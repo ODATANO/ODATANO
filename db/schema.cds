@@ -50,3 +50,27 @@ entity Metadata {
     key datakey : String;
         json    : LargeString;
 }
+
+entity Assets {
+    key unit      : String; // policyId.assetName
+        policyId  : String(56) @assert.format: '^[a-f0-9]{56}$';
+        assetName : String(128);
+        quantity  : Decimal(38, 0);
+        decimals  : Integer;
+        metadata  : LargeString;
+}
+
+entity UTxOs {
+    key tx       : Association to Transactions;
+    key index    : Integer;
+        address  : String;
+        lovelace : Decimal(20, 0);
+        assets   : LargeString; // JSON representation of multi-asset list for this UTxO
+}
+
+entity Networks {
+    key id        : String(16);
+        name      : String;
+        baseUrl   : String;
+        isDefault : Boolean;
+}

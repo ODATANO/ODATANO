@@ -20,6 +20,16 @@ class Koios {
  };
  }
 
+	async getTransactionMetadata(hash) {
+		const { data } = await this.api.get(`/tx_info?tx_hash=${hash}`);
+		if (!data.length) throw new Error('NOT_FOUND');
+		const tx = data[0];
+		// Koios may provide json_metadata or metadata fields
+		const meta = tx.json_metadata || tx.metadata || tx.tx_metadata || null;
+		if (!meta) throw new Error('NOT_FOUND');
+		return meta;
+	}
+
  async getAddressBalance(address) {
  const { data } = await this.api.get(`/address_info?address=${address}`);
  if (!data.length) throw new Error('NOT_FOUND');

@@ -37,7 +37,19 @@ class CardanoClient {
   }
 
   // convenience wrappers
-  getTransaction(hash)        { return this.request('getTransaction', hash); }
+  async getTransaction(hash) {
+    // get basic tx info (with primary/fallback)
+    const tx = await this.request('getTransaction', hash);
+    // try to fetch metadata (best-effort)
+    try {
+      const meta = await this.request('getTransactionMetadata', hash);
+      tx.metadata = meta;
+    } catch (err) {
+      // if metadata not found, ignore; otherwise bubble up if providers both fail
+      if (err.message && err.message.includes('Both providers failed')) throw err;
+    }
+    return tx;
+  }
   getAddressBalance(address)  { return this.request('getAddressBalance', address); }
 }
 

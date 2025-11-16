@@ -1,17 +1,28 @@
 {
   "name": "odatano",
   "version": "1.0.0",
-  "description": "A simple CAP project.",
+  "description": "A SAP CAP service for interactting with Cardano blockchain data.",
   "dependencies": {
     "@sap/cds": "^9",
     "express": "^4",
-    "redis": "^5.9.0"
+    "redis": "^5.9.0",
+    "axios": "^1.4.0",
+    "node-cache": "^5.1.2",
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
-    "@cap-js/sqlite": "^2"
+    "@cap-js/sqlite": "^2",
+    "jest": "^29.6.1",
+    "supertest": "^6.3.3",
+    "@types/jest": "^29.5.3",
+    "nyc": "^15.1.0"
   },
   "scripts": {
-    "start": "cds-serve"
+    "start": "cds-serve",
+    "cds:watch": "cds watch",
+    "cds:serve": "cds serve --with-mocks",
+    "test": "jest --runInBand",
+    "coverage": "nyc --reporter=lcov --reporter=text npm test"
   },
   "private": true
 }

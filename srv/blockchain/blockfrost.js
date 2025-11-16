@@ -25,6 +25,23 @@ class Blockfrost {
  }
  }
 
+	async getTransactionMetadata(hash) {
+		try {
+			const { data } = await this.api.get(`/txs/${hash}/metadata`);
+			if (!Array.isArray(data) || data.length === 0) throw new Error('NOT_FOUND');
+			// Map labels to JSON metadata where possible
+			const result = {};
+			data.forEach(item => {
+				const label = item.label || 'unknown';
+				result[label] = item.json_metadata ?? item.metadata ?? item;
+			});
+			return result;
+		} catch (err) {
+			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+			throw err;
+		}
+	}
+
  async getAddressBalance(address) {
  try {
  const { data } = await this.api.get(`/addresses/${address}`);
