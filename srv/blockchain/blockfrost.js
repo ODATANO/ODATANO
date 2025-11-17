@@ -1,60 +1,93 @@
-const axios = require('axios');
 require('dotenv').config();
+const Blockfrost = require("@blockfrost/blockfrost-js");
 
 class Blockfrost {
- constructor() {
- this.api = axios.create({
- baseURL: 'https://cardano-preview.blockfrost.io/api/v0',
- headers: { project_id: process.env.BLOCKFROST_KEY },
- timeout: 5000
- });
- }
+	constructor() {
+ 	this.api = new Blockfrost.BlockFrostAPI({
+   		projectId: process.env.BLOCKFROST_KEY,
+   		network: Blockfrost.Networks.PREVIEW }); 
+	}
 
- async getTransaction(hash) {
- try {
- const { data } = await this.api.get(`/txs/${hash}`);
- return {
- hash: data.hash,
- block: data.block,
- blockTime: new Date(data.block_time * 1000),
- fee: parseInt(data.fee)
- };
- } catch (err) {
- if (err.response?.status === 404) throw new Error('NOT_FOUND');
- throw err;
- }
- }
+	// get basic network info
+	async get_networkInfo() {
+		try {
+			const latestBlock = await this.api.blocksLatest();
+			const networkInfo = await this.api.network();
+			const latestEpoch = await this.api.epochsLatest();
+			
+			return {
+				latestBlock: latestBlock.height,
+				network: networkInfo.network,
+				latestEpoch: latestEpoch.epoch
+			};
+		}
+		catch (err) {
+			throw err;
+		}
+	}
 
+	// get blockfrost api health
+	async get_apiHealth() {
+		try {
+			const health = await this.api.health();
+			return health;
+		}
+		catch (err) { 
+			throw err; 
+		}		
+	}
+
+	// get transaction by hash
+	async getTransaction(hash) {
+ 		try {
+ 			const { data } = await this.api.getTransaction(hash);
+ 			return {
+ 				hash: data.hash,
+ 				block: data.block,
+ 				blockTime: new Date(data.block_time * 1000),
+ 				fee: parseInt(data.fee) };
+ 			} 
+		catch (err) {
+ 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
+ 	}
+
+	// get transaction metadata by hash
 	async getTransactionMetadata(hash) {
 		try {
-			const { data } = await this.api.get(`/txs/${hash}/metadata`);
+			const { data } = await this.api.getTransactionMetadata(hash);
 			if (!Array.isArray(data) || data.length === 0) throw new Error('NOT_FOUND');
-			// Map labels to JSON metadata where possible
 			const result = {};
+	
 			data.forEach(item => {
-				const label = item.label || 'unknown';
-				result[label] = item.json_metadata ?? item.metadata ?? item;
+			const label = item.label || 'unknown';
+			result[label] = item.json_metadata ?? item.metadata ?? item;
 			});
 			return result;
+		
 		} catch (err) {
 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
 			throw err;
 		}
 	}
 
- async getAddressBalance(address) {
- try {
- const { data } = await this.api.get(`/addresses/${address}`);
- const ada = data.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
- return {
- address,
- balance: parseInt(ada) / 1_000_000
- };
- } catch (err) {
- if (err.response?.status === 404) throw new Error('NOT_FOUND');
- throw err;
- }
- }
+	// get address balance
+	async getAddressBalance(address) {
+		try {
+ 			const { data } = await this.api.getAddress(address);
+ 			const ada = data.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
+ 		
+			return {
+ 				address,
+ 				balance: parseInt(ada) / 1_000_000
+ 			};
+		} 
+		catch (err) {
+ 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
+	}
 }
 
 module.exports = Blockfrost;

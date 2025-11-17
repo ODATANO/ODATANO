@@ -1,5 +1,3 @@
-// cardano-client.js (no cache)
-
 const PRIMARY_TIMEOUT_MS  = Number(process.env.PRIMARY_TIMEOUT_MS  || 8000); // 8s
 const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS || 8000); // 8s
 
@@ -19,16 +17,16 @@ class CardanoClient {
   }
 
   async request(method, ...args) {
-    // 1) Try primary
+    // try primary
     try {
       return await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
     } catch (errPrimary) {
       console.warn(`Primary ${method} failed → ${errPrimary.message} → trying fallback`);
-      // 2) Try fallback
+      // try fallback
       try {
         return await this._withTimeout(this.fallback[method](...args), FALLBACK_TIMEOUT_MS, `Fallback ${method}`);
       } catch (errFallback) {
-        // 3) Bubble up a combined error
+        // 3) ubble up a combined error
         const e = new Error(`Both providers failed for ${method}. Primary: ${errPrimary.message}. Fallback: ${errFallback.message}`);
         e.cause = { primary: errPrimary, fallback: errFallback };
         throw e;
@@ -50,7 +48,9 @@ class CardanoClient {
     }
     return tx;
   }
-  getAddressBalance(address)  { return this.request('getAddressBalance', address); }
+
+  async getAddressBalance(address)  { 
+    return this.request('getAddressBalance', address); }
 }
 
 module.exports = new CardanoClient();

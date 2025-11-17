@@ -1,76 +1,108 @@
-namespace odatano;
-
 using {
     cuid,
     temporal
 } from '@sap/cds/common';
 
+namespace odatano.cardano;
+
+// Basic Types
+type Blake2b224 : String(56); // 28 bytes -> 56 hex chars
+type Blake2b256 : String(64); // 32 bytes -> 64 hex chars
+type HexBytes   : String(4000); // hex-encoded CBOR / byte arrays
+type Lovelace   : Decimal(20, 0);
+
+// Addresses & Credentials
+entity Addresses : cuid, temporal {
+    key ID          : UUID;
+        bech32      : String(120);
+        paymentKind : String(10);
+        paymentHash : Blake2b224;
+        label       : String(80);
+}
+
+// Assets & Value
+entity Assets : cuid, temporal {
+    key ID        : UUID;
+        policyId  : Blake2b224; // PolicyId = Hash<Blake2b_224, Script>
+        assetName : String(64); // hex-encoded AssetName (0..32 bytes)
+        symbol    : String(40);
+        decimals  : Integer;
+        metadata  : LargeString; // optional JSON (token metadata)
+}
+
+// flattened Value entries per transaction input/output
+entity TransactionInputAssets : cuid {
+    key ID        : UUID;
+        input     : Association to TransactionInputs;
+        policyId  : Blake2b224;
+        assetName : String(64);
+        quantity  : Decimal(38, 0);
+}
+
+entity TransactionOutputAssets : cuid {
+    key ID        : UUID;
+        output    : Association to TransactionOutputs;
+        policyId  : Blake2b224;
+        assetName : String(64);
+        quantity  : Decimal(38, 0);
+}
+
+// Metadata
+
+entity Metadata : cuid, temporal {
+    key ID    : UUID;
+        label : String(200);
+        json  : LargeString; // raw JSON as string
+}
+
+// Transactions
 entity Transactions : cuid, temporal {
     key ID        : UUID;
-        hash      : String(64) @assert.format: '^[a-f0-9]{64}$';
+        hash      : Blake2b256 @assert.format: '^[a-f0-9]{64}$';
         block     : Integer;
         blockTime : Timestamp;
-        fee       : Decimal(20, 0);
+        fee       : Lovelace;
+        metadata  : Association to Metadata;
         inputs    : Composition of many TransactionInputs
                         on inputs.tx = $self;
         outputs   : Composition of many TransactionOutputs
                         on outputs.tx = $self;
-        metadata  : Association to Metadata;
 }
 
-entity TransactionInputs {
-    key tx      : Association to Transactions;
-    key index   : Integer;
-        address : String;
-        amount  : Decimal(20, 0);
+// Transaction Inputs
+entity TransactionInputs : cuid {
+    key ID            : UUID;
+        tx            : Association to Transactions;
+        index         : Integer;
+        sourceTxHash  : Blake2b256;
+        sourceIndex   : Integer;
+        address       : Association to Addresses;
+        valueLovelace : Lovelace;
+        assets        : Composition of many TransactionInputAssets
+                            on assets.input = $self;
+        datumHash     : Blake2b256;
 }
 
-entity TransactionOutputs {
-    key tx      : Association to Transactions;
-    key index   : Integer;
-        address : String;
-        amount  : Decimal(20, 0);
+// Transaction Outputs
+entity TransactionOutputs : cuid {
+    key ID              : UUID;
+        tx              : Association to Transactions;
+        index           : Integer;
+        address         : Association to Addresses;
+        valueLovelace   : Lovelace;
+        assets          : Composition of many TransactionOutputAssets
+                              on assets.output = $self;
+        datumKind       : String(10);
+        datumHash       : Blake2b256;
+        inlineDatumCbor : HexBytes;
+        referenceScript : Blake2b224;
 }
 
-entity Addresses {
-    key address : String @assert.format: '^addr_test';
-        balance : Decimal(20, 0);
-        assets  : Composition of many AddressAssets
-                      on assets.address = $self;
-}
-
-entity AddressAssets {
-    key address  : Association to Addresses;
-    key unit     : String;
-        quantity : Decimal(20, 0);
-}
-
-entity Metadata {
-    key tx      : Association to Transactions;
-    key datakey : String;
-        json    : LargeString;
-}
-
-entity Assets {
-    key unit      : String; // policyId.assetName
-        policyId  : String(56) @assert.format: '^[a-f0-9]{56}$';
-        assetName : String(128);
-        quantity  : Decimal(38, 0);
-        decimals  : Integer;
-        metadata  : LargeString;
-}
-
-entity UTxOs {
-    key tx       : Association to Transactions;
-    key index    : Integer;
-        address  : String;
-        lovelace : Decimal(20, 0);
-        assets   : LargeString; // JSON representation of multi-asset list for this UTxO
-}
-
-entity Networks {
-    key id        : String(16);
-        name      : String;
-        baseUrl   : String;
-        isDefault : Boolean;
+// Datums
+entity Datums {
+    key hash        : Blake2b256;
+        rawCbor     : HexBytes;
+        typeName    : String(80);
+        decodedJson : LargeString;
+        createdAt   : Timestamp;
 }

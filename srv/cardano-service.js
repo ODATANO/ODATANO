@@ -29,7 +29,7 @@ module.exports = cds.service.impl(function () {
         return mapped;
       }
 
-      // Collection read - for now return empty array (implement paging later)
+      // collection read - for now return empty array
       const rows = [];
       if (req.query?.SELECT?.count) req._.count = rows.length;
       return rows;
@@ -43,7 +43,7 @@ module.exports = cds.service.impl(function () {
     try {
       const address = req.data?.ID || req.data?.address;
       if (address) {
-        if (!isBech32Address(address)) return req.error(400, 'Invalid Cardano address format');
+        if (!isBech32Address(address)) return req.error(400, 'Invalid address format');
 
         const cacheKey = `addr:${address}`;
         const cached = cache.get(cacheKey);
@@ -74,7 +74,7 @@ module.exports = cds.service.impl(function () {
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 
-      // Try to reuse getTransaction (some providers include metadata)
+      // first get transaction
       const tx = await cardano.getTransaction(txId);
       if (tx?.metadata) {
         const res = tx.metadata;
@@ -82,10 +82,53 @@ module.exports = cds.service.impl(function () {
         return res;
       }
 
-      // No metadata available
+      // no metadata available
       return req.error(404, 'Metadata not found for transaction');
     } catch (e) {
       return mapError(req, e, 'Metadata');
+    }
+  });
+
+  // --- Actions: GetTransactionByHash ---
+  this.on('GetTransactionByHash', async req => {
+    try {
+      const { hash } = req.data || {};
+      if (!hash) return req.error(400, 'Missing hash parameter');
+      if (!isTxHash(hash)) return req.error(400, 'Invalid transaction hash format');
+
+      const cacheKey = `tx:${hash}`;
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+
+      const tx = await cardano.getTransaction(hash);
+      const mapped = mapTx(tx);
+      cache.set(cacheKey, mapped);
+      return mapped;
+    } catch (e) {
+      return mapError(req, e, 'GetTransactionByHash');
+    }
+  });
+
+  // --- Actions: GetMetadataByTx ---
+  this.on('GetMetadataByTx', async req => {
+    try {
+      const { hash } = req.data || {};
+      if (!hash) return req.error(400, 'Missing hash parameter');
+      if (!isTxHash(hash)) return req.error(400, 'Invalid transaction hash format');
+
+      const cacheKey = `meta:${hash}`;
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+
+      // best-effort metadata via client
+      const tx = await cardano.getTransaction(hash);
+      if (tx?.metadata) {
+        cache.set(cacheKey, tx.metadata);
+        return tx.metadata;
+      }
+      return req.error(404, 'Metadata not found for transaction');
+    } catch (e) {
+      return mapError(req, e, 'GetMetadataByTx');
     }
   });
 
