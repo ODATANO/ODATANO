@@ -1,9 +1,9 @@
 function mapProviderError(err) {
-  // Default
+  // defaults
   let status = 500;
   let message = err && err.message ? err.message : String(err);
 
-  // Axios-style response errors
+  // HTTP error handling
   if (err && err.response && err.response.status) {
     status = err.response.status;
     // Try to extract helpful message

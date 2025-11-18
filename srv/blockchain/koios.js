@@ -13,7 +13,7 @@ class Koios {
  		return {
  			hash: tx.tx_hash,
  			block: tx.block_no,
- 			blockTime: new Date(tx.tx_validity_start * 1000), // Approx
+ 			blockTime: new Date(tx.tx_validity_start * 1000),
  			fee: parseInt(tx.tx_fee || 0)
  		};
  	}

@@ -1,11 +1,8 @@
 # Technical Design Specification (TDS)
 
-**Project:** ODATANO – SAP–Cardano OData Connector\
-**Scope:** Milestone 1 – OData Foundation & Blockchain Read Integration\
-**Version:** 1.1 (Aligned with M1 Delivery – Jan 2025)\
-**Date:** 2025-10-31\
-**Author:** Maximilian Weber\
-**License:** Apache-2.0
+**Project:** ODATANO – SAP–Cardano OData Connector **Scope:** Milestone 1 –
+OData Foundation & Blockchain Read Integration **Version:** 1.0 **Date:**
+2025-11-18 **Author:** Maximilian Weber **License:** Apache-2.0
 
 ## 1. Purpose & Objectives
 
@@ -13,28 +10,32 @@
 
 Define the foundational architecture and data model for an enterprise-grade
 OData V4 service (SAP CAP-based) providing **read-only access** to Cardano
-blockchain data such as transactions, addresses, and token metadata.
+blockchain data such as transactions, addresses, multi-asset holdings and token
+metadata.
 
 ### Objectives
 
 - Deliver a functional **CAP OData service** exposing blockchain entities
-  (`Transactions`, `Addresses`, `Assets`).
+  (Transactions, Addresses, Assets, Metadata, UTxOs where applicable).
 - Implement CAP Services for the **read-integration** with the Cardano preview
-  network via **Blockfrost API** (primary) and **Koios API** (fallback).
-- Provide **three or more fully working OData endpoints** (transaction lookup,
-  address balance, metadata query etc.).
-- Include automated tests, schema documentation, and demonstration queries.
+  network using the official **@blockfrost/blockfrost-js** SDK (primary) and
+  **Koios** as fallback.
+- Provide three primary OData actions/operations for M1: `GetTransactionByHash`,
+  `GetAddressByBech32`, `GetMetadataByTx`, plus standard READ collections.
+- Include automated unit and integration tests, coverage reporting, and
+  demonstration queries.
 
 ## 2. Architecture Overview
 
 ### Layered Architecture
 
-| Layer                   | Description                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------ |
-| **OData API (CAP)**     | Provides typed V4 endpoints for blockchain entities (`Transactions`, `Addresses`, `Assets`).     |
-| **Integration Adapter** | Service handlers calling external Cardano APIs (Blockfrost / Koios). Converts JSON → CDS models. |
-| **Domain Model**        | Typed CDS entities for blockchain primitives (TxHash, Bech32, Lovelace, PolicyId etc.).          |
-| **Persistence Layer**   | Lightweight in-memory or SQLite mirror for local caching and test replay.                        |
+| Layer                   | Description                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **OData API (CAP)**     | Provides typed V4 endpoints and actions for blockchain entities (Transactions, Addresses, Metadata, Assets).                   |
+| **Service Layer**       | `srv/cardano-service.js` — OData handlers, action implementations, request validation and mapping to domain objects.           |
+| **Integration Adapter** | `srv/blockchain/*` — provider adapters (Blockfrost SDK, Koios) and `cardano-client.js` orchestrator for failover and timeouts. |
+| **Domain Model**        | Typed CDS entities (db/schema.cds) for blockchain primitives (TxHash, Bech32, Lovelace, PolicyId, Blake2b types).              |
+| **Caching / Mirror**    | In-memory cache (`srv/utils/cache.js`) and optional local mirror tables (UTxOs) used for demo/offline scenarios.               |
 
 ### Design Principles
 
@@ -48,43 +49,40 @@ blockchain data such as transactions, addresses, and token metadata.
 
 ### 3.1 Primitive Types
 
-| Type         | CAP Type        | Description                                         |
-| ------------ | --------------- | --------------------------------------------------- |
-| `Lovelace`   | `Decimal(38,0)` | ADA amount in Lovelace (1 ADA = 1_000_000 Lovelace) |
-| `PolicyId`   | `String(56)`    | 28-byte hex policy hash                             |
-| `AssetName`  | `String(128)`   | UTF-8 token name (≤ 32 bytes)                       |
-| `TxHash`     | `String(64)`    | 32-byte transaction hash                            |
-| `Bech32`     | `String(256)`   | Cardano address / stake key                         |
-| `Hex`        | `String(4096)`  | CBOR-encoded binary data                            |
-| `JsonText`   | `LargeString`   | Arbitrary JSON payload                              |
-| `NetworkTag` | `String(16)`    | Environment identifier (preview / mainnet)          |
+| Type         | CAP Type        | Description                                          |
+| ------------ | --------------- | ---------------------------------------------------- |
+| `Lovelace`   | `Decimal(38,0)` | ADA amount in Lovelace (1 ADA = 1_000_000 Lovelace)  |
+| `PolicyId`   | `String(56)`    | 28-byte hex policy hash                              |
+| `AssetName`  | `String(128)`   | UTF-8 token name (≤ 32 bytes)                        |
+| `TxHash`     | `String(64)`    | 32-byte transaction hash                             |
+| `Bech32`     | `String(256)`   | Cardano address / stake key                          |
+| `Blake2b224` | `String(56)`    | 224-bit blake2b used in some Cardano identifiers     |
+| `Blake2b256` | `String(64)`    | 256-bit blake2b used in transaction hashes (if used) |
+| `Hex`        | `String(4096)`  | CBOR-encoded binary data                             |
+| `JsonText`   | `LargeString`   | Arbitrary JSON payload                               |
+| `NetworkTag` | `String(16)`    | Environment identifier (preview / mainnet)           |
 
 ### 3.2 Core Entities (M1 Scope)
 
-| Entity           | Description                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------- |
-| **Networks**     | Holds network configuration (chain ID, API base URL, isDefault).                                        |
-| **Transactions** | Basic transaction object: `txHash`, `blockHeight`, `timestamp`, `fee`, `inputs`, `outputs`, `metadata`. |
-| **Addresses**    | Represents Cardano addresses (`bech32`, `stakeKey`, `type`). Used for UTxO and balance queries.         |
-| **Assets**       | Multi-asset representation: `policyId`, `assetName`, `quantity`, `decimals`, `metadata`.                |
-| **UTxOs**        | (optional mirror) Links `address` and `txHash + index` to ADA and asset amounts.                        |
+| Entity           | Description                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Networks**     | Holds network configuration (chain ID, API base URL, isDefault).                                                              |
+| **Transactions** | Transaction entity with `txHash`, `blockHeight`, `timestamp`, `fee`, flattened `inputs` and `outputs`, and linked `metadata`. |
+| **Addresses**    | Represents Cardano addresses (`bech32`, `stakeKey`, `type`) with balance and asset holdings.                                  |
+| **Assets**       | Multi-asset representation: `policyId`, `assetName`, `quantity`, `metadata` (CIP-25/68/721).                                  |
+| **UTxOs**        | Optional mirror table used for demo/offline lookup; links `address` with `txHash` + `index` and amounts.                      |
 
 > Entities like `SignRequests`, `BridgeJobs`, `Subscriptions` are planned for
 > future milestones and excluded here.
 
 ## 4. OData Service Design
 
-**Service Name:** `BlockchainService`
+**Service Name:** `cardano-odata` (OData root: `/odata/v4/cardano-odata`)
 
-**Exposed Entities:**\
-`Transactions`, `Addresses`, `Assets`, `UTxOs`, `Networks`
-
-**Capabilities:**
-
-- `$filter`, `$expand`, `$select`, `$top`, `$skip`
-- Auto-generated `$metadata` document
-- JSON + XML response support
-- Paging for large result sets
+**Exposed Entities & Actions:** `Transactions`, `Addresses`, `Assets`,
+`Metadata`, `TransactionInputs`, `TransactionOutputs`, `TransactionInputAssets`,
+`TransactionOutputAssets` and actions: `GetTransactionByHash`,
+`GetAddressByBech32`, `GetMetadataByTx`.
 
 **Example Queries:**
 
@@ -94,89 +92,145 @@ GET /odata/v4/BlockchainService/Addresses('<bech32>')/UTxOs
 GET /odata/v4/BlockchainService/Assets?$filter=policyId eq '<pid>'
 ```
 
-## 5. Blockchain Integration Adapter (Read)
+### 5. Blockchain Integration Adapter (Read)
 
 ### Supported Sources
 
-- **Primary:** Blockfrost API
-- **Fallback:** Koios API
-- **Future:** Direct Cardano Node or db-sync connector
+- **Primary:** Blockfrost (official SDK: `@blockfrost/blockfrost-js`)
+- **Fallback:** Koios (HTTP adapter)
+- **Future:** db-sync or direct Cardano node connector
+
+### cardano-client Orchestration
+
+`srv/blockchain/cardano-client.js` implements lazy initialization and failover:
+
+- Primary call to Blockfrost via SDK with a configurable timeout (default
+  8000ms).
+- On timeout/error, try Koios with same timeout.
+- Combine and normalize errors for the service layer.
 
 ### Mapping Logic
 
-| Source API               | Target Entity      | Mapping Notes                                             |
-| :----------------------- | :----------------- | :-------------------------------------------------------- |
-| `txs/{hash}`             | `Transactions`     | Includes inputs, outputs, metadata → flattened structure. |
-| `addresses/{addr}`       | `UTxOs` (+ Assets) | Extracts balance and multi-asset quantities.              |
-| `assets/{policy}/{name}` | `Assets`           | Reads token metadata (CIP-25 / 68 / 721).                 |
+| Source API                | Target Entity     | Notes                                                                     |
+| :------------------------ | :---------------- | :------------------------------------------------------------------------ |
+| `txs/{hash}` (Blockfrost) | `Transactions`    | Map inputs/outputs, decode multi-asset units, attach metadata if present. |
+| `txs/{hash}/metadata`     | `Metadata`        | Blockfrost tx metadata → JSON stored in `Metadata` entity.                |
+| `addresses/{addr}`        | `Addresses/UTxOs` | Address info + assets; used to compute balance and list assets.           |
+| `assets/{unit}`           | `Assets`          | Read on-demand for asset metadata (CIP-25/721)                            |
 
-### Error Handling
+### Error Handling (Normalized)
 
-| Condition                 | Response                                              |
-| :------------------------ | :---------------------------------------------------- |
-| Invalid address / hash    | HTTP 400 – Bad Request                                |
-| Not found                 | HTTP 404 – OData error (`ENTITY_NOT_FOUND`)           |
-| API timeout / unreachable | HTTP 503 – Service Unavailable                        |
-| Unauthorized (API key)    | HTTP 401 – Unauthorized                               |
-| Internal error            | HTTP 500 – Generic server error (wrapped OData fault) |
+| Condition                 | Response                         |
+| :------------------------ | :------------------------------- |
+| Invalid address / hash    | HTTP 400 – Bad Request           |
+| Not found                 | HTTP 404 – Not Found             |
+| API timeout / unreachable | HTTP 503 – Service Unavailable   |
+| Unauthorized (API key)    | HTTP 401 – Unauthorized          |
+| Internal error            | HTTP 500 – Internal Server Error |
 
 ### Caching / Consistency
 
-- In-memory cache (`NodeCache`) for hot queries.
-- Cache keys scoped by network (`preview` / `mainnet`).
-- Optional local mirror (table `UTxOs`) for demo and offline testing.
+- `srv/utils/cache.js` (NodeCache) used with default TTL = 300s (5 minutes).
+- Cache keys: `tx_{hash}`, `addr_{bech32}`, `meta_{hash}` and include network
+  tag.
+- Optional mirror tables (`UTxOs`) for demo/offline usage; mirror updated
+  on-demand.
 
-## 6. Security & Compliance
+### 6. Security & Compliance
 
-| Area                | Implementation                                           |
-| :------------------ | :------------------------------------------------------- |
-| **Authentication**  | OAuth2 / XSUAA (SAP BTP); Basic Auth fallback for local. |
-| **Secret Handling** | API keys from `.env` or BTP Destination Service.         |
-| **Data Privacy**    | No PII stored; only public on-chain data.                |
-| **Audit Logging**   | CAP default logging enabled (`console` + CI logs).       |
-| **Webhooks**        | Not in scope for M1 (read-only phase).                   |
+| Area                | Implementation                                                                                      |
+| :------------------ | :-------------------------------------------------------------------------------------------------- |
+| **Authentication**  | Local dev: `.env` with `BLOCKFROST_KEY`. Production: integrate with SAP BTP Destinations or OAuth2. |
+| **Secret Handling** | Use environment variables or secret manager (do not commit keys). `.env.example` provided.          |
+| **Data Privacy**    | Only public blockchain data is stored; no PII is kept.                                              |
+| **Audit Logging**   | Service logs (console) and structured logs can be enabled. Add central logging in production.       |
+| **Webhooks**        | Not in scope for M1 (read-only phase).                                                              |
 
 ## 7. Acceptance Criteria (M1 Alignment)
 
-| Category              | Expected Outcome                                                                                |
-| :-------------------- | :---------------------------------------------------------------------------------------------- |
-| **Deployment**        | CAP service deployable locally (`cds watch`) and accessible at `/odata/v4/BlockchainService`.   |
-| **Connectivity**      | Queries successfully return live Cardano data from Blockfrost preview network.                  |
-| **Endpoints**         | Minimum 3 functional read operations (Transaction Lookup, Address Balance, Metadata Query).     |
-| **Schema Validation** | Responses match OData EDMX schema (types, naming, relations).                                   |
-| **Error Handling**    | Five standardized error scenarios (400, 401, 404, 503, 500).                                    |
-| **Test Coverage**     | ≥ 70 % unit + integration coverage on read services.                                            |
-| **Open Source**       | Public GitHub repo with Apache-2.0 license, README, and `/docs` folder.                         |
-| **Demonstration**     | Example query `GET /Transactions?$filter=txHash eq '<testHash>'` returns expected result < 5 s. |
+| Category              | Expected Outcome                                                                                                      |
+| :-------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| **Deployment**        | CAP service deployable locally (`cds watch` or `cds serve --with-mocks`) and accessible at `/odata/v4/cardano-odata`. |
+| **Connectivity**      | Live queries return Cardano preview data via Blockfrost (or Koios fallback).                                          |
+| **Endpoints**         | `GetTransactionByHash`, `GetAddressByBech32`, `GetMetadataByTx` implemented and tested.                               |
+| **Schema Validation** | Responses conform to the OData EDMX schema in the service `$metadata`.                                                |
+| **Error Handling**    | Standardized error mapping for 400, 401, 404, 500, 503 implemented and covered by tests.                              |
+| **Test Coverage**     | Unit + integration tests present; current status: 23 passing tests, 100% statements, 97.22% branches.                 |
+| **Open Source**       | Repo contains license, README and a `/docs` folder with guides and test reports.                                      |
+| **Performance**       | Typical cached response <100ms; first-call provider latency depends on external API (< ~2s typical).                  |
 
 ## 8. Testing Strategy
 
 ### Unit Tests
 
-- Validation of primitive types (`Bech32`, `TxHash`, `PolicyId`).
-- Parsing and mapping API response → CDS entity.
-- Error response simulation (invalid input / network down).
+- Validate `srv/utils/validators.js` functions (isTxHash, isPolicyId,
+  isBech32Address) — unit coverage 100%.
+- Validate `srv/utils/errors.js` mapping logic — near-complete coverage.
+- Mapping functions: API response → internal DTO → OData entity.
 
 ### Integration Tests
 
-- Live queries against Cardano preview via Blockfrost.
-- Schema validation (`$metadata`, `$filter`, `$expand`).
-- Mock data fallback for deterministic responses.
+- Integration tests exercise the running CAP server endpoints
+  (test/integration/*.test.js).
+- Tests include 14 core M1 tests (m1_core.test.js) and provider error tests
+  (provider_errors.test.js).
 
 ### Continuous Integration
 
-- **Tooling:** Jest + Supertest + nyc for coverage.
-- Executed on every GitHub Actions push (build + test + coverage report).
+- **Tooling:** Jest + Supertest + nyc for coverage; CI pipeline runs tests and
+  produces coverage report.
 
 ### End-to-End Demo
 
-- `Address → UTxOs → Assets` query chain executed live.
-- `Transaction → Inputs / Outputs / Metadata` demonstrated through OData
-  Services.
+- Demonstrations executed during M1 validation:
+  - `POST /GetTransactionByHash` → validates input, calls providers, returns
+    mapped transaction.
+  - `POST /GetAddressByBech32` → returns balances and assets.
+  - `POST /GetMetadataByTx` → returns transaction metadata.
+
+Live test result snapshot: 23 tests passing; coverage: 100% statements, 97.22%
+branches.
 
 ## 9. Future Outlook (M2 Preview)
 
-Milestone 2 & 3 will extend this foundation with **write and transaction-build
-capabilities**,\
-including `SignRequests`, `BridgeJobs`, and external signing via HSM /
-Fireblocks.
+Milestone 2 & 3 will extend this foundation with **enhanced transaction details,
+write/construct capabilities, multi-asset flattening and improved asset
+metadata**:
+
+- Transaction input/output flattening and full multi-asset unit normalization
+- Asset metadata enrichment (CIP-25, CIP-68, CIP-721 lookups)
+- Batch query endpoints and pagination improvements
+- Optional db-sync / direct node adapter for high-throughput production
+- Explore OpenAPI / Swagger and interactive API explorer
+
+---
+
+## 10. Run & Test (Quick Commands)
+
+Run CAP server (development/watch):
+
+```powershell
+cd 'c:\Users\max\ODATANO'
+cds watch
+```
+
+Run CAP server (serve with mocks):
+
+```powershell
+cds serve --with-mocks
+```
+
+Run tests and coverage:
+
+```powershell
+npm test
+npm test -- --coverage
+```
+
+Check OData metadata:
+
+```powershell
+Invoke-WebRequest -Uri 'http://localhost:4004/odata/v4/cardano-odata/$metadata' -UseBasicParsing
+```
+
+_Document updated to reflect implementation state as of 2025-11-18._

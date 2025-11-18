@@ -37,18 +37,58 @@ class Blockfrost {
 		}		
 	}
 
-	// get transaction by hash
+	// get transaction by hash (with full details: inputs, outputs, assets, metadata)
 	async getTransaction(hash) {
  		try {
- 			const { data } = await this.api.getTransaction(hash);
+ 			const tx = await this.api.getTransaction(hash);
+ 			
+ 			// Fetch full transaction details (inputs, outputs, etc.)
+ 			const txUtxos = await this.api.getTransactionUtxos(hash);
+ 			const metadata = await this.getTransactionMetadata(hash).catch(() => null);
+ 			
+ 			// Map inputs (with assets)
+ 			const inputs = (txUtxos?.inputs || []).map((inp, idx) => ({
+ 				index: idx,
+ 				sourceTxHash: inp.txHash,
+ 				sourceIndex: inp.outputIndex,
+ 				address: inp.address,
+ 				valueLovelace: parseInt(inp.amount?.[0]?.quantity || '0'),
+ 				assets: (inp.amount || [])
+ 					.filter(a => a.unit !== 'lovelace')
+ 					.map(a => ({
+ 						policyId: a.unit.slice(0, 56),
+ 						assetName: a.unit.slice(56),
+ 						quantity: parseInt(a.quantity || '0')
+ 					}))
+ 			}));
+ 			
+ 			// Map outputs
+ 			const outputs = (txUtxos?.outputs || []).map((out, idx) => ({
+ 				index: idx,
+ 				address: out.address,
+ 				valueLovelace: parseInt(out.amount?.[0]?.quantity || '0'),
+ 				datumHash: out.datumHash || null,
+ 				assets: (out.amount || [])
+ 					.filter(a => a.unit !== 'lovelace')
+ 					.map(a => ({
+ 						policyId: a.unit.slice(0, 56),
+ 						assetName: a.unit.slice(56),
+ 						quantity: parseInt(a.quantity || '0')
+ 					}))
+ 			}));
+ 			
  			return {
- 				hash: data.hash,
- 				block: data.block,
- 				blockTime: new Date(data.block_time * 1000),
- 				fee: parseInt(data.fee) };
- 			} 
+ 				hash: tx.hash,
+ 				block: tx.block,
+ 				blockTime: new Date(tx.block_time * 1000),
+ 				fee: parseInt(tx.fee),
+ 				inputs,
+ 				outputs,
+ 				metadata
+ 			};
+ 		} 
 		catch (err) {
- 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			if (err.status === 404) throw new Error('NOT_FOUND');
  			throw err;
  		}
  	}
@@ -56,7 +96,7 @@ class Blockfrost {
 	// get transaction metadata by hash
 	async getTransactionMetadata(hash) {
 		try {
-			const { data } = await this.api.getTransactionMetadata(hash);
+			const data = await this.api.getTransactionMetadata(hash);
 			if (!Array.isArray(data) || data.length === 0) throw new Error('NOT_FOUND');
 			const result = {};
 	
@@ -75,7 +115,7 @@ class Blockfrost {
 	// get address balance
 	async getAddressBalance(address) {
 		try {
- 			const { data } = await this.api.getAddress(address);
+ 			const data = await this.api.getAddress(address);
  			const ada = data.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
  		
 			return {

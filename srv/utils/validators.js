@@ -1,6 +1,6 @@
 const TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
 const POLICY_ID_REGEX = /^[a-fA-F0-9]{56}$/;
-const BECH32_TEST_PREFIX = /^addr_test/; // simple check for preview addresses
+const BECH32_TEST_PREFIX = /^addr_test/; // preview addresses start with addr_test
 
 function isTxHash(s) {
   return typeof s === 'string' && TX_HASH_REGEX.test(s);

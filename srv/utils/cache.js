@@ -1,5 +1,5 @@
 const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // 5 minutes TTL
+const cache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 function get(key) {
   return cache.get(key);

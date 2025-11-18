@@ -5,12 +5,59 @@ const cache = require('./utils/cache');
 const { mapProviderError } = require('./utils/errors');
 
 module.exports = cds.service.impl(function () {
-  const { Transactions, Addresses, Metadata } = this.entities;
+  const { 
+    Transactions, Addresses, Assets, Metadata, Datums,
+    TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets 
+  } = this.entities;
+
+  // ============ HELPERS ============
+
+  // Helper: Map provider transaction to OData entity
+  function mapTransaction(providerTx) {
+    if (!providerTx) return null;
+    const txHash = providerTx.hash || providerTx.tx_id;
+    const blockTime = providerTx.block_time || providerTx.block_timestamp;
+    return {
+      ID: txHash,
+      hash: txHash,
+      blockHash: providerTx.block || providerTx.block_hash,
+      blockHeight: providerTx.height || providerTx.block_height,
+      timestamp: blockTime ? new Date(blockTime * 1000) : null,
+      fee: providerTx.fees || 0,
+      inputCount: (providerTx.inputs || []).length,
+      outputCount: (providerTx.outputs || []).length,
+      metadata: providerTx.metadata ? JSON.stringify(providerTx.metadata) : null
+    };
+  }
+
+  // Map address with balance
+  function mapAddress(address, providerBal = {}) {
+    return {
+      ID: address,
+      address: address,
+      paymentHash: address.slice(0, 56),
+      paymentKind: 'Enterprise',
+      balance: providerBal?.balance ?? providerBal?.lovelace ?? 0,
+      assets: providerBal?.assets ? JSON.stringify(providerBal.assets) : null
+    };
+  }
+
+  // Normalize error
+  function mapError(req, err, ctx) {
+    const mapped = mapProviderError(err);
+    const status = mapped.status || 500;
+    const message = mapped.message || `${ctx} operation failed`;
+    return req.error(status, `${ctx}: ${message}`);
+  }
+
+  // ============ LOGGING ============
 
   this.before('READ', '*', req => {
     const ent = req.target?.name || req.path;
-    console.log('OData READ →', ent, JSON.stringify(req.data || {}));
+    console.log('[CardanoService] Before READ:', ent, JSON.stringify(req.data || {}));
   });
+
+  // ============ READ HANDLERS ============
 
   // --- Transactions ---
   this.on('READ', Transactions, async req => {
@@ -24,16 +71,15 @@ module.exports = cds.service.impl(function () {
         if (cached) return cached;
 
         const tx = await cardano.getTransaction(txId);
-        const mapped = mapTx(tx);
+        const mapped = mapTransaction(tx);
         cache.set(cacheKey, mapped);
         return mapped;
       }
 
-      // collection read - for now return empty array
-      const rows = [];
-      if (req.query?.SELECT?.count) req._.count = rows.length;
-      return rows;
+      // collection read - return empty array
+      return [];
     } catch (e) {
+      console.error('[CardanoService] Transaction error:', e);
       return mapError(req, e, 'Transactions');
     }
   });
@@ -50,23 +96,32 @@ module.exports = cds.service.impl(function () {
         if (cached) return cached;
 
         const bal = await cardano.getAddressBalance(address);
-        const mapped = mapAddr(address, bal);
+        const mapped = mapAddress(address, bal);
         cache.set(cacheKey, mapped);
         return mapped;
       }
 
-      const rows = [];
-      if (req.query?.SELECT?.count) req._.count = rows.length;
-      return rows;
+      return [];
     } catch (e) {
+      console.error('[CardanoService] Address error:', e);
       return mapError(req, e, 'Addresses');
+    }
+  });
+
+  // --- Assets ---
+  this.on('READ', Assets, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] Assets error:', e);
+      return mapError(req, e, 'Assets');
     }
   });
 
   // --- Metadata ---
   this.on('READ', Metadata, async req => {
     try {
-      const txId = req.data?.tx;
+      const txId = req.data?.tx_ID;
       if (!txId) return req.error(400, 'Missing transaction id');
       if (!isTxHash(txId)) return req.error(400, 'Invalid transaction hash format');
 
@@ -74,22 +129,72 @@ module.exports = cds.service.impl(function () {
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 
-      // first get transaction
       const tx = await cardano.getTransaction(txId);
       if (tx?.metadata) {
-        const res = tx.metadata;
-        cache.set(cacheKey, res);
-        return res;
+        cache.set(cacheKey, tx.metadata);
+        return tx.metadata;
       }
 
-      // no metadata available
       return req.error(404, 'Metadata not found for transaction');
     } catch (e) {
+      console.error('[CardanoService] Metadata error:', e);
       return mapError(req, e, 'Metadata');
     }
   });
 
-  // --- Actions: GetTransactionByHash ---
+  // --- Datums ---
+  this.on('READ', Datums, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] Datums error:', e);
+      return mapError(req, e, 'Datums');
+    }
+  });
+
+  // --- TransactionInputs ---
+  this.on('READ', TransactionInputs, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] TransactionInputs error:', e);
+      return mapError(req, e, 'TransactionInputs');
+    }
+  });
+
+  // --- TransactionOutputs ---
+  this.on('READ', TransactionOutputs, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] TransactionOutputs error:', e);
+      return mapError(req, e, 'TransactionOutputs');
+    }
+  });
+
+  // --- TransactionInputAssets ---
+  this.on('READ', TransactionInputAssets, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] TransactionInputAssets error:', e);
+      return mapError(req, e, 'TransactionInputAssets');
+    }
+  });
+
+  // --- TransactionOutputAssets ---
+  this.on('READ', TransactionOutputAssets, async req => {
+    try {
+      return [];
+    } catch (e) {
+      console.error('[CardanoService] TransactionOutputAssets error:', e);
+      return mapError(req, e, 'TransactionOutputAssets');
+    }
+  });
+
+  // ============ ACTIONS ============
+
+  // --- GetTransactionByHash ---
   this.on('GetTransactionByHash', async req => {
     try {
       const { hash } = req.data || {};
@@ -101,15 +206,16 @@ module.exports = cds.service.impl(function () {
       if (cached) return cached;
 
       const tx = await cardano.getTransaction(hash);
-      const mapped = mapTx(tx);
+      const mapped = mapTransaction(tx);
       cache.set(cacheKey, mapped);
       return mapped;
     } catch (e) {
+      console.error('[CardanoService] GetTransactionByHash error:', e);
       return mapError(req, e, 'GetTransactionByHash');
     }
   });
 
-  // --- Actions: GetMetadataByTx ---
+  // --- GetMetadataByTx ---
   this.on('GetMetadataByTx', async req => {
     try {
       const { hash } = req.data || {};
@@ -120,7 +226,6 @@ module.exports = cds.service.impl(function () {
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 
-      // best-effort metadata via client
       const tx = await cardano.getTransaction(hash);
       if (tx?.metadata) {
         cache.set(cacheKey, tx.metadata);
@@ -128,35 +233,31 @@ module.exports = cds.service.impl(function () {
       }
       return req.error(404, 'Metadata not found for transaction');
     } catch (e) {
+      console.error('[CardanoService] GetMetadataByTx error:', e);
       return mapError(req, e, 'GetMetadataByTx');
     }
   });
 
-  function mapTx(tx) {
-    return {
-      ID: tx.hash,
-      hash: tx.hash,
-      block: tx.block ?? null,
-      blockTime: tx.blockTime ?? null,
-      fee: tx.fee ?? null,
-      inputs: tx.inputs || [],
-      outputs: tx.outputs || [],
-      metadata: tx.metadata || null
-    };
-  }
+  // --- GetAddressByBech32 ---
+  this.on('GetAddressByBech32', async req => {
+    try {
+      const { bech32 } = req.data || {};
+      if (!bech32) return req.error(400, 'Missing address parameter');
+      if (!isBech32Address(bech32)) return req.error(400, 'Invalid bech32 address format');
 
-  function mapAddr(address, bal) {
-    return {
-      address: address,
-      balance: bal?.balance ?? bal?.lovelace ?? 0,
-      assets: bal?.assets ? JSON.stringify(bal.assets) : null
-    };
-  }
+      const cacheKey = `addr:${bech32}`;
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
 
-  function mapError(req, err, ctx) {
-    const mapped = mapProviderError(err);
-    const status = mapped.status || 500;
-    const message = mapped.message || `${ctx} READ failed`;
-    return req.error(status, `${ctx}: ${message}`);
-  }
+      const bal = await cardano.getAddressBalance(bech32);
+      const mapped = mapAddress(bech32, bal);
+      cache.set(cacheKey, mapped);
+      return mapped;
+    } catch (e) {
+      console.error('[CardanoService] GetAddressByBech32 error:', e);
+      return mapError(req, e, 'GetAddressByBech32');
+    }
+  });
+
+  console.log('[CardanoService] Service impl complete');
 });

@@ -3,8 +3,25 @@ const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS || 8000); // 
 
 class CardanoClient {
   constructor() {
-    this.primary  = new (require('./blockfrost'))();
-    this.fallback = new (require('./koios'))();
+    this.primary  = null;
+    this.fallback = null;
+  }
+
+  _ensureInitialized() {
+    if (!this.primary) {
+      try {
+        this.primary = new (require('./blockfrost'))();
+      } catch (e) {
+        console.error('[CardanoClient] Failed to initialize Blockfrost:', e.message);
+      }
+    }
+    if (!this.fallback) {
+      try {
+        this.fallback = new (require('./koios'))();
+      } catch (e) {
+        console.error('[CardanoClient] Failed to initialize Koios:', e.message);
+      }
+    }
   }
 
   _withTimeout(promise, ms, label) {
@@ -17,21 +34,24 @@ class CardanoClient {
   }
 
   async request(method, ...args) {
+    this._ensureInitialized();
     // try primary
     try {
-      return await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
+      if (this.primary) {
+        return await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
+      }
     } catch (errPrimary) {
       console.warn(`Primary ${method} failed → ${errPrimary.message} → trying fallback`);
-      // try fallback
-      try {
-        return await this._withTimeout(this.fallback[method](...args), FALLBACK_TIMEOUT_MS, `Fallback ${method}`);
-      } catch (errFallback) {
-        // 3) ubble up a combined error
-        const e = new Error(`Both providers failed for ${method}. Primary: ${errPrimary.message}. Fallback: ${errFallback.message}`);
-        e.cause = { primary: errPrimary, fallback: errFallback };
-        throw e;
-      }
     }
+    // try fallback
+    try {
+      if (this.fallback) {
+        return await this._withTimeout(this.fallback[method](...args), FALLBACK_TIMEOUT_MS, `Fallback ${method}`);
+      }
+    } catch (errFallback) {
+      console.error(`Fallback ${method} also failed:`, errFallback.message);
+    }
+    throw new Error(`All providers failed for ${method}`);
   }
 
   // convenience wrappers
