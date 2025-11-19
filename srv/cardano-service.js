@@ -87,7 +87,7 @@ module.exports = cds.service.impl(function () {
   // --- Addresses ---
   this.on('READ', Addresses, async req => {
     try {
-      const address = req.data?.ID || req.data?.address;
+      const address = req.data?.bech32;
       if (address) {
         if (!isBech32Address(address)) return req.error(400, 'Invalid address format');
 
@@ -95,7 +95,7 @@ module.exports = cds.service.impl(function () {
         const cached = cache.get(cacheKey);
         if (cached) return cached;
 
-        const bal = await cardano.getAddressBalance(address);
+        const bal = await cardano.getAddress(address);
         const mapped = mapAddress(address, bal);
         cache.set(cacheKey, mapped);
         return mapped;
@@ -250,6 +250,7 @@ module.exports = cds.service.impl(function () {
       if (cached) return cached;
 
       const bal = await cardano.getAddressBalance(bech32);
+      console.log('after call' && bal);
       const mapped = mapAddress(bech32, bal);
       cache.set(cacheKey, mapped);
       return mapped;

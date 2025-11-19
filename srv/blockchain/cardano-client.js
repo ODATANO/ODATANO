@@ -38,6 +38,7 @@ class CardanoClient {
     // try primary
     try {
       if (this.primary) {
+        console.log('[CardanoClient] Calling primary.', method);
         return await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
       }
     } catch (errPrimary) {
@@ -69,8 +70,8 @@ class CardanoClient {
     return tx;
   }
 
-  async getAddressBalance(address)  { 
-    return this.request('getAddressBalance', address); }
+  async getAddress(address)  { 
+    return this.request('getAddress', address); }
 }
 
 module.exports = new CardanoClient();

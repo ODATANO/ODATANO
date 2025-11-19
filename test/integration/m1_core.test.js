@@ -28,7 +28,7 @@ describe('M1 Milestone - Core 3 Endpoints', () => {
     });
   });
 
-  describe('✅ Endpoint 2: Address Balance', () => {
+  describe('Endpoint 2: Address Balance', () => {
     test('GET /Addresses - returns empty collection (200)', async () => {
       const res = await request(BASE).get('/Addresses').expect(200);
       expect(res.body.value).toEqual([]);

@@ -1,12 +1,10 @@
 require('dotenv').config();
 const Blockfrost = require("@blockfrost/blockfrost-js");
 
-class Blockfrost {
+class BlockfrostConnector {
 	constructor() {
  	this.api = new Blockfrost.BlockFrostAPI({
-   		projectId: process.env.BLOCKFROST_KEY,
-   		network: Blockfrost.Networks.PREVIEW }); 
-	}
+   		projectId: process.env.BLOCKFROST_KEY, }); }
 
 	// get basic network info
 	async get_networkInfo() {
@@ -112,12 +110,14 @@ class Blockfrost {
 		}
 	}
 
-	// get address balance
-	async getAddressBalance(address) {
+	// get address
+	async getAddress(address) {
 		try {
- 			const data = await this.api.getAddress(address);
+			console.log('[Call Blockfrost]');
+ 			const data = await this.api.addresses(address);
+			console.log('[CardanoClient] Calling data.', data);
  			const ada = data.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
- 		
+ 		    
 			return {
  				address,
  				balance: parseInt(ada) / 1_000_000
@@ -130,4 +130,4 @@ class Blockfrost {
 	}
 }
 
-module.exports = Blockfrost;
+module.exports = BlockfrostConnector;

@@ -12,9 +12,8 @@ type HexBytes   : String(4000); // hex-encoded CBOR / byte arrays
 type Lovelace   : Decimal(20, 0);
 
 // Addresses & Credentials
-entity Addresses : cuid, temporal {
-    key ID          : UUID;
-        bech32      : String(120);
+entity Addresses : temporal {
+    key bech32      : String(120);
         paymentKind : String(10);
         paymentHash : Blake2b224;
         label       : String(80);
