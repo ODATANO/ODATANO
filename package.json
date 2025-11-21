@@ -18,6 +18,14 @@
     "nyc": "^15.1.0",
     "supertest": "^6.3.3"
   },
+  "cds": {
+    "requires": {
+      "db": {
+          "kind": "sqlite",
+          "credentials": { "url": "db.sqlite" } 
+      }
+    }
+  },
   "scripts": {
     "start": "cds-serve",
     "cds:watch": "cds watch",

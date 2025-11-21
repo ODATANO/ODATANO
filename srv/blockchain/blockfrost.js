@@ -113,15 +113,9 @@ class BlockfrostConnector {
 	// get address
 	async getAddress(address) {
 		try {
-			console.log('[Call Blockfrost]');
  			const data = await this.api.addresses(address);
-			console.log('[CardanoClient] Calling data.', data);
- 			const ada = data.amount.find(a => a.unit === 'lovelace')?.quantity || '0';
- 		    
-			return {
- 				address,
- 				balance: parseInt(ada) / 1_000_000
- 			};
+			console.log('Blockfrost data.', data);
+			return { data };
 		} 
 		catch (err) {
  			if (err.response?.status === 404) throw new Error('NOT_FOUND');

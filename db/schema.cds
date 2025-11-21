@@ -1,107 +1,165 @@
-using {
-    cuid,
-    temporal
-} from '@sap/cds/common';
+using {temporal} from '@sap/cds/common';
 
 namespace odatano.cardano;
 
-// Basic Types
-type Blake2b224 : String(56); // 28 bytes -> 56 hex chars
-type Blake2b256 : String(64); // 32 bytes -> 64 hex chars
-type HexBytes   : String(4000); // hex-encoded CBOR / byte arrays
-type Lovelace   : Decimal(20, 0);
+// -----------------------------------------------------
+// Basic Cardano Types
+// -----------------------------------------------------
+type Blake2b224 : String(56); // 28 bytes hex
+type Blake2b256 : String(64); // 32 bytes hex
+type HexBytes   : String(4000); // CBOR / bytes as hex
+type Lovelace   : Decimal(20, 0); // up to 1e20
+type AssetUnit  : String(120);
 
-// Addresses & Credentials
+// -----------------------------------------------------
+// Shared structural slices
+// -----------------------------------------------------
+
+// UTxO / IO structural block
+type UTxOSlice {
+    address         : Association to Addresses;
+    valueLovelace   : Lovelace;
+    datumHash       : Blake2b256;
+    inlineDatum     : HexBytes;
+    referenceScript : HexBytes;
+    isScript        : Boolean;
+}
+
+// Asset structural block
+type AssetSlice {
+    unit      : AssetUnit;
+    quantity  : Lovelace;
+    isAda     : Boolean;
+    policyId  : Blake2b224;
+    assetName : String(128);
+}
+
+// -----------------------------------------------------
+// Addresses & Balance
+// -----------------------------------------------------
 entity Addresses : temporal {
-    key bech32      : String(120);
-        paymentKind : String(10);
-        paymentHash : Blake2b224;
-        label       : String(80);
+    key bech32        : String(120);
+        stakeAddress  : String(120);
+        type          : String(20);
+        isScript      : Boolean;
+        totalLovelace : Lovelace;
+        assets        : Composition of many AddressAssets
+                            on assets.address = $self;
 }
 
-// Assets & Value
-entity Assets : cuid, temporal {
-    key ID        : UUID;
-        policyId  : Blake2b224; // PolicyId = Hash<Blake2b_224, Script>
-        assetName : String(64); // hex-encoded AssetName (0..32 bytes)
-        symbol    : String(40);
-        decimals  : Integer;
-        metadata  : LargeString; // optional JSON (token metadata)
+entity AddressAssets : temporal {
+    key address : Association to Addresses;
+    key unit    : AssetUnit;
+        asset   : AssetSlice;
 }
 
-// flattened Value entries per transaction input/output
-entity TransactionInputAssets : cuid {
-    key ID        : UUID;
-        input     : Association to TransactionInputs;
-        policyId  : Blake2b224;
-        assetName : String(64);
-        quantity  : Decimal(38, 0);
+
+// -----------------------------------------------------
+// Transactions (high-level metadata)
+// -----------------------------------------------------
+entity Transactions : temporal {
+    key hash                 : Blake2b256 @assert.format: '^[a-f0-9]{64}$';
+        blockHash            : Blake2b256;
+        blockHeight          : Integer;
+        blockTime            : Timestamp;
+        slot                 : Integer;
+        txIndex              : Integer;
+        fee                  : Lovelace;
+        deposit              : Lovelace;
+        size                 : Integer;
+        utxoCount            : Integer;
+        withdrawalCount      : Integer;
+        mirCertCount         : Integer;
+        delegationCount      : Integer;
+        stakeCertCount       : Integer;
+        poolUpdateCount      : Integer;
+        poolRetireCount      : Integer;
+        assetMintOrBurnCount : Integer;
+        redeemerCount        : Integer;
+        validContract        : Boolean;
+        metadata             : Association to Metadata;
+        inputs               : Composition of many TransactionInputs
+                                   on inputs.txHash = $self.hash;
+        outputs              : Composition of many TransactionOutputs
+                                   on outputs.txHash = $self.hash;
 }
 
-entity TransactionOutputAssets : cuid {
-    key ID        : UUID;
-        output    : Association to TransactionOutputs;
-        policyId  : Blake2b224;
-        assetName : String(64);
-        quantity  : Decimal(38, 0);
-}
-
-// Metadata
-
-entity Metadata : cuid, temporal {
-    key ID    : UUID;
-        label : String(200);
-        json  : LargeString; // raw JSON as string
-}
-
-// Transactions
-entity Transactions : cuid, temporal {
-    key ID        : UUID;
-        hash      : Blake2b256 @assert.format: '^[a-f0-9]{64}$';
-        block     : Integer;
-        blockTime : Timestamp;
-        fee       : Lovelace;
-        metadata  : Association to Metadata;
-        inputs    : Composition of many TransactionInputs
-                        on inputs.tx = $self;
-        outputs   : Composition of many TransactionOutputs
-                        on outputs.tx = $self;
-}
-
+// -----------------------------------------------------
 // Transaction Inputs
-entity TransactionInputs : cuid {
-    key ID            : UUID;
-        tx            : Association to Transactions;
-        index         : Integer;
-        sourceTxHash  : Blake2b256;
-        sourceIndex   : Integer;
-        address       : Association to Addresses;
-        valueLovelace : Lovelace;
-        assets        : Composition of many TransactionInputAssets
-                            on assets.input = $self;
-        datumHash     : Blake2b256;
+// -----------------------------------------------------
+entity TransactionInputs : temporal {
+    key txHash            : Blake2b256;
+    key inputIndex        : Integer;
+        tx                : Association to Transactions
+                                on tx.hash = txHash;
+        sourceTxHash      : Blake2b256;
+        sourceOutputIndex : Integer;
+        utxo              : UTxOSlice;
+        isCollateral      : Boolean;
+        isReference       : Boolean;
+        assets            : Composition of many TransactionInputAssets
+                                on  assets.txHash     = $self.txHash
+                                and assets.inputIndex = $self.inputIndex;
 }
 
-// Transaction Outputs
-entity TransactionOutputs : cuid {
-    key ID              : UUID;
-        tx              : Association to Transactions;
-        index           : Integer;
-        address         : Association to Addresses;
-        valueLovelace   : Lovelace;
-        assets          : Composition of many TransactionOutputAssets
-                              on assets.output = $self;
-        datumKind       : String(10);
-        datumHash       : Blake2b256;
-        inlineDatumCbor : HexBytes;
-        referenceScript : Blake2b224;
+entity TransactionInputAssets : temporal {
+    key txHash     : Blake2b256;
+    key inputIndex : Integer;
+    key unit       : AssetUnit;
+        asset      : AssetSlice;
 }
 
-// Datums
+// -----------------------------------------------------
+// Transaction Outputs  (potentielle UTxOs einer Tx)
+// -----------------------------------------------------
+entity TransactionOutputs : temporal {
+    key txHash           : Blake2b256; // Hash der Transaktion
+    key outputIndex      : Integer; // output_index im outputs[]-Array
+        tx               : Association to Transactions
+                               on tx.hash = txHash;
+        utxo             : UTxOSlice;
+        consumedByTxHash : Blake2b256; // Hash der Tx, die diesen Output als Input konsumiert (optional/null)
+        assets           : Composition of many TransactionOutputAssets
+                               on  assets.txHash      = $self.txHash
+                               and assets.outputIndex = $self.outputIndex;
+}
+
+entity TransactionOutputAssets : temporal {
+    key txHash      : Blake2b256;
+    key outputIndex : Integer;
+    key unit        : AssetUnit;
+        asset       : AssetSlice;
+}
+
+
+// -----------------------------------------------------
+// Current UTxO Set (spendable UTxOs)
+// -----------------------------------------------------
+entity UTxOs : temporal {
+    key txHash      : Blake2b256;
+    key outputIndex : Integer;
+        utxo        : UTxOSlice;
+        spent       : Boolean; // false = unspent, true = bereits verbraucht
+}
+
+
+// -----------------------------------------------------
+// Inline Datums (decoded)
+// -----------------------------------------------------
 entity Datums {
     key hash        : Blake2b256;
         rawCbor     : HexBytes;
         typeName    : String(80);
         decodedJson : LargeString;
         createdAt   : Timestamp;
+}
+
+// -----------------------------------------------------
+// CIP-10 Metadata
+// -----------------------------------------------------
+entity Metadata {
+    key txHash      : Blake2b256;
+        rawCbor     : HexBytes;
+        createdAt   : Timestamp;
+        decodedJson : LargeString;
 }
