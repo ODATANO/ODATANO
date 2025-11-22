@@ -20,8 +20,15 @@ cp .env.example .env
 **Configuration (.env):**
 
 ```env
-BLOCKFROST_KEY=your_api_key_here         # Blockfrost API key (optional)
-PORT=4004                                # Server port
+# Blockfrost API key ( get more infos on https://blockfrost.io )
+BLOCKFROST_KEY=your_api_key_here
+
+# Timeout settings (milliseconds)
+PRIMARY_TIMEOUT_MS=8000
+FALLBACK_TIMEOUT_MS=8000
+
+# Data Age settings
+ADDR_MAX_AGE_MIN=1
 ```
 
 ### 3. Start Server
@@ -34,7 +41,9 @@ cds watch
 
 ## Main Cardano Endpoints
 
-### 1. Get Transaction Details
+### 1. Get Transaction Details http://localhost:4004/odata/v4/cardano-odata/Transactions('tx hash')
+
+#### Example Call:
 
 ```bash
 curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('1932fa826ee085666c012b7e464562e455309b33637af2929a9c1cdd00842c2a')"
@@ -68,7 +77,9 @@ ParsedHtml        : mshtml.HTMLDocumentClass
 RawContentLength  : 527
 ```
 
-### 2. Check Addresses
+### 2. Check Addresses http://localhost:4004/odata/v4/cardano-odata/Addresses('bench32 address')
+
+#### Example Call:
 
 ```bash
 curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')"
