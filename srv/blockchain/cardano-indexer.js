@@ -18,41 +18,33 @@ const { UPSERT } = cds.ql;
 
 class CardanoIndexer {
   /**
-   * Index a single transaction (and optionally inputs/outputs/assets/UTxOs/addresses)
+   * Index a single transaction with inputs/outputs/assets/UTxOs/addresses
    *
    * @param {cds.Transaction} tx  - CAP transaction (cds.tx(req))
    * @param {string} txHash       - transaction hash (hex)
-   * @param {object} options      - toggles for what to index
    */
   async indexTransaction(tx, txHash, options = {}) {
-    const {
-      indexInputs = true,
-      indexOutputs = true,
-      indexUTxOs = false,
-      indexAddresses = false,
-    } = options;
 
-    // getting data from cardano data provider
+    // getting data from cardano data provider (@TODO add tx metadata)
     const { tx: providerTx, txUtxos } = await cardano.getTransaction(txHash);
     console.log(providerTx)
     if (!providerTx) {
       throw new Error(`Transaction ${txHash} not found at provider`);
     }
-
-    // 2) Transactions-Entity mappen & upserten
+    // transactions-entity mappen & upserten
     const txRow = mapTransaction(providerTx);
     await tx.run(
       UPSERT.into('odatano.cardano.Transactions').entries(txRow)
     );
 
-    // 3) Optional: Adressen indexieren (aus Inputs & Outputs gesammelt)
-    if (indexAddresses && txUtxos) {
+    // get in tx involved addresses  
+    if (txUtxos) {
       const addresses = this._collectAddressesFromUtxos(txUtxos);
       await this._ensureAddresses(tx, addresses);
     }
 
-    // 4) Inputs + InputAssets indexieren
-    if (indexInputs && txUtxos) {
+    // index tx inputs with utxos and assets
+    if (txUtxos) {
       const inputRows = mapTransactionInputs(txHash, txUtxos);
       const inputAssetRows = mapTransactionInputAssets(txHash, txUtxos);
 
@@ -71,8 +63,8 @@ class CardanoIndexer {
       }
     }
 
-    // 5) Outputs + OutputAssets indexieren
-    if (indexOutputs && txUtxos) {
+    // index tx outputs with utxos and assets
+    if (txUtxos) {
       const outputRows = mapTransactionOutputs(txHash, txUtxos);
       const outputAssetRows = mapTransactionOutputAssets(txHash, txUtxos);
 
@@ -90,18 +82,7 @@ class CardanoIndexer {
         );
       }
     }
-
-    // 6) Optional: aktuelles UTxO-Set aus Outputs ableiten
-    if (indexUTxOs && txUtxos) {
-      const utxoRows = mapUTxOsFromOutputs(txHash, txUtxos);
-      if (utxoRows.length) {
-        await tx.run(
-          UPSERT.into('odatano.cardano.UTxOs').entries(utxoRows)
-        );
-      }
-    }
-
-    // Ergebnis für den Aufrufer (z. B. READ-Handler)
+    // result for CAP Handler
     return txRow;
   }
 
@@ -139,7 +120,7 @@ class CardanoIndexer {
   }
 
   /**
-   * Hilfsfunktion: alle beteiligten Adressen aus txUtxos sammeln
+   * Helper: collect all involed Adresses form a txUtxos set
    */
   _collectAddressesFromUtxos(txUtxos) {
     const set = new Set();
@@ -155,7 +136,7 @@ class CardanoIndexer {
   }
 
   /**
-   * Hilfsfunktion: mehrere Adressen sicherstellen (UPSERT)
+   * Helper: index multiple addresses with assets  
    */
   async _ensureAddresses(tx, bech32List) {
     for (const bech32 of bech32List) {

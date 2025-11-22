@@ -31,7 +31,13 @@ FALLBACK_TIMEOUT_MS=8000
 ADDR_MAX_AGE_MIN=1
 ```
 
-### 3. Start Server
+### 3. Create Local Sqlight DB
+
+```bash
+cds deploy
+```
+
+### 4. Start Server
 
 ```bash
 cds watch

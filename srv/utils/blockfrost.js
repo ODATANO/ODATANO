@@ -39,15 +39,8 @@ class BlockfrostConnector {
 	async getTransaction(hash) {
  		try {
  			const tx = await this.api.txs(hash);
-
-			console.log("TX:",tx);
- 			
- 			// Fetch full transaction details (inputs, outputs, etc.)
  			const txUtxos = await this.api.txsUtxos(hash);
-			console.log("UTXOS:",txUtxos);
  			const txMetadata = await this.api.txsMetadata(hash);
- 			console.log("META:",txMetadata);
- 		
  			return {
 				tx,
  				txUtxos,

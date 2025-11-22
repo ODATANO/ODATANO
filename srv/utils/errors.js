@@ -6,13 +6,13 @@ function mapProviderError(err) {
   // HTTP error handling
   if (err && err.response && err.response.status) {
     status = err.response.status;
-    // Try to extract helpful message
+    // try to extract helpful message
     message = err.response.data && (err.response.data.error || err.response.data.message)
       ? (err.response.data.error || err.response.data.message)
       : `Provider returned HTTP ${status}`;
   }
 
-  // Timeouts / network errors
+  // timeouts / network errors
   if (err && (err.code === 'ECONNABORTED' || message.toLowerCase().includes('timed out') || message.toLowerCase().includes('timeout'))) {
     status = 503;
     message = 'Provider timeout or unreachable';

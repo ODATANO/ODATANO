@@ -45,3 +45,5 @@ docs/DEVELOPER_GUIDE.md
 docs/USER_GUIDE.md
 docs/QUICK_START.md
 .nyc_output
+db.sqlite-shm
+db.sqlite-wal
