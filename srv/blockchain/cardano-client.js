@@ -10,14 +10,14 @@ class CardanoClient {
   _ensureInitialized() {
     if (!this.primary) {
       try {
-        this.primary = new (require('./blockfrost'))();
+        this.primary = new (require('../utils/blockfrost'))();
       } catch (e) {
         console.error('[CardanoClient] Failed to initialize Blockfrost:', e.message);
       }
     }
     if (!this.fallback) {
       try {
-        this.fallback = new (require('./koios'))();
+        this.fallback = new (require('../utils/koios'))();
       } catch (e) {
         console.error('[CardanoClient] Failed to initialize Koios:', e.message);
       }
@@ -39,7 +39,9 @@ class CardanoClient {
     try {
       if (this.primary) {
         console.log('[CardanoClient] Calling primary.', method);
-        return await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
+        let result = await this._withTimeout(this.primary[method](...args), PRIMARY_TIMEOUT_MS, `Primary ${method}`);
+        console.log(result);
+        return result;
       }
     } catch (errPrimary) {
       console.warn(`Primary ${method} failed → ${errPrimary.message} → trying fallback`);
@@ -57,18 +59,10 @@ class CardanoClient {
 
   // convenience wrappers
   async getTransaction(hash) {
+
     // get basic tx info (with primary/fallback)
     const tx = await this.request('getTransaction', hash);
-    // try to fetch metadata (best-effort)
-    try {
-      const meta = await this.request('getTransactionMetadata', hash);
-      tx.metadata = meta;
-    } catch (err) {
-      // if metadata not found, ignore; otherwise bubble up if providers both fail
-      if (err.message && err.message.includes('Both providers failed')) throw err;
-    }
-    return tx;
-  }
+    return tx; }
 
   async getAddress(address)  { 
     return this.request('getAddress', address); }

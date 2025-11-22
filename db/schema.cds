@@ -17,19 +17,16 @@ type AssetUnit  : String(120);
 
 // UTxO / IO structural block
 type UTxOSlice {
-    address         : Association to Addresses;
-    valueLovelace   : Lovelace;
-    datumHash       : Blake2b256;
-    inlineDatum     : HexBytes;
-    referenceScript : HexBytes;
-    isScript        : Boolean;
+    address             : Association to Addresses;
+    valueLovelace       : Lovelace;
+    dataHash            : Blake2b256;
+    inlineDatum         : HexBytes;
+    referenceScriptHash : HexBytes;
 }
 
 // Asset structural block
 type AssetSlice {
-    unit      : AssetUnit;
     quantity  : Lovelace;
-    isAda     : Boolean;
     policyId  : Blake2b224;
     assetName : String(128);
 }
@@ -44,20 +41,20 @@ entity Addresses : temporal {
         isScript      : Boolean;
         totalLovelace : Lovelace;
         assets        : Composition of many AddressAssets
-                            on assets.address = $self;
+                            on assets.bech32 = $self;
 }
 
 entity AddressAssets : temporal {
-    key address : Association to Addresses;
-    key unit    : AssetUnit;
-        asset   : AssetSlice;
+    key bech32 : Association to Addresses;
+    key unit   : AssetUnit;
+        asset  : AssetSlice;
 }
 
 
 // -----------------------------------------------------
 // Transactions (high-level metadata)
 // -----------------------------------------------------
-entity Transactions : temporal {
+entity Transactions {
     key hash                 : Blake2b256 @assert.format: '^[a-f0-9]{64}$';
         blockHash            : Blake2b256;
         blockHeight          : Integer;
@@ -87,7 +84,7 @@ entity Transactions : temporal {
 // -----------------------------------------------------
 // Transaction Inputs
 // -----------------------------------------------------
-entity TransactionInputs : temporal {
+entity TransactionInputs {
     key txHash            : Blake2b256;
     key inputIndex        : Integer;
         tx                : Association to Transactions
@@ -102,7 +99,7 @@ entity TransactionInputs : temporal {
                                 and assets.inputIndex = $self.inputIndex;
 }
 
-entity TransactionInputAssets : temporal {
+entity TransactionInputAssets {
     key txHash     : Blake2b256;
     key inputIndex : Integer;
     key unit       : AssetUnit;
@@ -112,7 +109,7 @@ entity TransactionInputAssets : temporal {
 // -----------------------------------------------------
 // Transaction Outputs  (potentielle UTxOs einer Tx)
 // -----------------------------------------------------
-entity TransactionOutputs : temporal {
+entity TransactionOutputs {
     key txHash           : Blake2b256; // Hash der Transaktion
     key outputIndex      : Integer; // output_index im outputs[]-Array
         tx               : Association to Transactions
@@ -124,7 +121,7 @@ entity TransactionOutputs : temporal {
                                and assets.outputIndex = $self.outputIndex;
 }
 
-entity TransactionOutputAssets : temporal {
+entity TransactionOutputAssets {
     key txHash      : Blake2b256;
     key outputIndex : Integer;
     key unit        : AssetUnit;
