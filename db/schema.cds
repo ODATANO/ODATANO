@@ -14,25 +14,24 @@ type AssetUnit  : String(120);
 // -----------------------------------------------------
 // Shared structural slices
 // -----------------------------------------------------
+// asset structural block
+type AssetSlice {
+    quantity     : Lovelace;
+    policyId     : Blake2b224;
+    assetNameHex : String(14);
+    assetName    : String(128);
+    fingerprint  : String(120);
+}
 
 // UTxO / IO structural block
-type UTxOSlice {
-    address             : Association to Addresses;
-    valueLovelace       : Lovelace;
+type UTxODataSlice {
     dataHash            : Blake2b256;
     inlineDatum         : HexBytes;
     referenceScriptHash : HexBytes;
 }
 
-// Asset structural block
-type AssetSlice {
-    quantity  : Lovelace;
-    policyId  : Blake2b224;
-    assetName : String(128);
-}
-
 // -----------------------------------------------------
-// Addresses & Balance
+// Address related Entitys
 // -----------------------------------------------------
 entity Addresses : temporal {
     key bech32        : String(120);
@@ -44,10 +43,31 @@ entity Addresses : temporal {
                             on assets.bech32 = $self;
 }
 
+// assets in one adress independet from the utxos
 entity AddressAssets : temporal {
     key bech32 : Association to Addresses;
     key unit   : AssetUnit;
         asset  : AssetSlice;
+}
+
+// utxos on a specific address
+entity AddressUtxos : temporal {
+    key bench32   : Association to Addresses;
+    key hash      : Association to Transactions;
+    key index     : Integer;
+        blockHash : Blake2b256;
+        utxodata  : UTxODataSlice;
+        assets    : Composition of many UtxoAssets
+                        on assets.hash = $self.hash;
+
+}
+
+// utxo specific assets
+entity UtxoAssets {
+    key hash       : Blake2b256;
+    key inputIndex : Integer;
+    key unit       : AssetUnit;
+        asset      : AssetSlice;
 }
 
 
@@ -91,7 +111,7 @@ entity TransactionInputs {
                                 on tx.hash = txHash;
         sourceTxHash      : Blake2b256;
         sourceOutputIndex : Integer;
-        utxo              : UTxOSlice;
+        utxo              : UTxODataSlice;
         isCollateral      : Boolean;
         isReference       : Boolean;
         assets            : Composition of many TransactionInputAssets
@@ -114,7 +134,7 @@ entity TransactionOutputs {
     key outputIndex      : Integer; // output_index im outputs[]-Array
         tx               : Association to Transactions
                                on tx.hash = txHash;
-        utxo             : UTxOSlice;
+        utxo             : UTxODataSlice;
         consumedByTxHash : Blake2b256; // Hash der Tx, die diesen Output als Input konsumiert (optional/null)
         assets           : Composition of many TransactionOutputAssets
                                on  assets.txHash      = $self.txHash
@@ -128,35 +148,11 @@ entity TransactionOutputAssets {
         asset       : AssetSlice;
 }
 
-
 // -----------------------------------------------------
-// Current UTxO Set (spendable UTxOs)
-// -----------------------------------------------------
-entity UTxOs : temporal {
-    key txHash      : Blake2b256;
-    key outputIndex : Integer;
-        utxo        : UTxOSlice;
-        spent       : Boolean; // false = unspent, true = bereits verbraucht
-}
-
-
-// -----------------------------------------------------
-// Inline Datums (decoded)
-// -----------------------------------------------------
-entity Datums {
-    key hash        : Blake2b256;
-        rawCbor     : HexBytes;
-        typeName    : String(80);
-        decodedJson : LargeString;
-        createdAt   : Timestamp;
-}
-
-// -----------------------------------------------------
-// CIP-10 Metadata
+// Tx Metadata
 // -----------------------------------------------------
 entity Metadata {
-    key txHash      : Blake2b256;
+    key txHash      : Association to Transactions;
         rawCbor     : HexBytes;
-        createdAt   : Timestamp;
         decodedJson : LargeString;
 }
