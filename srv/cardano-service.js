@@ -6,8 +6,6 @@ const { mapError } = require('./utils/mappers');
 
 const { SELECT, INSERT } = cds.ql;
 
-const MAX_AGE_MINUTES = process.env.ADDR_MAX_AGE_MIN || 1;
-const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
 
 module.exports = cds.service.impl(function () {
   const {
@@ -73,24 +71,24 @@ module.exports = cds.service.impl(function () {
     const db = cds.tx(req);
 
     try {
-      const bech32 = req.data?.bech32;
+      const addr = req.data?.address;
 
       // read by primary key
-      if (bech32) {
-        if (!isBech32Address(bech32)) {
+      if (addr) {
+        if (!isBech32Address(addr)) {
           return req.error(400, 'Invalid bech32 address');
         }
-        // check db
         const existing = await db.run(
-          SELECT.one.from(Addresses).where({ bech32 })
+          SELECT.one.from(Addresses).where({ address: addr })
         );
         if (existing) {
             return existing;
         }
         // re-index address via indexer
-        console.log('[CardanoService] Indexing address:', bech32);
+        console.log('[CardanoService] Indexing address:', addr);
 
-        const { address } = await indexer.indexAddress(db, bech32);
+        const address = await indexer.indexAddress(db, addr);
+        console.log('[CardanoService] Indexed',address);
         return address;
       }
       // else use odata query
@@ -115,20 +113,6 @@ module.exports = cds.service.impl(function () {
   });
 
   // --------------------------------------------------------------------------
-  // UTxOs
-  // --------------------------------------------------------------------------
-  this.on('READ', UTxOs, async (req) => {
-    const db = cds.tx(req);
-    try {
-      // TODO: Optionally trigger indexTransaction(..., indexUTxOs=true)
-      return db.run(req.query);
-    } catch (e) {
-      console.error('[CardanoService] UTxOs error:', e);
-      return mapError(req, e, 'UTxOs');
-    }
-  });
-
-  // --------------------------------------------------------------------------
   // Metadata
   // --------------------------------------------------------------------------
   this.on('READ', Metadata, async (req) => {
@@ -138,19 +122,6 @@ module.exports = cds.service.impl(function () {
     } catch (e) {
       console.error('[CardanoService] Metadata error:', e);
       return mapError(req, e, 'Metadata');
-    }
-  });
-
-  // --------------------------------------------------------------------------
-  // Datums
-  // --------------------------------------------------------------------------
-  this.on('READ', Datums, async (req) => {
-    const db = cds.tx(req);
-    try {
-      return db.run(req.query);
-    } catch (e) {
-      console.error('[CardanoService] Datums error:', e);
-      return mapError(req, e, 'Datums');
     }
   });
 

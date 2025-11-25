@@ -8,7 +8,7 @@ namespace odatano.cardano;
 type Blake2b224    : String(56); // 28 bytes hex
 type Blake2b256    : String(64); // 32 bytes hex
 type HexBytes      : String(4000); // CBOR / bytes as hex
-type Lovelace      : Decimal(20, 0); // up to 1e20
+type Lovelace      : Decimal(20, 0);
 type AssetUnit     : String(120);
 type bech32        : String(120);
 type MetadataLabel : Integer;
@@ -25,7 +25,7 @@ type AssetSlice {
     fingerprint  : String(120);
 }
 
-// UTxO / IO structural block
+// UTxO structural data block
 type UTxODataSlice {
     dataHash            : Blake2b256;
     inlineDatum         : HexBytes;
@@ -43,6 +43,8 @@ entity Addresses : temporal {
         totalLovelace : Lovelace;
         assets        : Composition of many AddressAssets
                             on assets.address = $self;
+        utxos         : Composition of many AddressUtxos
+                            on utxos.address = $self;
 }
 
 // assets in one address independet from the utxos
@@ -72,7 +74,7 @@ entity UtxoAssets {
 }
 
 // -----------------------------------------------------
-// Transactions (high-level metadata)
+// Transactions
 // -----------------------------------------------------
 entity Transactions {
     key hash                 : Blake2b256 @assert.format: '^[a-f0-9]{64}$';
@@ -150,7 +152,9 @@ entity TransactionOutputAssets {
         asset       : AssetSlice;
 }
 
-
+// -----------------------------------------------------
+// Transaction Metadata
+// -----------------------------------------------------
 entity Metadata {
     key txHash      : Blake2b256;
         label       : MetadataLabel;

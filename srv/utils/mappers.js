@@ -1,19 +1,13 @@
 'use strict';
 
-// -----------------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------------
-const MAX_AGE_MS = 1000 * 60 * 60 * 24; // 24h Gültigkeit für Address-Snapshots
+const MAX_AGE_MINUTES = process.env.ADDR_MAX_AGE_MIN || 1;
+const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
 
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------
-// Blockfrost / Koios TX → odatano.cardano.Transactions
 function mapTransaction(providerTx) {
   if (!providerTx) return null;
-
-  const now = new Date();
-
   return {
     hash: providerTx.hash,
     blockHash: providerTx.block,
@@ -58,12 +52,9 @@ function mapTransactionInputs(txHash, txUtxos) {
 
     return {
       txHash,
-      inputIndex,                        // key
-
+      inputIndex,                       
       sourceTxHash: input.tx_hash,
       sourceOutputIndex: input.output_index,
-
-      // UTxOSlice (flach: utxo_*)
       utxo_address_bech32: input.address,
       utxo_valueLovelace: valueLovelace,
       utxo_datumHash: input.data_hash || null,
@@ -128,7 +119,6 @@ function mapTransactionInputAssets(txHash, txUtxos) {
 // -----------------------------------------------------------------------------
 // Transaction Outputs
 // -----------------------------------------------------------------------------
-// txUtxos → odatano.cardano.TransactionOutputs
 function mapTransactionOutputs(txHash, txUtxos) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
@@ -144,8 +134,6 @@ function mapTransactionOutputs(txHash, txUtxos) {
     return {
       txHash,
       outputIndex,
-
-      // UTxOSlice flach
       utxo_address_bech32: output.address,
       utxo_valueLovelace: valueLovelace,
       utxo_datumHash: output.data_hash || null,
@@ -156,13 +144,11 @@ function mapTransactionOutputs(txHash, txUtxos) {
         output.data_hash ||
         output.reference_script_hash
       ),
-
       consumedByTxHash: output.consumed_by_tx || null,
     };
   });
 }
 
-// txUtxos → odatano.cardano.TransactionOutputAssets
 function mapTransactionOutputAssets(txHash, txUtxos) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
@@ -244,46 +230,56 @@ function mapUTxOsFromOutputs(txHash, txUtxos) {
 // -----------------------------------------------------------------------------
 // Addresses
 // -----------------------------------------------------------------------------
-// bech32 + Blockfrost address response → odatano.cardano.Addresses
-function mapAddress(bech32, provider = {}) {
-  const data = provider.data || provider; // flexibler
-
+function mapAddress(address, provider = {}) {
+  const data = provider.data;
+  const validTo = new Date(new Date().getTime() + MAX_AGE_MS);
   const now = new Date();
-  const validTo = new Date(now.getTime() + MAX_AGE_MS);
-
-  const stakeAddress = data.stake_address || null;
-  const type = data.type ?? 'unknown';
-  const isScript = data.script === true || data.type === 'script';
-
+  // total address lovelance
   const totalLovelace =
     Array.isArray(data.amount)
       ? data.amount.find(a => a.unit === 'lovelace')?.quantity || '0'
       : '0';
 
   return {
-    bech32,
-    stakeAddress,
-    type,
-    isScript,
-    totalLovelace,
+    address: address,
+    stakeAddress: data.stakeAddress || null,
+    type: data.type ?? 'unknown',
+    isScript:  data.script === true || data.type === 'script',
+    totalLovelace: totalLovelace,
     validFrom: now,
-    validTo,
+    validTo: validTo,
   };
 }
 
-// bech32 + Blockfrost address response → odatano.cardano.AddressAssets
-function mapAddressAssets(bech32, validFrom, validTo, provider = {}) {
-  const data = provider.data || provider;
-  const amounts = data?.amount;
+function mapAddressUtxos(addr, validTo, provider = {}) {
+  const data = provider.data;
+  const now = new Date();
+  if (!Array.isArray(data)) return [];
+  return data
+    .map(a => {
+      return {
+        address_address: addr,
+        hash:  a.tx_hash,
+        index: a.output_index,
+        blockHash: a.block,
+        data_hash: a.data_hash,
+        inline_datum: a.inline_datum,
+        reference_script_hash: a.reference_script_hash,
+        validFrom: now,
+        validTo: validTo,
+      };
+    });
+}
+
+function mapAddressAssets(addr, validTo, provider = {}) {
+  const amounts = provider.data?.amount;
+  const now = new Date();
   if (!Array.isArray(amounts)) return [];
 
   return amounts
     .filter(a => a.unit !== 'lovelace')
     .map(a => {
-      const unit = a.unit;
-      const quantity = a.quantity;
-      const policyId = unit.slice(0, 56);
-      const assetNameHex = unit.slice(56);
+      const assetNameHex = a.unit.slice(56);
 
       let assetName;
       try {
@@ -293,14 +289,13 @@ function mapAddressAssets(bech32, validFrom, validTo, provider = {}) {
       }
 
       return {
-        // Association key → FK-Spalte
-        bech32_bech32: bech32,
-        unit,
-        validFrom,
-        validTo,
-        asset_quantity: quantity,
-        asset_policyId: policyId,
-        asset_assetName: assetName,
+        address_address: addr,
+        unit: a.unit,
+        validFrom: now,
+        validTo: validTo,
+        asset_quantity:  a.quantity,
+        asset_policyId:  a.unit.slice(0, 56),
+        asset_assetName: assetName
       };
     });
 }
@@ -309,7 +304,6 @@ function mapAddressAssets(bech32, validFrom, validTo, provider = {}) {
 // Error Mapping
 // -----------------------------------------------------------------------------
 function mapProviderError(err) {
-  // Minimaler Default – kannst du mit deiner bestehenden Logik ersetzen
   return {
     status: err.status || err.code || 500,
     message: err.message || String(err),
@@ -335,5 +329,6 @@ module.exports = {
   mapUTxOsFromOutputs,
   mapAddress,
   mapAddressAssets,
+  mapAddressUtxos,
   mapError,
 };

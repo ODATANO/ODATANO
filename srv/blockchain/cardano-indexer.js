@@ -12,6 +12,7 @@ const {
   mapUTxOsFromOutputs,
   mapAddress,
   mapAddressAssets,
+  mapAddressUtxos,
 } = require('../utils/mappers');
 
 const { UPSERT } = cds.ql;
@@ -87,36 +88,34 @@ class CardanoIndexer {
   }
 
   /**
-   * Index a single address (Addresses + AddressAssets)
-   *
-   * @param {cds.Transaction} tx
-   * @param {string} bech32
+   * Index a single address (Addresses + AddressAssets + AddressUtxos )
    */
-  async indexAddress(tx, bech32) {
-    const addrData = await cardano.getAddress(bech32);
+  async indexAddress(tx, addr) {
+    const addrData = await cardano.getAddress(addr);
 
     // Address baseline
-    const addrEntity = mapAddress(bech32, addrData);
-    const assetEntities = mapAddressAssets(
-      bech32,
-      addrEntity.validFrom,
-      addrEntity.validTo,
-      addrData
-    );
+    const addrEntity = mapAddress(addr, addrData);
 
-    // Addresses upserten
-    await tx.run(
-      UPSERT.into('odatano.cardano.Addresses').entries(addrEntity)
-    );
+    // Addresses upsert
+    await tx.run( UPSERT.into('odatano.cardano.Addresses').entries(addrEntity));
 
-    // AddressAssets upserten
-    if (assetEntities.length) {
-      await tx.run(
-        UPSERT.into('odatano.cardano.AddressAssets').entries(assetEntities)
-      );
-    }
+    const assetEntitys = mapAddressAssets( addr, addrEntity.validTo, addrData);
 
-    return { address: addrEntity, assets: assetEntities };
+    // Address Assets upsert
+    await tx.run( UPSERT.into('odatano.cardano.AddressAssets').entries(assetEntitys));
+
+    addrEntity.assets =  assetEntitys;
+
+    const utxo_data = await cardano.getAddressUtxos();
+
+    const utxoEntitys = mapAddressUtxos(addr, addrEntity.validTo, utxo_data );
+    
+    // Address Utxos upsert
+    await tx.run(UPSERT.into('odatano.cardano.AddressUtxos').entries(utxoEntitys));
+
+    addrEntity.AddressUtxos = utxoEntitys;
+
+    return addrEntity;
   }
 
   /**
