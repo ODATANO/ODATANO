@@ -12,27 +12,18 @@ class BlockfrostConnector {
 			const latestBlock = await this.api.blocksLatest();
 			const networkInfo = await this.api.network();
 			const latestEpoch = await this.api.epochsLatest();
+			const health = await this.api.health();
 			
 			return {
 				latestBlock: latestBlock.height,
 				network: networkInfo.network,
-				latestEpoch: latestEpoch.epoch
+				latestEpoch: latestEpoch.epoch,
+				health: health,
 			};
 		}
 		catch (err) {
 			throw err;
 		}
-	}
-
-	// get blockfrost api health
-	async get_apiHealth() {
-		try {
-			const health = await this.api.health();
-			return health;
-		}
-		catch (err) { 
-			throw err; 
-		}		
 	}
 
 	// get transaction
@@ -44,7 +35,7 @@ class BlockfrostConnector {
  			return {
 				tx,
  				txUtxos,
-				//txMetadata
+				txMetadata
  			};
  		} 
 		catch (err) {
@@ -57,6 +48,18 @@ class BlockfrostConnector {
 	async getAddress(address) {
 		try {
  			const data = await this.api.addresses(address);
+			return { data };
+		} 
+		catch (err) {
+ 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
+	}
+
+	// get address
+	async getAddressUtxos(address) {
+		try {
+ 			const data = await this.api.addressesUtxosAll(address);
 			return { data };
 		} 
 		catch (err) {

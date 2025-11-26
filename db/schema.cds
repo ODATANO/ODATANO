@@ -1,4 +1,7 @@
-using {temporal} from '@sap/cds/common';
+using {
+    temporal,
+    cuid
+} from '@sap/cds/common';
 
 namespace odatano.cardano;
 
@@ -7,10 +10,13 @@ namespace odatano.cardano;
 // -----------------------------------------------------
 type Blake2b224    : String(56); // 28 bytes hex
 type Blake2b256    : String(64); // 32 bytes hex
-type HexBytes      : String(4000); // CBOR / bytes as hex
+type HexBytes      : String(8192); // CBOR / bytes as hex
 type Lovelace      : Decimal(20, 0);
 type AssetUnit     : String(120);
-type bech32        : String(120);
+
+type bech32        : String(120)
+@assert.format: '^(addr1|stake1|addr_test1|stake_test1)[0-9a-z]+$';
+
 type MetadataLabel : Integer;
 
 // -----------------------------------------------------
@@ -20,16 +26,26 @@ type MetadataLabel : Integer;
 type AssetSlice {
     quantity     : Lovelace;
     policyId     : Blake2b224;
-    assetNameHex : String(14);
+    assetNameHex : String(64);
     assetName    : String(128);
-    fingerprint  : String(120);
+    fingerprint  : String(44);
 }
 
 // UTxO structural data block
 type UTxODataSlice {
     dataHash            : Blake2b256;
     inlineDatum         : HexBytes;
-    referenceScriptHash : HexBytes;
+    referenceScriptHash : Blake2b256;
+}
+
+// -----------------------------------------------------
+// Network Info Entity
+// -----------------------------------------------------
+entity NetworkInformation : temporal, cuid {
+    latestBlock : Blake2b256;
+    network     : String(14);
+    latestEpoch : String(3);
+    apiHealth   : String(10);
 }
 
 // -----------------------------------------------------
@@ -43,7 +59,7 @@ entity Addresses : temporal {
         totalLovelace : Lovelace;
         assets        : Composition of many AddressAssets
                             on assets.address = $self;
-        utxos         : Composition of many AddressUtxos
+        utxos         : Composition of many AddressUTxOs
                             on utxos.address = $self;
 }
 
@@ -55,22 +71,21 @@ entity AddressAssets : temporal {
 }
 
 // current utxos on a specific address
-entity AddressUtxos : temporal {
+entity AddressUTxOs : temporal {
     key address   : Association to Addresses;
     key hash      : Blake2b256;
     key index     : Integer;
         blockHash : Blake2b256;
         utxodata  : UTxODataSlice;
-        assets    : Composition of many UtxoAssets
-                        on assets.hash = $self.hash;
+        assets    : Composition of many UTxOAssets
+                        on assets.utxo = $self;
 }
 
 // utxo specific assets
-entity UtxoAssets {
-    key hash       : Blake2b256;
-    key inputIndex : Integer;
-    key unit       : AssetUnit;
-        asset      : AssetSlice;
+entity UTxOAssets : cuid {
+    utxo  : Association to AddressUTxOs;
+    unit  : AssetUnit;
+    asset : AssetSlice;
 }
 
 // -----------------------------------------------------
@@ -81,7 +96,7 @@ entity Transactions {
         blockHash            : Blake2b256;
         blockHeight          : Integer;
         blockTime            : Timestamp;
-        slot                 : Integer;
+        slot                 : Integer64;
         txIndex              : Integer;
         fee                  : Lovelace;
         deposit              : Lovelace;
@@ -97,66 +112,56 @@ entity Transactions {
         redeemerCount        : Integer;
         validContract        : Boolean;
         metadata             : Association to Metadata
-                                   on metadata.txHash = $self.hash;
+                                   on metadata.tx = $self;
         inputs               : Composition of many TransactionInputs
-                                   on inputs.txHash = $self.hash;
+                                   on inputs.tx = $self;
         outputs              : Composition of many TransactionOutputs
-                                   on outputs.txHash = $self.hash;
+                                   on outputs.tx = $self;
 }
 
 // -----------------------------------------------------
 // Transaction Inputs
 // -----------------------------------------------------
 entity TransactionInputs {
-    key txHash       : Blake2b256;
+    key tx           : Association to Transactions;
     key inputIndex   : Integer;
-        tx           : Association to Transactions
-                           on tx.hash = txHash;
         address      : Association to Addresses;
         utxoData     : UTxODataSlice;
         isCollateral : Boolean;
         isReference  : Boolean;
         assets       : Composition of many TransactionInputAssets
-                           on  assets.txHash     = $self.txHash
-                           and assets.inputIndex = $self.inputIndex;
+                           on assets.input = $self;
 }
 
-entity TransactionInputAssets {
-    key txHash     : Blake2b256;
-    key inputIndex : Integer;
-    key unit       : AssetUnit;
-        asset      : AssetSlice;
+entity TransactionInputAssets : cuid {
+    input : Association to TransactionInputs;
+    unit  : AssetUnit;
+    asset : AssetSlice;
 }
 
 // -----------------------------------------------------
 // Transaction Outputs
 // -----------------------------------------------------
 entity TransactionOutputs {
-    key txHash         : Blake2b256;
-    key outputIndex    : Integer;
-        tx             : Association to Transactions
-                             on tx.hash = $self.txHash;
-        bech32_address : bech32;
-        address        : Association to Addresses
-                             on address.address = $self.bech32_address;
-        utxo           : UTxODataSlice;
-        assets         : Composition of many TransactionOutputAssets
-                             on  assets.txHash      = $self.txHash
-                             and assets.outputIndex = $self.outputIndex;
+    key tx          : Association to Transactions;
+    key outputIndex : Integer;
+        address     : Association to Addresses;
+        utxo        : UTxODataSlice;
+        assets      : Composition of many TransactionOutputAssets
+                          on assets.output = $self;
 }
 
-entity TransactionOutputAssets {
-    key txHash      : Blake2b256;
-    key outputIndex : Integer;
-    key unit        : AssetUnit;
-        asset       : AssetSlice;
+entity TransactionOutputAssets : cuid {
+    output : Association to TransactionOutputs;
+    unit   : AssetUnit;
+    asset  : AssetSlice;
 }
 
 // -----------------------------------------------------
 // Transaction Metadata
 // -----------------------------------------------------
 entity Metadata {
-    key txHash      : Blake2b256;
-        label       : MetadataLabel;
+    key tx          : Association to Transactions;
+    key label       : MetadataLabel;
         payloadJson : LargeString;
 }

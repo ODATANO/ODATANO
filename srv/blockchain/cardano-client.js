@@ -59,13 +59,14 @@ class CardanoClient {
 
   // convenience wrappers
   async getTransaction(hash) {
-
-    // get basic tx info (with primary/fallback)
     const tx = await this.request('getTransaction', hash);
     return tx; }
 
   async getAddress(address)  { 
     return this.request('getAddress', address); }
-}
 
+  async getAddress(address)  { 
+    return this.request('getAddressesUtxos', address); }
+
+}
 module.exports = new CardanoClient();
