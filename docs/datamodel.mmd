@@ -1,0 +1,133 @@
+---
+config:
+  layout: elk
+---
+erDiagram
+	direction LR
+	NetworkInformation {
+		UUID ID PK ""  
+		String latestBlock  ""  
+		String network  ""  
+		String latestEpoch  ""  
+		String apiHealth  ""  
+	}
+
+	Addresses {
+		String address PK ""  
+		String stakeAddress  ""  
+		String type  ""  
+		Boolean isScript  ""  
+		Decimal totalLovelace  ""  
+	}
+
+	AddressAssets {
+		Addresses address PK ""  
+		String unit PK ""  
+		Decimal quantity  ""  
+		String policyId  ""  
+		String assetNameHex  ""  
+		String assetName  ""  
+		String fingerprint  ""  
+	}
+
+	AddressUTxOs {
+		Addresses address PK ""  
+		String hash PK ""  
+		Integer index PK ""  
+		String blockHash  ""  
+		String dataHash  ""  
+		String inlineDatum  ""  
+		String referenceScriptHash  ""  
+	}
+
+	UTxOAssets {
+		UUID ID PK ""  
+		AddressUTxOs utxo FK ""  
+		String unit  ""  
+		Decimal quantity  ""  
+		String policyId  ""  
+		String assetNameHex  ""  
+		String assetName  ""  
+		String fingerprint  ""  
+	}
+
+	Transactions {
+		String hash PK ""  
+		String blockHash  ""  
+		Integer blockHeight  ""  
+		Timestamp blockTime  ""  
+		Integer64 slot  ""  
+		Integer txIndex  ""  
+		Decimal fee  ""  
+		Decimal deposit  ""  
+		Integer size  ""  
+		Integer utxoCount  ""  
+		Integer withdrawalCount  ""  
+		Integer mirCertCount  ""  
+		Integer delegationCount  ""  
+		Integer stakeCertCount  ""  
+		Integer poolUpdateCount  ""  
+		Integer poolRetireCount  ""  
+		Integer assetMintOrBurnCount  ""  
+		Integer redeemerCount  ""  
+		Boolean validContract  ""  
+	}
+
+	Metadata {
+		Transactions tx PK ""  
+		Integer label PK ""  
+		LargeString payloadJson  ""  
+	}
+
+	TransactionInputs {
+		Transactions tx PK ""  
+		Integer inputIndex PK ""  
+		Addresses address FK ""  
+		String dataHash  ""  
+		String inlineDatum  ""  
+		String referenceScriptHash  ""  
+		Boolean isCollateral  ""  
+		Boolean isReference  ""  
+	}
+
+	TransactionOutputs {
+		Transactions tx PK ""  
+		Integer outputIndex PK ""  
+		Addresses address FK ""  
+		String dataHash  ""  
+		String inlineDatum  ""  
+		String referenceScriptHash  ""  
+	}
+
+	TransactionInputAssets {
+		UUID ID PK ""  
+		TransactionInputs input FK ""  
+		String unit  ""  
+		Decimal quantity  ""  
+		String policyId  ""  
+		String assetNameHex  ""  
+		String assetName  ""  
+		String fingerprint  ""  
+	}
+
+	TransactionOutputAssets {
+		UUID ID PK ""  
+		TransactionOutputs output FK ""  
+		String unit  ""  
+		Decimal quantity  ""  
+		String policyId  ""  
+		String assetNameHex  ""  
+		String assetName  ""  
+		String fingerprint  ""  
+	}
+
+	Addresses||--o{AddressAssets:"has"
+	Addresses||--o{AddressUTxOs:"has"
+	AddressUTxOs||--o{UTxOAssets:"contains"
+	Transactions||--o{Metadata:"has"
+	Transactions||--o{TransactionInputs:"has"
+	Transactions||--o{TransactionOutputs:"has"
+	TransactionInputs||--o{TransactionInputAssets:"contains"
+	TransactionOutputs||--o{TransactionOutputAssets:"contains"
+	TransactionInputs||--o{Addresses:"contains"
+	TransactionOutputs||--o{Addresses:"contains"
