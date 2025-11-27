@@ -13,11 +13,11 @@ type Blake2b256    : String(64); // 32 bytes hex
 type HexBytes      : String(8192); // CBOR / bytes as hex
 type Lovelace      : Decimal(20, 0);
 type AssetUnit     : String(120);
+type CIP10         : String(120);
+type MetadataLabel : String(5);
 
 type bech32        : String(120)
 @assert.format: '^(addr1|stake1|addr_test1|stake_test1)[0-9a-z]+$';
-
-type MetadataLabel : Integer;
 
 // -----------------------------------------------------
 // Shared structural slices
@@ -162,6 +162,12 @@ entity TransactionOutputAssets : cuid {
 // -----------------------------------------------------
 entity Metadata {
     key tx          : Association to Transactions;
-    key label       : MetadataLabel;
+    key label       : Association to MetadataLabels;
         payloadJson : LargeString;
+}
+
+entity MetadataLabels : cuid {
+    label : MetadataLabel;
+    cip10 : CIP10;
+    count : Integer;
 }

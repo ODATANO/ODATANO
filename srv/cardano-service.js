@@ -1,69 +1,52 @@
 const cds = require('@sap/cds');
-const cardano = require('./blockchain/cardano-client');
 const indexer = require('./blockchain/cardano-indexer');
 const { isTxHash, isBech32Address } = require('./utils/validators');
 const { mapError } = require('./utils/mappers');
-
-const { SELECT, INSERT } = cds.ql;
-
+const { SELECT } = cds.ql;
 
 module.exports = cds.service.impl(function () {
   const {
-    Transactions,
+    NetworkInformation,
     Addresses,
     AddressAssets,
-    UTxOs,
-    Metadata,
-    Datums,
+    AddressUTxOs,
+    UTxOAssets,
+    Transactions,
     TransactionInputs,
     TransactionOutputs,
     TransactionInputAssets,
     TransactionOutputAssets,
+    Metadata,
   } = this.entities;
 
   // --------------------------------------------------------------------------
   // Logging
   // --------------------------------------------------------------------------
   this.before('READ', '*', (req) => {
-    const ent = req.target?.name || req.path;
+  const ent = req.target?.name || req.path;
     console.log('[CardanoService] Before READ:', ent, req.data || {});
   });
 
   // --------------------------------------------------------------------------
-  // Transactions
+  // Network Informations
   // --------------------------------------------------------------------------
-  this.on('READ', Transactions, async (req) => {
+  this.on('READ', NetworkInformation, async(req) => {
     const db = cds.tx(req);
-
     try {
-      const txHash = req.data?.hash;
-
-      // read by primary key
-      if (txHash) {
-        if (!isTxHash(txHash)) return req.error(400, 'Invalid transaction hash');
-
-        // check db
-        const existing = await db.run(
-          SELECT.one.from(Transactions).where({ hash: txHash })
-        );
-        if (existing) return existing;
-
-        // otherwise index and persist it
-        console.log('[CardanoService] Indexing transaction:', txHash);
-
-        const txRow = await indexer.indexTransaction(db, txHash);
+      const existing = await db.run( SELECT.one.from(NetworkInformation) );
+        if (existing) {
+            return existing;
+        }
         
-        console.log('[CardanoService] Persisted via indexer:', txRow);
-        return txRow;
-      }
-      // else use odata query
-      return db.run(req.query);
+        const networkInformation = await indexer.indexNetworkInformation(db);
+        return networkInformation;
+
     } catch (e) {
-      console.error('[CardanoService] Transaction error:', e);
-      return mapError(req, e, 'Transactions');
+      console.error('[CardanoService] Address error:', e);
+      return mapError(req, e, 'NetworkInformation');
     }
   });
-
+ 
   // --------------------------------------------------------------------------
   // Addresses
   // --------------------------------------------------------------------------
@@ -111,17 +94,66 @@ module.exports = cds.service.impl(function () {
       return mapError(req, e, 'AddressAssets');
     }
   });
-
+  
   // --------------------------------------------------------------------------
-  // Metadata
+  // AddressUtxos 
   // --------------------------------------------------------------------------
-  this.on('READ', Metadata, async (req) => {
+  this.on('READ', AddressUTxOs, async(req) => {
     const db = cds.tx(req);
     try {
-      return req.error(404, 'Metadata not found for this transaction');
+      return db.run(req.query); // no indexing logic here yet
     } catch (e) {
-      console.error('[CardanoService] Metadata error:', e);
-      return mapError(req, e, 'Metadata');
+      console.error('[CardanoService]  AddressUTxOs error:', e);
+      return mapError(req, e, ' AddressUTxOs');
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // UTxOAssets
+  // --------------------------------------------------------------------------
+  this.on('READ', UTxOAssets, async(req) => {
+    const db = cds.tx(req);
+    try {
+      return db.run(req.query); // no indexing logic here yet
+    } catch (e) {
+      console.error('[CardanoService] UTxOAssets error:', e);
+      return mapError(req, e, 'UTxOAssets');
+    }
+  });
+
+
+   // --------------------------------------------------------------------------
+  // Transactions
+  // --------------------------------------------------------------------------
+  this.on('READ', Transactions, async (req) => {
+    const db = cds.tx(req);
+
+    try {
+      const txHash = req.data?.hash;
+
+      // read by primary key
+      if (txHash) {
+        if (!isTxHash(txHash)) return req.error(400, 'Invalid transaction hash');
+
+        // check db
+        const existing = await db.run(
+          SELECT.one.from(Transactions).where({ hash: txHash })
+        );
+        if (existing) return existing;
+
+        // otherwise index and persist it
+        console.log('[CardanoService] Indexing transaction:', txHash);
+
+        const txRow = await indexer.indexTransaction(db, txHash);
+        
+        console.log('[CardanoService] Persisted via indexer:', txRow);
+        return txRow;
+      }
+      // else use odata query
+      return db.run(req.query);
+    } catch (e) {
+      console.error('[CardanoService] Transaction error:', e);
+      return mapError(req, e, 'Transactions');
     }
   });
 
@@ -176,4 +208,18 @@ module.exports = cds.service.impl(function () {
       return mapError(req, e, 'TransactionOutputAssets');
     }
   });
+
+  // --------------------------------------------------------------------------
+  // Metadata
+  // --------------------------------------------------------------------------
+  this.on('READ', Metadata, async (req) => {
+    const db = cds.tx(req);
+    try {
+      return req.error(404, 'Metadata not found for this transaction');
+    } catch (e) {
+      console.error('[CardanoService] Metadata error:', e);
+      return mapError(req, e, 'Metadata');
+    }
+  });
+
 });

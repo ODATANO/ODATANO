@@ -22,8 +22,9 @@ class BlockfrostConnector {
 			};
 		}
 		catch (err) {
-			throw err;
-		}
+ 			if (err.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
 	}
 
 	// get transaction
@@ -44,12 +45,22 @@ class BlockfrostConnector {
  		}
  	}
 
-	// get address
-	async getAddress(address) {
+	async getMetadataLabels(){
 		try {
- 			const data = await this.api.addresses(address);
-			return { data };
-		} 
+			const label_data = await this.api.metadataTxsLabels();
+			return label_data;
+		}
+		catch (err) {
+ 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
+	}
+
+	async getMetadataLabelTransactions(label){
+		try {
+			const label_data = await this.api.metadataTxsLabel(label);
+			return label_data;
+		}
 		catch (err) {
  			if (err.response?.status === 404) throw new Error('NOT_FOUND');
  			throw err;
@@ -57,10 +68,23 @@ class BlockfrostConnector {
 	}
 
 	// get address
+	async getAddress(address) {
+		try {
+ 			const data = await this.api.addresses(address);
+			return data;
+		} 
+		catch (err) {
+ 			if (err.response?.status === 404) throw new Error('NOT_FOUND');
+ 			throw err;
+ 		}
+	}
+
+	// get address Utxos
 	async getAddressUtxos(address) {
 		try {
- 			const data = await this.api.addressesUtxosAll(address);
-			return { data };
+			console.log("adress:", address)
+ 			const data = await this.api.addressesUtxos(address);
+			return data;
 		} 
 		catch (err) {
  			if (err.response?.status === 404) throw new Error('NOT_FOUND');

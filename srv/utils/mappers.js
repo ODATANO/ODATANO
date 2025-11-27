@@ -262,9 +262,9 @@ function mapAddressUtxos(addr, validTo, provider = {}) {
         hash:  a.tx_hash,
         index: a.output_index,
         blockHash: a.block,
-        data_hash: a.data_hash,
-        inline_datum: a.inline_datum,
-        reference_script_hash: a.reference_script_hash,
+        utxodata_dataHash: a.data_hash,
+        utxodata_inlineDatum: a.inline_datum,
+        utxodata_referenceScriptHash: a.reference_script_hash,
         validFrom: now,
         validTo: validTo,
       };
