@@ -1,7 +1,16 @@
-// srv/utils/cardano-indexer.ts
-
-import * as cds from '@sap/cds';
+import cds from '@sap/cds';
 import cardano from './cardano-client';
+
+import {
+  Addresses,
+  AddressAssets,
+  AddressUTxOs,
+  Transactions,
+  TransactionInputs,
+  TransactionInputAssets,
+  TransactionOutputs,
+  TransactionOutputAssets,
+} from '#cds-models/odatano/cardano';
 
 import {
   mapTransaction,
@@ -9,12 +18,10 @@ import {
   mapTransactionInputAssets,
   mapTransactionOutputs,
   mapTransactionOutputAssets,
-  mapUTxOsFromOutputs,
   mapAddress,
   mapAddressAssets,
   mapAddressUtxos,
 } from '../utils/mappers';
-
 
 const { UPSERT } = cds.ql;
 
@@ -23,85 +30,72 @@ export class CardanoIndexer {
    * Index a single transaction with inputs/outputs/assets/UTxOs/addresses
    *
    * @param tx      CAP transaction (cds.tx(req))
-   * @param txHash  transaction hash (hex)
+   * @param txHash  Cardano transaction hash (hex)
    */
   async indexTransaction(
-    tx: Transaction,
+    tx: any,
     txHash: string,
     options: any = {}
   ): Promise<any> {
     // getting data from cardano data provider (@TODO add tx metadata)
     const { tx: providerTx, txUtxos } = await cardano.getTransaction(txHash);
 
-    console.log(providerTx);
-
     if (!providerTx) {
       throw new Error(`Transaction ${txHash} not found at provider`);
     }
 
-    // transactions-entity mappen & upserten
     const txRow = mapTransaction(providerTx);
 
     await tx.run(
-      UPSERT.into('odatano.cardano.Transactions').entries(txRow)
+      UPSERT.into(Transactions).entries(txRow)
     );
 
-    // get in tx involved addresses
+    // Beteiligte Adressen indexieren
     if (txUtxos) {
       const addresses = this._collectAddressesFromUtxos(txUtxos);
-      await this._ensureAddresses(tx, addresses);
-    }
+      if (addresses.length) {
+        await this._ensureAddresses(tx, addresses);
+      }
 
-    // index tx inputs with utxos and assets
-    if (txUtxos) {
+      // Inputs + InputAssets
       const inputRows = mapTransactionInputs(txHash, txUtxos);
       const inputAssetRows = mapTransactionInputAssets(txHash, txUtxos);
 
       if (inputRows.length) {
         await tx.run(
-          UPSERT.into('odatano.cardano.TransactionInputs').entries(inputRows)
+          UPSERT.into(TransactionInputs).entries(inputRows)
         );
       }
 
       if (inputAssetRows.length) {
         await tx.run(
-          UPSERT.into('odatano.cardano.TransactionInputAssets').entries(
-            inputAssetRows
-          )
+          UPSERT.into(TransactionInputAssets).entries(inputAssetRows)
         );
       }
-    }
 
-    // index tx outputs with utxos and assets
-    if (txUtxos) {
+      // Outputs + OutputAssets
       const outputRows = mapTransactionOutputs(txHash, txUtxos);
       const outputAssetRows = mapTransactionOutputAssets(txHash, txUtxos);
 
       if (outputRows.length) {
         await tx.run(
-          UPSERT.into('odatano.cardano.TransactionOutputs').entries(
-            outputRows
-          )
+          UPSERT.into(TransactionOutputs).entries(outputRows)
         );
       }
 
       if (outputAssetRows.length) {
         await tx.run(
-          UPSERT.into('odatano.cardano.TransactionOutputAssets').entries(
-            outputAssetRows
-          )
+          UPSERT.into(TransactionOutputAssets).entries(outputAssetRows)
         );
       }
     }
-
-    // result for CAP Handler
     return txRow;
   }
 
   /**
-   * Index a single address (Addresses + AddressAssets + AddressUTxos)
+   * Index a single address (Addresses + AddressAssets + AddressUTxOs)
    */
-  async indexAddress(tx: Transaction, addr: string): Promise<any> {
+  async indexAddress(tx: any, addr: string): Promise<any> {
     const addrData = await cardano.getAddress(addr);
 
     // Address baseline
@@ -109,38 +103,38 @@ export class CardanoIndexer {
 
     // Addresses upsert
     await tx.run(
-      UPSERT.into('odatano.cardano.Addresses').entries(addrEntity)
+      UPSERT.into(Addresses).entries(addrEntity)
     );
 
-    const assetEntitys = mapAddressAssets(
+    // AddressAssets
+    const assetEntities = mapAddressAssets(
       addr,
-      addrEntity.validTo,
+      (addrEntity as any).validTo,
       addrData
     );
 
-    // Address Assets upsert
-    await tx.run(
-      UPSERT.into('odatano.cardano.AddressAssets').entries(assetEntitys)
-    );
+    if (assetEntities.length) {
+      await tx.run(
+        UPSERT.into(AddressAssets).entries(assetEntities)
+      );
+    }
 
-    addrEntity.assets = assetEntitys;
-
+    // AddressUTxOs
     const utxoData = await cardano.getAddressUtxos(addr);
 
-    const utxoEntitys = mapAddressUtxos(
+    const utxoEntities = mapAddressUtxos(
       addr,
-      addrEntity.validTo,
+      (addrEntity as any).validTo,
       utxoData
     );
 
-    console.log('utxos:', utxoEntitys);
+    console.log('utxos:', utxoEntities);
 
-    // Address Utxos upsert
-    await tx.run(
-      UPSERT.into('odatano.cardano.AddressUTxOs').entries(utxoEntitys)
-    );
-
-    addrEntity.AddressUtxos = utxoEntitys;
+    if (utxoEntities.length) {
+      await tx.run(
+        UPSERT.into(AddressUTxOs).entries(utxoEntities)
+      );
+    }
 
     return addrEntity;
   }
@@ -165,7 +159,7 @@ export class CardanoIndexer {
    * Helper: index multiple addresses with assets
    */
   private async _ensureAddresses(
-    tx: Transaction,
+    tx: any,
     bech32List: string[]
   ): Promise<void> {
     for (const bech32 of bech32List) {
@@ -174,6 +168,5 @@ export class CardanoIndexer {
   }
 }
 
-// entspricht deinem bisherigen `module.exports = new CardanoIndexer()`
 const cardanoIndexer = new CardanoIndexer();
 export default cardanoIndexer;

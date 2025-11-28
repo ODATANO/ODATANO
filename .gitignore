@@ -47,3 +47,6 @@ docs/QUICK_START.md
 .nyc_output
 db.sqlite-shm
 db.sqlite-wal
+
+@cds-models
+@cds-models

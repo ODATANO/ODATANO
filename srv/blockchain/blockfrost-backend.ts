@@ -15,13 +15,12 @@ export class BlockfrostBackend implements CardanoBackend {
       projectId,
     });
   }
-  
+
    async init(): Promise<void> {
-    // Optional: einmalig prüfen, ob Blockfrost erreichbar ist
     // await this.api.health();
   }
   // ---------------------------------------------------------------------------
-  // Network-Info (dein altes get_networkInfo -> jetzt getNetworkInformation)
+  // Network-Info
   // ---------------------------------------------------------------------------
   async getNetworkInformation(): Promise<any> {
     try {
@@ -37,7 +36,6 @@ export class BlockfrostBackend implements CardanoBackend {
         health: health,
       };
     } catch (err: any) {
-      // je nach Blockfrost-Error-Shape – du hattest vorher err.status / err.response?.status
       if (err?.status === 404 || err?.response?.status === 404) {
         throw new Error('NOT_FOUND');
       }

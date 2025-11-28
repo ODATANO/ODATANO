@@ -141,7 +141,6 @@ export class CardanoClient {
   }
 }
 
-// Default-Instanz, ähnlich wie dein altes `module.exports = new CardanoClient()`
 export const cardanoClient = new CardanoClient([
   new BlockfrostBackend(), // primary
   new KoiosBackend(),      // fallback
