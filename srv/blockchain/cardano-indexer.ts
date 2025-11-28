@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import type { Transaction } from '@sap/cds';
 import cardano from './cardano-client';
+import logger from '../utils/logger';
 
 import {
   Addresses,
@@ -98,7 +99,7 @@ export class CardanoIndexer {
   async indexAddress(tx: Transaction, addr: string): Promise<any> {
     const addrData = await cardano.getAddress(addr);
 
-    console.log('dada', addrData);
+    logger.debug({ addrData }, 'indexAddress: provider response');
 
     const AddrEntity = mapAddress(addr, addrData);
 
@@ -123,10 +124,10 @@ export class CardanoIndexer {
     const utxoEntities = mapAddressUtxos(
       addr,
       AddrEntity.validTo,
-      utxoData
+      { data: utxoData }
     );
 
-    console.log('utxos:', utxoEntities);
+    logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
     if (utxoEntities.length) {
       await tx.run(

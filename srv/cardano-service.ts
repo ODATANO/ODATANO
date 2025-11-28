@@ -3,6 +3,7 @@ import indexer from './blockchain/cardano-indexer';
 import { isTxHash, isBech32Address } from './utils/validators';
 import { mapError } from './utils/mappers';
 import { Request } from '@sap/cds'
+import logger from './utils/logger';
 
 
 const { SELECT } = cds.ql;
@@ -29,7 +30,7 @@ export default class CardanoService extends cds.ApplicationService {
   // --------------------------------------------------------------------------
  this.before('READ', '*', req => {   
   const ent = (req as any).target?.name || (req as any).path;
-  console.log('[CardanoService] Before READ:', ent, req.data || {});
+  logger.debug({ entity: ent, data: req.data || {} }, 'Before READ');
 });
 
   // --------------------------------------------------------------------------
@@ -46,7 +47,7 @@ export default class CardanoService extends cds.ApplicationService {
       // call indexer etc
 
     } catch (e) {
-      console.error('[CardanoService] NetworkInformation error:', e);
+      logger.error({ err: e }, '[CardanoService] NetworkInformation error');
       return mapError(req, e, 'NetworkInformation');
     }
   });
@@ -55,8 +56,7 @@ export default class CardanoService extends cds.ApplicationService {
   // Addresses
   // --------------------------------------------------------------------------
   this.on('READ', Addresses, async req => {
-
-    console.log("on read" ,req)
+    logger.debug({ req }, 'on read');
     const db = cds.tx(req);
 
     try {
@@ -76,17 +76,17 @@ export default class CardanoService extends cds.ApplicationService {
         }
 
         // re-index address via indexer
-        console.log('[CardanoService] Indexing address:', addr);
+        logger.info({ address: addr }, 'Indexing address');
 
         const address = await indexer.indexAddress(db, addr);
-        console.log('[CardanoService] Indexed', address);
+        logger.info({ address }, 'Indexed address');
         return address;
       }
 
       // else use odata query
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] Address error:', e);
+      logger.error({ err: e }, '[CardanoService] Address error');
       return mapError(req, e, 'Addresses');
     }
   });
@@ -99,7 +99,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] AddressAssets error:', e);
+      logger.error({ err: e }, '[CardanoService] AddressAssets error');
       return mapError(req, e, 'AddressAssets');
     }
   });
@@ -112,7 +112,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] AddressUTxOs error:', e);
+      logger.error({ err: e }, '[CardanoService] AddressUTxOs error');
       return mapError(req, e, 'AddressUTxOs');
     }
   });
@@ -125,7 +125,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] UTxOAssets error:', e);
+      logger.error({ err: e }, '[CardanoService] UTxOAssets error');
       return mapError(req, e, 'UTxOAssets');
     }
   });
@@ -149,17 +149,17 @@ export default class CardanoService extends cds.ApplicationService {
         );
         if (existing) return existing;
 
-        console.log('[CardanoService] Indexing transaction:', txHash);
+        logger.info({ txHash }, '[CardanoService] Indexing transaction');
 
         const txRow = await indexer.indexTransaction(db, txHash);
 
-        console.log('[CardanoService] Persisted via indexer:', txRow);
+        logger.info({ txRow }, '[CardanoService] Persisted via indexer');
         return txRow;
       }
 
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] Transaction error:', e);
+      logger.error({ err: e }, '[CardanoService] Transaction error');
       return mapError(req, e, 'Transactions');
     }
   });
@@ -172,7 +172,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] TransactionInputs error:', e);
+      logger.error({ err: e }, '[CardanoService] TransactionInputs error');
       return mapError(req, e, 'TransactionInputs');
     }
   });
@@ -185,7 +185,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return await db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] TransactionOutputs error:', e);
+      logger.error({ err: e }, '[CardanoService] TransactionOutputs error');
       return mapError(req, e, 'TransactionOutputs');
     }
   });
@@ -198,7 +198,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return await db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] TransactionInputAssets error:', e);
+      logger.error({ err: e }, '[CardanoService] TransactionInputAssets error');
       return mapError(req, e, 'TransactionInputAssets');
     }
   });
@@ -212,7 +212,7 @@ export default class CardanoService extends cds.ApplicationService {
     try {
       return db.run(req.query);
     } catch (e) {
-      console.error('[CardanoService] TransactionOutputAssets error:', e);
+      logger.error({ err: e }, '[CardanoService] TransactionOutputAssets error');
       return mapError(req, e, 'TransactionOutputAssets');
     }
   });
@@ -225,10 +225,12 @@ export default class CardanoService extends cds.ApplicationService {
       // @Todo implement logic
       return req.error(404, 'Metadata not found for this transaction');
     } catch (e) {
-      console.error('[CardanoService] Metadata error:', e);
+      logger.error({ err: e }, '[CardanoService] Metadata error');
       return mapError(req, e, 'Metadata');
     }
   });
+
+  
   return super.init();
 }
 }

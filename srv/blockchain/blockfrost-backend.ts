@@ -109,7 +109,6 @@ export class BlockfrostBackend implements CardanoBackend {
 
   async getAddressUtxos(address: string): Promise<any[]> {
     try {
-      console.log('[BlockfrostBackend] address:', address);
       const data = await this.api.addressesUtxos(address);
       return data;
     } catch (err: any) {

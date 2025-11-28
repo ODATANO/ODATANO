@@ -1,6 +1,7 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
+import logger from '../utils/logger';
 
 const PRIMARY_TIMEOUT_MS  = Number(process.env.PRIMARY_TIMEOUT_MS  ?? 8000);
 const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS ?? 8000);
@@ -36,17 +37,12 @@ export class CardanoClient {
 
     for (const backend of this.backends) {
       try {
-        console.log(`[CardanoClient] Initializing backend '${backend.name}'...`);
+        logger.info({ backend: backend.name }, 'Initializing backend');
         await backend.init();
         initialized.push(backend);
-        console.log(
-          `[CardanoClient] Backend '${backend.name}' initialized successfully.`
-        );
+        logger.info({ backend: backend.name }, 'Backend initialized successfully');
       } catch (err: any) {
-        console.error(
-          `[CardanoClient] Failed to initialize backend '${backend.name}':`,
-          err?.message ?? err
-        );
+        logger.error({ backend: backend.name, err }, 'Failed to initialize backend');
       }
     }
 
@@ -96,7 +92,7 @@ export class CardanoClient {
       const timeoutMs = this.getTimeoutForBackend(backend);
 
       try {
-        console.log(`[CardanoClient] Calling ${backend.name}...`);
+        logger.debug({ backend: backend.name }, 'Calling backend');
         const result = await this.withTimeout(
           fn(backend),
           timeoutMs,
@@ -105,9 +101,7 @@ export class CardanoClient {
         return result;
       } catch (err: any) {
         lastError = err;
-        console.warn(
-          `[CardanoClient] Backend '${backend.name}' failed: ${err?.message ?? err}`
-        );
+        logger.warn({ backend: backend.name, err }, 'Backend failed');
       }
     }
 

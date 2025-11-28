@@ -3,11 +3,79 @@
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
 
+// -------------------------
+// Type definitions
+// -------------------------
+export interface ProviderTx {
+  hash: string;
+  block?: string;
+  block_height?: number;
+  block_time?: number;
+  slot?: number;
+  index?: number;
+  fees?: string;
+  deposit?: string;
+  size?: number;
+  utxo_count?: number;
+  withdrawal_count?: number;
+  mir_cert_count?: number;
+  delegation_count?: number;
+  stake_cert_count?: number;
+  pool_update_count?: number;
+  pool_retire_count?: number;
+  asset_mint_or_burn_count?: number;
+  redeemer_count?: number;
+  valid_contract?: boolean;
+  [k: string]: any;
+}
+
+export interface AmountEntry {
+  unit: string;
+  quantity: string;
+}
+
+export interface TxUtxos {
+  inputs?: Array<{
+    tx_hash?: string;
+    output_index?: number;
+    address?: string;
+    amount?: AmountEntry[];
+    data_hash?: string;
+    inline_datum?: string | null;
+    reference_script_hash?: string | null;
+    collateral?: boolean;
+    reference?: boolean;
+    [k: string]: any;
+  }>;
+  outputs?: Array<{
+    tx_hash?: string;
+    output_index?: number;
+    address?: string;
+    amount?: AmountEntry[];
+    data_hash?: string;
+    inline_datum?: string | null;
+    reference_script_hash?: string | null;
+    consumed_by_tx?: string | null;
+    [k: string]: any;
+  }>;
+  [k: string]: any;
+}
+
+export interface AddressProviderData {
+  amount?: AmountEntry[];
+  stakeAddress?: string | null;
+  stake_address?: string | null;
+  type?: string;
+  script?: boolean;
+  [k: string]: any;
+}
+
+
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------
 
-export function mapTransaction(providerTx: any) {
+export function mapTransaction(providerTx: ProviderTx) {
 
   const blockTimeIso = providerTx.block_time
     ? new Date(providerTx.block_time * 1000).toISOString()
@@ -20,8 +88,8 @@ export function mapTransaction(providerTx: any) {
     blockTime: blockTimeIso, // string | null
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
-    fee: providerTx.fees ?? '0',
-    deposit: providerTx.deposit ?? '0',
+    fee: providerTx.fees != null ? Number(providerTx.fees) : 0,
+    deposit: providerTx.deposit != null ? Number(providerTx.deposit) : 0,
     size: providerTx.size ?? null,
     utxoCount: providerTx.utxo_count ?? null,
     withdrawalCount: providerTx.withdrawal_count ?? null,
@@ -41,13 +109,13 @@ export function mapTransaction(providerTx: any) {
 // -----------------------------------------------------------------------------
 // txUtxos: Blockfrost `txsUtxos` Response
 // → TransactionInputs (mit UTxOSlice flach als utxo_*)
-export function mapTransactionInputs(txHash: string, txUtxos: any) {
+export function mapTransactionInputs(txHash: string, txUtxos: TxUtxos) {
   const inputs = txUtxos?.inputs;
   if (!Array.isArray(inputs)) return [];
 
-  return inputs.map((input: any, idx: number) => {
+  return inputs.map((input, idx: number) => {
     const lovelaceEntry = Array.isArray(input.amount)
-      ? input.amount.find((a: any) => a.unit === 'lovelace')
+      ? input.amount.find((a) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -59,7 +127,7 @@ export function mapTransactionInputs(txHash: string, txUtxos: any) {
       sourceTxHash: input.tx_hash,
       sourceOutputIndex: input.output_index,
       utxo_address_bech32: input.address,
-      utxo_valueLovelace: valueLovelace,
+      utxo_valueLovelace: Number(valueLovelace),
       utxo_datumHash: input.data_hash || null,
       utxo_inlineDatum: input.inline_datum || null,
       utxo_referenceScript: input.reference_script_hash || null,
@@ -75,16 +143,16 @@ export function mapTransactionInputs(txHash: string, txUtxos: any) {
 }
 
 // txUtxos → TransactionInputAssets
-export function mapTransactionInputAssets(txHash: string, txUtxos: any) {
+export function mapTransactionInputAssets(txHash: string, txUtxos: TxUtxos) {
   const inputs = txUtxos?.inputs;
   if (!Array.isArray(inputs)) return [];
 
-  return inputs.flatMap((input: any, idx: number) => {
+  return inputs.flatMap((input, idx: number) => {
     if (!Array.isArray(input.amount) || input.amount.length === 0) return [];
 
     const inputIndex = input.output_index ?? idx;
 
-    return input.amount.map((a: any) => {
+    return input.amount.map((a) => {
       const unit = a.unit;
       const quantity = a.quantity;
 
@@ -109,7 +177,7 @@ export function mapTransactionInputAssets(txHash: string, txUtxos: any) {
         txHash,
         inputIndex,
         unit,
-        asset_quantity: quantity,
+        asset_quantity: Number(quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -121,13 +189,13 @@ export function mapTransactionInputAssets(txHash: string, txUtxos: any) {
 // Transaction Outputs
 // -----------------------------------------------------------------------------
 
-export function mapTransactionOutputs(txHash: string, txUtxos: any) {
+export function mapTransactionOutputs(txHash: string, txUtxos: TxUtxos) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.map((output: any, idx: number) => {
+  return outputs.map((output, idx: number) => {
     const lovelaceEntry = Array.isArray(output.amount)
-      ? output.amount.find((a: any) => a.unit === 'lovelace')
+      ? output.amount.find((a) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -137,7 +205,7 @@ export function mapTransactionOutputs(txHash: string, txUtxos: any) {
       txHash,
       outputIndex,
       utxo_address_bech32: output.address,
-      utxo_valueLovelace: valueLovelace,
+      utxo_valueLovelace: Number(valueLovelace),
       utxo_datumHash: output.data_hash || null,
       utxo_inlineDatum: output.inline_datum || null,
       utxo_referenceScript: output.reference_script_hash || null,
@@ -151,16 +219,16 @@ export function mapTransactionOutputs(txHash: string, txUtxos: any) {
   });
 }
 
-export function mapTransactionOutputAssets(txHash: string, txUtxos: any) {
+export function mapTransactionOutputAssets(txHash: string, txUtxos: TxUtxos) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.flatMap((output: any, idx: number) => {
+  return outputs.flatMap((output, idx: number) => {
     if (!Array.isArray(output.amount) || output.amount.length === 0) return [];
 
     const outputIndex = output.output_index ?? idx;
 
-    return output.amount.map((a: any) => {
+    return output.amount.map((a) => {
       const unit = a.unit;
       const quantity = a.quantity;
 
@@ -185,7 +253,7 @@ export function mapTransactionOutputAssets(txHash: string, txUtxos: any) {
         txHash,
         outputIndex,
         unit,
-        asset_quantity: quantity,
+        asset_quantity: Number(quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -197,13 +265,13 @@ export function mapTransactionOutputAssets(txHash: string, txUtxos: any) {
 // UTxOs aus Outputs
 // -----------------------------------------------------------------------------
 
-export function mapUTxOsFromOutputs(txHash: string, txUtxos: any) {
+export function mapUTxOsFromOutputs(txHash: string, txUtxos: TxUtxos) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.map((output: any, idx: number) => {
+  return outputs.map((output, idx: number) => {
     const lovelaceEntry = Array.isArray(output.amount)
-      ? output.amount.find((a: any) => a.unit === 'lovelace')
+      ? output.amount.find((a) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -215,7 +283,7 @@ export function mapUTxOsFromOutputs(txHash: string, txUtxos: any) {
       txHash,
       outputIndex,
       utxo_address_bech32: output.address,
-      utxo_valueLovelace: valueLovelace,
+      utxo_valueLovelace: Number(valueLovelace),
       utxo_datumHash: output.data_hash || null,
       utxo_inlineDatum: output.inline_datum || null,
       utxo_referenceScript: output.reference_script_hash || null,
@@ -233,29 +301,28 @@ export function mapUTxOsFromOutputs(txHash: string, txUtxos: any) {
 // Addresses
 // -----------------------------------------------------------------------------
 
-export function mapAddress(address: string, data: any) {
-  console.log('data', data);
+export function mapAddress(address: string, data: AddressProviderData) {
 
   const nowIso = new Date().toISOString();
   const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
 
   const totalLovelace =
-    Array.isArray(data.amount)
-      ? data.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0'
-      : '0';
+    Array.isArray(data?.amount)
+      ? Number(data.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
+      : 0;
 
   return {
     address,
-    stakeAddress: data.stakeAddress || null,
+    stakeAddress: (data.stakeAddress ?? data.stake_address) || null,
     type: data.type ?? 'unknown',
     isScript: data.script === true || data.type === 'script',
     totalLovelace,
-    validFrom: nowIso,   
+    validFrom: nowIso,
     validTo: validToIso,
   };
 }
 
-export function mapAddressUtxos(addr: string, validTo: string, provider: any = {}) {
+export function mapAddressUtxos(addr: string, validTo: string, provider: { data?: any } = {}) {
   const data = provider.data;
   const nowIso = new Date().toISOString();
 
@@ -274,7 +341,7 @@ export function mapAddressUtxos(addr: string, validTo: string, provider: any = {
   }));
 }
 
-export function mapAddressAssets(addr: string, validTo: string, provider: any = {}) {
+export function mapAddressAssets(addr: string, validTo: string, provider: { data?: any } = {}) {
   const amounts = provider.data?.amount;
   const nowIso = new Date().toISOString();
 
