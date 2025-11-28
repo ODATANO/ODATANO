@@ -1,20 +1,23 @@
-'use strict';
+// srv/utils/mappers.ts
 
-const MAX_AGE_MINUTES = process.env.ADDR_MAX_AGE_MIN || 1;
+const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
 
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------
-function mapTransaction(providerTx) {
-  if (!providerTx) return null;
+
+export function mapTransaction(providerTx: any) {
+
+  const blockTimeIso = providerTx.block_time
+    ? new Date(providerTx.block_time * 1000).toISOString()
+    : null;
+
   return {
     hash: providerTx.hash,
     blockHash: providerTx.block,
     blockHeight: providerTx.block_height ?? null,
-    blockTime: providerTx.block_time
-      ? new Date(providerTx.block_time * 1000)
-      : null,
+    blockTime: blockTimeIso, // string | null
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
     fee: providerTx.fees ?? '0',
@@ -37,14 +40,14 @@ function mapTransaction(providerTx) {
 // Transaction Inputs
 // -----------------------------------------------------------------------------
 // txUtxos: Blockfrost `txsUtxos` Response
-// → odatano.cardano.TransactionInputs (mit UTxOSlice flach als utxo_*)
-function mapTransactionInputs(txHash, txUtxos) {
+// → TransactionInputs (mit UTxOSlice flach als utxo_*)
+export function mapTransactionInputs(txHash: string, txUtxos: any) {
   const inputs = txUtxos?.inputs;
   if (!Array.isArray(inputs)) return [];
 
-  return inputs.map((input, idx) => {
+  return inputs.map((input: any, idx: number) => {
     const lovelaceEntry = Array.isArray(input.amount)
-      ? input.amount.find(a => a.unit === 'lovelace')
+      ? input.amount.find((a: any) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -52,7 +55,7 @@ function mapTransactionInputs(txHash, txUtxos) {
 
     return {
       txHash,
-      inputIndex,                       
+      inputIndex,
       sourceTxHash: input.tx_hash,
       sourceOutputIndex: input.output_index,
       utxo_address_bech32: input.address,
@@ -65,29 +68,28 @@ function mapTransactionInputs(txHash, txUtxos) {
         input.data_hash ||
         input.reference_script_hash
       ),
-
       isCollateral: Boolean(input.collateral),
       isReference: Boolean(input.reference),
     };
   });
 }
 
-// txUtxos → odatano.cardano.TransactionInputAssets
-function mapTransactionInputAssets(txHash, txUtxos) {
+// txUtxos → TransactionInputAssets
+export function mapTransactionInputAssets(txHash: string, txUtxos: any) {
   const inputs = txUtxos?.inputs;
   if (!Array.isArray(inputs)) return [];
 
-  return inputs.flatMap((input, idx) => {
+  return inputs.flatMap((input: any, idx: number) => {
     if (!Array.isArray(input.amount) || input.amount.length === 0) return [];
 
     const inputIndex = input.output_index ?? idx;
 
-    return input.amount.map(a => {
+    return input.amount.map((a: any) => {
       const unit = a.unit;
       const quantity = a.quantity;
 
-      let policyId = null;
-      let assetName = null;
+      let policyId: string | null = null;
+      let assetName: string | null = null;
 
       if (unit === 'lovelace') {
         assetName = 'lovelace';
@@ -107,7 +109,6 @@ function mapTransactionInputAssets(txHash, txUtxos) {
         txHash,
         inputIndex,
         unit,
-        // AssetSlice flach
         asset_quantity: quantity,
         asset_policyId: policyId,
         asset_assetName: assetName,
@@ -119,13 +120,14 @@ function mapTransactionInputAssets(txHash, txUtxos) {
 // -----------------------------------------------------------------------------
 // Transaction Outputs
 // -----------------------------------------------------------------------------
-function mapTransactionOutputs(txHash, txUtxos) {
+
+export function mapTransactionOutputs(txHash: string, txUtxos: any) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.map((output, idx) => {
+  return outputs.map((output: any, idx: number) => {
     const lovelaceEntry = Array.isArray(output.amount)
-      ? output.amount.find(a => a.unit === 'lovelace')
+      ? output.amount.find((a: any) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -149,21 +151,21 @@ function mapTransactionOutputs(txHash, txUtxos) {
   });
 }
 
-function mapTransactionOutputAssets(txHash, txUtxos) {
+export function mapTransactionOutputAssets(txHash: string, txUtxos: any) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.flatMap((output, idx) => {
+  return outputs.flatMap((output: any, idx: number) => {
     if (!Array.isArray(output.amount) || output.amount.length === 0) return [];
 
     const outputIndex = output.output_index ?? idx;
 
-    return output.amount.map(a => {
+    return output.amount.map((a: any) => {
       const unit = a.unit;
       const quantity = a.quantity;
 
-      let policyId = null;
-      let assetName = null;
+      let policyId: string | null = null;
+      let assetName: string | null = null;
 
       if (unit === 'lovelace') {
         assetName = 'lovelace';
@@ -192,16 +194,16 @@ function mapTransactionOutputAssets(txHash, txUtxos) {
 }
 
 // -----------------------------------------------------------------------------
-// UTxOs (Current Set) – optional, aber praktisch
+// UTxOs aus Outputs
 // -----------------------------------------------------------------------------
-// txUtxos → odatano.cardano.UTxOs
-function mapUTxOsFromOutputs(txHash, txUtxos) {
+
+export function mapUTxOsFromOutputs(txHash: string, txUtxos: any) {
   const outputs = txUtxos?.outputs;
   if (!Array.isArray(outputs)) return [];
 
-  return outputs.map((output, idx) => {
+  return outputs.map((output: any, idx: number) => {
     const lovelaceEntry = Array.isArray(output.amount)
-      ? output.amount.find(a => a.unit === 'lovelace')
+      ? output.amount.find((a: any) => a.unit === 'lovelace')
       : null;
 
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
@@ -230,58 +232,60 @@ function mapUTxOsFromOutputs(txHash, txUtxos) {
 // -----------------------------------------------------------------------------
 // Addresses
 // -----------------------------------------------------------------------------
-function mapAddress(address, provider = {}) {
-  const data = provider.data;
-  const validTo = new Date(new Date().getTime() + MAX_AGE_MS);
-  const now = new Date();
-  // total address lovelance
+
+export function mapAddress(address: string, data: any) {
+  console.log('data', data);
+
+  const nowIso = new Date().toISOString();
+  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
+
   const totalLovelace =
     Array.isArray(data.amount)
-      ? data.amount.find(a => a.unit === 'lovelace')?.quantity || '0'
+      ? data.amount.find((a: any) => a.unit === 'lovelace')?.quantity || '0'
       : '0';
 
   return {
-    address: address,
+    address,
     stakeAddress: data.stakeAddress || null,
     type: data.type ?? 'unknown',
-    isScript:  data.script === true || data.type === 'script',
-    totalLovelace: totalLovelace,
-    validFrom: now,
-    validTo: validTo,
+    isScript: data.script === true || data.type === 'script',
+    totalLovelace,
+    validFrom: nowIso,   
+    validTo: validToIso,
   };
 }
 
-function mapAddressUtxos(addr, validTo, provider = {}) {
+export function mapAddressUtxos(addr: string, validTo: string, provider: any = {}) {
   const data = provider.data;
-  const now = new Date();
+  const nowIso = new Date().toISOString();
+
   if (!Array.isArray(data)) return [];
-  return data
-    .map(a => {
-      return {
-        address_address: addr,
-        hash:  a.tx_hash,
-        index: a.output_index,
-        blockHash: a.block,
-        utxodata_dataHash: a.data_hash,
-        utxodata_inlineDatum: a.inline_datum,
-        utxodata_referenceScriptHash: a.reference_script_hash,
-        validFrom: now,
-        validTo: validTo,
-      };
-    });
+
+  return data.map((a: any) => ({
+    address_address: addr,
+    hash: a.tx_hash,
+    index: a.output_index,
+    blockHash: a.block,
+    utxodata_dataHash: a.data_hash,
+    utxodata_inlineDatum: a.inline_datum,
+    utxodata_referenceScriptHash: a.reference_script_hash,
+    validFrom: nowIso,
+    validTo,
+  }));
 }
 
-function mapAddressAssets(addr, validTo, provider = {}) {
+export function mapAddressAssets(addr: string, validTo: string, provider: any = {}) {
   const amounts = provider.data?.amount;
-  const now = new Date();
+  const nowIso = new Date().toISOString();
+
   if (!Array.isArray(amounts)) return [];
 
   return amounts
-    .filter(a => a.unit !== 'lovelace')
-    .map(a => {
+    .filter((a: any) => a.unit !== 'lovelace')
+    .map((a: any) => {
       const assetNameHex = a.unit.slice(56);
 
-      let assetName;
+      let assetName: string;
       try {
         assetName = Buffer.from(assetNameHex, 'hex').toString('utf8');
       } catch {
@@ -291,11 +295,11 @@ function mapAddressAssets(addr, validTo, provider = {}) {
       return {
         address_address: addr,
         unit: a.unit,
-        validFrom: now,
-        validTo: validTo,
-        asset_quantity:  a.quantity,
-        asset_policyId:  a.unit.slice(0, 56),
-        asset_assetName: assetName
+        validFrom: nowIso,
+        validTo,
+        asset_quantity: a.quantity,
+        asset_policyId: a.unit.slice(0, 56),
+        asset_assetName: assetName,
       };
     });
 }
@@ -303,32 +307,17 @@ function mapAddressAssets(addr, validTo, provider = {}) {
 // -----------------------------------------------------------------------------
 // Error Mapping
 // -----------------------------------------------------------------------------
-function mapProviderError(err) {
+
+function mapProviderError(err: any) {
   return {
     status: err.status || err.code || 500,
     message: err.message || String(err),
   };
 }
 
-function mapError(req, err, ctx) {
+export function mapError(req: any, err: any, ctx: string) {
   const mapped = mapProviderError(err);
   const status = mapped.status || 500;
   const message = mapped.message || `${ctx} operation failed`;
   return req.error(status, `${ctx}: ${message}`);
 }
-
-// -----------------------------------------------------------------------------
-// Exports
-// -----------------------------------------------------------------------------
-module.exports = {
-  mapTransaction,
-  mapTransactionInputs,
-  mapTransactionInputAssets,
-  mapTransactionOutputs,
-  mapTransactionOutputAssets,
-  mapUTxOsFromOutputs,
-  mapAddress,
-  mapAddressAssets,
-  mapAddressUtxos,
-  mapError,
-};

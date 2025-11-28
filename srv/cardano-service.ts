@@ -1,12 +1,15 @@
-// srv/cardano-service.ts
 import cds from '@sap/cds';
 import indexer from './blockchain/cardano-indexer';
 import { isTxHash, isBech32Address } from './utils/validators';
 import { mapError } from './utils/mappers';
+import { Request } from '@sap/cds'
+
 
 const { SELECT } = cds.ql;
 
-export default cds.service.impl(function CardanoService(this: any) {
+export default class CardanoService extends cds.ApplicationService { 
+  public init() {
+
   const {
     NetworkInformation,
     Addresses,
@@ -19,20 +22,20 @@ export default cds.service.impl(function CardanoService(this: any) {
     TransactionInputAssets,
     TransactionOutputAssets,
     Metadata,
-  } = this.entities;
+  } = require('#cds-models/CardanoODataService')
 
-  // --------------------------------------------------------------------------
+ // --------------------------------------------------------------------------
   // Logging
   // --------------------------------------------------------------------------
-  this.before('READ', '*', (req: any) => {
-    const ent = req.target?.name || req.path;
-    console.log('[CardanoService] Before READ:', ent, req.data || {});
-  });
+ this.before('READ', '*', req => {   
+  const ent = (req as any).target?.name || (req as any).path;
+  console.log('[CardanoService] Before READ:', ent, req.data || {});
+});
 
   // --------------------------------------------------------------------------
   // Network Informations
   // --------------------------------------------------------------------------
-  this.on('READ', NetworkInformation, async (req: any) => {
+  this.on('READ', NetworkInformation, async req => {
     const db = cds.tx(req);
     try {
       const existing = await db.run(SELECT.one.from(NetworkInformation));
@@ -40,17 +43,20 @@ export default cds.service.impl(function CardanoService(this: any) {
         return existing;
       }
 
-      return existing;
+      // call indexer etc
+
     } catch (e) {
       console.error('[CardanoService] NetworkInformation error:', e);
       return mapError(req, e, 'NetworkInformation');
     }
   });
 
-  // --------------------------------------------------------------------------
+ // --------------------------------------------------------------------------
   // Addresses
   // --------------------------------------------------------------------------
-  this.on('READ', Addresses, async (req: any) => {
+  this.on('READ', Addresses, async req => {
+
+    console.log("on read" ,req)
     const db = cds.tx(req);
 
     try {
@@ -88,7 +94,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // AddressAssets (collection only)
   // --------------------------------------------------------------------------
-  this.on('READ', AddressAssets, async (req: any) => {
+  this.on('READ', AddressAssets, async req => {
     const db = cds.tx(req);
     try {
       return db.run(req.query);
@@ -101,7 +107,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // AddressUTxOs
   // --------------------------------------------------------------------------
-  this.on('READ', AddressUTxOs, async (req: any) => {
+  this.on('READ', AddressUTxOs, async req  => {
     const db = cds.tx(req);
     try {
       return db.run(req.query);
@@ -114,7 +120,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // UTxOAssets
   // --------------------------------------------------------------------------
-  this.on('READ', UTxOAssets, async (req: any) => {
+  this.on('READ', UTxOAssets, async req => {
     const db = cds.tx(req);
     try {
       return db.run(req.query);
@@ -127,7 +133,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // Transactions
   // --------------------------------------------------------------------------
-  this.on('READ', Transactions, async (req: any) => {
+  this.on('READ', Transactions, async req => {
     const db = cds.tx(req);
 
     try {
@@ -161,7 +167,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // TransactionInputs
   // --------------------------------------------------------------------------
-  this.on('READ', TransactionInputs, async (req: any) => {
+  this.on('READ', TransactionInputs, async req => {
     const db = cds.tx(req);
     try {
       return db.run(req.query);
@@ -174,10 +180,10 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // TransactionOutputs
   // --------------------------------------------------------------------------
-  this.on('READ', TransactionOutputs, async (req: any) => {
+  this.on('READ', TransactionOutputs, async req => {
     const db = cds.tx(req);
     try {
-      return db.run(req.query);
+      return await db.run(req.query);
     } catch (e) {
       console.error('[CardanoService] TransactionOutputs error:', e);
       return mapError(req, e, 'TransactionOutputs');
@@ -187,10 +193,10 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // TransactionInputAssets
   // --------------------------------------------------------------------------
-  this.on('READ', TransactionInputAssets, async (req: any) => {
+  this.on('READ', TransactionInputAssets, async req => {
     const db = cds.tx(req);
     try {
-      return db.run(req.query);
+      return await db.run(req.query);
     } catch (e) {
       console.error('[CardanoService] TransactionInputAssets error:', e);
       return mapError(req, e, 'TransactionInputAssets');
@@ -200,8 +206,9 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // TransactionOutputAssets
   // --------------------------------------------------------------------------
-  this.on('READ', TransactionOutputAssets, async (req: any) => {
+  this.on('READ', TransactionOutputAssets, async req  => {
     const db = cds.tx(req);
+    
     try {
       return db.run(req.query);
     } catch (e) {
@@ -213,7 +220,7 @@ export default cds.service.impl(function CardanoService(this: any) {
   // --------------------------------------------------------------------------
   // Metadata
   // --------------------------------------------------------------------------
-  this.on('READ', Metadata, async (req: any) => {
+  this.on('READ', Metadata, async req => {
     try {
       // @Todo implement logic
       return req.error(404, 'Metadata not found for this transaction');
@@ -222,4 +229,6 @@ export default cds.service.impl(function CardanoService(this: any) {
       return mapError(req, e, 'Metadata');
     }
   });
-});
+  return super.init();
+}
+}

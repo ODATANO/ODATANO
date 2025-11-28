@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import type { Transaction } from '@sap/cds';
 import cardano from './cardano-client';
 
 import {
@@ -10,7 +11,7 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
-} from '#cds-models/odatano/cardano';
+} from '#cds-models/CardanoODataService';
 
 import {
   mapTransaction,
@@ -33,7 +34,7 @@ export class CardanoIndexer {
    * @param txHash  Cardano transaction hash (hex)
    */
   async indexTransaction(
-    tx: any,
+    tx: Transaction,
     txHash: string,
     options: any = {}
   ): Promise<any> {
@@ -50,7 +51,6 @@ export class CardanoIndexer {
       UPSERT.into(Transactions).entries(txRow)
     );
 
-    // Beteiligte Adressen indexieren
     if (txUtxos) {
       const addresses = this._collectAddressesFromUtxos(txUtxos);
       if (addresses.length) {
@@ -95,21 +95,20 @@ export class CardanoIndexer {
   /**
    * Index a single address (Addresses + AddressAssets + AddressUTxOs)
    */
-  async indexAddress(tx: any, addr: string): Promise<any> {
+  async indexAddress(tx: Transaction, addr: string): Promise<any> {
     const addrData = await cardano.getAddress(addr);
 
-    // Address baseline
-    const addrEntity = mapAddress(addr, addrData);
+    console.log('dada', addrData);
 
-    // Addresses upsert
+    const AddrEntity = mapAddress(addr, addrData);
+
     await tx.run(
-      UPSERT.into(Addresses).entries(addrEntity)
+      UPSERT.into(Addresses).entries(AddrEntity)
     );
 
-    // AddressAssets
     const assetEntities = mapAddressAssets(
       addr,
-      (addrEntity as any).validTo,
+      AddrEntity.validTo, 
       addrData
     );
 
@@ -119,12 +118,11 @@ export class CardanoIndexer {
       );
     }
 
-    // AddressUTxOs
     const utxoData = await cardano.getAddressUtxos(addr);
 
     const utxoEntities = mapAddressUtxos(
       addr,
-      (addrEntity as any).validTo,
+      AddrEntity.validTo,
       utxoData
     );
 
@@ -136,7 +134,7 @@ export class CardanoIndexer {
       );
     }
 
-    return addrEntity;
+    return AddrEntity;
   }
 
   /**
@@ -159,7 +157,7 @@ export class CardanoIndexer {
    * Helper: index multiple addresses with assets
    */
   private async _ensureAddresses(
-    tx: any,
+    tx: Transaction,
     bech32List: string[]
   ): Promise<void> {
     for (const bech32 of bech32List) {
