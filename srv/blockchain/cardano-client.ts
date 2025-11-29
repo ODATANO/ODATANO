@@ -3,9 +3,21 @@ import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
 import logger from '../utils/logger';
 
+import {
+  Transaction,
+  Address,
+  UTxO,
+  NetworkInfo,
+  MetadataLabel,
+  MetadataLabelTx
+} from '../utils/types';
+
 const PRIMARY_TIMEOUT_MS  = Number(process.env.PRIMARY_TIMEOUT_MS  ?? 8000);
 const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS ?? 8000);
 
+// ---------------------------------------------------------------------------
+// Cardano Client with multiple backends, timeouts and fallbacks
+// ---------------------------------------------------------------------------
 export class CardanoClient {
   private backends: CardanoBackend[];
   private initialized = false;
@@ -21,7 +33,6 @@ export class CardanoClient {
   // ---------------------------------------------------------------------------
   // Init-Lifecycle
   // ---------------------------------------------------------------------------
-
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
 
@@ -49,7 +60,6 @@ export class CardanoClient {
     if (initialized.length === 0) {
       throw new Error('[CardanoClient] Initialization failed for all backends');
     }
-
     this.backends = initialized;
     this.initialized = true;
   }
@@ -57,7 +67,6 @@ export class CardanoClient {
   // ---------------------------------------------------------------------------
   // Intern: Timeout & Fallback
   // ---------------------------------------------------------------------------
-
   private withTimeout<T>(
     promise: Promise<T>,
     ms: number,
@@ -77,7 +86,7 @@ export class CardanoClient {
   private getTimeoutForBackend(backend: CardanoBackend): number {
     if (backend.name === 'blockfrost') return PRIMARY_TIMEOUT_MS;
     if (backend.name === 'koios') return FALLBACK_TIMEOUT_MS;
-    // ADD NEW BACKENDS HERE
+    // add more backends here with custom timeouts here
     return PRIMARY_TIMEOUT_MS;
   }
 
@@ -90,7 +99,6 @@ export class CardanoClient {
 
     for (const backend of this.backends) {
       const timeoutMs = this.getTimeoutForBackend(backend);
-
       try {
         logger.debug({ backend: backend.name }, 'Calling backend');
         const result = await this.withTimeout(
@@ -110,27 +118,27 @@ export class CardanoClient {
     );
   }
 
-  getTransaction(txHash: string): Promise<any> {
+  getTransaction(txHash: string): Promise<Transaction> {
     return this.withFallback(b => b.getTransaction(txHash));
   }
 
-  getAddress(address: string): Promise<any> {
+  getAddress(address: string): Promise<Address> {
     return this.withFallback(b => b.getAddress(address));
   }
 
-  getAddressUtxos(address: string): Promise<any[]> {
+  getAddressUtxos(address: string): Promise<UTxO[]> {
     return this.withFallback(b => b.getAddressUtxos(address));
   }
 
-  getNetworkInformation(): Promise<any> {
+  getNetworkInformation(): Promise<NetworkInfo> {
     return this.withFallback(b => b.getNetworkInformation());
   }
 
-  getMetadataLabels(): Promise<any[]> {
+  getMetadataLabels(): Promise<MetadataLabel[]> {
     return this.withFallback(b => b.getMetadataLabels());
   }
 
-  getMetadataTrasactions(label: string | number): Promise<any[]> {
+  getMetadataTrasactions(label: string | number): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
   }
 }
@@ -138,7 +146,8 @@ export class CardanoClient {
 export const cardanoClient = new CardanoClient([
   new BlockfrostBackend(), // primary
   new KoiosBackend(),      // fallback
-  //new NodeBackend(),     // add Note later
+  //new NodeBackend(),     // add more backends here
+  // add more backends here
 ]);
 
 export default cardanoClient;

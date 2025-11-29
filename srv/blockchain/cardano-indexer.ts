@@ -17,12 +17,12 @@ import {
 import {
   mapTransaction,
   mapTransactionInputs,
-  mapTransactionInputAssets,
+  mapTransactionAssets,
   mapTransactionOutputs,
-  mapTransactionOutputAssets,
   mapAddress,
   mapAddressAssets,
   mapAddressUtxos,
+  mapNetworkInfo,
 } from '../utils/mappers';
 
 const { UPSERT } = cds.ql;
@@ -40,7 +40,7 @@ export class CardanoIndexer {
     options: any = {}
   ): Promise<any> {
     // getting data from cardano data provider (@TODO add tx metadata)
-    const { tx: providerTx, txUtxos } = await cardano.getTransaction(txHash);
+    const providerTx = await cardano.getTransaction(txHash);
 
     if (!providerTx) {
       throw new Error(`Transaction ${txHash} not found at provider`);
@@ -52,15 +52,16 @@ export class CardanoIndexer {
       UPSERT.into(Transactions).entries(txRow)
     );
 
-    if (txUtxos) {
-      const addresses = this._collectAddressesFromUtxos(txUtxos);
+    if (providerTx.inputs || providerTx.outputs) {
+      const addresses = this._collectAddressesFromUtxos(providerTx);
       if (addresses.length) {
         await this._ensureAddresses(tx, addresses);
       }
 
       // Inputs + InputAssets
-      const inputRows = mapTransactionInputs(txHash, txUtxos);
-      const inputAssetRows = mapTransactionInputAssets(txHash, txUtxos);
+      const inputRows = mapTransactionInputs(txHash, providerTx.inputs || []);
+
+      const inputAssetRows = mapTransactionAssets(txHash, providerTx.inputs || []);
 
       if (inputRows.length) {
         await tx.run(
@@ -75,8 +76,8 @@ export class CardanoIndexer {
       }
 
       // Outputs + OutputAssets
-      const outputRows = mapTransactionOutputs(txHash, txUtxos);
-      const outputAssetRows = mapTransactionOutputAssets(txHash, txUtxos);
+      const outputRows = mapTransactionOutputs(txHash, providerTx.outputs || []);
+      const outputAssetRows = mapTransactionAssets(txHash, providerTx.outputs || []);
 
       if (outputRows.length) {
         await tx.run(
@@ -107,10 +108,12 @@ export class CardanoIndexer {
       UPSERT.into(Addresses).entries(AddrEntity)
     );
 
+    const validTo = AddrEntity.validTo ?? new Date().toISOString();
+
     const assetEntities = mapAddressAssets(
       addr,
-      AddrEntity.validTo, 
-      addrData
+      validTo, 
+      addrData.amount
     );
 
     if (assetEntities.length) {
@@ -123,8 +126,8 @@ export class CardanoIndexer {
 
     const utxoEntities = mapAddressUtxos(
       addr,
-      AddrEntity.validTo,
-      { data: utxoData }
+      validTo,
+      utxoData
     );
 
     logger.debug({ utxoEntities }, 'indexAddress: utxo entities');

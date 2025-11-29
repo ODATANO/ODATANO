@@ -1,6 +1,18 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import {
+  Transaction,
+  Address,
+  UTxO,
+  NetworkInfo,
+  JSONValue,
+  MetadataLabel,
+  MetadataLabelTx,
+} from '../utils/types';
 
+// ---------------------------------------------------------------------------
+// Blockfrost Backend Implementation
+// ---------------------------------------------------------------------------
 export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
@@ -15,25 +27,21 @@ export class BlockfrostBackend implements CardanoBackend {
       projectId,
     });
   }
+  
+  async init(): Promise<void> { }
 
-   async init(): Promise<void> {
-    // await this.api.health();
-  }
   // ---------------------------------------------------------------------------
-  // Network-Info
+  // Network Information
   // ---------------------------------------------------------------------------
-  async getNetworkInformation(): Promise<any> {
+  async getNetworkInformation(): Promise<NetworkInfo> {
     try {
       const latestBlock = await this.api.blocksLatest();
       const networkInfo = await this.api.network();
       const latestEpoch = await this.api.epochsLatest();
-      const health = await this.api.health();
-
       return {
         latestBlock: latestBlock,
         network: networkInfo,
         latestEpoch: latestEpoch,
-        health: health,
       };
     } catch (err: any) {
       if (err?.status === 404 || err?.response?.status === 404) {
@@ -44,18 +52,63 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   // ---------------------------------------------------------------------------
+  // Health Check
+  // ---------------------------------------------------------------------------
+  async healthCheck(): Promise<boolean> {
+    return (await this.api.health()).is_healthy;
+  }
+  
+  // ---------------------------------------------------------------------------
   // Transaction
   // ---------------------------------------------------------------------------
-  async getTransaction(hash: string): Promise<any> {
+  async getTransaction(hash: string): Promise<Transaction> {
     try {
       const tx = await this.api.txs(hash);
       const txUtxos = await this.api.txsUtxos(hash);
       const txMetadata = await this.api.txsMetadata(hash);
-
       return {
-        tx,
-        txUtxos,
-        txMetadata,
+        hash: tx.hash,
+        blockHash: tx.block,
+        blockHeight: tx.block_height,
+        blockTime: tx.block_time,
+        slot: tx.slot,
+        index: tx.index,
+        fee: parseInt(tx.fees, 10),
+        deposit: parseInt(tx.deposit, 10),
+        size: tx.size,
+        utxoCount: tx.utxo_count,
+        withdrawalCount: tx.withdrawal_count,
+        mirCertCount: tx.mir_cert_count,
+        delegationCount: tx.delegation_count,
+        stakeCertCount: tx.stake_cert_count,
+        poolUpdateCount: tx.pool_update_count,
+        poolRetireCount: tx.pool_retire_count,
+        assetMintOrBurnCount: tx.asset_mint_or_burn_count,
+        redeemerCount: tx.redeemer_count,
+        validContract: tx.valid_contract,
+        outputAmount: tx.output_amount,
+        inputs: txUtxos.inputs.map(input => ({
+          address: input.address,
+          txHash: input.tx_hash,
+          outputIndex: input.output_index,
+          amount: input.amount,
+          dataHash: input.data_hash,
+          inlineDatum: input.inline_datum,
+          referenceScriptHash: input.reference_script_hash,
+          collateral: input.collateral,
+          reference: input.reference,
+        })),
+        outputs: txUtxos.outputs.map(output => ({
+          address: output.address,
+          amount: output.amount,
+          txHash: tx.hash,
+          outputIndex: output.output_index,
+          dataHash: output.data_hash,  
+          inlineDatum: output.inline_datum,
+          isCollateral: output.collateral,
+          referenceScriptHash: output.reference_script_hash,
+        })),
+        metadata: txMetadata,
       };
     } catch (err: any) {
       if (err?.status === 404 || err?.response?.status === 404) {
@@ -66,9 +119,9 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   // ---------------------------------------------------------------------------
-  // Metadata
+  // Metadata Labels
   // ---------------------------------------------------------------------------
-  async getMetadataLabels(): Promise<any[]> {
+  async getMetadataLabels(): Promise<MetadataLabel[]> {
     try {
       const labelData = await this.api.metadataTxsLabels();
       return labelData;
@@ -80,10 +133,17 @@ export class BlockfrostBackend implements CardanoBackend {
     }
   }
 
-  async getMetadataLabelTransactions(label: string | number): Promise<any[]> {
+  // ---------------------------------------------------------------------------
+  // Metadata Label Transactions
+  // ---------------------------------------------------------------------------
+  async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
     try {
-      const labelData = await this.api.metadataTxsLabel(String(label));
-      return labelData;
+      const label_data = await this.api.metadataTxsLabel(String(label));
+      return label_data.map(tx => ({
+        label: label,
+        txHash: tx.tx_hash,
+        json: tx.json_metadata as JSONValue | null
+      }));
     } catch (err: any) {
       if (err?.response?.status === 404 || err?.status === 404) {
         throw new Error('NOT_FOUND');
@@ -95,10 +155,16 @@ export class BlockfrostBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
   // Address
   // ---------------------------------------------------------------------------
-  async getAddress(address: string): Promise<any> {
+  async getAddress(address: string): Promise<Address> {
     try {
-      const data = await this.api.addresses(address);
-      return data;
+      const address_data = await this.api.addresses(address);
+      return {
+        address: address_data.address,
+        stakeAddress: address_data.stake_address,
+        type: address_data.type,
+        isScript: address_data.script,
+        amount: address_data.amount,  
+      };
     } catch (err: any) {
       if (err?.response?.status === 404 || err?.status === 404) {
         throw new Error('NOT_FOUND');
@@ -107,10 +173,18 @@ export class BlockfrostBackend implements CardanoBackend {
     }
   }
 
-  async getAddressUtxos(address: string): Promise<any[]> {
+  async getAddressUtxos(address: string): Promise<UTxO[]> {
     try {
-      const data = await this.api.addressesUtxos(address);
-      return data;
+      const utxo_data = await this.api.addressesUtxos(address);
+      return utxo_data.map(utxo => ({
+        txHash: utxo.tx_hash,
+        outputIndex: utxo.output_index,
+        address: utxo.address,
+        amount: utxo.amount,
+        blockHash: utxo.block,
+        datumHash: utxo.data_hash,
+        scriptRef: utxo.reference_script_hash,
+    }));
     } catch (err: any) {
       if (err?.response?.status === 404 || err?.status === 404) {
         throw new Error('NOT_FOUND');

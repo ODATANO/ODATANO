@@ -17,6 +17,15 @@ export class KoiosBackend implements CardanoBackend {
     return;
   }
 
+  async healthCheck(): Promise<boolean> {
+    try {
+      const response = await this.api.get('/health');
+      return response.status === 200;
+    } catch (err) {
+      return false;
+    } 
+  }
+
   async getTransaction(txHash: string): Promise<any> {
     const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
 
