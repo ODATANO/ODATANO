@@ -26,7 +26,7 @@ export default class CardanoService extends cds.ApplicationService {
   } = require('#cds-models/CardanoODataService')
 
  // --------------------------------------------------------------------------
-  // Logging
+  // Logging (just for debugging requests / do not use wildcard reads in production)
   // --------------------------------------------------------------------------
  this.before('READ', '*', req => {   
   const ent = (req as any).target?.name || (req as any).path;

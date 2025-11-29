@@ -1,4 +1,4 @@
-const { mapProviderError } = require('../../srv/utils/errors');
+import { mapProviderError } from '../../srv/utils/errors';
 
 describe('mapProviderError', () => {
   test('maps NOT_FOUND token to 404', () => {
@@ -8,10 +8,9 @@ describe('mapProviderError', () => {
   });
 
   test('maps axios-style response status', () => {
-    const err = { response: { status: 401, data: { message: 'bad key' } } };
+    const err = { response: { status: 401, data: { message: 'bad key' } } } as any;
     const r = mapProviderError(err);
     expect(r.status).toBe(401);
-    // message may be the provider message or normalized text
     expect(r.message.toLowerCase()).toMatch(/bad key|provider returned http 401|unauthor/i);
   });
 

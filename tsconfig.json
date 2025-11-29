@@ -14,6 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true,
     "allowJs": true,
+    "types": ["node", "jest"],
     "paths": {
       "@sap/cds": [
         "./node_modules/@cap-js/cds-types"
@@ -27,6 +28,7 @@
     "srv/**/*.ts",
     "app/**/*.ts",
     "db/**/*.ts",
-    "types/**/*.d.ts"
+    "types/**/*.d.ts",
+    "test/**/*.ts"
   ]
 }

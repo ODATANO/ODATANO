@@ -1,6 +1,9 @@
 using {odatano} from '../db/schema';
 
 service CardanoODataService {
+    // ---------------------------------------------------------------------------
+    // Entity Projections
+    // ---------------------------------------------------------------------------
     // general network informations
     entity NetworkInformation      as projection on odatano.cardano.NetworkInformation;
 
@@ -19,4 +22,5 @@ service CardanoODataService {
     entity TransactionOutputs      as projection on odatano.cardano.TransactionOutputs;
     entity TransactionInputAssets  as projection on odatano.cardano.TransactionInputAssets;
     entity TransactionOutputAssets as projection on odatano.cardano.TransactionOutputAssets;
+
 }
