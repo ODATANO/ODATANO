@@ -98,4 +98,8 @@ export class KoiosBackend implements CardanoBackend {
   async getMetadataLabelTransactions(_label: string | number): Promise<any[]> {
     throw new Error('NOT_SUPPORTED');
   }
+
+  async getMetadataTransactions(_txHash: string): Promise<any[]> {
+    throw new Error('NOT_SUPPORTED');
+  }
 }

@@ -140,7 +140,7 @@ export class CardanoClient {
     return this.withFallback(b => b.getMetadataLabels());
   }
 
-  getMetadataTrasactions(label: string | number): Promise<MetadataLabelTx[]> {
+  getMetadataTransactions(label: string | number): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
   }
 

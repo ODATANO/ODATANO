@@ -23,8 +23,10 @@ import {
   TransactionOutputAsset as TransactionOutputAssetRow,
   NetworkInformation as NetworkInfoRow,
   Metadata as MetadataRow,
+  MetadataLabel as MetadataLabelsRow,
 } from '#cds-models/CardanoODataService';
 import { tx } from '@sap/cds';
+import e from 'express';
 
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
@@ -251,6 +253,79 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
     liveStake: Number(providerNetworkData.stake.live),
     activeStake: Number(providerNetworkData.stake.active),
   };
+}
+
+export function mapLatestBlock(providerBlockData: LatestBlockProviderData) {
+  return {
+    blockHeight: providerBlockData.height,
+    blockHash: providerBlockData.hash,  
+    slot: providerBlockData.slot,
+    epoch: providerBlockData.epoch,
+    epochSlot: providerBlockData.epochSlot,
+    slotInEpoch: providerBlockData.slot,
+    blockTime: new Date(providerBlockData.time * 1000).toISOString(),
+  };
+} 
+
+export function mapLatestEpoch(providerEpochData: LatestEpochProviderData) {
+  return {
+    epoch: providerEpochData.epoch,
+    startTime: new Date(providerEpochData.start_time * 1000).toISOString(),
+    endTime: new Date(providerEpochData.end_time * 1000).toISOString(),
+    blockCount: providerEpochData.block_count,
+    txCount: providerEpochData.tx_count,
+    output: Number(providerEpochData.output),
+    fees: Number(providerEpochData.fees),
+    activeStake: Number(providerEpochData.active_stake),
+  };
+}
+
+export function mapMetadataLabels(
+  providerLabels: MetadataLabelProviderData[]
+): MetadataLabelsRow[] {
+  if (!Array.isArray(providerLabels)) return [];
+
+  const rows: MetadataLabelsRow[] = [];
+
+  for (const lbl of providerLabels) {
+    const numericLabel = Number(lbl.label);
+
+    if (Number.isNaN(numericLabel)) {
+      continue;
+    }
+
+    rows.push({
+      label: numericLabel.toString() as MetadataLabelsRow['label'],
+      cip10: lbl.cip10 ?? '',
+      count: lbl.count ?? 0,
+    });
+  }
+
+  return rows;
+}
+
+export function mapMetadataFromLabelTxs(
+  providerLabelTxs: MetadataLabelTxProviderData[]
+): MetadataRow[] {
+  if (!Array.isArray(providerLabelTxs)) return [];
+
+  const rows: MetadataRow[] = [];
+
+  for (const txMeta of providerLabelTxs) {
+    const numericLabel = Number(txMeta.label);
+    if (Number.isNaN(numericLabel)) continue;
+
+    rows.push({
+      txHash_hash: txMeta.txHash as MetadataRow['txHash_hash'],
+      label_label: numericLabel.toString() as MetadataLabelsRow['label'],
+      payloadJson:
+        txMeta.json !== undefined
+          ? JSON.stringify(txMeta.json)
+          : null,
+    });
+  }
+
+  return rows;
 }
 
 // -----------------------------------------------------------------------------

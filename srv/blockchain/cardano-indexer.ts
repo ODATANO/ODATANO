@@ -5,6 +5,7 @@ import logger from '../utils/logger';
 
 import {
   Addresses,
+  Transaction as TransactionRow,
   AddressAssets,
   AddressUTxOs,
   Transactions,
@@ -12,6 +13,9 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
+  Metadata as MetadataEntity,
+  MetadataLabels as MetadataLabelsEntity,
+  MetadataLabel,
 } from '#cds-models/CardanoODataService';
 
 import {
@@ -23,7 +27,12 @@ import {
   mapAddressAssets,
   mapAddressUtxos,
   mapNetworkInfo,
+  mapLatestBlock,
+  mapLatestEpoch,
+  mapMetadataFromLabelTxs,
+  mapMetadataLabels,
 } from '../utils/mappers';
+import { metadataTxsLabel, metadataTxsLabels } from '@blockfrost/blockfrost-js/lib/endpoints/api/metadata';
 
 const { UPSERT } = cds.ql;
 
@@ -37,9 +46,8 @@ export class CardanoIndexer {
   async indexTransaction(
     tx: Transaction,
     txHash: string,
-    options: any = {}
-  ): Promise<any> {
-    // getting data from cardano data provider (@TODO add tx metadata)
+  ): Promise<TransactionRow> {
+    // getting data from cardano data provider
     const providerTx = await cardano.getTransaction(txHash);
 
     if (!providerTx) {
@@ -139,6 +147,72 @@ export class CardanoIndexer {
     }
 
     return AddrEntity;
+  }
+
+   /**
+   * Index metadata for a single transaction (Metadata)
+   *
+   * @param tx       CAP transaction
+   * @param txHash   transaction hash
+   * @param metadata raw metadata object (label -> JSONValue)
+   */
+  async indexTransactionMetadata(
+    tx: Transaction,
+    txHash: string,
+  ): Promise<any[]> {
+
+    const metadata = await cardano.getMetadataTransactions(txHash);
+
+    const rows = mapMetadataFromLabelTxs(metadata);
+
+    if (rows.length) {
+      await tx.run(
+        UPSERT.into(MetadataEntity).entries(rows)
+      );
+    }
+
+    return rows;
+  }
+
+  /**
+   * Index metadata for all transactions of a given label
+   * using cardano.getMetadataLabelTransactions(label)
+   *
+   * @param tx     CAP transaction
+   * @param label  metadata label (numeric or string)
+   */
+  async indexMetadataForLabel(
+    tx: Transaction,
+    label: string | number,
+  ): Promise<MetadataLabel[]> {
+    
+    const labelTxs = await cardano.getMetadataTransactions(label);
+
+    if (!Array.isArray(labelTxs) || labelTxs.length === 0) {
+      return [];
+    } 
+
+    const rows: any[] = [];
+
+    for (const entry of labelTxs) {
+      const numericLabel = Number(entry.label);
+      if (Number.isNaN(numericLabel)) continue;
+
+      rows.push({
+        txHash_hash: entry.txHash,
+        label_label: numericLabel.toString(),
+        payloadJson:
+          entry.json !== undefined ? JSON.stringify(entry.json) : null,
+      });
+    }
+
+    if (rows.length) {
+      await tx.run(
+        UPSERT.into(MetadataEntity).entries(rows)
+      );
+    }
+
+    return rows;
   }
 
   /**

@@ -127,6 +127,14 @@ export interface LatestEpoch{
 
 export interface MetadataLabel {
   label: string;
+  cip10: string | null;
+  count: number;
+}
+
+export interface Metadata {
+  txHash: Hex;
+  label: number | string;
+  json?: JSONValue;
 }
 
 export interface MetadataLabelTx {

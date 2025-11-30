@@ -143,7 +143,7 @@ entity Transactions {
         redeemerCount        : Integer;
         validContract        : Boolean;
         metadata             : Association to Metadata
-                                   on metadata.tx = $self;
+                                   on metadata.txHash = $self;
         inputs               : Composition of many TransactionInputs
                                    on inputs.tx = $self;
         outputs              : Composition of many TransactionOutputs
@@ -192,13 +192,13 @@ entity TransactionOutputAssets : cuid {
 // Transaction Metadata
 // -----------------------------------------------------
 entity Metadata {
-    key tx          : Association to Transactions;
+    key txHash      : Association to Transactions;
     key label       : Association to MetadataLabels;
         payloadJson : LargeString;
 }
 
-entity MetadataLabels : cuid {
-    label : MetadataLabel;
-    cip10 : CIP10;
-    count : Integer;
+entity MetadataLabels {
+    key label : MetadataLabel;
+        cip10 : CIP10;
+        count : Integer;
 }

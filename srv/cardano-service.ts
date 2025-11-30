@@ -46,7 +46,7 @@ export default class CardanoService extends cds.ApplicationService {
         if (existing) {
           return existing;
         }
-
+        
         // TODO: Später hier via indexer oder Backend live fetchen + persistieren.
         logger.warn(
           '[CardanoService] NetworkInformation not found in DB (no indexer logic yet)',

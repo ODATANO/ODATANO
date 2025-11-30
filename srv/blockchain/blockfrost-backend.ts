@@ -10,6 +10,7 @@ import {
   JSONValue,
   MetadataLabel,
   MetadataLabelTx,
+  Metadata,
 } from '../utils/types';
 
 // ---------------------------------------------------------------------------
@@ -166,17 +167,24 @@ export class BlockfrostBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
   // Metadata Labels
   // ---------------------------------------------------------------------------
-  async getMetadataLabels(): Promise<MetadataLabel[]> {
-    try {
-      const labelData = await this.api.metadataTxsLabels();
-      return labelData;
-    } catch (err: any) {
-      if (err?.response?.status === 404 || err?.status === 404) {
-        throw new Error('NOT_FOUND');
-      }
-      throw err;
+async getMetadataLabels(): Promise<MetadataLabel[]> {
+  try {
+    const labelData = await this.api.metadataTxsLabels();
+
+    if (!Array.isArray(labelData)) return [];
+
+    return labelData.map((lbl: any) => ({
+      label: lbl.label,
+      cip10: lbl.cip10,
+      count: lbl.count,
+    }));
+  } catch (err: any) {
+    if (err?.response?.status === 404 || err?.status === 404) {
+      throw new Error('NOT_FOUND');
     }
+    throw err;
   }
+}
 
   // ---------------------------------------------------------------------------
   // Metadata Label Transactions
@@ -195,6 +203,14 @@ export class BlockfrostBackend implements CardanoBackend {
       }
       throw err;
     }
+  }
+
+  async  getMetadataTransactions(txHash: string): Promise<Metadata[]>{
+    return(await this.api.txsMetadata(txHash)).map(md => ({
+      txHash: txHash,
+      label: md.label,
+      json: md.json_metadata as JSONValue | null,
+    }));
   }
 
   // ---------------------------------------------------------------------------
