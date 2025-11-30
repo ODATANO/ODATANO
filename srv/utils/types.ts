@@ -82,10 +82,14 @@ export interface UTxO {
 
 export interface LatestBlock {
     time: number;
+    height: number | null;
     hash: string;
-    slot_leader: string;
+    slot: number | null;
+    slotLeader: string;
+    epoch: number | null;
+    epochSlot: number | null;
     size: number;
-    tx_count: number;
+    txCount: number;
     fees?: string | null;
 }
 
@@ -119,12 +123,6 @@ export interface LatestEpoch{
     output: string;
     fees: string;
     active_stake: string | null;
-}
-
-export interface NetworkInfo {
-    latestBlock: LatestBlock;
-    network: Network;
-    latestEpoch: LatestEpoch;
 }
 
 export interface MetadataLabel {

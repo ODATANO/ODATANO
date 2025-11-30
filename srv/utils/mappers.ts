@@ -5,7 +5,9 @@ import {
   TxInputLine as TxInputProviderData,
   TxOutputLine as TxOutputProviderData,
   Amount as AmountProviderData,
-  NetworkInfo as NetworkInfoProviderData,
+  Network as NetworkInfoProviderData,
+  LatestBlock as LatestBlockProviderData,
+  LatestEpoch as LatestEpochProviderData,
   MetadataLabel as MetadataLabelProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
 } from './types';
@@ -240,10 +242,14 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
 
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
   return {
-    latestBlock : String(providerNetworkData.latestBlock ?? 0),
-    network     : 'Testnet',
-    latestEpoch : String(providerNetworkData.latestEpoch.epoch  ?? 0),
-    apiHealth   : 'Healthy',
+    maxSupply: Number(providerNetworkData.supply.max),
+    circulatingSupply: Number( providerNetworkData.supply.circulating),
+    totalSupply:  Number(providerNetworkData.supply.total),
+    lockedSupply: Number(providerNetworkData.supply.locked),
+    treasurySupply: Number(providerNetworkData.supply.treasury),
+    reservesSupply: Number(providerNetworkData.supply.reserves),
+    liveStake: Number(providerNetworkData.stake.live),
+    activeStake: Number(providerNetworkData.stake.active),
   };
 }
 

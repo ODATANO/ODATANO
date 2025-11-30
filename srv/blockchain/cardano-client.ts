@@ -7,7 +7,9 @@ import {
   Transaction,
   Address,
   UTxO,
-  NetworkInfo,
+  Network,
+  LatestBlock,
+  LatestEpoch,
   MetadataLabel,
   MetadataLabelTx
 } from '../utils/types';
@@ -130,7 +132,7 @@ export class CardanoClient {
     return this.withFallback(b => b.getAddressUtxos(address));
   }
 
-  getNetworkInformation(): Promise<NetworkInfo> {
+  getNetworkInformation(): Promise<Network> {
     return this.withFallback(b => b.getNetworkInformation());
   }
 
@@ -140,6 +142,13 @@ export class CardanoClient {
 
   getMetadataTrasactions(label: string | number): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
+  }
+
+  getLatestBlock(): Promise<LatestBlock> {
+    return this.withFallback(b => b.getLatestBlock());
+  }
+  getLatestEpoch(): Promise<LatestEpoch> {
+    return this.withFallback(b => b.getLatestEpoch());
   }
 }
 

@@ -1,5 +1,17 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
+import {
+  Transaction,
+  LatestBlock,
+  Address,
+  UTxO,
+  Network,
+  LatestEpoch,
+  JSONValue,
+  MetadataLabel,
+  MetadataLabelTx,
+} from '../utils/types';
+
 
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
@@ -35,11 +47,19 @@ export class KoiosBackend implements CardanoBackend {
 
     const tx = data[0];
     return {
-      hash: tx.tx_hash,
-      block: tx.block_no,
-      blockTime: new Date(tx.tx_validity_start * 1000),
-      fee: parseInt(tx.tx_fee || '0', 10),
-    };
+     hash: tx.tx_hash,
+     block: tx.block_no,
+     blockTime: new Date(tx.tx_validity_start * 1000),
+     fee: parseInt(tx.tx_fee || '0', 10),
+   };
+  }
+
+  getLatestBlock(): Promise<LatestBlock> {
+    throw new Error('NOT_SUPPORTED');
+  }
+
+  getLatestEpoch(): Promise<LatestEpoch> {
+    throw new Error('NOT_SUPPORTED');
   }
 
   async getAddress(address: string): Promise<any> {

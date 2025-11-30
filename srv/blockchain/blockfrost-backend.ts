@@ -2,9 +2,11 @@ import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import {
   Transaction,
+  LatestBlock,
   Address,
   UTxO,
-  NetworkInfo,
+  Network,
+  LatestEpoch,
   JSONValue,
   MetadataLabel,
   MetadataLabelTx,
@@ -33,15 +35,12 @@ export class BlockfrostBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
   // Network Information
   // ---------------------------------------------------------------------------
-  async getNetworkInformation(): Promise<NetworkInfo> {
+  async getNetworkInformation(): Promise<Network> {
     try {
-      const latestBlock = await this.api.blocksLatest();
       const networkInfo = await this.api.network();
-      const latestEpoch = await this.api.epochsLatest();
       return {
-        latestBlock: latestBlock,
-        network: networkInfo,
-        latestEpoch: latestEpoch,
+        supply: networkInfo.supply,
+        stake: networkInfo.stake,
       };
     } catch (err: any) {
       if (err?.status === 404 || err?.response?.status === 404) {
@@ -51,6 +50,52 @@ export class BlockfrostBackend implements CardanoBackend {
     }
   }
 
+  async getLatestBlock(): Promise<LatestBlock> {
+    try {
+     const latestBlock = await this.api.blocksLatest();
+     return {
+        time: latestBlock.time,
+        height: latestBlock.height,
+        hash: latestBlock.hash,
+        slot: latestBlock.slot,
+        slotLeader: latestBlock.slot_leader,
+        epoch: latestBlock.epoch,
+        epochSlot: latestBlock.epoch_slot,
+        size: latestBlock.size,
+        txCount: latestBlock.tx_count,
+        fees: latestBlock.fees,
+    };
+    } catch (err: any) {
+      if (err?.status === 404 || err?.response?.status === 404) {
+        throw new Error('NOT_FOUND');
+      }
+      throw err;
+    }
+  }
+
+  async getLatestEpoch(): Promise<LatestEpoch> {
+     
+    try {
+    const latestEpoch = await this.api.epochsLatest();     
+     return {
+        epoch: latestEpoch.epoch,
+        start_time: latestEpoch.start_time,
+        end_time: latestEpoch.end_time,
+        first_block_time: latestEpoch.first_block_time,
+        last_block_time: latestEpoch.last_block_time,
+        block_count: latestEpoch.block_count,
+        tx_count: latestEpoch.tx_count,
+        output: latestEpoch.output,
+        fees: latestEpoch.fees,
+        active_stake: latestEpoch.active_stake,
+    };
+    } catch (err: any) {
+        if (err?.status === 404 || err?.response?.status === 404) {
+          throw new Error('NOT_FOUND');
+        }
+        throw err;
+      }
+  }
   // ---------------------------------------------------------------------------
   // Health Check
   // ---------------------------------------------------------------------------

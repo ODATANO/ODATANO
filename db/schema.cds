@@ -42,10 +42,41 @@ type UTxODataSlice {
 // Network Info Entity
 // -----------------------------------------------------
 entity NetworkInformation : temporal, cuid {
-    latestBlock : Blake2b256;
-    network     : String(14);
-    latestEpoch : String(3);
-    apiHealth   : String(10);
+    maxSupply         : Lovelace;
+    totalSupply       : Lovelace;
+    circulatingSupply : Lovelace;
+    lockedSupply      : Lovelace;
+    treasurySupply    : Lovelace;
+    reservesSupply    : Lovelace;
+    liveStake         : Lovelace;
+    activeStake       : Lovelace;
+}
+
+entity LatestBlock : temporal, cuid {
+    time        : String;
+    height      : Integer;
+    hash        : String;
+    slotLeader  : String;
+    epochNumber : Integer;
+    epoch       : Association to LatestEpoch
+                      on epoch.epoch = $self.epochNumber;
+    epochSlot   : Integer;
+    size        : Integer;
+    txCount     : Integer;
+    fees        : Lovelace;
+}
+
+entity LatestEpoch : temporal {
+    key epoch            : Integer;
+        start_time       : Integer;
+        end_time         : Integer;
+        first_block_time : Integer;
+        last_block_time  : Integer;
+        block_count      : Integer;
+        tx_count         : Integer;
+        output           : String;
+        fees             : String;
+        active_stake     : String;
 }
 
 // -----------------------------------------------------
