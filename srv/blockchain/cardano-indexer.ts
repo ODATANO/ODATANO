@@ -36,7 +36,6 @@ import {
   mapMetadataFromLabelTxs,
   mapMetadataLabels,
 } from '../utils/mappers';
-import { metadataTxsLabel, metadataTxsLabels } from '@blockfrost/blockfrost-js/lib/endpoints/api/metadata';
 
 const { UPSERT } = cds.ql;
 

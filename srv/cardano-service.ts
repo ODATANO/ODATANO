@@ -36,7 +36,7 @@ export default class CardanoService extends cds.ApplicationService {
     });
 
     // ------------------------------------------------------------------------
-    // NetworkInformation (Entity READ)
+    //  Read Handler for NetworkInformation
     // ------------------------------------------------------------------------
     this.on('READ', NetworkInformation, async (req: Request) => {
       const db = cds.tx(req);
@@ -47,11 +47,10 @@ export default class CardanoService extends cds.ApplicationService {
           return existing;
         }
         
-        // TODO: Später hier via indexer oder Backend live fetchen + persistieren.
-        logger.warn(
-          '[CardanoService] NetworkInformation not found in DB (no indexer logic yet)',
-        );
-        return req.error(404, 'Network information not available yet');
+        const networkInfo = await indexer.indexNetworkInformation(db);
+        if (networkInfo) {
+          return networkInfo;
+        }
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] NetworkInformation error');
         return mapError(req, e, 'NetworkInformation');
@@ -59,7 +58,7 @@ export default class CardanoService extends cds.ApplicationService {
     });
 
     // ------------------------------------------------------------------------
-    // LatestBlock (Entity READ)
+    // Read Handler for LatestBlock Information
     // ------------------------------------------------------------------------
     this.on('READ', LatestBlock, async (req: Request) => {
       const db = cds.tx(req);
@@ -70,11 +69,10 @@ export default class CardanoService extends cds.ApplicationService {
           return existing;
         }
 
-        // TODO: Später via indexer / Provider den neuesten Block holen und speichern.
-        logger.warn(
-          '[CardanoService] LatestBlock not found in DB (no indexer logic yet)',
-        );
-        return req.error(404, 'Latest block not available yet');
+        const latestBlock = await indexer.indexLatestBlock(db);
+        if (latestBlock) {
+          return latestBlock;
+        }
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] LatestBlock error');
         return mapError(req, e, 'LatestBlock');
@@ -93,11 +91,10 @@ export default class CardanoService extends cds.ApplicationService {
           return existing;
         }
 
-        // TODO: Später via indexer / Provider die neueste Epoch holen und speichern.
-        logger.warn(
-          '[CardanoService] LatestEpoch not found in DB (no indexer logic yet)',
-        );
-        return req.error(404, 'Latest epoch not available yet');
+        const latestEpoch =  await indexer.indexLatestEpoch(db);
+        if (latestEpoch) {
+          return latestEpoch;
+        } 
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] LatestEpoch error');
         return mapError(req, e, 'LatestEpoch');
@@ -113,7 +110,7 @@ export default class CardanoService extends cds.ApplicationService {
       try {
         const addr = (req.data as { address?: string })?.address;
 
-        // Read by primary key (address)
+        // read by primary key
         if (addr) {
           if (!isBech32Address(addr)) {
             return req.error(400, 'Invalid bech32 address');
@@ -126,7 +123,7 @@ export default class CardanoService extends cds.ApplicationService {
             return existing;
           }
 
-          // re-index address via indexer
+          // (re)index address via indexer
           logger.info({ address: addr }, '[CardanoService] Indexing address');
           const addressRow = await indexer.indexAddress(db, addr);
           logger.info(
@@ -136,7 +133,7 @@ export default class CardanoService extends cds.ApplicationService {
           return addressRow;
         }
 
-        // Default: run OData query directly on DB (collections / filters)
+        // default: run OData query directly on DB (collections / filters)
         return db.run(req.query);
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] Address error');
@@ -149,7 +146,6 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     this.on('READ', AddressAssets, async (req: Request) => {
       const db = cds.tx(req);
-
       try {
         return db.run(req.query);
       } catch (e) {
@@ -163,7 +159,6 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     this.on('READ', AddressUTxOs, async (req: Request) => {
       const db = cds.tx(req);
-
       try {
         return db.run(req.query);
       } catch (e) {
@@ -376,13 +371,13 @@ export default class CardanoService extends cds.ApplicationService {
           return req.error(400, 'Invalid transaction hash');
         }
 
-        // Erst aus DB
+        // First: try to find in DB
         const existing = await db.run(
           SELECT.one.from(Transactions).where({ hash: txHash }),
         );
         if (existing) return existing;
 
-        // Fallback: indexer
+        // Fallback: index via indexer
         logger.info(
           { txHash },
           '[CardanoService] GetTransactionByHash → indexing transaction',
@@ -442,9 +437,8 @@ export default class CardanoService extends cds.ApplicationService {
           return req.error(400, 'Invalid transaction hash');
         }
 
-        // Annahme: deine Metadata-Entity hat ein Feld txHash (anpassen falls es "hash" heißt)
         const rows = await db.run(
-          SELECT.from(Metadata).where({ txHash }), // ggf. zu { hash: txHash } ändern
+          SELECT.from(Metadata).where({ txHash }),
         );
         if (!rows || rows.length === 0) {
           return req.error(404, 'No metadata found for this transaction');
@@ -497,7 +491,6 @@ export default class CardanoService extends cds.ApplicationService {
           return req.error(400, 'Invalid bech32 address');
         }
 
-        // Annahme: AddressAssets hat ein Feld "address"
         const rows = await db.run(
           SELECT.from(AddressAssets).where({ address }),
         );
