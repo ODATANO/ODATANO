@@ -16,13 +16,17 @@ import {
   Metadata as MetadataEntity,
   MetadataLabels as MetadataLabelsEntity,
   MetadataLabel,
+  NetworkInformation as NetworkInformationEntity,
+  LatestBlock as LatestBlockEntity,
+  LatestEpoch as LatestEpochEntity,
 } from '#cds-models/CardanoODataService';
 
 import {
   mapTransaction,
   mapTransactionInputs,
-  mapTransactionAssets,
+  mapTransactionInputAssets,
   mapTransactionOutputs,
+  mapTransactionOutputAssets,
   mapAddress,
   mapAddressAssets,
   mapAddressUtxos,
@@ -69,7 +73,7 @@ export class CardanoIndexer {
       // Inputs + InputAssets
       const inputRows = mapTransactionInputs(txHash, providerTx.inputs || []);
 
-      const inputAssetRows = mapTransactionAssets(txHash, providerTx.inputs || []);
+      const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs || []);
 
       if (inputRows.length) {
         await tx.run(
@@ -85,7 +89,7 @@ export class CardanoIndexer {
 
       // Outputs + OutputAssets
       const outputRows = mapTransactionOutputs(txHash, providerTx.outputs || []);
-      const outputAssetRows = mapTransactionAssets(txHash, providerTx.outputs || []);
+      const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs || []);
 
       if (outputRows.length) {
         await tx.run(
@@ -213,6 +217,43 @@ export class CardanoIndexer {
     }
 
     return rows;
+  }
+
+  async indexNetworkInformation(tx: Transaction): Promise<NetworkInformationEntity> {
+    const netInfo = await cardano.getNetworkInformation();
+    const netEntity = mapNetworkInfo(netInfo);
+
+    await tx.run(
+      UPSERT.into(NetworkInformationEntity).entries(netEntity)
+    );
+    return netEntity;
+  }
+  
+  async indexLatestBlock(tx: Transaction): Promise<LatestBlockEntity> {
+    const blockInfo = await cardano.getLatestBlock();
+    
+    let latestEpoch = await tx.run(SELECT.one.from(LatestEpochEntity));
+    if (!latestEpoch) {
+      try {
+        latestEpoch = await this.indexLatestEpoch(tx);
+      } catch (error) {
+        throw new Error('LatestEpoch data not found for LatestBlock indexing');
+      }
+    }
+    const blockEntity = mapLatestBlock(blockInfo, latestEpoch); 
+    await tx.run(
+      UPSERT.into(LatestBlockEntity).entries([blockEntity])
+    );
+    return blockEntity;
+  }
+
+  async indexLatestEpoch(tx: Transaction): Promise<LatestEpochEntity> {
+    const epochInfo = await cardano.getLatestEpoch();
+    const epochEntity = mapLatestEpoch(epochInfo);  
+    await tx.run(
+      UPSERT.into(LatestEpochEntity).entries([epochEntity])
+    );
+    return epochEntity;
   }
 
   /**

@@ -24,9 +24,9 @@ import {
   NetworkInformation as NetworkInfoRow,
   Metadata as MetadataRow,
   MetadataLabel as MetadataLabelsRow,
+  LatestBlock as LatestBlockRow,
+  LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
-import { tx } from '@sap/cds';
-import e from 'express';
 
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
@@ -96,7 +96,7 @@ export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderD
   });
 }
 
-export function mapTransactionAssets(
+export function mapTransactionInputAssets(
   txHash: string,
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
@@ -132,6 +132,49 @@ export function mapTransactionAssets(
         txHash,
         inputIndex,
         unit,
+        asset_quantity: Number(quantity),
+        asset_policyId: policyId,
+        asset_assetName: assetName,
+      };
+    });
+  });
+}
+
+export function mapTransactionOutputAssets(
+  txHash: string,
+  outputs: TxOutputProviderData[]
+): TransactionOutputAssetRow[] {
+  if (!Array.isArray(outputs)) return [];
+  return outputs.flatMap((output, idx) => {
+    if (!Array.isArray(output.amount) || output.amount.length === 0) return [];
+
+    const outputIndex = output.outputIndex ?? idx;
+
+    return output.amount.map(a => {
+      const unit = a.unit;
+      const quantity = a.quantity;
+
+      let policyId: string | null = null;
+      let assetName: string | null = null;
+
+      if (unit === 'lovelace') {
+        assetName = 'lovelace';
+      } else {
+        const policy = unit.slice(0, 56);
+        const assetNameHex = unit.slice(56);
+        policyId = policy;
+
+        try {
+          assetName = Buffer.from(assetNameHex, 'hex').toString('utf8');
+        } catch {
+          assetName = assetNameHex;
+        }
+      }
+
+      return {
+        txHash: txHash,
+        outputIndex:outputIndex,
+        unit: unit,
         asset_quantity: Number(quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
@@ -255,26 +298,31 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   };
 }
 
-export function mapLatestBlock(providerBlockData: LatestBlockProviderData) {
+export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latestEpochData: LatestEpochRow) : LatestBlockRow {
   return {
-    blockHeight: providerBlockData.height,
-    blockHash: providerBlockData.hash,  
-    slot: providerBlockData.slot,
-    epoch: providerBlockData.epoch,
+    time: new Date(providerBlockData.time * 1000).toISOString(),
+    height: providerBlockData.height,
+    hash: providerBlockData.hash,  
+    slotLeader: String(providerBlockData.slot ?? null),
+    epochNumber: latestEpochData.epoch,
+    epoch: latestEpochData, 
     epochSlot: providerBlockData.epochSlot,
-    slotInEpoch: providerBlockData.slot,
-    blockTime: new Date(providerBlockData.time * 1000).toISOString(),
+    size: providerBlockData.size,
+    txCount: providerBlockData.txCount,
+    fees: Number(providerBlockData.fees),
   };
 } 
 
-export function mapLatestEpoch(providerEpochData: LatestEpochProviderData) {
+export function mapLatestEpoch(providerEpochData: LatestEpochProviderData)   {
   return {
     epoch: providerEpochData.epoch,
-    startTime: new Date(providerEpochData.start_time * 1000).toISOString(),
-    endTime: new Date(providerEpochData.end_time * 1000).toISOString(),
+    startTime: providerEpochData.start_time,
+    endTime: providerEpochData.end_time,
+    firstBlockTime: providerEpochData.first_block_time,
+    lastBlockTime: providerEpochData.last_block_time,
     blockCount: providerEpochData.block_count,
     txCount: providerEpochData.tx_count,
-    output: Number(providerEpochData.output),
+    output: providerEpochData.output,
     fees: Number(providerEpochData.fees),
     activeStake: Number(providerEpochData.active_stake),
   };

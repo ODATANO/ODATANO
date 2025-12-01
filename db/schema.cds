@@ -67,16 +67,16 @@ entity LatestBlock : temporal, cuid {
 }
 
 entity LatestEpoch : temporal {
-    key epoch            : Integer;
-        start_time       : Integer;
-        end_time         : Integer;
-        first_block_time : Integer;
-        last_block_time  : Integer;
-        block_count      : Integer;
-        tx_count         : Integer;
-        output           : String;
-        fees             : String;
-        active_stake     : String;
+    key epoch          : Integer;
+        startTime      : Integer;
+        endTime        : Integer;
+        firstBlockTime : Integer;
+        lastBlockTime  : Integer;
+        blockCount     : Integer;
+        txCount        : Integer;
+        output         : String;
+        fees           : Lovelace;
+        activeStake    : Lovelace;
 }
 
 // -----------------------------------------------------
