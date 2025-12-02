@@ -76,20 +76,12 @@ export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderD
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
     const inputIndex = input.outputIndex ?? idx;
     return {
-      txHash: txHash,
+      tx_hash: txHash,
       inputIndex: inputIndex,
-      sourceTxHash: input.txHash,
-      sourceOutputIndex: input.outputIndex,
-      utxo_address_bech32: input.address,
-      utxo_valueLovelace: Number(valueLovelace),
-      utxo_datumHash: input.dataHash || null,
-      utxo_inlineDatum: input.inlineDatum || null,
-      utxo_referenceScript: input.referenceScriptHash || null,
-      utxo_isScript: Boolean(
-        input.inlineDatum ||
-        input.dataHash ||
-        input.referenceScriptHash
-      ),
+      address_address: input.address,
+      utxoData_dataHash: input.dataHash || null,
+      utxoData_inlineDatum: input.inlineDatum || null,
+      utxoData_referenceScriptHash: input.referenceScriptHash || null,
       isCollateral: Boolean(input.isCollateral),
       isReference: Boolean(input.isReference),
     };
@@ -129,8 +121,8 @@ export function mapTransactionInputAssets(
       }
 
       return {
-        txHash,
-        inputIndex,
+        input_tx_hash: txHash,
+        input_inputIndex: inputIndex,
         unit,
         asset_quantity: Number(quantity),
         asset_policyId: policyId,
@@ -172,8 +164,8 @@ export function mapTransactionOutputAssets(
       }
 
       return {
-        txHash: txHash,
-        outputIndex:outputIndex,
+        output_tx_hash: txHash,
+        output_outputIndex: outputIndex,
         unit: unit,
         asset_quantity: Number(quantity),
         asset_policyId: policyId,
@@ -200,18 +192,12 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
     const outputIndex = output.outputIndex ?? idx;
 
     return {
-      txHash: txHash,
-      output_index: outputIndex,
-      utxo_address_bech32: output.address,
-      utxo_valueLovelace: Number(valueLovelace),
-      utxo_datumHash: output.dataHash || null,
+      tx_hash: txHash,
+      outputIndex: outputIndex,
+      address_address: output.address,
+      utxo_dataHash: output.dataHash || null,
       utxo_inlineDatum: output.inlineDatum || null,
-      utxo_referenceScript: output.referenceScriptHash || null,
-      utxo_isScript: Boolean(
-        output.inlineDatum ||
-        output.dataHash ||
-        output.referenceScriptHash
-      ),
+      utxo_referenceScriptHash: output.referenceScriptHash || null,
     };
   });
 }
@@ -243,16 +229,18 @@ export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData:
 
   if (!Array.isArray(addressUtxosData)) return [];
 
+  console.log('Mapping Address UTxOs:', addressUtxosData);
+
   return addressUtxosData.map((a: any) => ({
     address_address: addr,
-    hash: a.tx_hash,
-    index: a.output_index,
-    blockHash: a.block_hash,
-    utxodata_dataHash: a.data_hash,
-    utxodata_inlineDatum: a.inline_datum,
-    utxodata_referenceScriptHash: a.reference_script_hash,
+    hash: a.txHash,
+    index: a.outputIndex,
+    blockHash: a.blockHash,
+    utxodata_dataHash: a.dataHash,
+    utxodata_inlineDatum: a.inlineDatum,
+    utxodata_referenceScriptHash: a.referenceScriptHash,
     validFrom: nowIso,
-    validTo,
+    validTo: validTo,
   }));
 }
 
@@ -286,7 +274,11 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
 }
 
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
+  const nowIso = new Date().toISOString();
+  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
+    validFrom: nowIso,
+    validTo: validToIso,
     maxSupply: Number(providerNetworkData.supply.max),
     circulatingSupply: Number( providerNetworkData.supply.circulating),
     totalSupply:  Number(providerNetworkData.supply.total),
@@ -299,7 +291,11 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
 }
 
 export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latestEpochData: LatestEpochRow) : LatestBlockRow {
+  const nowIso = new Date().toISOString();
+  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
+    validFrom: nowIso,
+    validTo: validToIso,
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
     hash: providerBlockData.hash,  
@@ -313,8 +309,12 @@ export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latest
   };
 } 
 
-export function mapLatestEpoch(providerEpochData: LatestEpochProviderData)   {
+export function mapLatestEpoch(providerEpochData: LatestEpochProviderData) : LatestEpochRow {
+const nowIso = new Date().toISOString();
+const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
+    validFrom: nowIso,
+    validTo: validToIso,
     epoch: providerEpochData.epoch,
     startTime: providerEpochData.start_time,
     endTime: providerEpochData.end_time,
@@ -364,7 +364,7 @@ export function mapMetadataFromLabelTxs(
     if (Number.isNaN(numericLabel)) continue;
 
     rows.push({
-      txHash_hash: txMeta.txHash as MetadataRow['txHash_hash'],
+      tx_hash: txMeta.txHash as MetadataRow['tx_hash'],
       label_label: numericLabel.toString() as MetadataLabelsRow['label'],
       payloadJson:
         txMeta.json !== undefined

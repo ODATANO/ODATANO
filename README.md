@@ -45,7 +45,29 @@ cds watch
 
 **Server should now be running at:** `http://localhost:4004`
 
-## Main Cardano Endpoints
+# Endpoits
+
+## 1. General Information Endpoints
+
+### NetworkInformation
+
+```bash
+curl "http://localhost:4004/odata/v4/cardano-odata/NetworkInformation"
+```
+
+### Latest Epoch
+
+```bash
+curl "http://localhost:4004/odata/v4/cardano-odata/LatestEpoch"
+```
+
+### Latest Block
+
+```bash
+curl "http://localhost:4004/odata/v4/cardano-odata/LatestBlock"
+```
+
+# 2. Transaction Endpoints
 
 ### 1. Get Transaction Details http://localhost:4004/odata/v4/cardano-odata/Transactions('tx hash')
 

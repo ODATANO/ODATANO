@@ -296,9 +296,6 @@ export default class CardanoService extends cds.ApplicationService {
       }
     });
 
-    // ========================================================================
-    // Actions – sauber an deinen Service angepasst
-    // ========================================================================
 
     // ------------------------------------------------------------------------
     // action GetNetworkInformation() returns NetworkInformation;
@@ -309,8 +306,7 @@ export default class CardanoService extends cds.ApplicationService {
       try {
         const row = await db.run(SELECT.one.from(NetworkInformation));
         if (!row) {
-          // später: indexer / backend call einbauen
-          return req.error(404, 'Network information not available');
+          return await indexer.indexNetworkInformation(db);
         }
         return row;
       } catch (e) {
@@ -328,7 +324,7 @@ export default class CardanoService extends cds.ApplicationService {
       try {
         const row = await db.run(SELECT.one.from(LatestBlock));
         if (!row) {
-          return req.error(404, 'Latest block not available');
+          return await indexer.indexLatestBlock(db);
         }
         return row;
       } catch (e) {
@@ -346,7 +342,7 @@ export default class CardanoService extends cds.ApplicationService {
       try {
         const row = await db.run(SELECT.one.from(LatestEpoch));
         if (!row) {
-          return req.error(404, 'Latest epoch not available');
+          return await indexer.indexLatestEpoch(db);
         }
         return row;
       } catch (e) {
@@ -370,8 +366,7 @@ export default class CardanoService extends cds.ApplicationService {
         if (!isTxHash(txHash)) {
           return req.error(400, 'Invalid transaction hash');
         }
-
-        // First: try to find in DB
+        // try to find in DB
         const existing = await db.run(
           SELECT.one.from(Transactions).where({ hash: txHash }),
         );
@@ -441,7 +436,7 @@ export default class CardanoService extends cds.ApplicationService {
           SELECT.from(Metadata).where({ txHash }),
         );
         if (!rows || rows.length === 0) {
-          return req.error(404, 'No metadata found for this transaction');
+          return await indexer.indexTransactionMetadata(db, txHash);
         }
         return rows;
       } catch (e) {
@@ -464,8 +459,6 @@ export default class CardanoService extends cds.ApplicationService {
         if (!isBech32Address(address)) {
           return req.error(400, 'Invalid bech32 address');
         }
-
-        // Annahme: AddressUTxOs hat ein Feld "address"
         const rows = await db.run(
           SELECT.from(AddressUTxOs).where({ address }),
         );

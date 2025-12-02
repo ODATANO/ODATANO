@@ -41,7 +41,7 @@ type UTxODataSlice {
 // -----------------------------------------------------
 // Network Info Entity
 // -----------------------------------------------------
-entity NetworkInformation : temporal, cuid {
+entity NetworkInformation : temporal {
     maxSupply         : Lovelace;
     totalSupply       : Lovelace;
     circulatingSupply : Lovelace;
@@ -52,18 +52,18 @@ entity NetworkInformation : temporal, cuid {
     activeStake       : Lovelace;
 }
 
-entity LatestBlock : temporal, cuid {
-    time        : String;
-    height      : Integer;
-    hash        : String;
-    slotLeader  : String;
-    epochNumber : Integer;
-    epoch       : Association to LatestEpoch
-                      on epoch.epoch = $self.epochNumber;
-    epochSlot   : Integer;
-    size        : Integer;
-    txCount     : Integer;
-    fees        : Lovelace;
+entity LatestBlock : temporal {
+    key hash        : String;
+        time        : String;
+        height      : Integer;
+        slotLeader  : String;
+        epochNumber : Integer;
+        epoch       : Association to LatestEpoch
+                          on epoch.epoch = $self.epochNumber;
+        epochSlot   : Integer;
+        size        : Integer;
+        txCount     : Integer;
+        fees        : Lovelace;
 }
 
 entity LatestEpoch : temporal {
@@ -143,7 +143,7 @@ entity Transactions {
         redeemerCount        : Integer;
         validContract        : Boolean;
         metadata             : Association to Metadata
-                                   on metadata.txHash = $self;
+                                   on metadata.tx = $self;
         inputs               : Composition of many TransactionInputs
                                    on inputs.tx = $self;
         outputs              : Composition of many TransactionOutputs
@@ -164,10 +164,10 @@ entity TransactionInputs {
                            on assets.input = $self;
 }
 
-entity TransactionInputAssets : cuid {
-    input : Association to TransactionInputs;
-    unit  : AssetUnit;
-    asset : AssetSlice;
+entity TransactionInputAssets {
+    key input : Association to TransactionInputs;
+    key unit  : AssetUnit;
+        asset : AssetSlice;
 }
 
 // -----------------------------------------------------
@@ -182,17 +182,17 @@ entity TransactionOutputs {
                           on assets.output = $self;
 }
 
-entity TransactionOutputAssets : cuid {
-    output : Association to TransactionOutputs;
-    unit   : AssetUnit;
-    asset  : AssetSlice;
+entity TransactionOutputAssets {
+    key output : Association to TransactionOutputs;
+    key unit   : AssetUnit;
+        asset  : AssetSlice;
 }
 
 // -----------------------------------------------------
 // Transaction Metadata
 // -----------------------------------------------------
 entity Metadata {
-    key txHash      : Association to Transactions;
+    key tx          : Association to Transactions;
     key label       : Association to MetadataLabels;
         payloadJson : LargeString;
 }
