@@ -21,6 +21,18 @@ const examples: ExampleRequest[] = [
     name: 'Metadata (example tx)',
     url: `${BASE}/Metadata(tx='50d9ad6558a6963d72dc25b4f37f31db15a512c708bb735a8f67f30b878bd4e3')`,
   },
+  {
+    name: 'Latest Block',
+    url: `${BASE}/LatestBlock`,
+  },
+  {
+    name: 'Network Information',
+    url: `${BASE}/NetworkInformation`,
+  },
+  {
+    name: 'Latest Epoch',
+    url: `${BASE}/LatestEpoch`,
+  },  
 ];
 
 (async () => {

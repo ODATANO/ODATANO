@@ -45,7 +45,7 @@ cds watch
 
 **Server should now be running at:** `http://localhost:4004`
 
-# Endpoits
+# Endpoints
 
 ## 1. General Information Endpoints
 

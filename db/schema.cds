@@ -142,7 +142,7 @@ entity Transactions {
         assetMintOrBurnCount : Integer;
         redeemerCount        : Integer;
         validContract        : Boolean;
-        metadata             : Association to Metadata
+        metadata             : Association to TransactionMetadata
                                    on metadata.tx = $self;
         inputs               : Composition of many TransactionInputs
                                    on inputs.tx = $self;
@@ -191,14 +191,16 @@ entity TransactionOutputAssets {
 // -----------------------------------------------------
 // Transaction Metadata
 // -----------------------------------------------------
-entity Metadata {
-    key tx          : Association to Transactions;
-    key label       : Association to MetadataLabels;
-        payloadJson : LargeString;
+entity TransactionMetadata {
+    key tx             : Association to Transactions;
+        metadataLabels : Composition of many TxMetadataLabels
+                             on metadataLabels.tx = $self;
 }
 
-entity MetadataLabels {
-    key label : MetadataLabel;
-        cip10 : CIP10;
-        count : Integer;
+entity TxMetadataLabels {
+    key tx          : Association to TransactionMetadata;
+    key label       : MetadataLabel;
+        cip10       : CIP10;
+        count       : Integer;
+        payloadJson : LargeString;
 }
