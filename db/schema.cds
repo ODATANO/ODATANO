@@ -192,15 +192,7 @@ entity TransactionOutputAssets {
 // Transaction Metadata
 // -----------------------------------------------------
 entity TransactionMetadata {
-    key tx             : Association to Transactions;
-        metadataLabels : Composition of many TxMetadataLabels
-                             on metadataLabels.tx = $self;
-}
-
-entity TxMetadataLabels {
-    key tx          : Association to TransactionMetadata;
-    key label       : MetadataLabel;
-        cip10       : CIP10;
-        count       : Integer;
-        payloadJson : LargeString;
+    key tx      : Association to Transactions;
+    key label   : String;
+        payload : LargeString;
 }

@@ -5,7 +5,6 @@ import {
   Network,
   LatestBlock,
   LatestEpoch,
-  MetadataLabel,
   MetadataLabelTx
 } from '../utils/types';
 
@@ -17,9 +16,8 @@ export interface CardanoBackend {
   getAddress(address: string): Promise<Address>;
   getAddressUtxos(address: string): Promise<UTxO[]>;
   getNetworkInformation(): Promise<Network>;
-  getMetadataLabels(): Promise<MetadataLabel[]>;
   getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]>;
-  getMetadataTransactions(txHash: string): Promise<MetadataLabelTx[]>;
+  getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
   getLatestBlock(): Promise<LatestBlock>;
   getLatestEpoch(): Promise<LatestEpoch>;
 }

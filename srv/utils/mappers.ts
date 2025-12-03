@@ -8,7 +8,6 @@ import {
   Network as NetworkInfoProviderData,
   LatestBlock as LatestBlockProviderData,
   LatestEpoch as LatestEpochProviderData,
-  MetadataLabel as MetadataLabelProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
 } from './types';
 
@@ -22,8 +21,7 @@ import {
   TransactionOutput as TransactionOutputRow,
   TransactionOutputAsset as TransactionOutputAssetRow,
   NetworkInformation as NetworkInfoRow,
-  Metadata as MetadataRow,
-  MetadataLabel as MetadataLabelsRow,
+  TransactionMetadata as TransactionMetadataRow,
   LatestBlock as LatestBlockRow,
   LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
@@ -328,12 +326,12 @@ const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   };
 }
 
-export function mapMetadataLabels(
-  providerLabels: MetadataLabelProviderData[]
-): MetadataLabelsRow[] {
+export function mapTransactionMetadata(
+  providerLabels: MetadataLabelTxProviderData[],
+): TransactionMetadataRow[] {
   if (!Array.isArray(providerLabels)) return [];
 
-  const rows: MetadataLabelsRow[] = [];
+  const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
     const numericLabel = Number(lbl.label);
@@ -343,35 +341,12 @@ export function mapMetadataLabels(
     }
 
     rows.push({
-      label: numericLabel.toString() as MetadataLabelsRow['label'],
-      cip10: lbl.cip10 ?? '',
-      count: lbl.count ?? 0,
+      tx_hash: lbl.txHash,
+      label: numericLabel.toString(),
+      payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
     });
   }
 
-  return rows;
-}
-
-export function mapMetadataFromLabelTxs(
-  providerLabelTxs: MetadataLabelTxProviderData[]
-): MetadataRow[] {
-  if (!Array.isArray(providerLabelTxs)) return [];
-
-  const rows: MetadataRow[] = [];
-
-  for (const txMeta of providerLabelTxs) {
-    const numericLabel = Number(txMeta.label);
-    if (Number.isNaN(numericLabel)) continue;
-
-    rows.push({
-      tx_hash: txMeta.txHash as MetadataRow['tx_hash'],
-      label_label: numericLabel.toString() as MetadataLabelsRow['label'],
-      payloadJson:
-        txMeta.json !== undefined
-          ? JSON.stringify(txMeta.json)
-          : null,
-    });
-  }
 
   return rows;
 }

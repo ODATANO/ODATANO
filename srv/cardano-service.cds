@@ -12,10 +12,7 @@ service CardanoODataService {
     // core entities
     entity Transactions            as projection on cardano.Transactions;
     entity Addresses               as projection on cardano.Addresses;
-    entity Metadata                as projection on cardano.Metadata;
-
-    // metadata labels
-    entity MetadataLabels          as projection on cardano.MetadataLabels;
+    entity TransactionMetadata     as projection on cardano.TransactionMetadata;
 
     // address details
     entity AddressAssets           as projection on cardano.AddressAssets;
@@ -33,7 +30,8 @@ service CardanoODataService {
     action GetLatestEpoch()                                 returns LatestEpoch;
     action GetTransactionByHash(txHash: cardano.Blake2b256) returns Transactions;
     action GetAddressByBech32(address: cardano.bech32)      returns Addresses;
-    action GetMetadataByTxHash(txHash: cardano.Blake2b256)  returns many Metadata;
+    action GetMetadataByTxHash(txHash: cardano.Blake2b256)  returns TransactionMetadata;
+    action GetMetadataLabelTransactions(label: String)      returns many TransactionInputs;
     action GetUTxOsByAddress(address: cardano.bech32)       returns many AddressUTxOs;
     action GetAssetsByAddress(address: cardano.bech32)      returns many AddressAssets;
 

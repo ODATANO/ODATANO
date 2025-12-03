@@ -10,7 +10,6 @@ import {
   Network,
   LatestBlock,
   LatestEpoch,
-  MetadataLabel,
   MetadataLabelTx
 } from '../utils/types';
 
@@ -136,11 +135,11 @@ export class CardanoClient {
     return this.withFallback(b => b.getNetworkInformation());
   }
 
-  getMetadataLabels(): Promise<MetadataLabel[]> {
-    return this.withFallback(b => b.getMetadataLabels());
+  getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+    return this.withFallback(b => b.getTransactionMetadata(txHash));
   }
 
-  getMetadataTransactions(label: string | number): Promise<MetadataLabelTx[]> {
+  getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
   }
 

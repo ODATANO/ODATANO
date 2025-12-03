@@ -13,9 +13,7 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
-  Metadata as MetadataEntity,
-  MetadataLabels as MetadataLabelsEntity,
-  MetadataLabel,
+  TransactionMetadata as TransactionMetadataEntity,
   NetworkInformation as NetworkInformationEntity,
   LatestBlock as LatestBlockEntity,
   LatestEpoch as LatestEpochEntity,
@@ -33,8 +31,7 @@ import {
   mapNetworkInfo,
   mapLatestBlock,
   mapLatestEpoch,
-  mapMetadataFromLabelTxs,
-  mapMetadataLabels,
+  mapTransactionMetadata,
 } from '../utils/mappers';
 
 const { UPSERT } = cds.ql;
@@ -164,16 +161,15 @@ export class CardanoIndexer {
     txHash: string,
   ): Promise<any[]> {
 
-    const metadata = await cardano.getMetadataTransactions(txHash);
+    const metadata = await cardano.getTransactionMetadata(txHash);
 
-    const rows = mapMetadataFromLabelTxs(metadata);
+    const rows = mapTransactionMetadata(metadata);
 
     if (rows.length) {
       await tx.run(
-        UPSERT.into(MetadataEntity).entries(rows)
+        UPSERT.into(TransactionMetadataEntity).entries(rows)
       );
     }
-
     return rows;
   }
 
@@ -184,40 +180,42 @@ export class CardanoIndexer {
    * @param tx     CAP transaction
    * @param label  metadata label (numeric or string)
    */
-  async indexMetadataForLabel(
+  async indexMetadataLabelTransactions(
     tx: Transaction,
     label: string | number,
-  ): Promise<MetadataLabel[]> {
+  ): Promise<TransactionMetadataEntity[]> {
     
-    const labelTxs = await cardano.getMetadataTransactions(label);
+    const labelTxs = await cardano.getMetadataLabelTransactions(label);
+
+    const rows = mapTransactionMetadata(labelTxs);
 
     if (!Array.isArray(labelTxs) || labelTxs.length === 0) {
       return [];
     } 
-
-    const rows: any[] = [];
 
     for (const entry of labelTxs) {
       const numericLabel = Number(entry.label);
       if (Number.isNaN(numericLabel)) continue;
 
       rows.push({
-        txHash_hash: entry.txHash,
-        label_label: numericLabel.toString(),
-        payloadJson:
-          entry.json !== undefined ? JSON.stringify(entry.json) : null,
+        tx_hash: entry.txHash,
+        label: numericLabel.toString(),
+        payload: entry.json !== undefined ? JSON.stringify(entry.json) : null,
       });
     }
 
     if (rows.length) {
       await tx.run(
-        UPSERT.into(MetadataEntity).entries(rows)
+        UPSERT.into(TransactionMetadataEntity).entries(rows)
       );
     }
 
     return rows;
   }
 
+  /**
+   * Index network information
+   */
   async indexNetworkInformation(tx: Transaction): Promise<NetworkInformationEntity> {
     const netInfo = await cardano.getNetworkInformation();
     const netEntity = mapNetworkInfo(netInfo);
@@ -228,6 +226,9 @@ export class CardanoIndexer {
     return netEntity;
   }
   
+  /**
+   * Index latest block information
+   */
   async indexLatestBlock(tx: Transaction): Promise<LatestBlockEntity> {
     const blockInfo = await cardano.getLatestBlock();
     
@@ -246,6 +247,9 @@ export class CardanoIndexer {
     return blockEntity;
   }
 
+  /**
+   * Index latest epoch information
+   */
   async indexLatestEpoch(tx: Transaction): Promise<LatestEpochEntity> {
     const epochInfo = await cardano.getLatestEpoch();
     const epochEntity = mapLatestEpoch(epochInfo);  

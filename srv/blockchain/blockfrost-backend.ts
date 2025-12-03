@@ -8,10 +8,9 @@ import {
   Network,
   LatestEpoch,
   JSONValue,
-  MetadataLabel,
   MetadataLabelTx,
-  Metadata,
 } from '../utils/types';
+import { tx } from '@sap/cds';
 
 // ---------------------------------------------------------------------------
 // Blockfrost Backend Implementation
@@ -165,19 +164,19 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   // ---------------------------------------------------------------------------
-  // Metadata Labels
+  // Metadata Label Transactions
   // ---------------------------------------------------------------------------
-async getMetadataLabels(): Promise<MetadataLabel[]> {
+async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
   try {
-    const labelData = await this.api.metadataTxsLabels();
+    const txLabelData = await this.api.metadataTxsLabel(label);
+    if (!Array.isArray(txLabelData)) return [];
 
-    if (!Array.isArray(labelData)) return [];
+    return txLabelData.map(md => ({
+      txHash: md.tx_hash,
+      label: label,
+      json: md.json_metadata as JSONValue | null,
+    }));  
 
-    return labelData.map((lbl: any) => ({
-      label: lbl.label,
-      cip10: lbl.cip10,
-      count: lbl.count,
-    }));
   } catch (err: any) {
     if (err?.response?.status === 404 || err?.status === 404) {
       throw new Error('NOT_FOUND');
@@ -187,30 +186,24 @@ async getMetadataLabels(): Promise<MetadataLabel[]> {
 }
 
   // ---------------------------------------------------------------------------
-  // Metadata Label Transactions
+  //  Transaction Metadata
   // ---------------------------------------------------------------------------
-  async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
+  async  getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
     try {
-      const label_data = await this.api.metadataTxsLabel(String(label));
-      return label_data.map(tx => ({
-        label: label,
-        txHash: tx.tx_hash,
-        json: tx.json_metadata as JSONValue | null
+    const txMetadata = await this.api.txsMetadata(txHash); 
+    if (!Array.isArray(txMetadata)) return [];
+
+      return txMetadata.map(md => ({
+        txHash: txHash,
+        label: md.label,
+        json: md.json_metadata as JSONValue | null,
       }));
-    } catch (err: any) {
+    }catch (err: any) {
       if (err?.response?.status === 404 || err?.status === 404) {
         throw new Error('NOT_FOUND');
       }
       throw err;
     }
-  }
-
-  async  getMetadataTransactions(txHash: string): Promise<Metadata[]>{
-    return(await this.api.txsMetadata(txHash)).map(md => ({
-      txHash: txHash,
-      label: md.label,
-      json: md.json_metadata as JSONValue | null,
-    }));
   }
 
   // ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ export default class CardanoService extends cds.ApplicationService {
       TransactionOutputs,
       TransactionInputAssets,
       TransactionOutputAssets,
-      Metadata,
+      TransactionMetadata,
     } = require('#cds-models/CardanoODataService');
 
     // ------------------------------------------------------------------------
@@ -284,11 +284,36 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Metadata (Entity READ)
     // ------------------------------------------------------------------------
-    this.on('READ', Metadata, async (req: Request) => {
+    this.on('READ', TransactionMetadata, async (req: Request) => {
       const db = cds.tx(req);
 
       try {
-        // Standard: OData-Query auf die persistierten Metadaten
+         const txHash = (req.data as { hash?: string })?.hash;
+         
+         if (txHash) {
+          if (!isTxHash(txHash)) {
+            return req.error(400, 'Invalid transaction hash');
+          }
+
+         let existing = await db.run(SELECT.one.from(TransactionMetadata).where({ txHash }));
+         if (existing) {
+           return existing;
+         }
+         const txMetadata = await indexer.indexTransactionMetadata(db, txHash);
+         return txMetadata;
+        }
+
+        const label = (req.data as { label?: string })?.label;
+        if (label) { 
+
+        const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ label}));
+         if (existing) {
+           return existing;
+         }
+
+         const txMetadata = await indexer.indexMetadataLabelTransactions(db, label);
+         return txMetadata;
+        }
         return db.run(req.query);
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] Metadata error');
@@ -371,12 +396,7 @@ export default class CardanoService extends cds.ApplicationService {
           SELECT.one.from(Transactions).where({ hash: txHash }),
         );
         if (existing) return existing;
-
-        // Fallback: index via indexer
-        logger.info(
-          { txHash },
-          '[CardanoService] GetTransactionByHash → indexing transaction',
-        );
+        // index via indexer
         const txRow = await indexer.indexTransaction(db, txHash);
         return txRow;
       } catch (e) {
@@ -405,11 +425,8 @@ export default class CardanoService extends cds.ApplicationService {
         );
         if (existing) return existing;
 
-        logger.info(
-          { address },
-          '[CardanoService] GetAddressByBech32 → indexing address',
-        );
         const addrRow = await indexer.indexAddress(db, address);
+
         return addrRow;
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] GetAddressByBech32 error');
@@ -433,7 +450,7 @@ export default class CardanoService extends cds.ApplicationService {
         }
 
         const rows = await db.run(
-          SELECT.from(Metadata).where({ txHash }),
+          SELECT.from(TransactionMetadata).where({ txHash }),
         );
         if (!rows || rows.length === 0) {
           return await indexer.indexTransactionMetadata(db, txHash);
@@ -442,6 +459,31 @@ export default class CardanoService extends cds.ApplicationService {
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] GetMetadataByTxHash error');
         return mapError(req, e, 'GetMetadataByTxHash');
+      }
+    });
+
+    // ------------------------------------------------------------------------
+    // action GetMetadataLabelTransactions(label: String) returns many Metadata;
+    // ------------------------------------------------------------------------
+    this.on('GetMetadataLabelTransactions', async (req: Request) => {
+      const db = cds.tx(req);
+
+      try {
+        const { label } = req.data as { label?: string };
+        if (!label) {
+          return req.error(400, 'label is required');
+        }
+
+        const rows = await db.run(
+          SELECT.from(TransactionMetadata).where({ label }),
+        );
+        if (!rows || rows.length === 0) {
+          return await indexer.indexMetadataLabelTransactions(db, label);
+        }
+        return rows;
+      } catch (e) {
+        logger.error({ err: e }, '[CardanoService] GetMetadataLabelTransactions error');
+        return mapError(req, e, 'GetMetadataLabelTransactions');
       }
     });
 
@@ -459,9 +501,16 @@ export default class CardanoService extends cds.ApplicationService {
         if (!isBech32Address(address)) {
           return req.error(400, 'Invalid bech32 address');
         }
-        const rows = await db.run(
+        let rows = await db.run(
           SELECT.from(AddressUTxOs).where({ address }),
         );
+
+        if (!rows || rows.length === 0) {
+          await indexer.indexAddress(db, address);
+          rows = await db.run(
+            SELECT.from(AddressUTxOs).where({ address }),
+          );
+        }
         return rows;
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] GetUTxOsByAddress error');
@@ -484,9 +533,15 @@ export default class CardanoService extends cds.ApplicationService {
           return req.error(400, 'Invalid bech32 address');
         }
 
-        const rows = await db.run(
+        let rows = await db.run(
           SELECT.from(AddressAssets).where({ address }),
         );
+        if (!rows || rows.length === 0) {
+          await indexer.indexAddress(db, address);
+          rows = await db.run(
+            SELECT.from(AddressAssets).where({ address }),
+          );
+        }
         return rows;
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] GetAssetsByAddress error');

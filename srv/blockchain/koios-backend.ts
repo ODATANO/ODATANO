@@ -8,7 +8,6 @@ import {
   Network,
   LatestEpoch,
   JSONValue,
-  MetadataLabel,
   MetadataLabelTx,
 } from '../utils/types';
 
@@ -99,7 +98,7 @@ export class KoiosBackend implements CardanoBackend {
     throw new Error('NOT_SUPPORTED');
   }
 
-  async getMetadataTransactions(_txHash: string): Promise<any[]> {
+  async getTransactionMetadata(_txHash: string): Promise<any[]> {
     throw new Error('NOT_SUPPORTED');
   }
 }

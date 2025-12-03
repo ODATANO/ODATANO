@@ -125,20 +125,8 @@ export interface LatestEpoch{
     active_stake: string | null;
 }
 
-export interface MetadataLabel {
-  label: string;
-  cip10: string | null;
-  count: number;
-}
-
-export interface Metadata {
-  txHash: Hex;
-  label: number | string;
-  json?: JSONValue;
-}
-
 export interface MetadataLabelTx {
-  label: number | string;
   txHash: Hex;
+  label: number | string;
   json?: JSONValue;
 }
