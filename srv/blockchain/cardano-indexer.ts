@@ -282,9 +282,8 @@ export class CardanoIndexer {
     tx: Transaction,
     bech32List: string[]
   ): Promise<void> {
-    for (const bech32 of bech32List) {
-      await this.indexAddress(tx, bech32);
-    }
+    await Promise.all(
+    bech32List.map(bech32 => this.indexAddress(tx, bech32)));
   }
 }
 

@@ -26,6 +26,9 @@ import {
   LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
 
+import { mapProviderError } from './errors'; 
+import type { Request } from '@sap/cds';
+
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
 
@@ -43,7 +46,7 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     hash: providerTx.hash,
     blockHash: providerTx.blockHash,
     blockHeight: providerTx.blockHeight ?? null,
-    blockTime: blockTimeIso, // string | null 
+    blockTime: blockTimeIso,
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
     fee: providerTx.fee != null ? Number(providerTx.fee) : 0,
@@ -69,7 +72,7 @@ export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderD
 
   return txInputs.map((input, idx: number) => {
     const lovelaceEntry = Array.isArray(input.amount)
-      ? input.amount.find((a: any) => a.unit === 'lovelace')
+      ? input.amount.find((a: AmountProviderData) => a.unit === 'lovelace')
       : null;
     const valueLovelace = lovelaceEntry?.quantity ?? '0';
     const inputIndex = input.outputIndex ?? idx;
@@ -229,14 +232,14 @@ export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData:
 
   console.log('Mapping Address UTxOs:', addressUtxosData);
 
-  return addressUtxosData.map((a: any) => ({
+  return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
-    hash: a.txHash,
-    index: a.outputIndex,
-    blockHash: a.blockHash,
-    utxodata_dataHash: a.dataHash,
-    utxodata_inlineDatum: a.inlineDatum,
-    utxodata_referenceScriptHash: a.referenceScriptHash,
+    hash: utxo.txHash,
+    index: utxo.outputIndex,
+    blockHash: utxo.blockHash,
+    utxodata_dataHash: utxo.datumHash,
+    utxodata_inlineDatum: null,
+    utxodata_referenceScriptHash: utxo.scriptRef,
     validFrom: nowIso,
     validTo: validTo,
   }));
@@ -248,9 +251,9 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
   if (!Array.isArray(AssetAssets)) return [];
 
   return AssetAssets
-    .filter((a: any) => a.unit !== 'lovelace')
-    .map((a: any) => {
-      const assetNameHex = a.unit.slice(56);
+    .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
+    .map((asset: AmountProviderData) => {
+      const assetNameHex = asset.unit.slice(56);
 
       let assetName: string;
       try {
@@ -261,11 +264,11 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
 
       return {
         address_address: addr,
-        unit: a.unit,
+        unit: asset.unit,
         validFrom: nowIso,
         validTo,
-        asset_quantity: a.quantity,
-        asset_policyId: a.unit.slice(0, 56),
+        asset_quantity: Number(asset.quantity),
+        asset_policyId: asset.unit.slice(0, 56),
         asset_assetName: assetName,
       };
     });
@@ -351,20 +354,7 @@ export function mapTransactionMetadata(
   return rows;
 }
 
-// -----------------------------------------------------------------------------
-// Error Mapping
-// -----------------------------------------------------------------------------
-
-function mapProviderError(err: any) {
-  return {
-    status: err.status || err.code || 500,
-    message: err.message || String(err),
-  };
-}
-
-export function mapError(req: any, err: any, ctx: string) {
-  const mapped = mapProviderError(err);
-  const status = mapped.status || 500;
-  const message = mapped.message || `${ctx} operation failed`;
+export function mapError(req: Request, err: unknown, ctx: string) {
+  const { status, message } = mapProviderError(err);
   return req.error(status, `${ctx}: ${message}`);
 }
