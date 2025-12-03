@@ -1,0 +1,20 @@
+{
+  "extends": "@istanbuljs/nyc-config-typescript",
+  "all": true,
+  "include": [
+    "srv/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.d.ts",
+    "coverage/**",
+    "test/**",
+    "@cds-models/**"
+  ],
+  "reporter": [
+    "html",
+    "text",
+    "lcov"
+  ],
+  "report-dir": "./coverage",
+  "check-coverage": false
+}

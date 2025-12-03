@@ -15,4 +15,9 @@ module.exports = {
   moduleNameMapper: {
     '^#cds-models/(.*)$': '<rootDir>/@cds-models/$1/index.js'
   },
+  collectCoverageFrom: [
+    'srv/**/*.ts',
+    '!srv/**/*.d.ts',
+    '!**/node_modules/**',
+  ],
 };

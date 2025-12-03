@@ -16,14 +16,17 @@
     "@cap-js/cds-typer": "^0.38.0",
     "@cap-js/cds-types": "^0.15.0",
     "@cap-js/sqlite": "^2",
+    "@istanbuljs/nyc-config-typescript": "^1.0.2",
     "@sap/cds-dk": "^9.4.3",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.0.0",
     "@types/supertest": "^6.0.3",
     "jest": "^29.6.1",
     "nyc": "^15.1.0",
+    "source-map-support": "^0.5.21",
     "supertest": "^6.3.3",
     "ts-jest": "^29.4.5",
+    "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
@@ -42,7 +45,9 @@
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
     "test": "jest --runInBand",
-    "coverage": "nyc --reporter=lcov --reporter=text npm test"
+    "test:coverage": "nyc npm test",
+    "test:integration": "npm test -- --testPathPattern=integration",
+    "test:unit": "npm test -- --testPathPattern=unit"
   },
   "private": true,
   "imports": {
