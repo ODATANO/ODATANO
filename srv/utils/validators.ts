@@ -1,7 +1,9 @@
 // --- Regular Expressions ---
 export const TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
 export const POLICY_ID_REGEX = /^[a-fA-F0-9]{56}$/;
-export const BECH32_TEST_PREFIX = /^addr_test/; // preview/testnet bech32 prefix
+// Bech32 address validation for Cardano preview/testnet
+// Format: addr_test1 + base32 encoded data (min 53 chars)
+export const BECH32_ADDRESS_REGEX = /^addr_test1[a-z0-9]{53,}$/;
 
 // --- Type Guards ---
 
@@ -21,8 +23,9 @@ export function isPolicyId(s: unknown): s is string {
 
 /**
  * Checks if a string is a valid bech32 address (testnet preview pattern).
- * Note: For mainnet, adapt the prefix to /^addr1/ if needed.
+ * Validates format: addr_test1 + base32 chars (minimum 53 additional characters).
+ * Note: For mainnet, adapt to /^addr1[a-z0-9]{53,}$/ pattern.
  */
 export function isBech32Address(s: unknown): s is string {
-  return typeof s === "string" && BECH32_TEST_PREFIX.test(s);
+  return typeof s === "string" && BECH32_ADDRESS_REGEX.test(s);
 }

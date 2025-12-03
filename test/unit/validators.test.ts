@@ -2,12 +2,14 @@ import { isTxHash, isPolicyId, isBech32Address } from '../../srv/utils/validator
 
 describe('validators', () => {
   test('isTxHash valid/invalid', () => {
-    expect(isTxHash('1932fa826ee085666c012b7e464562e455309b33637af2929a9c1cdd00842c2a'.repeat(64))).toBe(true);
+    // Valid 64-character hex string (Blake2b256)
+    expect(isTxHash('1932fa826ee085666c012b7e464562e455309b33637af2929a9c1cdd00842c2a')).toBe(true);
     expect(isTxHash('testhash')).toBe(false);
   });
 
   test('isPolicyId valid/invalid', () => {
-    expect(isPolicyId('def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea'.repeat(56))).toBe(true);
+    // Valid 56-character hex string (Blake2b224)
+    expect(isPolicyId('def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea')).toBe(true);
     expect(isPolicyId('123')).toBe(false);
   });
 

@@ -26,7 +26,8 @@ import {
   LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
 
-import { mapProviderError } from './errors'; 
+import { mapProviderError } from './errors';
+import logger from './logger';
 import type { Request } from '@sap/cds';
 
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
@@ -230,7 +231,7 @@ export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData:
 
   if (!Array.isArray(addressUtxosData)) return [];
 
-  console.log('Mapping Address UTxOs:', addressUtxosData);
+  logger.debug({ count: addressUtxosData.length }, 'Mapping Address UTxOs');
 
   return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
@@ -278,6 +279,7 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   const nowIso = new Date().toISOString();
   const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
+    ID: 1, // Singleton entity
     validFrom: nowIso,
     validTo: validToIso,
     maxSupply: Number(providerNetworkData.supply.max),

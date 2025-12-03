@@ -13,8 +13,8 @@ import {
   MetadataLabelTx
 } from '../utils/types';
 
-const PRIMARY_TIMEOUT_MS  = Number(process.env.PRIMARY_TIMEOUT_MS  ?? 8000);
-const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS ?? 8000);
+const PRIMARY_TIMEOUT_MS = Number(process.env.PRIMARY_TIMEOUT_MS) || 8000;
+const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS) || 8000;
 
 // ---------------------------------------------------------------------------
 // Cardano Client with multiple backends, timeouts and fallbacks

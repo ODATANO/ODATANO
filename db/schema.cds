@@ -42,14 +42,15 @@ type UTxODataSlice {
 // Network Info Entity
 // -----------------------------------------------------
 entity NetworkInformation : temporal {
-    maxSupply         : Lovelace;
-    totalSupply       : Lovelace;
-    circulatingSupply : Lovelace;
-    lockedSupply      : Lovelace;
-    treasurySupply    : Lovelace;
-    reservesSupply    : Lovelace;
-    liveStake         : Lovelace;
-    activeStake       : Lovelace;
+    key ID                : Integer default 1; // Singleton entity
+        maxSupply         : Lovelace;
+        totalSupply       : Lovelace;
+        circulatingSupply : Lovelace;
+        lockedSupply      : Lovelace;
+        treasurySupply    : Lovelace;
+        reservesSupply    : Lovelace;
+        liveStake         : Lovelace;
+        activeStake       : Lovelace;
 }
 
 entity LatestBlock : temporal {

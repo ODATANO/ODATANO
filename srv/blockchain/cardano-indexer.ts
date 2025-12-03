@@ -34,6 +34,8 @@ import {
   mapTransactionMetadata,
 } from '../utils/mappers';
 
+import { Transaction as TransactionProviderData } from '../utils/types';
+
 const { UPSERT } = cds.ql;
 
 export class CardanoIndexer {
@@ -159,7 +161,7 @@ export class CardanoIndexer {
   async indexTransactionMetadata(
     tx: Transaction,
     txHash: string,
-  ): Promise<any[]> {
+  ): Promise<TransactionMetadataEntity[]> {
 
     const metadata = await cardano.getTransactionMetadata(txHash);
 
@@ -262,7 +264,7 @@ export class CardanoIndexer {
   /**
    * Helper: collect all involved addresses from a txUtxos set
    */
-  private _collectAddressesFromUtxos(txUtxos: any): string[] {
+  private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
     const set = new Set<string>();
 
     for (const i of txUtxos.inputs ?? []) {

@@ -7,6 +7,23 @@ import logger from './utils/logger';
 const { SELECT } = cds.ql;
 
 export default class CardanoService extends cds.ApplicationService {
+  /**
+   * Helper method to handle read operations with consistent error handling
+   */
+  private async handleEntityRead(
+    req: Request,
+    entityName: string,
+    handler: (db: any) => Promise<any>
+  ): Promise<any> {
+    const db = cds.tx(req);
+    try {
+      return await handler(db);
+    } catch (e) {
+      logger.error({ err: e }, `[CardanoService] ${entityName} error`);
+      return mapError(req, e, entityName);
+    }
+  }
+
   public init() {
     const {
       NetworkInformation,
@@ -28,9 +45,9 @@ export default class CardanoService extends cds.ApplicationService {
     // Generic logging (debug)  for all READ operations
     // ------------------------------------------------------------------------
     this.before('READ', '*', (req: Request) => {
-      const ent = (req as any).target?.name || (req as any).path;
+      const entity = req.target?.name || req.event;
       logger.debug(
-        { entity: ent, data: req.data || {} },
+        { entity, params: req.data },
         '[CardanoService] Before READ',
       );
     });
@@ -42,15 +59,19 @@ export default class CardanoService extends cds.ApplicationService {
       const db = cds.tx(req);
 
       try {
-        const existing = await db.run(SELECT.one.from(NetworkInformation));
-        if (existing) {
+        // Check if there's existing data
+        const existing = await db.run(SELECT.from(NetworkInformation));
+        if (existing && existing.length > 0) {
           return existing;
         }
         
+        // Index new data if not found
         const networkInfo = await indexer.indexNetworkInformation(db);
         if (networkInfo) {
-          return networkInfo;
+          // Return as array for collection requests
+          return [networkInfo];
         }
+        return [];
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] NetworkInformation error');
         return mapError(req, e, 'NetworkInformation');
@@ -64,15 +85,16 @@ export default class CardanoService extends cds.ApplicationService {
       const db = cds.tx(req);
 
       try {
-        const existing = await db.run(SELECT.one.from(LatestBlock));
-        if (existing) {
+        const existing = await db.run(SELECT.from(LatestBlock));
+        if (existing && existing.length > 0) {
           return existing;
         }
 
         const latestBlock = await indexer.indexLatestBlock(db);
         if (latestBlock) {
-          return latestBlock;
+          return [latestBlock];
         }
+        return [];
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] LatestBlock error');
         return mapError(req, e, 'LatestBlock');
@@ -86,15 +108,16 @@ export default class CardanoService extends cds.ApplicationService {
       const db = cds.tx(req);
 
       try {
-        const existing = await db.run(SELECT.one.from(LatestEpoch));
-        if (existing) {
+        const existing = await db.run(SELECT.from(LatestEpoch));
+        if (existing && existing.length > 0) {
           return existing;
         }
 
-        const latestEpoch =  await indexer.indexLatestEpoch(db);
+        const latestEpoch = await indexer.indexLatestEpoch(db);
         if (latestEpoch) {
-          return latestEpoch;
-        } 
+          return [latestEpoch];
+        }
+        return [];
       } catch (e) {
         logger.error({ err: e }, '[CardanoService] LatestEpoch error');
         return mapError(req, e, 'LatestEpoch');
@@ -145,40 +168,27 @@ export default class CardanoService extends cds.ApplicationService {
     // AddressAssets (collection only)
     // ------------------------------------------------------------------------
     this.on('READ', AddressAssets, async (req: Request) => {
-      const db = cds.tx(req);
-      try {
+      return this.handleEntityRead(req, 'AddressAssets', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error({ err: e }, '[CardanoService] AddressAssets error');
-        return mapError(req, e, 'AddressAssets');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
     // AddressUTxOs
     // ------------------------------------------------------------------------
     this.on('READ', AddressUTxOs, async (req: Request) => {
-      const db = cds.tx(req);
-      try {
+      return this.handleEntityRead(req, 'AddressUTxOs', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error({ err: e }, '[CardanoService] AddressUTxOs error');
-        return mapError(req, e, 'AddressUTxOs');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
     // UTxOAssets
     // ------------------------------------------------------------------------
     this.on('READ', UTxOAssets, async (req: Request) => {
-      const db = cds.tx(req);
-
-      try {
+      return this.handleEntityRead(req, 'UTxOAssets', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error({ err: e }, '[CardanoService] UTxOAssets error');
-        return mapError(req, e, 'UTxOAssets');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
@@ -223,62 +233,36 @@ export default class CardanoService extends cds.ApplicationService {
     // TransactionInputs
     // ------------------------------------------------------------------------
     this.on('READ', TransactionInputs, async (req: Request) => {
-      const db = cds.tx(req);
-
-      try {
+      return this.handleEntityRead(req, 'TransactionInputs', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error({ err: e }, '[CardanoService] TransactionInputs error');
-        return mapError(req, e, 'TransactionInputs');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
     // TransactionOutputs
     // ------------------------------------------------------------------------
     this.on('READ', TransactionOutputs, async (req: Request) => {
-      const db = cds.tx(req);
-
-      try {
+      return this.handleEntityRead(req, 'TransactionOutputs', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error({ err: e }, '[CardanoService] TransactionOutputs error');
-        return mapError(req, e, 'TransactionOutputs');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
     // TransactionInputAssets
     // ------------------------------------------------------------------------
     this.on('READ', TransactionInputAssets, async (req: Request) => {
-      const db = cds.tx(req);
-
-      try {
+      return this.handleEntityRead(req, 'TransactionInputAssets', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error(
-          { err: e },
-          '[CardanoService] TransactionInputAssets error',
-        );
-        return mapError(req, e, 'TransactionInputAssets');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
     // TransactionOutputAssets
     // ------------------------------------------------------------------------
     this.on('READ', TransactionOutputAssets, async (req: Request) => {
-      const db = cds.tx(req);
-
-      try {
+      return this.handleEntityRead(req, 'TransactionOutputAssets', async (db) => {
         return db.run(req.query);
-      } catch (e) {
-        logger.error(
-          { err: e },
-          '[CardanoService] TransactionOutputAssets error',
-        );
-        return mapError(req, e, 'TransactionOutputAssets');
-      }
+      });
     });
 
     // ------------------------------------------------------------------------
