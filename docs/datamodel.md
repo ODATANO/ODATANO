@@ -1,8 +1,3 @@
----
-config:
-  layout: elk
----
-
 ```mermaid
 erDiagram
 
