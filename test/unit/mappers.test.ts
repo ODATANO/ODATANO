@@ -4,6 +4,13 @@ import {
   mapLatestEpoch,
   mapTransaction,
   mapAddress,
+  mapAddressUtxos,
+  mapAddressAssets,
+  mapTransactionInputs,
+  mapTransactionOutputs,
+  mapTransactionInputAssets,
+  mapTransactionOutputAssets,
+  mapTransactionMetadata,
 } from '../../srv/utils/mappers';
 import type {
   Network,
@@ -11,6 +18,11 @@ import type {
   LatestEpoch,
   Transaction,
   Address,
+  UTxO,
+  Amount,
+  TxInputLine,
+  TxOutputLine,
+  MetadataLabelTx,
 } from '../../srv/utils/types';
 
 describe('mappers', () => {
@@ -213,6 +225,290 @@ describe('mappers', () => {
 
       const result = mapAddress(address, providerData);
       expect(result.totalLovelace).toBe(0);
+    });
+  });
+
+  describe('mapAddressUtxos', () => {
+    test('maps UTxO array correctly', () => {
+      const address = 'addr_test1qz123';
+      const validTo = '2024-12-31T23:59:59Z';
+      const utxoData: UTxO[] = [
+        {
+          txHash: 'a'.repeat(64),
+          outputIndex: 0,
+          address: address,
+          blockHash: 'b'.repeat(64),
+          datumHash: 'datum123',
+          scriptRef: null,
+          amount: [{ unit: 'lovelace', quantity: '2000000' }],
+        },
+        {
+          txHash: 'c'.repeat(64),
+          outputIndex: 1,
+          address: address,
+          blockHash: 'd'.repeat(64),
+          datumHash: null,
+          scriptRef: 'script456',
+          amount: [{ unit: 'lovelace', quantity: '5000000' }],
+        },
+      ];
+
+      const result = mapAddressUtxos(address, validTo, utxoData);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].address_address).toBe(address);
+      expect(result[0].hash).toBe('a'.repeat(64));
+      expect(result[0].index).toBe(0);
+      expect(result[0].utxodata_dataHash).toBe('datum123');
+      expect(result[0].utxodata_referenceScriptHash).toBeNull();
+      expect(result[1].hash).toBe('c'.repeat(64));
+      expect(result[1].utxodata_referenceScriptHash).toBe('script456');
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapAddressUtxos('addr', '2024-12-31', null as any);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapAddressAssets', () => {
+    test('maps assets correctly and filters lovelace', () => {
+      const address = 'addr_test1qz123';
+      const validTo = '2024-12-31T23:59:59Z';
+      const assets: Amount[] = [
+        { unit: 'lovelace', quantity: '5000000' },
+        { unit: '7eae28af48c06b8b28b7a32a14c3f6cc8f4e5aa9d9e2c4b1a8f7e6d5' + Buffer.from('SUNDAE').toString('hex'), quantity: '1000' },
+        { unit: 'c'.repeat(56) + Buffer.from('Token').toString('hex'), quantity: '500' },
+      ];
+
+      const result = mapAddressAssets(address, validTo, assets);
+
+      expect(result).toHaveLength(2); // lovelace filtered out
+      expect(result[0].address_address).toBe(address);
+      expect(result[0].asset_policyId).toBe('7eae28af48c06b8b28b7a32a14c3f6cc8f4e5aa9d9e2c4b1a8f7e6d5');
+      expect(result[0].asset_assetName).toBe('SUNDAE');
+      expect(result[0].asset_quantity).toBe(1000);
+      expect(result[1].asset_assetName).toBe('Token');
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapAddressAssets('addr', '2024-12-31', null as any);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapTransactionInputs', () => {
+    test('maps transaction inputs correctly', () => {
+      const txHash = 'a'.repeat(64);
+      const inputs: TxInputLine[] = [
+        {
+          address: 'addr_test1qz123',
+          txHash: txHash,
+          outputIndex: 0,
+          amount: [{ unit: 'lovelace', quantity: '10000000' }],
+          dataHash: 'datum123',
+          inlineDatum: null,
+          referenceScriptHash: null,
+          isCollateral: false,
+          isReference: false,
+        },
+        {
+          address: 'addr_test1qz456',
+          txHash: txHash,
+          outputIndex: 1,
+          amount: [{ unit: 'lovelace', quantity: '5000000' }],
+          dataHash: null,
+          inlineDatum: 'inline123',
+          referenceScriptHash: 'script456',
+          isCollateral: true,
+          isReference: false,
+        },
+      ];
+
+      const result = mapTransactionInputs(txHash, inputs);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].tx_hash).toBe(txHash);
+      expect(result[0].inputIndex).toBe(0);
+      expect(result[0].address_address).toBe('addr_test1qz123');
+      expect(result[0].utxoData_dataHash).toBe('datum123');
+      expect(result[0].isCollateral).toBe(false);
+      expect(result[1].isCollateral).toBe(true);
+      expect(result[1].utxoData_inlineDatum).toBe('inline123');
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapTransactionInputs('hash', null as any);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapTransactionOutputs', () => {
+    test('maps transaction outputs correctly', () => {
+      const txHash = 'b'.repeat(64);
+      const outputs: TxOutputLine[] = [
+        {
+          address: 'addr_test1qz789',
+          txHash: txHash,
+          outputIndex: 0,
+          amount: [{ unit: 'lovelace', quantity: '8000000' }],
+          dataHash: null,
+          inlineDatum: null,
+          isCollateral: false,
+          referenceScriptHash: null,
+        },
+        {
+          address: 'addr_test1qz012',
+          txHash: txHash,
+          outputIndex: 1,
+          amount: [{ unit: 'lovelace', quantity: '2000000' }],
+          dataHash: 'datum789',
+          inlineDatum: null,
+          isCollateral: false,
+          referenceScriptHash: 'script789',
+        },
+      ];
+
+      const result = mapTransactionOutputs(txHash, outputs);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].tx_hash).toBe(txHash);
+      expect(result[0].outputIndex).toBe(0);
+      expect(result[0].address_address).toBe('addr_test1qz789');
+      expect(result[1].utxo_dataHash).toBe('datum789');
+      expect(result[1].utxo_referenceScriptHash).toBe('script789');
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapTransactionOutputs('hash', null as any);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapTransactionInputAssets', () => {
+    test('maps input assets including lovelace and native tokens', () => {
+      const txHash = 'c'.repeat(64);
+      const inputs: TxInputLine[] = [
+        {
+          address: 'addr1',
+          txHash: txHash,
+          outputIndex: 0,
+          amount: [
+            { unit: 'lovelace', quantity: '10000000' },
+            { unit: 'a'.repeat(56) + Buffer.from('TOKEN1').toString('hex'), quantity: '500' },
+          ],
+          dataHash: null,
+          inlineDatum: null,
+          referenceScriptHash: null,
+          isCollateral: false,
+          isReference: false,
+        },
+      ];
+
+      const result = mapTransactionInputAssets(txHash, inputs);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].input_tx_hash).toBe(txHash);
+      expect(result[0].input_inputIndex).toBe(0);
+      expect(result[0].unit).toBe('lovelace');
+      expect(result[0].asset_assetName).toBe('lovelace');
+      expect(result[0].asset_policyId).toBeNull();
+      expect(result[0].asset_quantity).toBe(10000000);
+      expect(result[1].asset_assetName).toBe('TOKEN1');
+      expect(result[1].asset_policyId).toBe('a'.repeat(56));
+    });
+
+    test('returns empty array when inputs have no amounts', () => {
+      const inputs: TxInputLine[] = [
+        {
+          address: 'addr1',
+          txHash: 'hash',
+          outputIndex: 0,
+          amount: [],
+          dataHash: null,
+          inlineDatum: null,
+          referenceScriptHash: null,
+          isCollateral: false,
+          isReference: false,
+        },
+      ];
+
+      const result = mapTransactionInputAssets('hash', inputs);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapTransactionOutputAssets', () => {
+    test('maps output assets including lovelace and native tokens', () => {
+      const txHash = 'd'.repeat(64);
+      const outputs: TxOutputLine[] = [
+        {
+          address: 'addr2',
+          txHash: txHash,
+          outputIndex: 0,
+          amount: [
+            { unit: 'lovelace', quantity: '5000000' },
+            { unit: 'b'.repeat(56) + Buffer.from('TOKEN2').toString('hex'), quantity: '1000' },
+          ],
+          dataHash: null,
+          inlineDatum: null,
+          isCollateral: false,
+          referenceScriptHash: null,
+        },
+      ];
+
+      const result = mapTransactionOutputAssets(txHash, outputs);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].output_tx_hash).toBe(txHash);
+      expect(result[0].output_outputIndex).toBe(0);
+      expect(result[0].unit).toBe('lovelace');
+      expect(result[0].asset_assetName).toBe('lovelace');
+      expect(result[0].asset_policyId).toBeNull();
+      expect(result[1].asset_assetName).toBe('TOKEN2');
+      expect(result[1].asset_quantity).toBe(1000);
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapTransactionOutputAssets('hash', null as any);
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('mapTransactionMetadata', () => {
+    test('maps transaction metadata array correctly', () => {
+      const metadataData: MetadataLabelTx[] = [
+        {
+          txHash: 'f'.repeat(64),
+          label: 721,
+          json: { name: 'NFT1' },
+        },
+      ];
+
+      const result = mapTransactionMetadata(metadataData);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].tx_hash).toBe('f'.repeat(64));
+      expect(result[0].label).toBe('721');
+      expect(result[0].payload).toBe(JSON.stringify({ name: 'NFT1' }));
+    });
+
+    test('filters out non-numeric labels', () => {
+      const metadataData: MetadataLabelTx[] = [
+        {
+          txHash: 'g'.repeat(64),
+          label: 'invalid',
+          json: { someKey: 'someValue' },
+        },
+      ];
+
+      const result = mapTransactionMetadata(metadataData);
+      expect(result).toHaveLength(0);
+    });
+
+    test('returns empty array for non-array input', () => {
+      const result = mapTransactionMetadata(null as any);
+      expect(result).toEqual([]);
     });
   });
 });

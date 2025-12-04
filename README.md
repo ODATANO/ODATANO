@@ -7,7 +7,8 @@ V4 access to Cardano blockchain data. It features intelligent caching,
 multi-provider fallback, and comprehensive blockchain data exposure through a
 standardized REST API.
 
-[![Tests](https://img.shields.io/badge/tests-52%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-65.68%25-yellow)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
 [![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
 
@@ -18,9 +19,10 @@ standardized REST API.
 - **Multi-Provider Architecture**: Blockfrost (primary) + Koios (fallback) with
   automatic failover (I am also planning a way to access Cardano directly via a
   running node in the future)
-- **Smart Caching**: SQLite-based temporal caching with automatic expiration
+- **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
+  persisted to SQLite, then served from local database
 - **Type Safety**: Full TypeScript implementation with CAP type generation
-- **Comprehensive Testing**: 52 tests (40 integration + 12 unit) with 100% pass
+- **Comprehensive Testing**: 83 tests with 65.68% code coverage and 100% pass
   rate
 - **Other features**: Error handling, logging, validation, and monitoring
 
@@ -35,6 +37,7 @@ standardized REST API.
 ┌────────────────────────────────▼───────────────────────────────┐
 │                    CAP Service Layer                           │
 │      - cardano-service.ts (Entities + Actions)                 │
+│      - cardano-service.js (TypeScript loader wrapper)          │
 │      - validators.ts (Input validation)                        │
 │      - mappers.ts (Data transformation)                        │
 └────────────────────────────────┬───────────────────────────────┘
@@ -49,7 +52,7 @@ standardized REST API.
           │                      │                     │         
 ┌─────────▼─────────┐  ┌─────────▼─────────┐ ┌─────────▼─────────┐
 │ Blockfrost Backend│  │  Koios Backend    │ │  Cardano Node     │
-│  (Primary)        │  │  (Fallback)       │ │    (etc.)         │
+│  (Primary)        │  │  (Fallback)       │ │    (Future)       │
 └───────────────────┘  └───────────────────┘ └───────────────────┘
 ```
 
@@ -154,6 +157,8 @@ npm run test:unit
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Architecture and development
+- **[User Guide](docs/USER_GUIDE.md)** - API usage and examples
 - **[Data Model](docs/MM_DATAMODEL.md)** - Entity relationships and schema
 - **[Indexing Concept](docs/INDEXING.md)** - Caching strategy
 

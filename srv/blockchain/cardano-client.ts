@@ -146,16 +146,21 @@ export class CardanoClient {
   getLatestBlock(): Promise<LatestBlock> {
     return this.withFallback(b => b.getLatestBlock());
   }
+  
   getLatestEpoch(): Promise<LatestEpoch> {
     return this.withFallback(b => b.getLatestEpoch());
   }
 }
 
-export const cardanoClient = new CardanoClient([
-  new BlockfrostBackend(), // primary
-  new KoiosBackend(),      // fallback
-  //new NodeBackend(),     // add more backends here
-  // add more backends here
-]);
+// Lazy backend initialization - only create if env vars are set
+const backends: CardanoBackend[] = [];
+
+if (process.env.BLOCKFROST_KEY) {
+  backends.push(new BlockfrostBackend());
+}
+
+backends.push(new KoiosBackend()); // Koios doesn't require API key
+
+export const cardanoClient = new CardanoClient(backends);
 
 export default cardanoClient;

@@ -49,10 +49,14 @@ npm run cds:watch
 
 ## Testing
 
-### Run All Tests (52 tests)
+### Run All Tests (83 tests)
 
 ```bash
-npm test
+# Set Blockfrost API key and run tests
+$env:BLOCKFROST_KEY='your_api_key_here'; npm test
+
+# Run with coverage report
+$env:BLOCKFROST_KEY='your_api_key_here'; npm test -- --coverage
 ```
 
 ## First Odata Call
