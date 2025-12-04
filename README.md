@@ -154,7 +154,7 @@ npm run test:unit
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
-- **[Data Model](docs/DATAMODEL.md)** - Entity relationships and schema
+- **[Data Model](docs/MM_DATAMODEL.md)** - Entity relationships and schema
 - **[Indexing Concept](docs/INDEXING.md)** - Caching strategy
 
 ## API Overview
