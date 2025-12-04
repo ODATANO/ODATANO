@@ -1,6 +1,65 @@
 # ODATANO
 
+**OData Service for Cardano Blockchain Data**
+
+ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData
+V4 access to Cardano blockchain data. It features intelligent caching,
+multi-provider fallback, and comprehensive blockchain data exposure through a
+standardized REST API.
+
+[![Tests](https://img.shields.io/badge/tests-52%20passing-brightgreen)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
+[![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
+
+## Features
+
+- **OData V4 Protocol**: Full OData query capabilities ($filter, $select,
+  $expand, $top, $skip, $count)
+- **Multi-Provider Architecture**: Blockfrost (primary) + Koios (fallback) with
+  automatic failover (I am also planning a way to access Cardano directly via a
+  running node in the future)
+- **Smart Caching**: SQLite-based temporal caching with automatic expiration
+- **Type Safety**: Full TypeScript implementation with CAP type generation
+- **Comprehensive Testing**: 52 tests (40 integration + 12 unit) with 100% pass
+  rate
+- **Other features**: Error handling, logging, validation, and monitoring
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                        OData V4 API                            │
+│      http://localhost:4004/odata/v4/cardano-odata              │
+└────────────────────────────────┬───────────────────────────────┘
+                                 │
+┌────────────────────────────────▼───────────────────────────────┐
+│                    CAP Service Layer                           │
+│      - cardano-service.ts (Entities + Actions)                 │
+│      - validators.ts (Input validation)                        │
+│      - mappers.ts (Data transformation)                        │
+└────────────────────────────────┬───────────────────────────────┘
+                                 │
+┌────────────────────────────────▼───────────────────────────────┐
+│                Cardano Indexer & Client                        │
+│      - cardano-indexer.ts (Caching logic)                      │
+│      - cardano-client.ts (Multi-provider orchestration)        │      
+└────────────────────────────────┬───────────────────────────────┘
+                                 │
+          ┌──────────────────────┬─────────────────────┐
+          │                      │                     │         
+┌─────────▼─────────┐  ┌─────────▼─────────┐ ┌─────────▼─────────┐
+│ Blockfrost Backend│  │  Koios Backend    │ │  Cardano Node     │
+│  (Primary)        │  │  (Fallback)       │ │    (etc.)         │
+└───────────────────┘  └───────────────────┘ └───────────────────┘
+```
+
 ## Installation
+
+### Prerequisites
+
+- Node.js 20+ or 22+
+- npm 10+
+- Blockfrost API Key ([Get one here](https://blockfrost.io))
 
 ### 1. Clone & Install
 
@@ -14,129 +73,184 @@ npm install
 
 ```bash
 cp .env.example .env
-# Edit .env
 ```
 
 **Configuration (.env):**
 
 ```env
-# Blockfrost API key ( get more infos on https://blockfrost.io )
-BLOCKFROST_KEY=your_api_key_here
+# Blockfrost API key (required)
+BLOCKFROST_KEY=your_blockfrost_project_id_here
 
-# Timeout settings (milliseconds)
+# Timeout settings (milliseconds) - optional
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=8000
 
-# Data Age settings
+# Data cache validity (minutes) - optional
 ADDR_MAX_AGE_MIN=1
 ```
 
-### 3. Create Local Sqlight DB
+### 3. Initialize Database
 
 ```bash
-cds deploy
+cds deploy --to sqlite
 ```
+
+This creates the SQLite database with data caching tables.
 
 ### 4. Start Server
 
 ```bash
-cds watch
+npm run cds:watch
 ```
 
-**Server should now be running at:** `http://localhost:4004`
+**Server runs at:** `http://localhost:4004`
 
-# Endpoints
+## Quick Start
 
-## 1. General Information Endpoints
-
-### NetworkInformation
+### Test Network Information
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/NetworkInformation"
+curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
 ```
 
-### Latest Epoch
+### Query a Transaction
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/LatestEpoch"
+curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('your_tx_hash_here')"
 ```
 
-### Latest Block
+### Check an Address
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/LatestBlock"
+curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')"
 ```
 
-# 2. Transaction Endpoints
+## Testing
 
-### 1. Get Transaction Details http://localhost:4004/odata/v4/cardano-odata/Transactions('tx hash')
-
-#### Example Call:
+### Run All Tests
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('1932fa826ee085666c012b7e464562e455309b33637af2929a9c1cdd00842c2a')"
+npm test
 ```
 
-**Response:** Transaction with inputs, outputs, fee, etc.
+### Run with Coverage
 
 ```bash
-StatusCode        : 200
-StatusDescription : OK
-Content           : {"@odata.context":"$metadata#Transactions/$entity","hash
-                    ":"1932fa826ee085666c012b7e464562e455309b33637af2929a9c1
-                    cdd00842c2a","blockHash":"6645ec303472c2ed2f18d16e9b9b15
-                    889412ab4756045beb45874716870a97...
-RawContent        : HTTP/1.1 200 OK
-                    X-Correlation-ID: 63365bf9-0226-40e3-99c7-663ea29dfc85
-                    OData-Version: 4.0
-                    Connection: keep-alive
-                    Keep-Alive: timeout=5
-                    Content-Length: 527
-                    Content-Type: application/json; charset...
-Forms             : {}
-Headers           : {[X-Correlation-ID,
-                    63365bf9-0226-40e3-99c7-663ea29dfc85], [OData-Version,
-                    4.0], [Connection, keep-alive], [Keep-Alive,
-                    timeout=5]...}
-Images            : {}
-InputFields       : {}
-Links             : {}
-ParsedHtml        : mshtml.HTMLDocumentClass
-RawContentLength  : 527
+npm test -- --coverage
 ```
 
-### 2. Check Addresses http://localhost:4004/odata/v4/cardano-odata/Addresses('bench32 address')
-
-#### Example Call:
+### Run Only Integration Tests
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')"
+npm run test:integration
 ```
 
-**Response:** Address balance and token holdings
+### Run Only Unit Tests
 
 ```bash
-StatusCode        : 200
-StatusDescription : OK
-Content           : {"@odata.context":"$metadata#Addresses/$entity","bech32"
-                    :"addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zu
-                    xxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8",
-                    "stakeAddress":"stake_test1uzkws...
-RawContent        : HTTP/1.1 200 OK
-                    X-Correlation-ID: d1d5ceb9-d973-4fec-8a93-e4ac0eef8a9b
-                    OData-Version: 4.0
-                    Connection: keep-alive
-                    Keep-Alive: timeout=5
-                    Content-Length: 389
-                    Content-Type: application/json; charset...
-Forms             : {}
-Headers           : {[X-Correlation-ID,
-                    d1d5ceb9-d973-4fec-8a93-e4ac0eef8a9b], [OData-Version,
-                    4.0], [Connection, keep-alive], [Keep-Alive,
-                    timeout=5]...}
-Images            : {}
-InputFields       : {}
-Links             : {}
-ParsedHtml        : mshtml.HTMLDocumentClass
-RawContentLength  : 389
+npm run test:unit
 ```
+
+## Documentation
+
+- **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
+- **[Data Model](docs/datamodel.md)** - Entity relationships and schema
+- **[Indexing Concept](docs/INDEXING.md)** - Caching strategy
+
+## API Overview
+
+### Entities (GET)
+
+| Entity                | Description                              | Example                 |
+| --------------------- | ---------------------------------------- | ----------------------- |
+| `NetworkInformation`  | Network statistics (supply, stake)       | `/NetworkInformation`   |
+| `LatestBlock`         | Most recent block data                   | `/LatestBlock`          |
+| `LatestEpoch`         | Current epoch data                       | `/LatestEpoch`          |
+| `Transactions`        | Transaction details with inputs/outputs  | `/Transactions('hash')` |
+| `Addresses`           | Address balances and metadata            | `/Addresses('addr...')` |
+| `AddressAssets`       | Native assets at an address              | `/AddressAssets`        |
+| `AddressUTxOs`        | Unspent outputs at an address            | `/AddressUTxOs`         |
+| `TransactionMetadata` | Transaction metadata by label or tx hash | `/TransactionMetadata`  |
+
+### Actions (POST)
+
+| Action                         | Parameters | Description                 |
+| ------------------------------ | ---------- | --------------------------- |
+| `GetNetworkInformation`        | -          | Fetch current network stats |
+| `GetLatestBlock`               | -          | Get latest block            |
+| `GetLatestEpoch`               | -          | Get current epoch           |
+| `GetTransactionByHash`         | `txHash`   | Lookup transaction          |
+| `GetMetadataByTxHash`          | `txHash`   | Get tx metadata             |
+| `GetAddressByBech32`           | `address`  | Get address info            |
+| `GetUTxOsByAddress`            | `address`  | Get address UTxOs           |
+| `GetAssetsByAddress`           | `address`  | Get address assets          |
+| `GetMetadataLabelTransactions` | `label`    | Find txs by metadata label  |
+
+### OData Query Examples
+
+```bash
+# Filter transactions by fee
+GET /Transactions?$filter=fee gt 1000000
+
+# Select specific fields
+GET /Addresses?$select=address,totalLovelace
+
+# Pagination
+GET /Transactions?$top=10&$skip=0
+
+# Count results
+GET /Addresses?$count=true
+
+# Expand related data
+GET /Transactions?$expand=inputs,outputs
+```
+
+## Important parts of the project structure
+
+```
+ODATANO/
+├── db/                     # Database schema
+│   └── schema.cds          # CDS data model
+│
+├── srv/                    # Service implementation
+│   ├── cardano-service.ts  # Main OData service
+│   ├── cardano-service.cds # Service definition
+│   ├── blockchain/         # Blockchain integration
+│   │   ├── cardano-client.ts      # Multi-provider client
+│   │   ├── cardano-indexer.ts     # Caching logic
+│   │   ├── blockfrost-backend.ts  # Blockfrost adapter
+│   │   └── koios-backend.ts       # Koios adapter
+│   │
+│   └── utils/              # Utilities
+│       ├── validators.ts   # Input validation
+│       ├── mappers.ts      # Data transformation
+│       ├── errors.ts       # Error handling
+│       └── logger.ts       # Structured logging
+│   
+├── test/                   # Test suites
+│   ├── integration/        # End-to-end tests
+│   └── unit/              # Unit tests
+└── docs/                   # Documentation
+```
+
+## Technology Stack
+
+- **SAP CAP** (v9.x) - Application framework
+- **TypeScript** (v5.9) - Type-safe development
+- **SQLite** - Persistent caching
+- **Jest** - Testing framework
+- **Supertest** - HTTP assertions
+- **Pino** - Structured logging
+- **Blockfrost/Koios** - Cardano data providers
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
+for details.
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
+- **Documentation**: [docs/](docs/)
+- **Blockfrost**: https://blockfrost.io
+- **Koios**: https://koios.rest

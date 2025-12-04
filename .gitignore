@@ -43,8 +43,6 @@ M1_MILESTONE_COMPLETION.md
 docs/M1_TEST_COVERAGE_REPORT.md
 docs/DEVELOPER_GUIDE.md
 docs/USER_GUIDE.md
-docs/QUICK_START.md
-docs/Indexing_Concept.md
 .nyc_output
 db.sqlite-shm
 db.sqlite-wal

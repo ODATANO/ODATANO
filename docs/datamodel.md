@@ -17,7 +17,7 @@ erDiagram
     %% -----------------------------------------------------
 
     NetworkInformation {
-        string ID PK
+        int    ID PK
         decimal maxSupply
         decimal totalSupply
         decimal circulatingSupply
@@ -29,53 +29,52 @@ erDiagram
     }
 
     LatestEpoch {
-        int epoch PK
-        int start_time
-        int end_time
-        int first_block_time
-        int last_block_time
-        int block_count
-        int tx_count
+        int    epoch PK
+        int    startTime
+        int    endTime
+        int    firstBlockTime
+        int    lastBlockTime
+        int    blockCount
+        int    txCount
         string output
-        string fees
-        string active_stake
+        decimal fees
+        decimal activeStake
     }
 
     LatestBlock {
-        string ID PK
+        string hash PK
         string time
-        int height
-        string hash
+        int    height
         string slotLeader
-        int epochNumber
-        int epochSlot
-        int size
-        int txCount
+        int    epochNumber
+        int    epochSlot
+        int    size
+        int    txCount
         decimal fees
     }
 
     Addresses {
-        string address PK
-        string stakeAddress
-        string type
+        string  address PK
+        string  stakeAddress
+        string  type
         boolean isScript
         decimal totalLovelace
     }
 
     AddressAssets {
-        string address PK
-        string unit PK
+        string  address PK
+        string  unit PK
         decimal quantity
-        string policyId
-        string assetNameHex
-        string assetName
-        string fingerprint
+        string  policyId
+        string  assetNameHex
+        string  assetName
+        string  fingerprint
     }
 
     AddressUTxOs {
         string address PK
         string hash PK
-        int index PK
+        int    index PK
         string blockHash
         string dataHash
         string inlineDatum
@@ -94,43 +93,36 @@ erDiagram
     }
 
     Transactions {
-        string hash PK
-        string blockHash
-        int blockHeight
+        string   hash PK
+        string   blockHash
+        int      blockHeight
         timestamp blockTime
-        int slot
-        int txIndex
-        decimal fee
-        decimal deposit
-        int size
-        int utxoCount
-        int withdrawalCount
-        int mirCertCount
-        int delegationCount
-        int stakeCertCount
-        int poolUpdateCount
-        int poolRetireCount
-        int assetMintOrBurnCount
-        int redeemerCount
-        boolean validContract
+        long     slot
+        int      txIndex
+        decimal  fee
+        decimal  deposit
+        int      size
+        int      utxoCount
+        int      withdrawalCount
+        int      mirCertCount
+        int      delegationCount
+        int      stakeCertCount
+        int      poolUpdateCount
+        int      poolRetireCount
+        int      assetMintOrBurnCount
+        int      redeemerCount
+        boolean  validContract
     }
 
-    MetadataLabels {
-        string ID PK
-        string label
-        string cip10
-        int count
-    }
-
-    Metadata {
+    TransactionMetadata {
         string tx PK
         string label PK
-        string payloadJson
+        string payload
     }
 
     TransactionInputs {
         string tx PK
-        int inputIndex PK
+        int    inputIndex PK
         string address
         string dataHash
         string inlineDatum
@@ -141,7 +133,7 @@ erDiagram
 
     TransactionOutputs {
         string tx PK
-        int outputIndex PK
+        int    outputIndex PK
         string address
         string dataHash
         string inlineDatum
@@ -149,25 +141,23 @@ erDiagram
     }
 
     TransactionInputAssets {
-        string ID PK
-        string input
-        string unit
+        string input PK
+        string unit  PK
         decimal quantity
-        string policyId
-        string assetNameHex
-        string assetName
-        string fingerprint
+        string  policyId
+        string  assetNameHex
+        string  assetName
+        string  fingerprint
     }
 
     TransactionOutputAssets {
-        string ID PK
-        string output
-        string unit
+        string output PK
+        string unit   PK
         decimal quantity
-        string policyId
-        string assetNameHex
-        string assetName
-        string fingerprint
+        string  policyId
+        string  assetNameHex
+        string  assetName
+        string  fingerprint
     }
 
     %% -----------------------------------------------------
@@ -176,17 +166,17 @@ erDiagram
 
     %% Epoch <-> Latest Blocks
     LatestEpoch ||--o{ LatestBlock : hasBlocks
+    %% (via LatestBlock.epochNumber -> LatestEpoch.epoch)
 
     %% Address relations
-    Addresses ||--o{ AddressAssets : has
-    Addresses ||--o{ AddressUTxOs  : has
-
-    AddressUTxOs ||--o{ UTxOAssets : contains
+    Addresses   ||--o{ AddressAssets : has
+    Addresses   ||--o{ AddressUTxOs  : has
+    AddressUTxOs ||--o{ UTxOAssets   : contains
 
     %% Transactions and related data
-    Transactions ||--o{ Metadata           : has
-    Transactions ||--o{ TransactionInputs  : has
-    Transactions ||--o{ TransactionOutputs : has
+    Transactions ||--o{ TransactionMetadata     : has
+    Transactions ||--o{ TransactionInputs       : has
+    Transactions ||--o{ TransactionOutputs      : has
 
     TransactionInputs  ||--o{ TransactionInputAssets   : contains
     TransactionOutputs ||--o{ TransactionOutputAssets  : contains
@@ -194,7 +184,4 @@ erDiagram
     %% Inputs/Outputs reference Addresses
     Addresses ||--o{ TransactionInputs  : usedBy
     Addresses ||--o{ TransactionOutputs : usedBy
-
-    %% Metadata labels
-    MetadataLabels ||--o{ Metadata : categorizes
 ```
