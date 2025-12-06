@@ -11,7 +11,9 @@ import {
   MetadataLabelTx,
 } from '../utils/types';
 
-
+// ---------------------------------------------------------------------------
+// Koios Backend Implementation
+// ---------------------------------------------------------------------------
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
@@ -24,7 +26,6 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async init(): Promise<void> {
-    // not needed atm
     return;
   }
 
@@ -37,19 +38,44 @@ export class KoiosBackend implements CardanoBackend {
     } 
   }
 
-  async getTransaction(txHash: string): Promise<any> {
+  async getTransaction(txHash: string): Promise<Transaction> {
     const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
 
     if (!data.length) {
-      throw new Error('NOT_FOUND');
+      throw new Error('Transaction not found');
     }
 
     const tx = data[0];
     return {
-     hash: tx.tx_hash,
-     block: tx.block_no,
-     blockTime: new Date(tx.tx_validity_start * 1000),
-     fee: parseInt(tx.tx_fee || '0', 10),
+      hash: tx.tx_hash,
+      blockHash: tx.block_hash,
+      blockHeight: tx.block_height,
+      slot: tx.slot_no,
+      index: tx.tx_index,
+      fee: parseInt(tx.tx_fee || '0', 10),
+      deposit: parseInt(tx.deposit || '0', 10),
+      size: tx.tx_size,
+      utxoCount: tx.utxo_count,
+      withdrawalCount: tx.withdrawal_count,
+      mirCertCount: tx.mir_cert_count,
+      delegationCount: tx.delegation_count,
+      stakeCertCount: tx.stake_cert_count,
+      poolUpdateCount: tx.pool_update_count,
+      poolRetireCount: tx.pool_retire_count,
+      assetMintOrBurnCount: tx.asset_mint_or_burn_count,
+      redeemerCount: tx.redeemer_count,
+      validContract: tx.valid_contract,
+      blockTime: Number(tx.tx_validity_start * 1000),
+      outputAmount: tx.output_amount,
+      inputs: tx.inputs.map((input: any) => ({
+        address: input.address,
+        txHash: input.tx_hash,
+      })),
+      outputs: tx.outputs.map((output: any) => ({
+        address: output.address,
+        amount: output.amount,
+      })),
+      metadata: tx.metadata,
    };
   }
 
@@ -110,44 +136,103 @@ export class KoiosBackend implements CardanoBackend {
     throw new Error('ERROR_FETCHING_EPOCH');
   }
 
-  async getAddress(address: string): Promise<any> {
+  async getAddress(address: string): Promise<Address> {
     const { data } = await this.api.get(`/address_info?address=${address}`);
 
     if (!data.length) {
-      throw new Error('NOT_FOUND');
+      throw new Error('Address not found');
     }
 
-    const bal = data[0];
+    const addressData = data[0];
 
     return {
-      address,
-      balance: parseInt(bal.balance_utxo.lovelace || '0', 10),
+     address: address,
+     stakeAddress: addressData.stake_address || null,
+     type: addressData.address_type,
+     isScript: addressData.is_script,
+     amount: addressData.total_balance,
     };
   }
 
-  async getAddressUtxos(_address: string): Promise<any[]> {
-    throw new Error('NOT_SUPPORTED');
+  async getAddressUtxos(address: string): Promise<UTxO[]> {
+    const { data } = await this.api.get(`/address_utxos?address=${address}`);
+
+    if (!data.length) {
+      throw new Error('Address not found');
+    }
+    const addressData = data[0];
+    return addressData.utxos.map((utxo: any) => ({
+      txHash: utxo.tx_hash,
+      outputIndex: utxo.tx_index,
+      address: address,
+      amount: utxo.amount,
+      blockHash: utxo.block_hash,
+      datumHash: utxo.datum_hash || null,
+      scriptRef: utxo.script_ref || null,
+    }));
   }
 
   // ---------------------------------------------------------------------------
   // NETWORKINFO
   // ---------------------------------------------------------------------------
-  async getNetworkInformation(): Promise<any> {
-    throw new Error('NOT_SUPPORTED');
+  async getNetworkInformation(): Promise<Network> {
+    const { data } = await this.api.get('/network_info');
+
+    if (!data) {
+      throw new Error('Network information not found');
+    } 
+    return {
+      supply: {
+        max: data.supply.max,
+        total: data.supply.total,
+        circulating: data.supply.circulating,
+        locked: data.supply.locked,
+        treasury: data.supply.treasury,
+        reserves: data.supply.reserves},  
+      stake: {
+        live: data.stake.live,
+        active: data.stake.active
+      },  
+    };  
   }
 
   // ---------------------------------------------------------------------------
   // METADATA
   // ---------------------------------------------------------------------------
-  async getMetadataLabels(): Promise<any[]> {
+  async getMetadataLabelTransactions(_label: string | number): Promise<MetadataLabelTx[]> {
     throw new Error('NOT_SUPPORTED');
   }
 
-  async getMetadataLabelTransactions(_label: string | number): Promise<any[]> {
-    throw new Error('NOT_SUPPORTED');
+async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+  const body = {
+    _tx_hashes: [txHash],
+  };
+
+  const { data } = await this.api.post('/tx_metadata', body);
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('Transaction metadata not found');
   }
 
-  async getTransactionMetadata(_txHash: string): Promise<any[]> {
-    throw new Error('NOT_SUPPORTED');
+  const first = data[0];
+  const txHashFromResponse = (first.tx_hash ?? txHash);
+  const metadataObj = first.metadata ?? {};
+
+  const labels: MetadataLabelTx[] = Object.entries(metadataObj).map(
+    ([labelKey, value]) => {
+      const numeric = Number(labelKey);
+      const parsedLabel = Number.isFinite(numeric) ? numeric : labelKey;
+      return {
+        txHash: txHashFromResponse,
+        label: parsedLabel,
+        json: value as JSONValue,
+      };
+    }
+  );
+
+  if (!labels.length) {
+    throw new Error('Transaction metadata not found');
   }
+  return labels;
+}
 }
