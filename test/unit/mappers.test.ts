@@ -93,7 +93,7 @@ describe('mappers', () => {
 
       expect(result.hash).toBe('abc123def456');
       expect(result.height).toBe(9876543);
-      expect(result.slotLeader).toBe('123456789'); // Mapped from slot, not slotLeader
+      expect(result.slotLeader).toBe('123456789');
       expect(result.epochNumber).toBe(450);
       expect(result.epochSlot).toBe(12345);
       expect(result.size).toBe(65432);

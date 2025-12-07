@@ -1,5 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
+import { handleBackendError } from './backend-error-handler';
+import { InvalidDataError } from '../utils/errors';
 import {
   Transaction,
   LatestBlock,
@@ -39,56 +41,65 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getTransaction(txHash: string): Promise<Transaction> {
-    const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
+    return handleBackendError(
+      async () => {
+        const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
 
-    if (!data.length) {
-      throw new Error('Transaction not found');
-    }
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new InvalidDataError('Transaction not found', this.name);
+        }
 
-    const tx = data[0];
-    return {
-      hash: tx.tx_hash,
-      blockHash: tx.block_hash,
-      blockHeight: tx.block_height,
-      slot: tx.slot_no,
-      index: tx.tx_index,
-      fee: parseInt(tx.tx_fee || '0', 10),
-      deposit: parseInt(tx.deposit || '0', 10),
-      size: tx.tx_size,
-      utxoCount: tx.utxo_count,
-      withdrawalCount: tx.withdrawal_count,
-      mirCertCount: tx.mir_cert_count,
-      delegationCount: tx.delegation_count,
-      stakeCertCount: tx.stake_cert_count,
-      poolUpdateCount: tx.pool_update_count,
-      poolRetireCount: tx.pool_retire_count,
-      assetMintOrBurnCount: tx.asset_mint_or_burn_count,
-      redeemerCount: tx.redeemer_count,
-      validContract: tx.valid_contract,
-      blockTime: Number(tx.tx_validity_start * 1000),
-      outputAmount: tx.output_amount,
-      inputs: tx.inputs.map((input: any) => ({
-        address: input.address,
-        txHash: input.tx_hash,
-      })),
-      outputs: tx.outputs.map((output: any) => ({
-        address: output.address,
-        amount: output.amount,
-      })),
-      metadata: tx.metadata,
-   };
+        const tx = data[0];
+        return {
+          hash: tx.tx_hash,
+          blockHash: tx.block_hash,
+          blockHeight: tx.block_height,
+          slot: tx.slot_no,
+          index: tx.tx_index,
+          fee: parseInt(tx.tx_fee || '0', 10),
+          deposit: parseInt(tx.deposit || '0', 10),
+          size: tx.tx_size,
+          utxoCount: tx.utxo_count,
+          withdrawalCount: tx.withdrawal_count,
+          mirCertCount: tx.mir_cert_count,
+          delegationCount: tx.delegation_count,
+          stakeCertCount: tx.stake_cert_count,
+          poolUpdateCount: tx.pool_update_count,
+          poolRetireCount: tx.pool_retire_count,
+          assetMintOrBurnCount: tx.asset_mint_or_burn_count,
+          redeemerCount: tx.redeemer_count,
+          validContract: tx.valid_contract,
+          blockTime: Number(tx.tx_validity_start * 1000),
+          outputAmount: tx.output_amount,
+          inputs: tx.inputs.map((input: any) => ({
+            address: input.address,
+            txHash: input.tx_hash,
+          })),
+          outputs: tx.outputs.map((output: any) => ({
+            address: output.address,
+            amount: output.amount,
+          })),
+          metadata: tx.metadata,
+        };
+      },
+      this.name,
+      'Transaction'
+    );
   }
 
   async getLatestBlock(): Promise<LatestBlock> {
-    try {
-      // get tip first
-      const tipData = await this.api.get('/tip');
+    return handleBackendError(
+      async () => {
+        // get tip first
+        const tipData = await this.api.get('/tip');
 
-      const blockHash = tipData.data.hash;
-      // get data of the tip block
-      const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
+        const blockHash = tipData.data.hash;
+        // get data of the tip block
+        const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
 
-      if (blockData.data && blockData.data.length > 0) {
+        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
+          throw new InvalidDataError('Block data not available', this.name);
+        }
 
         return {
           time: blockData.data[0].time,
@@ -101,26 +112,27 @@ export class KoiosBackend implements CardanoBackend {
           size: blockData.data[0].block_size,
           txCount: blockData.data[0].tx_count,
           fees: blockData.data[0].total_fees,
-   };
-  }
-    throw new Error('ERROR_FETCHING_BLOCK');
-  } catch (err: any) {
-      if (err?.status === 404 || err?.response?.status === 404) {
-        throw new Error('NOT_FOUND');
-      }
-      throw err;
-    }
+        };
+      },
+      this.name,
+      'LatestBlock'
+    );
   }
 
   async getLatestEpoch(): Promise<LatestEpoch> {
-     // get tip first
-      const tipData = await this.api.get('/tip');
+    return handleBackendError(
+      async () => {
+        // get tip first
+        const tipData = await this.api.get('/tip');
 
-      // get data of the tip epoch
-      const epochData = await this.api.post('/epoch_info', { _epoch_nos: [tipData.data.epoch_no] });
-      if (epochData.data && epochData.data.length > 0) {
+        // get data of the tip epoch
+        const epochData = await this.api.post('/epoch_info', { _epoch_nos: [tipData.data.epoch_no] });
+        
+        if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
+          throw new InvalidDataError('Epoch data not available', this.name);
+        }
 
-        return {  
+        return {
           epoch: epochData.data[0].epoch_no,
           start_time: epochData.data[0].start_time,
           end_time: epochData.data[0].end_time,
@@ -131,108 +143,137 @@ export class KoiosBackend implements CardanoBackend {
           output: epochData.data[0].total_output,
           fees: epochData.data[0].total_fees,
           active_stake: epochData.data[0].active_stake,
-     };
-    }
-    throw new Error('ERROR_FETCHING_EPOCH');
+        };
+      },
+      this.name,
+      'LatestEpoch'
+    );
   }
 
   async getAddress(address: string): Promise<Address> {
-    const { data } = await this.api.get(`/address_info?address=${address}`);
+    return handleBackendError(
+      async () => {
+        const { data } = await this.api.get(`/address_info?address=${address}`);
 
-    if (!data.length) {
-      throw new Error('Address not found');
-    }
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new InvalidDataError('Address not found', this.name);
+        }
 
-    const addressData = data[0];
+        const addressData = data[0];
 
-    return {
-     address: address,
-     stakeAddress: addressData.stake_address || null,
-     type: addressData.address_type,
-     isScript: addressData.is_script,
-     amount: addressData.total_balance,
-    };
+        return {
+          address: address,
+          stakeAddress: addressData.stake_address || null,
+          type: addressData.address_type,
+          isScript: addressData.is_script,
+          amount: addressData.total_balance,
+        };
+      },
+      this.name,
+      'Address'
+    );
   }
 
   async getAddressUtxos(address: string): Promise<UTxO[]> {
-    const { data } = await this.api.get(`/address_utxos?address=${address}`);
+    return handleBackendError(
+      async () => {
+        const { data } = await this.api.get(`/address_utxos?address=${address}`);
 
-    if (!data.length) {
-      throw new Error('Address not found');
-    }
-    const addressData = data[0];
-    return addressData.utxos.map((utxo: any) => ({
-      txHash: utxo.tx_hash,
-      outputIndex: utxo.tx_index,
-      address: address,
-      amount: utxo.amount,
-      blockHash: utxo.block_hash,
-      datumHash: utxo.datum_hash || null,
-      scriptRef: utxo.script_ref || null,
-    }));
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new InvalidDataError('Address UTxOs not found', this.name);
+        }
+        
+        const addressData = data[0];
+        return addressData.utxos.map((utxo: any) => ({
+          txHash: utxo.tx_hash,
+          outputIndex: utxo.tx_index,
+          address: address,
+          amount: utxo.amount,
+          blockHash: utxo.block_hash,
+          datumHash: utxo.datum_hash || null,
+          scriptRef: utxo.script_ref || null,
+        }));
+      },
+      this.name,
+      'AddressUTxOs'
+    );
   }
 
   // ---------------------------------------------------------------------------
   // NETWORKINFO
   // ---------------------------------------------------------------------------
   async getNetworkInformation(): Promise<Network> {
-    const { data } = await this.api.get('/network_info');
+    return handleBackendError(
+      async () => {
+        const { data } = await this.api.get('/network_info');
 
-    if (!data) {
-      throw new Error('Network information not found');
-    } 
-    return {
-      supply: {
-        max: data.supply.max,
-        total: data.supply.total,
-        circulating: data.supply.circulating,
-        locked: data.supply.locked,
-        treasury: data.supply.treasury,
-        reserves: data.supply.reserves},  
-      stake: {
-        live: data.stake.live,
-        active: data.stake.active
-      },  
-    };  
+        if (!data) {
+          throw new InvalidDataError('Network information not available', this.name);
+        }
+        
+        return {
+          supply: {
+            max: data.supply.max,
+            total: data.supply.total,
+            circulating: data.supply.circulating,
+            locked: data.supply.locked,
+            treasury: data.supply.treasury,
+            reserves: data.supply.reserves,
+          },
+          stake: {
+            live: data.stake.live,
+            active: data.stake.active,
+          },
+        };
+      },
+      this.name,
+      'NetworkInformation'
+    );
   }
 
   // ---------------------------------------------------------------------------
   // METADATA
   // ---------------------------------------------------------------------------
   async getMetadataLabelTransactions(_label: string | number): Promise<MetadataLabelTx[]> {
-    throw new Error('NOT_SUPPORTED');
+    throw new InvalidDataError('Metadata label transactions not supported by Koios', this.name);
   }
 
 async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
-  const body = {
-    _tx_hashes: [txHash],
-  };
-
-  const { data } = await this.api.post('/tx_metadata', body);
-
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error('Transaction metadata not found');
-  }
-
-  const first = data[0];
-  const txHashFromResponse = (first.tx_hash ?? txHash);
-  const metadataObj = first.metadata ?? {};
-
-  const labels: MetadataLabelTx[] = Object.entries(metadataObj).map(
-    ([labelKey, value]) => {
-      const numeric = Number(labelKey);
-      const parsedLabel = Number.isFinite(numeric) ? numeric : labelKey;
-      return {
-        txHash: txHashFromResponse,
-        label: parsedLabel,
-        json: value as JSONValue,
+  return handleBackendError(
+    async () => {
+      const body = {
+        _tx_hashes: [txHash],
       };
-    }
-  );
 
-  if (!labels.length) {
-    throw new Error('Transaction metadata not found');
-  }
-  return labels;
+      const { data } = await this.api.post('/tx_metadata', body);
+
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new InvalidDataError('Transaction metadata not found', this.name);
+      }
+
+      const first = data[0];
+      const txHashFromResponse = (first.tx_hash ?? txHash);
+      const metadataObj = first.metadata ?? {};
+
+      const labels: MetadataLabelTx[] = Object.entries(metadataObj).map(
+        ([labelKey, value]) => {
+          const numeric = Number(labelKey);
+          const parsedLabel = Number.isFinite(numeric) ? numeric : labelKey;
+          return {
+            txHash: txHashFromResponse,
+            label: parsedLabel,
+            json: value as JSONValue,
+          };
+        }
+      );
+
+      if (!labels.length) {
+        throw new InvalidDataError('Transaction metadata not found', this.name);
+      }
+      return labels;
+    },
+    this.name,
+    'TransactionMetadata'
+  );
 }
 }

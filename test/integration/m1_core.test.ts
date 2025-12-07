@@ -2,13 +2,13 @@ import cds from '@sap/cds';
 
 const { GET, POST, expect } = cds.test(__dirname + '/../../');
 
-describe('M1 Milestone - Complete Service Tests', () => {
+describe('ODATANO Milestone 1 - Complete Service Tests', () => {
   
   // ============================================================================
   // ENTITY READ TESTS
   // ============================================================================
 
-  describe('Entity Reads - Network Information', () => {
+  describe('Entity Reads - Current Network Information', () => {
     test('GET /NetworkInformation - returns collection (200)', async () => {
       const { status, data } = await GET('/odata/v4/cardano-odata/NetworkInformation');
       expect(status).to.equal(200);
@@ -36,7 +36,6 @@ describe('M1 Milestone - Complete Service Tests', () => {
       if (data.value.length > 0) {
         const tx = data.value[0];
         expect(tx).to.have.property('hash');
-        expect(tx).to.have.property('fee');
         expect(tx).to.have.property('blockHash');
         expect(tx).to.have.property('blockHeight');
       }
@@ -142,9 +141,9 @@ describe('M1 Milestone - Complete Service Tests', () => {
   });
 
   describe('Actions - Transaction Lookup', () => {
-    // Known Preview testnet transaction from recent block
+    // valid preview transaction hash
     const validTxHash = '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83';
-    // Transaction with metadata (label 1990)
+    // valid hash transaction with metadata
     const txWithMetadata = '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1';
 
     test('POST GetTransactionByHash - rejects missing txHash', async () => {

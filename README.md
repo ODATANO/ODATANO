@@ -7,10 +7,11 @@ V4 access to Cardano blockchain data. It features intelligent caching,
 multi-provider fallback, and comprehensive blockchain data exposure through a
 standardized REST API.
 
-[![Tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-65.68%25-yellow)]()
+[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-75.44%25-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
 [![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ## Features
 

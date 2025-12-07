@@ -26,7 +26,6 @@ import {
   LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
 
-import { mapProviderError } from './errors';
 import logger from './logger';
 import type { Request } from '@sap/cds';
 
@@ -357,6 +356,12 @@ export function mapTransactionMetadata(
 }
 
 export function mapError(req: Request, err: unknown, ctx: string) {
-  const { status, message } = mapProviderError(err);
+  // Import normalizeBackendError for proper error handling
+  const { normalizeBackendError, getErrorStatus, getErrorMessage } = require('./errors');
+  
+  const backendError = normalizeBackendError(err);
+  const status = backendError.statusCode;
+  const message = backendError.message;
+  
   return req.error(status, `${ctx}: ${message}`);
 }

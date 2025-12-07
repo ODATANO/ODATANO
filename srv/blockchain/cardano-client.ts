@@ -1,6 +1,7 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
+import { BackendError, AllBackendsFailedError } from '../utils/errors';
 import logger from '../utils/logger';
 
 import {
@@ -96,7 +97,7 @@ export class CardanoClient {
   ): Promise<T> {
     await this.ensureInitialized();
 
-    let lastError: any;
+    const errors: BackendError[] = [];
 
     for (const backend of this.backends) {
       const timeoutMs = this.getTimeoutForBackend(backend);
@@ -109,14 +110,29 @@ export class CardanoClient {
         );
         return result;
       } catch (err: any) {
-        lastError = err;
-        logger.warn({ backend: backend.name, err }, 'Backend failed');
+        // Convert to BackendError if not already
+        const backendError = err instanceof BackendError 
+          ? err 
+          : new BackendError(
+              err?.message ?? 'Unknown error',
+              500,
+              backend.name,
+              err
+            );
+        
+        errors.push(backendError);
+        logger.warn(
+          { 
+            backend: backend.name, 
+            error: backendError.message,
+            statusCode: backendError.statusCode 
+          }, 
+          'Backend failed'
+        );
       }
     }
 
-    throw new Error(
-      `All Cardano backends failed: ${lastError?.message ?? 'unknown error'}`
-    );
+    throw new AllBackendsFailedError(errors);
   }
 
   getTransaction(txHash: string): Promise<Transaction> {
@@ -152,14 +168,13 @@ export class CardanoClient {
   }
 }
 
-// Lazy backend initialization - only create if env vars are set
 const backends: CardanoBackend[] = [];
 
 if (process.env.BLOCKFROST_KEY) {
   backends.push(new BlockfrostBackend());
 }
 
-backends.push(new KoiosBackend()); // Koios doesn't require API key
+backends.push(new KoiosBackend());
 
 export const cardanoClient = new CardanoClient(backends);
 

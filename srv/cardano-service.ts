@@ -434,7 +434,7 @@ export default class CardanoService extends cds.ApplicationService {
         }
 
         const rows = await db.run(
-          SELECT.from(TransactionMetadata).where({ txHash }),
+          SELECT.from(TransactionMetadata).where({ tx_hash: txHash }),
         );
         if (!rows || rows.length === 0) {
           return await indexer.indexTransactionMetadata(db, txHash);
