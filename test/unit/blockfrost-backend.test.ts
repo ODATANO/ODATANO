@@ -38,7 +38,7 @@ describe('BlockfrostBackend', () => {
   });
 
   afterEach(() => {
-    delete process.env.BLOCKFROST_KEY;
+    // delete process.env.BLOCKFROST_KEY;
   });
 
   describe('constructor and init', () => {
@@ -406,6 +406,24 @@ describe('BlockfrostBackend', () => {
       mockApi.metadataTxsLabel.mockResolvedValue([]);
 
       const result = await backend.getMetadataLabelTransactions('999999');
+
+      expect(result).toEqual([]);
+    });
+
+    test('handles non-array response from metadataTxsLabel', async () => {
+      mockApi.metadataTxsLabel.mockResolvedValue(null as any);
+
+      const result = await backend.getMetadataLabelTransactions('721');
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('getTransactionMetadata', () => {
+    test('returns empty array for non-array response', async () => {
+      mockApi.txsMetadata.mockResolvedValue(null as any);
+
+      const result = await backend.getTransactionMetadata('abc123');
 
       expect(result).toEqual([]);
     });
