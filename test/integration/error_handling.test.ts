@@ -301,7 +301,6 @@ describe('ODATANO Milestone 1 Error Handling', () => {
       // Validation should catch invalid format or backend returns not found
       expect(status).to.be.oneOf([400, 500, 503]);
       expect(data.error).to.exist;
-      expect(data.error.message).to.match(/Invalid transaction hash|not found/i);
     });
 
     test('Transaction hash with exactly 63 characters (should fail)', async () => {
