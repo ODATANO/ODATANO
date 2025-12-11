@@ -8,7 +8,6 @@
     "axios": "^1.4.0",
     "dotenv": "^16.3.1",
     "express": "^4",
-    "node-cache": "^5.1.2",
     "pino": "^8.13.0"
   },
   "devDependencies": {
@@ -34,17 +33,19 @@
       }
     }
   },
-  "scripts": {
-    "start": "cds-serve",
-    "cds:watch": "cds watch",
-    "cds:serve": "cds serve --with-mocks",
-    "test": "jest --runInBand",
-    "test:coverage": "jest --coverage",
-    "test:integration": "npm test -- --testPathPattern=integration",
-    "test:unit": "npm test -- --testPathPattern=unit"
-  },
-  "private": true,
-  "imports": {
-    "#cds-models/*": "./@cds-models/*/index.js"
-  }
+"scripts": {
+  "start": "cds-serve",
+  "cds:watch": "cds watch",
+  "cds:serve": "cds serve --with-mocks",
+
+  "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
+  "db:deploy": "cds deploy",
+
+  "pretest": "npm run cds:types && npm run db:deploy",
+  "test": "jest --runInBand",
+  "test:coverage": "jest --coverage",
+  "test:integration": "npm test -- --testPathPattern=integration",
+  "test:unit": "npm test -- --testPathPattern=unit"
 }
+}
+

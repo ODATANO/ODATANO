@@ -46,6 +46,6 @@ docs/USER_GUIDE.md
 .nyc_output
 db.sqlite-shm
 db.sqlite-wal
-
+.secrets 
 @cds-models
 @cds-models

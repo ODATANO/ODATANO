@@ -88,7 +88,7 @@ export class CardanoClient {
   private getTimeoutForBackend(backend: CardanoBackend): number {
     if (backend.name === 'blockfrost') return PRIMARY_TIMEOUT_MS;
     if (backend.name === 'koios') return FALLBACK_TIMEOUT_MS;
-    // add more backends here with custom timeouts here
+    // add more backends with custom timeouts here
     return PRIMARY_TIMEOUT_MS;
   }
 
