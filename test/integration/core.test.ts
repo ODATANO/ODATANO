@@ -10,19 +10,19 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('Entity Reads - Current Network Information', () => {
     test('GET /NetworkInformation - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/NetworkInformation');
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /LatestBlock - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/LatestBlock');
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestBlock`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /LatestEpoch - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/LatestEpoch');
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestEpoch`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
@@ -30,7 +30,7 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('Entity Reads - Core Entities', () => {
     test('GET /Transactions - returns collection (200) with correct schema', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/Transactions');
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       if (data.value.length > 0) {
@@ -42,7 +42,7 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
     });
 
     test('GET /Addresses - returns collection (200) with correct schema', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/Addresses');
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       if (data.value.length > 0) {
@@ -55,7 +55,7 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
     });
 
     test('GET /TransactionMetadata - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/TransactionMetadata');
+      const { status, data } = await GET `/odata/v4/cardano-odata/TransactionMetadata`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
@@ -63,19 +63,19 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('Entity Reads - Address Details', () => {
     test('GET /AddressAssets - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/AddressAssets');
+      const { status, data } = await GET `/odata/v4/cardano-odata/AddressAssets`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /AddressUTxOs - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/AddressUTxOs');
+      const { status, data } = await GET `/odata/v4/cardano-odata/AddressUTxOs`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /UTxOAssets - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/UTxOAssets');
+      const { status, data } = await GET `/odata/v4/cardano-odata/UTxOAssets`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
@@ -83,25 +83,25 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('Entity Reads - Transaction Details', () => {
     test('GET /TransactionInputs - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/TransactionInputs');
+      const { status, data } = await GET `/odata/v4/cardano-odata/TransactionInputs`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /TransactionOutputs - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/TransactionOutputs');
+      const { status, data } = await GET `/odata/v4/cardano-odata/TransactionOutputs`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /TransactionInputAssets - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/TransactionInputAssets');
+      const { status, data } = await GET `/odata/v4/cardano-odata/TransactionInputAssets`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('GET /TransactionOutputAssets - returns collection (200)', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/TransactionOutputAssets');
+      const { status, data } = await GET `/odata/v4/cardano-odata/TransactionOutputAssets`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
@@ -618,7 +618,7 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('Error Handling & Validation', () => {
     test('GET /$metadata - OData metadata is accessible', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/$metadata');
+      const { status, data } = await GET `/odata/v4/cardano-odata/$metadata`;
       expect(status).to.equal(200);
       expect(data).to.include('Transactions');
       expect(data).to.include('Addresses');
@@ -659,7 +659,7 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
   describe('OData Query Capabilities', () => {
     test('$top and $skip work on collections', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/Transactions?$top=5');
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$top=5`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       if (data.value.length > 0) {
@@ -668,13 +668,13 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
     });
 
     test('$count returns count metadata', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/Addresses?$count=true');
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$count=true`;
       expect(status).to.equal(200);
       expect(data['@odata.count']).to.exist;
     });
 
     test('$select filters properties', async () => {
-      const { status, data } = await GET('/odata/v4/cardano-odata/Transactions?$select=hash,fee');
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$select=hash,fee`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });

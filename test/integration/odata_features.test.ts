@@ -10,17 +10,13 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('$filter operations', () => {
     test('$filter on NetworkInformation - totalSupply gt value', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/NetworkInformation?$filter=totalSupply gt 1000000'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation?$filter=totalSupply gt 1000000`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('$filter on Transactions - fee comparison', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       
@@ -32,17 +28,13 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$filter on Addresses - totalLovelace range', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$filter=totalLovelace gt 1000000 and totalLovelace lt 10000000'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$filter=totalLovelace gt 1000000 and totalLovelace lt 10000000`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
     });
 
     test('$filter on Addresses - isScript eq true', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$filter=isScript eq true'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$filter=isScript eq true`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       
@@ -60,9 +52,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('$select operations', () => {
     test('$select specific fields from NetworkInformation', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/NetworkInformation?$select=totalSupply,circulatingSupply'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation?$select=totalSupply,circulatingSupply`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0) {
@@ -74,9 +64,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$select single field from Transactions', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$select=hash,fee&$top=5'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$select=hash,fee&$top=5`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0) {
@@ -87,9 +75,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$select on Addresses returns only requested fields', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$select=address,type,totalLovelace&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$select=address,type,totalLovelace&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0) {
@@ -107,21 +93,15 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('Pagination with $top and $skip', () => {
     test('$top limits result count', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$top=3'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$top=3`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
       expect(data.value.length).to.be.at.most(3);
     });
 
     test('$skip offsets results', async () => {
-      const { status: status1, data: data1 } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$top=1'
-      );
-      const { status: status2, data: data2 } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$top=1&$skip=1'
-      );
+      const { status: status1, data: data1 } = await GET `/odata/v4/cardano-odata/Transactions?$top=1`;
+      const { status: status2, data: data2 } = await GET `/odata/v4/cardano-odata/Transactions?$top=1&$skip=1`;
       
       expect(status1).to.equal(200);
       expect(status2).to.equal(200);
@@ -133,9 +113,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$top and $skip together for pagination', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$top=5&$skip=2'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$top=5&$skip=2`;
       expect(status).to.equal(200);
       expect(data.value.length).to.be.at.most(5);
     });
@@ -147,9 +125,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('$count operations', () => {
     test('$count=true includes count in response', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$count=true&$top=5'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$count=true&$top=5`;
       expect(status).to.equal(200);
       
       // OData v4 includes @odata.count when $count=true
@@ -160,9 +136,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('GET /$count returns count value', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/NetworkInformation/$count'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation/$count`;
       expect(status).to.equal(200);
       expect(typeof data).to.be.oneOf(['number', 'string']);
     });
@@ -174,9 +148,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('$orderby operations', () => {
     test('$orderby on Transactions by fee ascending', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$orderby=fee asc&$top=3'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$orderby=fee asc&$top=3`;
       expect(status).to.equal(200);
       
       if (data.value.length >= 2) {
@@ -187,9 +159,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$orderby on Transactions by fee descending', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$orderby=fee desc&$top=3'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$orderby=fee desc&$top=3`;
       expect(status).to.equal(200);
       
       if (data.value.length >= 2) {
@@ -200,9 +170,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$orderby on Addresses by totalLovelace', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$orderby=totalLovelace desc&$top=5'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$orderby=totalLovelace desc&$top=5`;
       expect(status).to.equal(200);
       
       if (data.value.length >= 2) {
@@ -219,9 +187,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('$expand operations', () => {
     test('$expand inputs on Transactions', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$expand=inputs&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$expand=inputs&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0 && data.value[0].inputs) {
@@ -230,9 +196,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$expand outputs on Transactions', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$expand=outputs&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$expand=outputs&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0 && data.value[0].outputs) {
@@ -241,9 +205,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$expand multiple relations on Transactions', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$expand=inputs,outputs&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$expand=inputs,outputs&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0) {
@@ -254,9 +216,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$expand assets on Addresses', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$expand=assets&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$expand=assets&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0 && data.value[0].assets) {
@@ -265,9 +225,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$expand utxos on Addresses', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$expand=utxos&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$expand=utxos&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0 && data.value[0].utxos) {
@@ -282,9 +240,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
 
   describe('Combined query operations', () => {
     test('$filter + $select + $top combination', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000&$select=hash,fee&$top=2'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000&$select=hash,fee&$top=2`;
       expect(status).to.equal(200);
       expect(data.value.length).to.be.at.most(2);
       
@@ -297,9 +253,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$filter + $orderby + $top combination', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Addresses?$filter=totalLovelace gt 1000000&$orderby=totalLovelace desc&$top=3'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$filter=totalLovelace gt 1000000&$orderby=totalLovelace desc&$top=3`;
       expect(status).to.equal(200);
       expect(data.value.length).to.be.at.most(3);
       
@@ -311,9 +265,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$select + $expand combination', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$select=hash,fee&$expand=inputs&$top=1'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$select=hash,fee&$expand=inputs&$top=1`;
       expect(status).to.equal(200);
       
       if (data.value.length > 0) {
@@ -327,9 +279,7 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
     });
 
     test('$filter + $expand + $count combination', async () => {
-      const { status, data } = await GET(
-        '/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000&$expand=outputs&$count=true&$top=2'
-      );
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$filter=fee gt 100000&$expand=outputs&$count=true&$top=2`;
       expect(status).to.equal(200);
       
       if (data['@odata.count'] !== undefined) {

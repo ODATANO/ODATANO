@@ -4,12 +4,9 @@ module.exports = {
   testMatch: ['**/test/**/*.test.(ts)', '**/test/**/*.spec.(ts)'],
   moduleFileExtensions: ['ts', 'js', 'json'],
   transform: {
-    '^.+\\.(ts|tsx)$': 'ts-jest'
-  },
-  globals: {
-    'ts-jest': {
+    '^.+\\.(ts|tsx)$': ['ts-jest', {
       tsconfig: 'tsconfig.json'
-    }
+    }]
   },
   transformIgnorePatterns: ['/node_modules/'],
   moduleNameMapper: {
@@ -20,4 +17,12 @@ module.exports = {
     '!srv/**/*.d.ts',
     '!**/node_modules/**',
   ],
+  coverageThreshold: {
+    global: {
+      statements: 80,
+      branches: 80,
+      functions: 80,
+      lines: 80
+    }
+  },
 };

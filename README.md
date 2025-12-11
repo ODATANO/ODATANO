@@ -7,8 +7,8 @@ V4 access to Cardano blockchain data. It features intelligent caching,
 multi-provider fallback, and comprehensive blockchain data exposure through a
 standardized REST API.
 
-[![Tests](https://img.shields.io/badge/tests-276%20passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-89.90%25-brightgreen)]()
+[![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
+[![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
 [![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)

@@ -42,8 +42,8 @@
   "db:deploy": "cds deploy",
 
   "pretest": "npm run cds:types && npm run db:deploy",
-  "test": "jest --runInBand",
-  "test:coverage": "jest --coverage",
+  "test": "jest --runInBand --forceExit",
+  "test:coverage": "jest --coverage --forceExit",
   "test:integration": "npm test -- --testPathPattern=integration",
   "test:unit": "npm test -- --testPathPattern=unit"
 }
