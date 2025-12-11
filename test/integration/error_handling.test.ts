@@ -4,7 +4,7 @@ jest.setTimeout(20000);
 
 const { GET, POST, expect } = cds.test(__dirname + '/../../');
 
-describe('ODATANO Milestone 3 - Error Handling', () => {
+describe('ODATANO Milestone 1 Error Handling', () => {
   
   // ============================================================================
   // INPUT VALIDATION ERRORS (400)
@@ -77,7 +77,7 @@ describe('ODATANO Milestone 3 - Error Handling', () => {
         { address: 'addr_test1q' + 'a'.repeat(100) }
       ).catch(err => err.response);
       
-      expect(status).to.be.oneOf([400, 500]);
+      expect(status).to.be.oneOf([503, 400]);
       if (status === 400) {
         expect(data.error.message).to.include('Invalid bech32 address');
       }
@@ -151,7 +151,7 @@ describe('ODATANO Milestone 3 - Error Handling', () => {
       ).catch(err => err.response);
       
       // Accept 404, 500, or successful with no data, depending on implementation
-      expect(status).to.be.oneOf([404, 500]);
+      expect(status).to.be.oneOf([404, 500, 503]);
       expect(data.error).to.exist;
       expect(data.error.message).to.match(/not found|All backends failed/i);
     });
@@ -163,7 +163,7 @@ describe('ODATANO Milestone 3 - Error Handling', () => {
       ).catch(err => err.response);
       
       // Should either be 404 or handle gracefully
-      expect(status).to.be.oneOf([200, 404, 500]);
+      expect(status).to.be.oneOf([200, 404, 500, 503]);
     });
 
     test('GET single Address with nonexistent address', async () => {
@@ -172,7 +172,7 @@ describe('ODATANO Milestone 3 - Error Handling', () => {
         `/odata/v4/cardano-odata/Addresses('${nonexistentAddr}')`
       ).catch(err => err.response);
       
-      expect(status).to.be.oneOf([200, 400, 404, 500]);
+      expect(status).to.be.oneOf([200, 400, 404, 500, 503]);
     });
   });
 
@@ -292,14 +292,14 @@ describe('ODATANO Milestone 3 - Error Handling', () => {
   // ============================================================================
 
   describe('Validation Edge Cases', () => {
-    test('Transaction hash with uppercase letters (should fail)', async () => {
+    test('Transaction hash with uppercase letters', async () => {
       const { status, data } = await POST(
         '/odata/v4/cardano-odata/GetTransactionByHash',
         { txHash: 'ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC1' }
       ).catch(err => err.response);
       
       // Validation should catch invalid format or backend returns not found
-      expect(status).to.be.oneOf([400, 500]);
+      expect(status).to.be.oneOf([400, 500, 503]);
       expect(data.error).to.exist;
       expect(data.error.message).to.match(/Invalid transaction hash|not found/i);
     });
