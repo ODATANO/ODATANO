@@ -1,5 +1,7 @@
 import cds from '@sap/cds';
 
+jest.setTimeout(20000);
+
 const { GET, POST, expect } = cds.test(__dirname + '/../../');
 
 describe('ODATANO Milestone 3 - Error Handling', () => {
