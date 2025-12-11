@@ -23,9 +23,11 @@ standardized REST API.
 - **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
   persisted to SQLite, then served from local database
 - **Type Safety**: Full TypeScript implementation with CAP type generation
-- **Comprehensive Testing**: 83 tests with 65.68% code coverage and 100% pass
+- **Comprehensive Testing**: 276 tests with 90%+ code coverage and 100% pass
   rate
-- **Other features**: Error handling, logging, validation, and monitoring
+- **CI/CD**: Automated testing on Node.js 20.x and 22.x with Codecov integration
+- **Enterprise Features**: Error handling, structured logging, input validation,
+  and monitoring
 
 ## Architecture
 
@@ -140,7 +142,7 @@ npm test
 ### Run with Coverage
 
 ```bash
-npm test -- --coverage
+npm run test:coverage
 ```
 
 ### Run Only Integration Tests
@@ -221,22 +223,26 @@ ODATANO/
 ├── srv/                    # Service implementation
 │   ├── cardano-service.ts  # Main OData service
 │   ├── cardano-service.cds # Service definition
+│   │  
 │   ├── blockchain/         # Blockchain integration
-│   │   ├── cardano-client.ts      # Multi-provider client
-│   │   ├── cardano-indexer.ts     # Caching logic
-│   │   ├── blockfrost-backend.ts  # Blockfrost adapter
-│   │   └── koios-backend.ts       # Koios adapter
+│   │   ├── backend-error-handler.ts  # Multi-provider client
+│   │   ├── blockfrost-backend.ts     # Blockfrost adapter
+│   │   ├── cardano-backend.ts        # Cardano Backend Interface
+│   │   ├── cardano-client.ts         # Cardano Client / Fallback Logic
+│   │   ├── cardano-indexer.ts        # Lazy indexing
+│   │   └── koios-backend.ts          # Koios adapter
 │   │
 │   └── utils/              # Utilities
-│       ├── validators.ts   # Input validation
-│       ├── mappers.ts      # Data transformation
 │       ├── errors.ts       # Error handling
-│       └── logger.ts       # Structured logging
+│       ├── loggers.ts      # Logging
+│       ├── mappers.ts      # Mapping functions
+│       ├── types.ts        # Types 
+│       └── validators.ts   # Input Validators
 │   
-├── test/                   # Test suites
-│   ├── integration/        # End-to-end tests
-│   └── unit/              # Unit tests
-└── docs/                   # Documentation
+├── test/               # Test suites
+│   ├── integration/    # End-to-end tests
+│   └── unit/           # Unit tests
+└── docs/               # Documentation
 ```
 
 ## Technology Stack
@@ -245,14 +251,13 @@ ODATANO/
 - **TypeScript** (v5.9) - Type-safe development
 - **SQLite** - Persistent caching
 - **Jest** - Testing framework
-- **Supertest** - HTTP assertions
 - **Pino** - Structured logging
 - **Blockfrost/Koios** - Cardano data providers
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
-for details.
+This project is licensed under the Apache License 2.0 - see the
+[LICENSE](LICENSE) file for details.
 
 ## Support
 
