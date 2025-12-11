@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate CDS types
+        run: npm run cds:types
+
+      - name: Deploy database
+        run: npm run db:deploy
+
       - name: Run tests with coverage
         env:
           NODE_ENV: test
