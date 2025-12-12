@@ -1,6 +1,7 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendError } from './backend-error-handler';
+import { CONFIG } from '../config/config';
 import {
   Transaction,
   LatestBlock,
@@ -20,13 +21,14 @@ export class BlockfrostBackend implements CardanoBackend {
   private api: BlockFrostAPI;
 
   constructor() {
-    const projectId = process.env.BLOCKFROST_KEY;
+    const projectId = CONFIG.blockfrostApiKey;
     if (!projectId) {
-      throw new Error('[BlockfrostBackend] Environment variable BLOCKFROST_KEY is not set');
+      throw new Error('[BlockfrostBackend] BLOCKFROST_KEY environment variable is not set');
     }
 
     this.api = new BlockFrostAPI({
       projectId,
+      customBackend: CONFIG.blockfrostApiUrl,
     });
   }
   

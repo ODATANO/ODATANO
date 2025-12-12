@@ -6,6 +6,7 @@ import {
   NotFoundError,
   AllBackendsFailedError 
 } from '../../srv/utils/errors';
+import { ERROR_CODES } from '../../srv/utils/error-codes';
 import type { Transaction, Address, UTxO, Network, LatestBlock, LatestEpoch } from '../../srv/utils/types';
 
 // Mock backends
@@ -50,7 +51,7 @@ describe('CardanoClient', () => {
   describe('Initialization', () => {
     test('requires at least one backend', () => {
       expect(() => new CardanoClient([])).toThrow(
-        '[CardanoClient] At least one backend must be provided'
+        'CardanoClient misconfigured: no backend available'
       );
     });
 
@@ -90,7 +91,7 @@ describe('CardanoClient', () => {
       const testClient = new CardanoClient([backend1, backend2]);
 
       await expect(testClient.getTransaction('abc123')).rejects.toThrow(
-        '[CardanoClient] Initialization failed for all backends'
+        'CardanoClient startup failed'
       );
     });
   });
@@ -111,7 +112,7 @@ describe('CardanoClient', () => {
       const txData: Partial<Transaction> = { hash: 'abc123' };
       
       primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Primary error', 500, 'primary')
+        new BackendError('Primary error', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
       );
       fallbackBackend.getTransaction.mockResolvedValue(txData);
 
@@ -124,10 +125,10 @@ describe('CardanoClient', () => {
 
     test('throws AllBackendsFailedError when all backends fail', async () => {
       primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Primary failed', 500, 'primary')
+        new BackendError('Primary failed', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
       );
       fallbackBackend.getTransaction.mockRejectedValue(
-        new BackendError('Fallback failed', 503, 'fallback')
+        new BackendError('Fallback failed', 503, ERROR_CODES.PROVIDER_UNAVAILABLE, 'fallback')
       );
 
       await expect(client.getTransaction('abc123')).rejects.toThrow(
@@ -248,10 +249,10 @@ describe('CardanoClient', () => {
 
     test('uses last error status code in AllBackendsFailedError', async () => {
       primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Error 1', 500, 'primary')
+        new BackendError('Error 1', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
       );
       fallbackBackend.getTransaction.mockRejectedValue(
-        new BackendError('Error 2', 404, 'fallback')
+        new BackendError('Error 2', 404, ERROR_CODES.NOT_FOUND, 'fallback')
       );
 
       try {

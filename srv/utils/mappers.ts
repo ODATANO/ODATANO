@@ -10,6 +10,7 @@ import {
   LatestEpoch as LatestEpochProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
 } from './types';
+import { CONFIG } from '../config/config';
 
 import {
   Address as AddressRow,
@@ -28,6 +29,9 @@ import {
 
 import logger from './logger';
 import type { Request } from '@sap/cds';
+import { BackendError } from './errors';
+import { ERROR_CODES } from './error-codes';
+
 
 const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
 const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
@@ -278,7 +282,7 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   const nowIso = new Date().toISOString();
   const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
-    ID: 1, // Singleton entity
+    network: CONFIG.network,
     validFrom: nowIso,
     validTo: validToIso,
     maxSupply: Number(providerNetworkData.supply.max),
@@ -355,13 +359,25 @@ export function mapTransactionMetadata(
   return rows;
 }
 
-export function mapError(req: Request, err: unknown, ctx: string) {
-  // Import normalizeBackendError for proper error handling
-  const { normalizeBackendError, getErrorStatus, getErrorMessage } = require('./errors');
-  
-  const backendError = normalizeBackendError(err);
-  const status = backendError.statusCode;
-  const message = backendError.message;
-  
-  return req.error(status, `${ctx}: ${message}`);
+
+function fmt(code: string, ctx: string, msg: string) {
+  return `[${code}] ${ctx}: ${msg}`;
 }
+
+export function mapError(req: Request, err: unknown, ctx: string) {
+  const r = req as any;
+
+  if (err instanceof BackendError) {
+    return req.reject(
+      err.statusCode,
+      fmt(err.code, ctx, err.message),
+      err.target
+    );
+  }
+
+  return req.reject(
+    500,
+    fmt(ERROR_CODES.INTERNAL_ERROR, ctx, 'Internal server error')
+  );
+}
+

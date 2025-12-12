@@ -3,7 +3,7 @@ import {
   NotFoundError,
   TimeoutError,
   UnauthorizedError,
-  InvalidDataError,
+  ProviderBadResponseError,
   AllBackendsFailedError,
   normalizeBackendError,
   isNotFoundError,
@@ -12,11 +12,12 @@ import {
   getErrorStatus,
   getErrorMessage,
 } from '../../srv/utils/errors';
+import { ERROR_CODES } from '../../srv/utils/error-codes';
 
 describe('Typed Backend Errors', () => {
   describe('BackendError', () => {
     test('creates error with message and status code', () => {
-      const err = new BackendError('Test error', 500, 'koios');
+      const err = new BackendError('Test error', 500, ERROR_CODES.INTERNAL_ERROR, 'koios');
       expect(err.message).toBe('Test error');
       expect(err.statusCode).toBe(500);
       expect(err.backendName).toBe('koios');
@@ -30,7 +31,7 @@ describe('Typed Backend Errors', () => {
 
     test('stores original error', () => {
       const original = new Error('Original');
-      const err = new BackendError('Wrapped', 500, 'koios', original);
+      const err = new BackendError('Wrapped', 500, ERROR_CODES.INTERNAL_ERROR, 'koios', original);
       expect(err.originalError).toBe(original);
     });
   });
@@ -69,11 +70,11 @@ describe('Typed Backend Errors', () => {
     });
   });
 
-  describe('InvalidDataError', () => {
-    test('creates 500 error with custom message', () => {
-      const err = new InvalidDataError('Invalid JSON response', 'koios');
+  describe('ProviderBadResponseError', () => {
+    test('creates 502 error with custom message', () => {
+      const err = new ProviderBadResponseError('Invalid JSON response', 'koios');
       expect(err.message).toBe('Invalid JSON response');
-      expect(err.statusCode).toBe(500);
+      expect(err.statusCode).toBe(502);
       expect(err.backendName).toBe('koios');
     });
   });
@@ -149,18 +150,17 @@ describe('Error Detection Functions', () => {
       expect(isUnauthorizedError({ status: 401 })).toBe(true);
     });
 
-    test('detects status 403', () => {
-      expect(isUnauthorizedError({ status: 403 })).toBe(true);
+    test('does not detect status 403 (that is Forbidden)', () => {
+      expect(isUnauthorizedError({ status: 403 })).toBe(false);
     });
 
-    test('detects response status 401/403', () => {
+    test('detects response status 401', () => {
       expect(isUnauthorizedError({ response: { status: 401 } })).toBe(true);
-      expect(isUnauthorizedError({ response: { status: 403 } })).toBe(true);
     });
 
     test('detects unauthorized in message', () => {
       expect(isUnauthorizedError({ message: 'Unauthorized access' })).toBe(true);
-      expect(isUnauthorizedError({ message: 'Forbidden' })).toBe(true);
+      expect(isUnauthorizedError({ message: 'Forbidden' })).toBe(false);
     });
 
     test('returns false for other errors', () => {
@@ -207,7 +207,7 @@ describe('Error Detection Functions', () => {
 
 describe('normalizeBackendError', () => {
   test('returns BackendError as is', () => {
-    const original = new BackendError('Test', 500, 'koios');
+    const original = new BackendError('Test', 500, ERROR_CODES.INTERNAL_ERROR, 'koios');
     const result = normalizeBackendError(original);
     expect(result).toBe(original);
   });
@@ -251,7 +251,7 @@ describe('normalizeBackendError', () => {
     
     expect(result).toBeInstanceOf(BackendError);
     expect(result.message).toBe('Internal server error');
-    expect(result.statusCode).toBe(500);
+    expect(result.statusCode).toBe(503); // 5xx errors are normalized to 503 (PROVIDER_UNAVAILABLE)
     expect(result.backendName).toBe('koios');
   });
 

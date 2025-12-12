@@ -45,7 +45,7 @@ describe('mappers', () => {
 
       const result = mapNetworkInfo(providerData);
 
-      expect(result.ID).toBe(1);
+      expect(result.network).toBe('preview');
       expect(result.maxSupply).toBe(45000000000000000);
       expect(result.totalSupply).toBe(35000000000000000);
       expect(result.circulatingSupply).toBe(34000000000000000);

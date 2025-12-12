@@ -1,3 +1,5 @@
+import { ERROR_CODES, type ErrorCode } from './error-codes';
+
 // ---------------------------------------------------------------------------
 // Typed Backend Errors
 // ---------------------------------------------------------------------------
@@ -9,8 +11,10 @@ export class BackendError extends Error {
   constructor(
     message: string,
     public readonly statusCode: number = 500,
+    public readonly code: ErrorCode = ERROR_CODES.INTERNAL_ERROR,
     public readonly backendName?: string,
-    public readonly originalError?: any
+    public readonly originalError?: any,
+    public readonly target?: string
   ) {
     super(message);
     this.name = this.constructor.name;
@@ -18,12 +22,20 @@ export class BackendError extends Error {
   }
 }
 
+import { Request } from '@sap/cds'; 
+
 /**
  * Resource not found in backend
  */
 export class NotFoundError extends BackendError {
   constructor(resource: string, backendName?: string, originalError?: any) {
-    super(`${resource} not found`, 404, backendName, originalError);
+    super(
+      `${resource} not found`,
+      404,
+      ERROR_CODES.NOT_FOUND,
+      backendName,
+      originalError
+    );
   }
 }
 
@@ -32,10 +44,32 @@ export class NotFoundError extends BackendError {
  */
 export class TimeoutError extends BackendError {
   constructor(backendName?: string, timeoutMs?: number, originalError?: any) {
-    const msg = timeoutMs 
+    const msg = timeoutMs
       ? `Backend timeout after ${timeoutMs}ms`
       : 'Backend timeout or unreachable';
-    super(msg, 503, backendName, originalError);
+
+    super(
+      msg,
+      503,
+      ERROR_CODES.PROVIDER_UNAVAILABLE,
+      backendName,
+      originalError
+    );
+  }
+}
+
+/**
+ * Backend rate limited
+ */
+export class RateLimitedError extends BackendError {
+  constructor(backendName?: string, originalError?: any) {
+    super(
+      'Provider rate limit exceeded',
+      503, // M1 choice: treat as retryable upstream overload
+      ERROR_CODES.PROVIDER_RATE_LIMITED,
+      backendName,
+      originalError
+    );
   }
 }
 
@@ -44,16 +78,43 @@ export class TimeoutError extends BackendError {
  */
 export class UnauthorizedError extends BackendError {
   constructor(backendName?: string, originalError?: any) {
-    super('Unauthorized access to provider', 401, backendName, originalError);
+    super(
+      'Unauthorized access to provider',
+      401,
+      ERROR_CODES.UNAUTHORIZED,
+      backendName,
+      originalError
+    );
   }
 }
 
 /**
- * Invalid data from backend
+ * Forbidden access to backend
  */
-export class InvalidDataError extends BackendError {
+export class ForbiddenError extends BackendError {
+  constructor(backendName?: string, originalError?: any) {
+    super(
+      'Forbidden access to provider',
+      403,
+      ERROR_CODES.FORBIDDEN,
+      backendName,
+      originalError
+    );
+  }
+}
+
+/**
+ * Invalid / unexpected data from backend (provider contract mismatch)
+ */
+export class ProviderBadResponseError extends BackendError {
   constructor(message: string, backendName?: string, originalError?: any) {
-    super(message, 500, backendName, originalError);
+    super(
+      message,
+      502,
+      ERROR_CODES.PROVIDER_BAD_RESPONSE,
+      backendName,
+      originalError
+    );
   }
 }
 
@@ -61,14 +122,13 @@ export class InvalidDataError extends BackendError {
  * All backends failed
  */
 export class AllBackendsFailedError extends BackendError {
-  constructor(
-    public readonly errors: BackendError[],
-    originalError?: any
-  ) {
+  constructor(public readonly errors: BackendError[], originalError?: any) {
     const lastError = errors[errors.length - 1];
+
     super(
       `All backends failed: ${lastError?.message ?? 'unknown error'}`,
       lastError?.statusCode ?? 500,
+      lastError?.code ?? ERROR_CODES.INTERNAL_ERROR,
       undefined,
       originalError
     );
@@ -85,6 +145,7 @@ export interface HttpErrorLike {
   status?: number;
   response?: {
     status?: number;
+    headers?: Record<string, any>;
     data?: {
       error?: string;
       message?: string;
@@ -94,84 +155,83 @@ export interface HttpErrorLike {
   [k: string]: any;
 }
 
-/**
- * Detects if error is a 404 Not Found
- */
 export function isNotFoundError(err: HttpErrorLike | unknown): boolean {
   const e = (err ?? {}) as HttpErrorLike;
-  
-  // Check direct status
+
   if (e.status === 404) return true;
-  
-  // Check response status
   if (e.response?.status === 404) return true;
-  
-  // Check message conventions
+
   const msg = (e.message ?? '').toLowerCase();
   if (msg === 'not_found' || msg === 'not found') return true;
   if (msg.includes('not found')) return true;
-  
+
   return false;
 }
 
-/**
- * Detects if error is a timeout
- */
 export function isTimeoutError(err: HttpErrorLike | unknown): boolean {
   const e = (err ?? {}) as HttpErrorLike;
-  
-  // Check error code
+
   if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') return true;
-  
-  // Check message
+
   const msg = (e.message ?? '').toLowerCase();
   if (msg.includes('timeout') || msg.includes('timed out')) return true;
-  
+
   return false;
 }
 
-/**
- * Detects if error is unauthorized
- */
 export function isUnauthorizedError(err: HttpErrorLike | unknown): boolean {
   const e = (err ?? {}) as HttpErrorLike;
-  
-  // Check status codes
-  if (e.status === 401 || e.status === 403) return true;
-  if (e.response?.status === 401 || e.response?.status === 403) return true;
-  
-  // Check message
+
+  if (e.status === 401 || e.response?.status === 401) return true;
+
   const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('unauthor') || msg.includes('forbidden')) return true;
-  
+  if (msg.includes('unauthor')) return true;
+
   return false;
 }
 
-/**
- * Gets HTTP status code from error
- */
+export function isForbiddenError(err: HttpErrorLike | unknown): boolean {
+  const e = (err ?? {}) as HttpErrorLike;
+
+  if (e.status === 403 || e.response?.status === 403) return true;
+
+  const msg = (e.message ?? '').toLowerCase();
+  if (msg.includes('forbidden')) return true;
+
+  return false;
+}
+
+export function isRateLimitedError(err: HttpErrorLike | unknown): boolean {
+  const e = (err ?? {}) as HttpErrorLike;
+
+  if (e.status === 429) return true;
+  if (e.response?.status === 429) return true;
+
+  const msg = (e.message ?? '').toLowerCase();
+  if (msg.includes('rate limit') || msg.includes('too many requests')) return true;
+
+  return false;
+}
+
 export function getErrorStatus(err: HttpErrorLike | unknown): number {
   const e = (err ?? {}) as HttpErrorLike;
   return e.status ?? e.response?.status ?? 500;
 }
 
-/**
- * Gets error message from various error formats
- */
 export function getErrorMessage(err: HttpErrorLike | unknown): string {
   const e = (err ?? {}) as HttpErrorLike;
-  
-  // Try response data first (most detailed)
+
   if (e.response?.data?.message) return e.response.data.message;
   if (e.response?.data?.error) return e.response.data.error;
-  
-  // Try direct message
+
   if (e.message) return e.message;
-  
-  // Fallback
+
   return 'Unknown error';
 }
 
+// ---------------------------------------------------------------------------
+// Backend Error Normalization
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Backend Error Normalization
 // ---------------------------------------------------------------------------
@@ -184,12 +244,10 @@ export function normalizeBackendError(
   backendName?: string,
   resource?: string
 ): BackendError {
-  // Already a BackendError - return as is
-  if (err instanceof BackendError) {
-    return err;
-  }
+  // Already normalized
+  if (err instanceof BackendError) return err;
 
-  // Check for specific error types
+  // Specific types first
   if (isNotFoundError(err)) {
     return new NotFoundError(resource ?? 'Resource', backendName, err);
   }
@@ -198,13 +256,83 @@ export function normalizeBackendError(
     return new TimeoutError(backendName, undefined, err);
   }
 
+  if (isRateLimitedError(err)) {
+    return new RateLimitedError(backendName, err);
+  }
+
   if (isUnauthorizedError(err)) {
     return new UnauthorizedError(backendName, err);
   }
 
-  // Generic backend error
+  if (isForbiddenError(err)) {
+    return new ForbiddenError(backendName, err);
+  }
+
   const message = getErrorMessage(err);
   const status = getErrorStatus(err);
-  
-  return new BackendError(message, status, backendName, err);
+
+  // Upstream 5xx → retryable provider failure (per your M1 requirement)
+  if (status >= 500) {
+    return new BackendError(
+      message,
+      503,
+      ERROR_CODES.PROVIDER_UNAVAILABLE,
+      backendName,
+      err
+    );
+  }
+
+  // Any other upstream 4xx (not caught above) → provider contract/request mismatch
+  // Treat as 502 bad gateway/bad response (client shouldn't "fix input" here)
+  if (status >= 400) {
+    return new ProviderBadResponseError(
+      message,
+      backendName,
+      err
+    );
+  }
+
+  // Unknown / non-http error → internal
+  return new BackendError(
+    message,
+    500,
+    ERROR_CODES.INTERNAL_ERROR,
+    backendName,
+    err
+  );
+}
+
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigError';
+  }
+}
+
+export class BackendInitError extends Error {
+  constructor(
+    public readonly backendName: string,
+    public readonly originalError: unknown
+  ) {
+    super(`Failed to initialize backend: ${backendName}`);
+    this.name = 'BackendInitError';
+  }
+}
+
+export class AllBackendsInitFailedError extends Error {
+  constructor(public readonly errors: BackendInitError[]) {
+    const summary = errors
+      .map(e => `${e.backendName}: ${String((e.originalError as any)?.message ?? e.originalError)}`)
+      .join(' | ');
+    super(`CardanoClient startup failed: all backends failed to initialize. ${summary}`);
+    this.name = 'AllBackendsInitFailedError';
+  }
+}
+
+export function rejectInvalid(req: Request, ctx: string, message: string, target?: string) {
+  return req .reject(400, `[${ERROR_CODES.INVALID_INPUT}] ${ctx}: ${message}`, target);
+}
+
+export function rejectMissing(req: Request, ctx: string, field: string) {
+  return req.reject(400, `[${ERROR_CODES.INVALID_INPUT}] ${ctx}: ${field} is required`, field);
 }

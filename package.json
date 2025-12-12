@@ -1,7 +1,7 @@
 {
   "name": "odatano",
   "version": "1.0.0",
-  "description": "A SAP CAP service for interactting with Cardano blockchain data.",
+  "description": "A SAP CAP service for interacting with Cardano blockchain data.",
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
     "@sap/cds": "^9",

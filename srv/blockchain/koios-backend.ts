@@ -1,7 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendError } from './backend-error-handler';
-import { InvalidDataError } from '../utils/errors';
+import { ProviderBadResponseError } from '../utils/errors';
+import { CONFIG } from '../config/config';
 import {
   Transaction,
   LatestBlock,
@@ -22,8 +23,8 @@ export class KoiosBackend implements CardanoBackend {
 
   constructor() {
     this.api = axios.create({
-      baseURL: 'https://testnet.koios.rest/api/v0',
-      timeout: 5000,
+      baseURL: CONFIG.koiosApiUrl,
+      timeout: CONFIG.primaryTimeoutMs,
     });
   }
 
@@ -46,7 +47,7 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new InvalidDataError('Transaction not found', this.name);
+          throw new ProviderBadResponseError('Transaction not found', this.name);
         }
 
         const tx = data[0];
@@ -98,7 +99,7 @@ export class KoiosBackend implements CardanoBackend {
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
 
         if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
-          throw new InvalidDataError('Block data not available', this.name);
+          throw new ProviderBadResponseError('Block data not available', this.name);
         }
 
         return {
@@ -129,7 +130,7 @@ export class KoiosBackend implements CardanoBackend {
         const epochData = await this.api.post('/epoch_info', { _epoch_nos: [tipData.data.epoch_no] });
         
         if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
-          throw new InvalidDataError('Epoch data not available', this.name);
+          throw new ProviderBadResponseError('Epoch data not available', this.name);
         }
 
         return {
@@ -156,7 +157,7 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.get(`/address_info?address=${address}`);
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new InvalidDataError('Address not found', this.name);
+          throw new ProviderBadResponseError('Address not found', this.name);
         }
 
         const addressData = data[0];
@@ -180,7 +181,7 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.get(`/address_utxos?address=${address}`);
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new InvalidDataError('Address UTxOs not found', this.name);
+          throw new ProviderBadResponseError('Address UTxOs not found', this.name);
         }
         
         const addressData = data[0];
@@ -205,24 +206,27 @@ export class KoiosBackend implements CardanoBackend {
   async getNetworkInformation(): Promise<Network> {
     return handleBackendError(
       async () => {
-        const { data } = await this.api.get('/network_info');
+        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
 
-        if (!data) {
-          throw new InvalidDataError('Network information not available', this.name);
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new ProviderBadResponseError('Network information not available', this.name);
         }
         
+        const latest = data[0];
+        
+        // Koios /totals doesn't have all the fields, so we provide reasonable defaults
         return {
           supply: {
-            max: data.supply.max,
-            total: data.supply.total,
-            circulating: data.supply.circulating,
-            locked: data.supply.locked,
-            treasury: data.supply.treasury,
-            reserves: data.supply.reserves,
+            max: '45000000000000000', // Fixed Cardano max supply
+            total: latest.supply || '0',
+            circulating: latest.circulation || '0',
+            locked: '0', // Not available in /totals
+            treasury: latest.treasury || '0',
+            reserves: latest.reserves || '0',
           },
           stake: {
-            live: data.stake.live,
-            active: data.stake.active,
+            live: '0', // Not available in /totals
+            active: '0', // Not available in /totals
           },
         };
       },
@@ -235,7 +239,7 @@ export class KoiosBackend implements CardanoBackend {
   // METADATA
   // ---------------------------------------------------------------------------
   async getMetadataLabelTransactions(_label: string | number): Promise<MetadataLabelTx[]> {
-    throw new InvalidDataError('Metadata label transactions not supported by Koios', this.name);
+    throw new ProviderBadResponseError('Metadata label transactions not supported by Koios', this.name);
   }
 
 async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
@@ -248,7 +252,7 @@ async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
       const { data } = await this.api.post('/tx_metadata', body);
 
       if (!Array.isArray(data) || data.length === 0) {
-        throw new InvalidDataError('Transaction metadata not found', this.name);
+        throw new ProviderBadResponseError('Transaction metadata not found', this.name);
       }
 
       const first = data[0];
@@ -268,7 +272,7 @@ async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
       );
 
       if (!labels.length) {
-        throw new InvalidDataError('Transaction metadata not found', this.name);
+        throw new ProviderBadResponseError('Transaction metadata not found', this.name);
       }
       return labels;
     },
@@ -277,3 +281,4 @@ async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
   );
 }
 }
+

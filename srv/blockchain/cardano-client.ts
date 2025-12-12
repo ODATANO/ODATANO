@@ -1,8 +1,9 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
-import { BackendError, AllBackendsFailedError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, TimeoutError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import logger from '../utils/logger';
+import { CONFIG } from '../config/config';
 
 import {
   Transaction,
@@ -14,8 +15,8 @@ import {
   MetadataLabelTx
 } from '../utils/types';
 
-const PRIMARY_TIMEOUT_MS = Number(process.env.PRIMARY_TIMEOUT_MS) || 8000;
-const FALLBACK_TIMEOUT_MS = Number(process.env.FALLBACK_TIMEOUT_MS) || 8000;
+const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs) || 8000;
+const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs) || 8000;
 
 // ---------------------------------------------------------------------------
 // Cardano Client with multiple backends, timeouts and fallbacks
@@ -26,11 +27,13 @@ export class CardanoClient {
   private initPromise: Promise<void> | null = null;
 
   constructor(backends: CardanoBackend[]) {
-    if (!backends || backends.length === 0) {
-      throw new Error('[CardanoClient] At least one backend must be provided');
-    }
-    this.backends = backends;
+   if (!backends || backends.length === 0) {
+    throw new ConfigError(
+      'CardanoClient misconfigured: no backend available. Check CONFIG and API keys.'
+    );
   }
+  this.backends = backends;
+}
 
   // ---------------------------------------------------------------------------
   // Init-Lifecycle
@@ -41,30 +44,32 @@ export class CardanoClient {
     if (!this.initPromise) {
       this.initPromise = this.initBackends();
     }
-
     await this.initPromise;
   }
 
-  private async initBackends(): Promise<void> {
-    const initialized: CardanoBackend[] = [];
+private async initBackends(): Promise<void> {
+  const initialized: CardanoBackend[] = [];
+  const initErrors: BackendInitError[] = [];
 
-    for (const backend of this.backends) {
-      try {
-        logger.info({ backend: backend.name }, 'Initializing backend');
-        await backend.init();
-        initialized.push(backend);
-        logger.info({ backend: backend.name }, 'Backend initialized successfully');
-      } catch (err: any) {
-        logger.error({ backend: backend.name, err }, 'Failed to initialize backend');
-      }
+  for (const backend of this.backends) {
+    try {
+      logger.info({ backend: backend.name }, 'Initializing backend');
+      await backend.init();
+      initialized.push(backend);
+      logger.info({ backend: backend.name }, 'Backend initialized successfully');
+    } catch (err: any) {
+      initErrors.push(new BackendInitError(backend.name, err));
+      logger.error({ backend: backend.name, err }, 'Failed to initialize backend');
     }
-
-    if (initialized.length === 0) {
-      throw new Error('[CardanoClient] Initialization failed for all backends');
-    }
-    this.backends = initialized;
-    this.initialized = true;
   }
+
+  if (initialized.length === 0) {
+    throw new AllBackendsInitFailedError(initErrors);
+  }
+
+  this.backends = initialized;
+  this.initialized = true;
+}
 
   // ---------------------------------------------------------------------------
   // Intern: Timeout & Fallback
@@ -72,13 +77,13 @@ export class CardanoClient {
   private withTimeout<T>(
     promise: Promise<T>,
     ms: number,
-    label: string
+    backendName: string
   ): Promise<T> {
     return Promise.race([
       promise,
       new Promise<T>((_, reject) =>
         setTimeout(
-          () => reject(new Error(`${label} timed out after ${ms}ms`)),
+          () => reject(new TimeoutError(backendName, ms)),
           ms
         )
       ),
@@ -110,22 +115,16 @@ export class CardanoClient {
         );
         return result;
       } catch (err: any) {
-        // Convert to BackendError if not already
-        const backendError = err instanceof BackendError 
-          ? err 
-          : new BackendError(
-              err?.message ?? 'Unknown error',
-              500,
-              backend.name,
-              err
-            );
-        
+
+        const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
+        
         logger.warn(
           { 
             backend: backend.name, 
             error: backendError.message,
-            statusCode: backendError.statusCode 
+            statusCode: backendError.statusCode,
+            code: backendError.code 
           }, 
           'Backend failed'
         );
@@ -170,7 +169,7 @@ export class CardanoClient {
 
 const backends: CardanoBackend[] = [];
 
-if (process.env.BLOCKFROST_KEY) {
+if (CONFIG.blockfrostApiKey) {
   backends.push(new BlockfrostBackend());
 }
 

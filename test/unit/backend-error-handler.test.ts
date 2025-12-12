@@ -1,5 +1,6 @@
 import { handleBackendError } from '../../srv/blockchain/backend-error-handler';
 import { BackendError, NotFoundError, TimeoutError } from '../../srv/utils/errors';
+import { ERROR_CODES } from '../../srv/utils/error-codes';
 
 describe('Backend Error Handler', () => {
   describe('handleBackendError', () => {
@@ -21,7 +22,7 @@ describe('Backend Error Handler', () => {
     });
 
     test('preserves BackendError as is', async () => {
-      const originalError = new BackendError('Test error', 500, 'blockfrost');
+      const originalError = new BackendError('Test error', 500, ERROR_CODES.INTERNAL_ERROR, 'blockfrost');
       const mockFn = jest.fn().mockRejectedValue(originalError);
       
       await expect(

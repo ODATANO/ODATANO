@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { KoiosBackend } from '../../srv/blockchain/koios-backend';
-import { InvalidDataError, NotFoundError } from '../../srv/utils/errors';
+import { ProviderBadResponseError, NotFoundError } from '../../srv/utils/errors';
 
 // Mock axios
 jest.mock('axios');
@@ -29,8 +29,8 @@ describe('KoiosBackend', () => {
   describe('constructor and init', () => {
     test('creates axios instance with correct config', () => {
       expect(mockedAxios.create).toHaveBeenCalledWith({
-        baseURL: 'https://testnet.koios.rest/api/v0',
-        timeout: 5000,
+        baseURL: 'https://preview.koios.rest/api/v1',
+        timeout: 8000,
       });
     });
 
@@ -141,7 +141,7 @@ describe('KoiosBackend', () => {
     test('throws error when transaction not found', async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: [] });
 
-      await expect(backend.getTransaction(mockTxHash)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getTransaction(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getTransaction(mockTxHash)).rejects.toThrow('Transaction not found');
     });
 
@@ -228,7 +228,7 @@ describe('KoiosBackend', () => {
       mockAxiosInstance.get.mockResolvedValue({ data: mockTipData });
       mockAxiosInstance.post.mockResolvedValue({ data: [] });
 
-      await expect(backend.getLatestBlock()).rejects.toThrow(InvalidDataError);
+      await expect(backend.getLatestBlock()).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getLatestBlock()).rejects.toThrow('Block data not available');
     });
 
@@ -301,7 +301,7 @@ describe('KoiosBackend', () => {
       mockAxiosInstance.get.mockResolvedValue({ data: mockTipData });
       mockAxiosInstance.post.mockResolvedValue({ data: [] });
 
-      await expect(backend.getLatestEpoch()).rejects.toThrow(InvalidDataError);
+      await expect(backend.getLatestEpoch()).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getLatestEpoch()).rejects.toThrow('Epoch data not available');
     });
 
@@ -309,7 +309,7 @@ describe('KoiosBackend', () => {
       mockAxiosInstance.get.mockResolvedValue({ data: mockTipData });
       mockAxiosInstance.post.mockResolvedValue({ data: null });
 
-      await expect(backend.getLatestEpoch()).rejects.toThrow(InvalidDataError);
+      await expect(backend.getLatestEpoch()).rejects.toThrow(ProviderBadResponseError);
     });
   });
 
@@ -352,7 +352,7 @@ describe('KoiosBackend', () => {
     test('throws error when address not found', async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: [] });
 
-      await expect(backend.getAddress(mockAddress)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getAddress(mockAddress)).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getAddress(mockAddress)).rejects.toThrow('Address not found');
     });
   });
@@ -411,7 +411,7 @@ describe('KoiosBackend', () => {
     test('handles empty UTxO list', async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: [] });
 
-      await expect(backend.getAddressUtxos(mockAddress)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getAddressUtxos(mockAddress)).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getAddressUtxos(mockAddress)).rejects.toThrow('Address UTxOs not found');
     });
   });
@@ -433,23 +433,31 @@ describe('KoiosBackend', () => {
     };
 
     test('fetches and parses network information correctly', async () => {
-      mockAxiosInstance.get.mockResolvedValue({ data: mockNetworkInfo });
+      const mockTotals = [{
+        epoch_no: 258,
+        circulation: '30013545931388687',
+        treasury: '1663258441069032',
+        supply: '31710284090017896',
+        reserves: '13289715909982104',
+      }];
+      
+      mockAxiosInstance.get.mockResolvedValue({ data: mockTotals });
 
       const result = await backend.getNetworkInformation();
 
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/network_info');
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/totals?order=epoch_no.desc&limit=1');
       expect(result).toEqual({
         supply: {
           max: '45000000000000000',
-          total: '35000000000000000',
-          circulating: '34000000000000000',
-          locked: '1000000000000000',
-          treasury: '500000000000000',
-          reserves: '10000000000000000',
+          total: '31710284090017896',
+          circulating: '30013545931388687',
+          locked: '0',
+          treasury: '1663258441069032',
+          reserves: '13289715909982104',
         },
         stake: {
-          live: '25000000000000000',
-          active: '24000000000000000',
+          live: '0',
+          active: '0',
         },
       });
     });
@@ -457,19 +465,19 @@ describe('KoiosBackend', () => {
     test('throws error when network info not found', async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: null });
 
-      await expect(backend.getNetworkInformation()).rejects.toThrow(InvalidDataError);
+      await expect(backend.getNetworkInformation()).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getNetworkInformation()).rejects.toThrow('Network information not available');
     });
   });
 
   describe('getMetadataLabelTransactions', () => {
-    test('throws InvalidDataError for string label', async () => {
-      await expect(backend.getMetadataLabelTransactions('721')).rejects.toThrow(InvalidDataError);
+    test('throws ProviderBadResponseError for string label', async () => {
+      await expect(backend.getMetadataLabelTransactions('721')).rejects.toThrow(ProviderBadResponseError);
       await expect(backend.getMetadataLabelTransactions('721')).rejects.toThrow('not supported');
     });
 
-    test('throws InvalidDataError for numeric label', async () => {
-      await expect(backend.getMetadataLabelTransactions(721)).rejects.toThrow(InvalidDataError);
+    test('throws ProviderBadResponseError for numeric label', async () => {
+      await expect(backend.getMetadataLabelTransactions(721)).rejects.toThrow(ProviderBadResponseError);
     });
   });
 
@@ -535,13 +543,13 @@ describe('KoiosBackend', () => {
     test('throws error when response is not an array', async () => {
       mockAxiosInstance.post.mockResolvedValue({ data: null });
 
-      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
     });
 
     test('throws error when response array is empty', async () => {
       mockAxiosInstance.post.mockResolvedValue({ data: [] });
 
-      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
     });
 
     test('throws error when metadata object is empty', async () => {
@@ -549,7 +557,7 @@ describe('KoiosBackend', () => {
         data: [{ tx_hash: mockTxHash, metadata: {} }],
       });
 
-      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
     });
 
     test('uses fallback txHash when tx_hash is missing in response', async () => {
@@ -573,7 +581,8 @@ describe('KoiosBackend', () => {
         data: [{ tx_hash: mockTxHash, metadata: null }],
       });
 
-      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(InvalidDataError);
+      await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
     });
   });
 });
+

@@ -77,7 +77,7 @@ describe('ODATANO Milestone 1 Error Handling', () => {
         { address: 'addr_test1q' + 'a'.repeat(100) }
       ).catch(err => err.response);
       
-      expect(status).to.be.oneOf([503, 500, 400]);
+      expect(status).to.be.equal(404);
       if (status === 400) {
         expect(data.error.message).to.include('Invalid bech32 address');
       }
@@ -281,7 +281,7 @@ describe('ODATANO Milestone 1 Error Handling', () => {
       ).catch(err => err.response);
       
       // Validation should catch invalid format or backend returns not found
-      expect(status).to.be.oneOf([400, 500, 503]);
+      expect(status).to.equal(404);
       expect(data.error).to.exist;
     });
 
