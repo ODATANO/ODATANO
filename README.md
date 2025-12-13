@@ -17,17 +17,19 @@ standardized REST API.
 
 - **OData V4 Protocol**: Full OData query capabilities ($filter, $select,
   $expand, $top, $skip, $count)
+- **Multi-Network Support**: Mainnet, Preview, and Preprod network
+  configurations
 - **Multi-Provider Architecture**: Blockfrost (primary) + Koios (fallback) with
   automatic failover (I am also planning a way to access Cardano directly via a
   running node in the future)
 - **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
-  persisted to SQLite, then served from local database
+  persisted to SQLite, then served from local database with TTL-based refresh
 - **Type Safety**: Full TypeScript implementation with CAP type generation
 - **Comprehensive Testing**: 276 tests with 90%+ code coverage and 100% pass
   rate
 - **CI/CD**: Automated testing on Node.js 20.x and 22.x with Codecov integration
-- **Enterprise Features**: Error handling, structured logging, input validation,
-  and monitoring
+- **Enterprise Features**: Error handling, structured logging (Pino), input
+  validation, and monitoring
 
 ## Architecture
 
@@ -47,7 +49,7 @@ standardized REST API.
                                  │
 ┌────────────────────────────────▼───────────────────────────────┐
 │                Cardano Indexer & Client                        │
-│      - cardano-indexer.ts (Caching logic)                      │
+│      - cardano-indexer.ts (Caching logic with TTL)             │
 │      - cardano-client.ts (Multi-provider orchestration)        │      
 └────────────────────────────────┬───────────────────────────────┘
                                  │
@@ -84,16 +86,31 @@ cp .env.example .env
 **Configuration (.env):**
 
 ```env
+# Log level: trace, debug, info, warn, error, fatal (default: info)
+LOG_LEVEL=info
+
+# Network: mainnet, preview, preprod (default: preview)
+NETWORK=preview
+
 # Blockfrost API key (required)
-BLOCKFROST_KEY=your_blockfrost_project_id_here
+BLOCKFROST_KEY=your_blockfrost_api_key_here
 
 # Timeout settings (milliseconds) - optional
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=8000
 
-# Data cache validity (minutes) - optional
-ADDR_MAX_AGE_MIN=1
+# Lazy Indexing Time-To-Live (milliseconds) - optional
+INDEX_TTL_MS=60000
 ```
+
+**Network Configuration:**
+
+- `mainnet` - Cardano mainnet with production data
+- `preview` - Preview testnet (recommended for development)
+- `preprod` - Pre-production testnet
+
+The service automatically selects the correct Blockfrost and Koios API endpoints
+based on your `NETWORK` setting.
 
 ### 3. Initialize Database
 
@@ -105,8 +122,16 @@ This creates the SQLite database with data caching tables.
 
 ### 4. Start Server
 
+**Development mode with live reload:**
+
 ```bash
 npm run cds:watch
+```
+
+**Production mode:**
+
+```bash
+npm start
 ```
 
 **Server runs at:** `http://localhost:4004`
@@ -217,6 +242,9 @@ GET /Transactions?$expand=inputs,outputs
 
 ```
 ODATANO/
+├── config/                 # Configuration
+│   └── config.ts           # Centralized config (network, timeouts, TTL, log level)
+│
 ├── db/                     # Database schema
 │   └── schema.cds          # CDS data model
 │
@@ -225,19 +253,20 @@ ODATANO/
 │   ├── cardano-service.cds # Service definition
 │   │  
 │   ├── blockchain/         # Blockchain integration
-│   │   ├── backend-error-handler.ts  # Multi-provider client
-│   │   ├── blockfrost-backend.ts     # Blockfrost adapter
-│   │   ├── cardano-backend.ts        # Cardano Backend Interface
-│   │   ├── cardano-client.ts         # Cardano Client / Fallback Logic
-│   │   ├── cardano-indexer.ts        # Lazy indexing
-│   │   └── koios-backend.ts          # Koios adapter
+│   │   ├── backends/       # Provider adapters
+│   │   │   ├── blockfrost-backend.ts  # Blockfrost adapter
+│   │   │   ├── cardano-backend.ts     # Backend interface
+│   │   │   └── koios-backend.ts       # Koios adapter
+│   │   ├── cardano-client.ts          # Client with fallback logic
+│   │   └── cardano-indexer.ts         # Lazy indexing with TTL
 │   │
 │   └── utils/              # Utilities
-│       ├── errors.ts       # Error handling
-│       ├── loggers.ts      # Logging
-│       ├── mappers.ts      # Mapping functions
-│       ├── types.ts        # Types 
-│       └── validators.ts   # Input Validators
+│       ├── backend-request-handler.ts # Backend error handling wrapper
+│       ├── errors.ts       # Error hierarchy and normalization
+│       ├── logger.ts       # Pino structured logging
+│       ├── mappers.ts      # Data transformation
+│       ├── types.ts        # TypeScript types
+│       └── validators.ts   # Input validation (network-aware)
 │   
 ├── test/               # Test suites
 │   ├── integration/    # End-to-end tests
@@ -251,8 +280,19 @@ ODATANO/
 - **TypeScript** (v5.9) - Type-safe development
 - **SQLite** - Persistent caching
 - **Jest** - Testing framework
-- **Pino** - Structured logging
+- **Pino** - Structured logging with optional pino-pretty for development
 - **Blockfrost/Koios** - Cardano data providers
+
+## Environment Variables
+
+| Variable              | Required | Default   | Description                                            |
+| --------------------- | -------- | --------- | ------------------------------------------------------ |
+| `LOG_LEVEL`           | No       | `info`    | Logging level (trace, debug, info, warn, error, fatal) |
+| `NETWORK`             | No       | `preview` | Cardano network (mainnet, preview, preprod)            |
+| `BLOCKFROST_KEY`      | Yes      | -         | Blockfrost API project ID                              |
+| `PRIMARY_TIMEOUT_MS`  | No       | `8000`    | Primary backend timeout in milliseconds                |
+| `FALLBACK_TIMEOUT_MS` | No       | `10000`   | Fallback backend timeout in milliseconds               |
+| `INDEX_TTL_MS`        | No       | `60000`   | Cache TTL in milliseconds (1 minute default)           |
 
 ## License
 

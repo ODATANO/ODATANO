@@ -36,8 +36,11 @@ jobs:
       - name: Run tests with coverage
         env:
           NODE_ENV: test
+          NETWORK: 'preview'
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
           PRIMARY_TIMEOUT_MS: 8000
+          FALLBACK_TIMEOUT_MS: 8000
+          INDEX_TTL_MS: 60000
         run: npm run test:coverage
 
       - name: Upload coverage to Codecov

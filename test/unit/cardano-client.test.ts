@@ -1,5 +1,5 @@
 import { CardanoClient } from '../../srv/blockchain/cardano-client';
-import { CardanoBackend } from '../../srv/blockchain/cardano-backend';
+import { CardanoBackend } from '../../srv/blockchain/backends/cardano-backend';
 import { 
   BackendError, 
   TimeoutError, 

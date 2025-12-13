@@ -6,7 +6,7 @@ import {
   LatestBlock,
   LatestEpoch,
   MetadataLabelTx
-} from '../utils/types';
+} from '../../utils/types';
 
 export interface CardanoBackend {
   name: string;

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { KoiosBackend } from '../../srv/blockchain/koios-backend';
+import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';
 import { ProviderBadResponseError, NotFoundError } from '../../srv/utils/errors';
 
 // Mock axios

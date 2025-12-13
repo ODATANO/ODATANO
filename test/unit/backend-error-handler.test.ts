@@ -1,4 +1,4 @@
-import { handleBackendError } from '../../srv/blockchain/backend-error-handler';
+import { handleBackendRequest } from '../../srv/utils/backend-request-handler';
 import { BackendError, NotFoundError, TimeoutError } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
@@ -7,7 +7,7 @@ describe('Backend Error Handler', () => {
     test('executes function successfully and returns result', async () => {
       const mockFn = jest.fn().mockResolvedValue({ data: 'test' });
       
-      const result = await handleBackendError(mockFn, 'blockfrost', 'Transaction');
+      const result = await handleBackendRequest(mockFn, 'blockfrost', 'Transaction');
       
       expect(result).toEqual({ data: 'test' });
       expect(mockFn).toHaveBeenCalledTimes(1);
@@ -17,7 +17,7 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue(new Error('Generic error'));
       
       await expect(
-        handleBackendError(mockFn, 'blockfrost', 'Transaction')
+        handleBackendRequest(mockFn, 'blockfrost', 'Transaction')
       ).rejects.toThrow(BackendError);
     });
 
@@ -26,7 +26,7 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue(originalError);
       
       await expect(
-        handleBackendError(mockFn, 'blockfrost', 'Transaction')
+        handleBackendRequest(mockFn, 'blockfrost', 'Transaction')
       ).rejects.toBe(originalError);
     });
 
@@ -34,11 +34,11 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue({ status: 404, message: 'Not found' });
       
       await expect(
-        handleBackendError(mockFn, 'koios', 'Transaction')
+        handleBackendRequest(mockFn, 'koios', 'Transaction')
       ).rejects.toThrow(NotFoundError);
       
       try {
-        await handleBackendError(mockFn, 'koios', 'Transaction');
+        await handleBackendRequest(mockFn, 'koios', 'Transaction');
       } catch (err: any) {
         expect(err.message).toBe('Transaction not found');
         expect(err.backendName).toBe('koios');
@@ -49,11 +49,11 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue({ code: 'ETIMEDOUT', message: 'timeout' });
       
       await expect(
-        handleBackendError(mockFn, 'blockfrost')
+        handleBackendRequest(mockFn, 'blockfrost')
       ).rejects.toThrow(TimeoutError);
       
       try {
-        await handleBackendError(mockFn, 'blockfrost');
+        await handleBackendRequest(mockFn, 'blockfrost');
       } catch (err: any) {
         expect(err.statusCode).toBe(503);
         expect(err.backendName).toBe('blockfrost');
@@ -64,7 +64,7 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue(new Error('Test'));
       
       try {
-        await handleBackendError(mockFn, 'koios', 'Address');
+        await handleBackendRequest(mockFn, 'koios', 'Address');
       } catch (err: any) {
         expect(err.backendName).toBe('koios');
       }
@@ -75,7 +75,7 @@ describe('Backend Error Handler', () => {
       const mockFn = jest.fn().mockRejectedValue(originalError);
       
       try {
-        await handleBackendError(mockFn, 'blockfrost');
+        await handleBackendRequest(mockFn, 'blockfrost');
       } catch (err: any) {
         expect(err.originalError).toBe(originalError);
       }

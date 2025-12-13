@@ -1,9 +1,13 @@
+import { CONFIG } from "../../config/config";
+
 // --- Regular Expressions ---
 export const TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
 export const POLICY_ID_REGEX = /^[a-fA-F0-9]{56}$/;
-// Bech32 address validation for Cardano preview/testnet
-// Format: addr_test1 + base32 encoded data (min 53 chars)
-export const BECH32_ADDRESS_REGEX = /^addr_test1[a-z0-9]{53,}$/;
+
+// Supports mainnet (addr1...) and testnet/preview (addr_test1...), lower-case bech32 payload, ≥53 chars
+export const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr;
+
+export const BECH32_STAKE_REGEX = CONFIG.hrp.stake;
 
 // --- Type Guards ---
 

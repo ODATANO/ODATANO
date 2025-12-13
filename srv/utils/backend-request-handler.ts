@@ -1,4 +1,4 @@
-import { normalizeBackendError, BackendError } from '../utils/errors';
+import { normalizeBackendError } from './errors';
 
 /**
  * Wraps a backend method call with standardized error handling
@@ -8,7 +8,7 @@ import { normalizeBackendError, BackendError } from '../utils/errors';
  * @param resourceName - Name of the resource being accessed (e.g., "Transaction", "Address")
  * @returns The result of the function or throws a normalized BackendError
  */
-export async function handleBackendError<T>(
+export async function handleBackendRequest<T>(
   fn: () => Promise<T>,
   backendName: string,
   resourceName?: string
@@ -19,3 +19,6 @@ export async function handleBackendError<T>(
     throw normalizeBackendError(err, backendName, resourceName);
   }
 }
+
+
+

@@ -10,7 +10,7 @@ import {
   LatestEpoch as LatestEpochProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
 } from './types';
-import { CONFIG } from '../config/config';
+import { CONFIG } from '../../config/config';
 
 import {
   Address as AddressRow,
@@ -233,9 +233,7 @@ export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData:
   const nowIso = new Date().toISOString();
 
   if (!Array.isArray(addressUtxosData)) return [];
-
-  logger.debug({ count: addressUtxosData.length }, 'Mapping Address UTxOs');
-
+  
   return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
     hash: utxo.txHash,

@@ -1,9 +1,9 @@
-import { CardanoBackend } from './cardano-backend';
-import { BlockfrostBackend } from './blockfrost-backend';
-import { KoiosBackend } from './koios-backend';
+import { CardanoBackend } from './backends/cardano-backend';
+import { BlockfrostBackend } from './backends/blockfrost-backend';
+import { KoiosBackend } from './backends/koios-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, TimeoutError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import logger from '../utils/logger';
-import { CONFIG } from '../config/config';
+import { CONFIG } from '../../config/config';
 
 import {
   Transaction,

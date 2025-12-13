@@ -137,9 +137,9 @@ export default class CardanoService extends cds.ApplicationService {
           }
 
           // (re)index address via indexer
-          logger.info({ address: addr }, '[CardanoService] Indexing address');
+          logger.debug({ address: addr }, '[CardanoService] Indexing address');
           const addressRow = await indexer.indexAddress(db, addr);
-          logger.info(
+          logger.debug(
             { address: addr },
             '[CardanoService] Address persisted via indexer',
           );
@@ -190,12 +190,12 @@ export default class CardanoService extends cds.ApplicationService {
           );
           if (existing) return existing;
 
-          logger.info(
+          logger.debug(
             { txHash },
             '[CardanoService] Indexing transaction via indexer',
           );
           const txRow = await indexer.indexTransaction(db, txHash);
-          logger.info(
+          logger.debug(
             { txHash },
             '[CardanoService] Transaction persisted via indexer',
           );

@@ -232,9 +232,6 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
 // ---------------------------------------------------------------------------
 // Backend Error Normalization
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Backend Error Normalization
-// ---------------------------------------------------------------------------
 
 /**
  * Normalizes any backend error into a typed BackendError
@@ -271,7 +268,7 @@ export function normalizeBackendError(
   const message = getErrorMessage(err);
   const status = getErrorStatus(err);
 
-  // Upstream 5xx → retryable provider failure (per your M1 requirement)
+  // Upstream 5xx → retryable provider failure
   if (status >= 500) {
     return new BackendError(
       message,
@@ -283,7 +280,6 @@ export function normalizeBackendError(
   }
 
   // Any other upstream 4xx (not caught above) → provider contract/request mismatch
-  // Treat as 502 bad gateway/bad response (client shouldn't "fix input" here)
   if (status >= 400) {
     return new ProviderBadResponseError(
       message,

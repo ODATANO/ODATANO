@@ -1,4 +1,4 @@
-import { BlockfrostBackend } from '../../srv/blockchain/blockfrost-backend';
+import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { NotFoundError } from '../../srv/utils/errors';
 

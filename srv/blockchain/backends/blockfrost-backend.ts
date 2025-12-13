@@ -1,7 +1,9 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { handleBackendError } from './backend-error-handler';
-import { CONFIG } from '../config/config';
+import { CONFIG } from '../../../config/config';
+import { handleBackendRequest } from '../../utils/backend-request-handler';
+import { BackendInitError } from '../../utils/errors';
+
 import {
   Transaction,
   LatestBlock,
@@ -11,7 +13,7 @@ import {
   LatestEpoch,
   JSONValue,
   MetadataLabelTx,
-} from '../utils/types';
+} from '../../utils/types';
 
 // ---------------------------------------------------------------------------
 // Blockfrost Backend Implementation
@@ -20,17 +22,14 @@ export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
 
-  constructor() {
-    const projectId = CONFIG.blockfrostApiKey;
-    if (!projectId) {
-      throw new Error('[BlockfrostBackend] BLOCKFROST_KEY environment variable is not set');
-    }
-
-    this.api = new BlockFrostAPI({
-      projectId,
-      customBackend: CONFIG.blockfrostApiUrl,
-    });
+constructor() {
+  const projectId = CONFIG.blockfrostApiKey;
+  if (!projectId) {
+    throw new BackendInitError('blockfrost', 'BLOCKFROST_KEY is not set');
   }
+
+  this.api = new BlockFrostAPI({ projectId });
+}
   
   async init(): Promise<void> { }
 
@@ -38,7 +37,7 @@ export class BlockfrostBackend implements CardanoBackend {
   // Network Information
   // ---------------------------------------------------------------------------
   async getNetworkInformation(): Promise<Network> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const networkInfo = await this.api.network();
         return {
@@ -52,7 +51,7 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   async getLatestBlock(): Promise<LatestBlock> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const latestBlock = await this.api.blocksLatest();
         return {
@@ -74,7 +73,7 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   async getLatestEpoch(): Promise<LatestEpoch> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const latestEpoch = await this.api.epochsLatest();
         return {
@@ -105,7 +104,7 @@ export class BlockfrostBackend implements CardanoBackend {
   // Transaction
   // ---------------------------------------------------------------------------
   async getTransaction(hash: string): Promise<Transaction> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const tx = await this.api.txs(hash);
         const txUtxos = await this.api.txsUtxos(hash);
@@ -164,7 +163,7 @@ export class BlockfrostBackend implements CardanoBackend {
   // Metadata Label Transactions
   // ---------------------------------------------------------------------------
   async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const txLabelData = await this.api.metadataTxsLabel(label);
         if (!Array.isArray(txLabelData)) return [];
@@ -184,7 +183,7 @@ export class BlockfrostBackend implements CardanoBackend {
   //  Transaction Metadata
   // ---------------------------------------------------------------------------
   async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const txMetadata = await this.api.txsMetadata(txHash);
         if (!Array.isArray(txMetadata)) return [];
@@ -204,7 +203,7 @@ export class BlockfrostBackend implements CardanoBackend {
   // Address
   // ---------------------------------------------------------------------------
   async getAddress(address: string): Promise<Address> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
         return {
@@ -221,7 +220,7 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   async getAddressUtxos(address: string): Promise<UTxO[]> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const utxo_data = await this.api.addressesUtxos(address);
         return utxo_data.map(utxo => ({

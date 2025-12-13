@@ -26,5 +26,4 @@ module.exports = {
     }
   },
   openHandlesTimeout: 0,
-  runInBand: true,
 };

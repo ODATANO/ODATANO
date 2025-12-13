@@ -1,8 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
-import { handleBackendError } from './backend-error-handler';
-import { ProviderBadResponseError } from '../utils/errors';
-import { CONFIG } from '../config/config';
+import { handleBackendRequest} from '../../utils/backend-request-handler';
+import { ProviderBadResponseError } from '../../utils/errors';
+import { CONFIG } from '../../../config/config';
 import {
   Transaction,
   LatestBlock,
@@ -12,7 +12,7 @@ import {
   LatestEpoch,
   JSONValue,
   MetadataLabelTx,
-} from '../utils/types';
+} from '../../utils/types';
 
 // ---------------------------------------------------------------------------
 // Koios Backend Implementation
@@ -42,7 +42,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getTransaction(txHash: string): Promise<Transaction> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
 
@@ -89,7 +89,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getLatestBlock(): Promise<LatestBlock> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         // get tip first
         const tipData = await this.api.get('/tip');
@@ -121,7 +121,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getLatestEpoch(): Promise<LatestEpoch> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         // get tip first
         const tipData = await this.api.get('/tip');
@@ -152,7 +152,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getAddress(address: string): Promise<Address> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const { data } = await this.api.get(`/address_info?address=${address}`);
 
@@ -176,7 +176,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getAddressUtxos(address: string): Promise<UTxO[]> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const { data } = await this.api.get(`/address_utxos?address=${address}`);
 
@@ -204,7 +204,7 @@ export class KoiosBackend implements CardanoBackend {
   // NETWORKINFO
   // ---------------------------------------------------------------------------
   async getNetworkInformation(): Promise<Network> {
-    return handleBackendError(
+    return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
 
@@ -243,7 +243,7 @@ export class KoiosBackend implements CardanoBackend {
   }
 
 async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
-  return handleBackendError(
+  return handleBackendRequest(
     async () => {
       const body = {
         _tx_hashes: [txHash],
