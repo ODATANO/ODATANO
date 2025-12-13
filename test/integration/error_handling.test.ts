@@ -2,13 +2,13 @@ import cds from '@sap/cds';
 
 jest.setTimeout(20000);
 
-const { GET, POST, expect } = cds.test(__dirname + '/../../');
-
 describe('ODATANO Milestone 1 Error Handling', () => {
   
+  const { GET, POST, expect } = cds.test(__dirname + '/../../')
   // ============================================================================
   // INPUT VALIDATION ERRORS (400)
   // ============================================================================
+
 
   describe('400 - Invalid Input', () => {
     test('GetTransactionByHash with invalid hash format', async () => {

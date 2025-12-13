@@ -3,6 +3,8 @@ import cds from '@sap/cds';
 const { GET, POST, expect } = cds.test(__dirname + '/../../');
 
 describe('ODATANO Milestone 2 - OData Query Features', () => {
+
+  const { GET, POST, expect } = cds.test(__dirname + '/../../');
   
   // ============================================================================
   // $FILTER TESTS

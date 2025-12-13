@@ -25,4 +25,6 @@ module.exports = {
       lines: 80
     }
   },
+  openHandlesTimeout: 0,
+  runInBand: true,
 };

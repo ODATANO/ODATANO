@@ -1,9 +1,13 @@
 import cds from '@sap/cds';
 
-const { GET, POST, expect } = cds.test(__dirname + '/../../');
+jest.setTimeout(20000);
+import util from 'node:util';
+
 
 describe('ODATANO Milestone 1 - Complete Service Tests', () => {
-  
+
+ const { GET, POST, expect } = cds.test(__dirname + '/../../');
+ 
   // ============================================================================
   // ENTITY READ TESTS
   // ============================================================================
