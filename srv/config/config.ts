@@ -3,7 +3,6 @@ import 'dotenv/config';
 export type Network = 'mainnet' | 'preview' | 'preprod' | 'testnet';
 
 export const CONFIG = {
-  // M1: hard default, overridable via env
   network: (process.env.ODATANO_NETWORK ?? 'preview') as Network,
 
   blockfrostApiKey: process.env.BLOCKFROST_KEY ?? '',
