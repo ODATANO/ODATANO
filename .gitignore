@@ -40,10 +40,6 @@ mta_archives/
 # not finished tests and documentation
 /coverage 
 M1_MILESTONE_COMPLETION.md
-docs/M1_TEST_COVERAGE_REPORT.md
-docs/DEVELOPER_GUIDE.md
-docs/USER_GUIDE.md
-.nyc_output
 db.sqlite-shm
 db.sqlite-wal
 .secrets 

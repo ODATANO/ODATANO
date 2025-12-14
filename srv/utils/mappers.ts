@@ -10,7 +10,6 @@ import {
   LatestEpoch as LatestEpochProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
 } from './types';
-import { CONFIG } from '../../config/config';
 
 import {
   Address as AddressRow,
@@ -27,15 +26,13 @@ import {
   LatestEpoch as LatestEpochRow,
 } from '#cds-models/CardanoODataService';
 
-import logger from './logger';
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
+import { CONFIG } from '../../config/config';
 
 
-const MAX_AGE_MINUTES = Number(process.env.ADDR_MAX_AGE_MIN ?? 1);
-const MAX_AGE_MS = MAX_AGE_MINUTES * 60 * 1000;
-
+const MAX_AGE_MS = CONFIG.indexTtlMs;
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------
@@ -372,7 +369,6 @@ export function mapError(req: Request, err: unknown, ctx: string) {
       err.target
     );
   }
-
   return req.reject(
     500,
     fmt(ERROR_CODES.INTERNAL_ERROR, ctx, 'Internal server error')

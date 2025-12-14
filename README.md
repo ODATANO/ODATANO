@@ -23,7 +23,8 @@ standardized REST API.
   automatic failover (I am also planning a way to access Cardano directly via a
   running node in the future)
 - **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
-  persisted to SQLite, then served from local database with TTL-based refresh
+  persisted to database with TTL-based refresh (see
+  [Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md))
 - **Type Safety**: Full TypeScript implementation with CAP type generation
 - **Comprehensive Testing**: 276 tests with 90%+ code coverage and 100% pass
   rate
@@ -118,7 +119,8 @@ based on your `NETWORK` setting.
 cds deploy --to sqlite
 ```
 
-This creates the SQLite database with data caching tables.
+This creates the database with temporal caching tables for lazy on-demand
+indexing.
 
 ### 4. Start Server
 
@@ -185,10 +187,13 @@ npm run test:unit
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
-- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Architecture and development
-- **[User Guide](docs/USER_GUIDE.md)** - API usage and examples
-- **[Data Model](docs/MM_DATAMODEL.md)** - Entity relationships and schema
-- **[Indexing Concept](docs/INDEXING.md)** - Caching strategy
+- **[Developer Guide](docs/guides/DEVELOPER_GUIDE.md)** - Architecture and
+  development
+- **[User Guide](docs/guides/USER_GUIDE.md)** - API usage and examples
+- **[Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md)** - Entity
+  relationships and schema
+- **[Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md)** - Caching
+  strategy
 
 ## API Overview
 

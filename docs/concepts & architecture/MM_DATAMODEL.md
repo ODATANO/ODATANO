@@ -12,7 +12,7 @@ erDiagram
     %% -----------------------------------------------------
 
     NetworkInformation {
-        int    ID PK
+        string network PK
         decimal maxSupply
         decimal totalSupply
         decimal circulatingSupply
@@ -59,6 +59,10 @@ erDiagram
     AddressAssets {
         string  address PK
         string  unit PK
+        AssetSlice asset
+    }
+
+    AssetSlice {
         decimal quantity
         string  policyId
         string  assetNameHex
@@ -71,6 +75,10 @@ erDiagram
         string hash PK
         int    index PK
         string blockHash
+        UTxODataSlice utxodata
+    }
+
+    UTxODataSlice {
         string dataHash
         string inlineDatum
         string referenceScriptHash
@@ -80,11 +88,7 @@ erDiagram
         string ID PK
         string utxo
         string unit
-        decimal quantity
-        string policyId
-        string assetNameHex
-        string assetName
-        string fingerprint
+        AssetSlice asset
     }
 
     Transactions {
@@ -119,9 +123,7 @@ erDiagram
         string tx PK
         int    inputIndex PK
         string address
-        string dataHash
-        string inlineDatum
-        string referenceScriptHash
+        UTxODataSlice utxoData
         boolean isCollateral
         boolean isReference
     }
@@ -130,29 +132,19 @@ erDiagram
         string tx PK
         int    outputIndex PK
         string address
-        string dataHash
-        string inlineDatum
-        string referenceScriptHash
+        UTxODataSlice utxo
     }
 
     TransactionInputAssets {
         string input PK
         string unit  PK
-        decimal quantity
-        string  policyId
-        string  assetNameHex
-        string  assetName
-        string  fingerprint
+        AssetSlice asset
     }
 
     TransactionOutputAssets {
         string output PK
         string unit   PK
-        decimal quantity
-        string  policyId
-        string  assetNameHex
-        string  assetName
-        string  fingerprint
+        AssetSlice asset
     }
 
     %% -----------------------------------------------------
