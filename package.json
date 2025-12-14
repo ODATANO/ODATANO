@@ -39,6 +39,7 @@
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
     "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
+    "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
     "pretest": "npm run cds:types && npm run db:deploy",
     "test": "jest --runInBand --forceExit",

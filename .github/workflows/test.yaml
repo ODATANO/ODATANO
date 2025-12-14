@@ -29,6 +29,9 @@ jobs:
 
       - name: Generate CDS types
         run: npm run cds:types
+      
+      - name: Type check
+        run: npm run typecheck
 
       - name: Deploy database
         run: npm run db:deploy

@@ -32,16 +32,16 @@ mta_archives/
 
 # IDEs
 *.vscode
-# .idea
+.idea/
+
+# local coverage directory
+coverage/
 
 # @cap-js/cds-typer
 @cds-models
 
-# not finished tests and documentation
-/coverage 
-M1_MILESTONE_COMPLETION.md
 db.sqlite-shm
 db.sqlite-wal
-.secrets 
-@cds-models
-@cds-models
+
+# not finished tests and documentation
+M1_MILESTONE_COMPLETION.md

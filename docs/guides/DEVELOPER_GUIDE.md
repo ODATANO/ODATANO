@@ -691,16 +691,28 @@ try {
 
 ## Testing
 
+Note: `srv/cardano-service.js` is intentionally committed as a small runtime
+entrypoint used by the CAP/Jest test harness. It only re-exports the TypeScript
+implementation (`srv/cardano-service.ts`) and contains no business logic.
+
 ### Test Structure
 
 ```
 test/
-├── integration/           # In-process tests using @cap-js/cds-test
-│   └── m1_core.test.ts   # 83 comprehensive integration tests
+├── integration/                 # In-process tests using @cap-js/cds-test
+│   └── m1_core.test.ts          # m1 core tests
+│   └── error_handling.test.ts   # integration error tests
+│   └── odata_features.ts        # odata features tests
+
 └── unit/                  # Tests for utility functions
-    ├── validators.test.ts # Input validation tests
+    ├── backend-error-handlder.test.ts # Input validation tests
+    ├── blockfrost-backend.test.ts # Input validation tests
+    ├── cardano-client.test.ts # Input validation tests
+    ├── cardano-indexer.test.ts # Input validation tests
     ├── errors.test.ts     # Error handling tests  
-    └── mappers.test.ts    # Data transformation tests
+    ├── koios-backend.test.ts     # Error handling tests  
+    ├── mappers.test.ts     # Error handling tests  
+    └── validators.test.ts    # Data transformation tests
 ```
 
 ### Current Test Status
@@ -984,9 +996,8 @@ npm test
 
 **Check:**
 
-1. Cache is working: `cache.get()` should return hits
-2. Provider timeouts: Check 8000ms timeouts
-3. Database queries: Review slow query logs
+1. Provider timeouts: Check 8000ms timeouts
+2. Database queries: Review slow query logs
 
 **Solutions:**
 
