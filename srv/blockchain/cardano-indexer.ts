@@ -119,9 +119,11 @@ export class CardanoIndexer {
     );
 
     const validTo = AddrEntity.validTo ?? new Date().toISOString();
+    const validFrom = AddrEntity.validFrom ?? new Date().toISOString();
 
     const assetEntities = mapAddressAssets(
       addr,
+      validFrom,
       validTo, 
       addrData.amount
     );
@@ -136,6 +138,7 @@ export class CardanoIndexer {
 
     const utxoEntities = mapAddressUtxos(
       addr,
+      validFrom,
       validTo,
       utxoData
     );
@@ -267,14 +270,17 @@ export class CardanoIndexer {
   private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
     const set = new Set<string>();
 
-    for (const i of txUtxos.inputs ?? []) {
+    const inputs = txUtxos.inputs ?? [];
+    const outputs = txUtxos.outputs ?? [];
+    
+    for (const i of inputs) {
       if (i.address) set.add(i.address);
     }
-    for (const o of txUtxos.outputs ?? []) {
+    for (const o of outputs) {
       if (o.address) set.add(o.address);
     }
 
-    return [...set];
+    return Array.from(set);
   }
 
   /**

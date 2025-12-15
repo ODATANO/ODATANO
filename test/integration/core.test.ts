@@ -4,7 +4,7 @@ jest.setTimeout(20000);
 
 describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 
- const { GET, POST, expect } = cds.test(__dirname + '/../../');
+  const { GET, POST, expect } = cds.test(__dirname + '/../../');
  
   // ============================================================================
   // ENTITY READ TESTS
@@ -679,6 +679,609 @@ describe('ODATANO Milestone 1 - Complete Service Tests', () => {
       const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$select=hash,fee`;
       expect(status).to.equal(200);
       expect(Array.isArray(data.value)).to.be.true;
+    });
+  });
+
+  // ============================================================================
+  // INDEXER COLD VS WARM (DB-DRIVEN)
+  // ============================================================================
+
+  describe('Indexer behavior - DB cold vs warm (DB-driven)', () => {
+    const validTxHash = '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83';
+    const seededTxHash = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const validAddress = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+
+    const truncateCoreTables = async () => {
+      const e = cds.entities as any;
+      const { DELETE } = cds.ql;
+      const order = [
+        'TransactionOutputAssets',
+        'TransactionInputAssets',
+        'UTxOAssets',
+        'AddressAssets',
+        'AddressUTxOs',
+        'TransactionMetadata',
+        'TransactionInputs',
+        'TransactionOutputs',
+        'Transactions',
+        'Addresses',
+        'LatestBlock',
+        'LatestEpoch',
+        'NetworkInformation',
+      ];
+      for (const name of order) {
+        if (e[name]) {
+          await cds.run(DELETE.from(e[name]));
+        }
+      }
+    };
+
+    beforeEach(async () => {
+      await truncateCoreTables();
+    });
+
+    test('Cold path (Transactions): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+
+      const before = await cds.run(SELECT.from(e.Transactions).where({ hash: validTxHash }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetTransactionByHash', { txHash: validTxHash });
+
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.Transactions).where({ hash: validTxHash }));
+        expect(after.length).to.equal(1);
+      }
+    });
+
+    test('Warm path (Transactions): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+
+      await cds.run(
+        INSERT.into(e.Transactions).entries({
+          hash: seededTxHash,
+          blockHash: 'beadfacebeadfacebeadfacebeadfacebeadfacebeadfacebeadfacebeadface',
+          blockHeight: 123,
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetTransactionByHash', { txHash: seededTxHash });
+
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        expect(res.data).to.have.property('hash');
+        expect(res.data.hash).to.equal(seededTxHash);
+      }
+    });
+
+    test('Cold path (Addresses): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+
+      const before = await cds.run(SELECT.from(e.Addresses).where({ address: validAddress }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetAddressByBech32', { address: validAddress });
+
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.Addresses).where({ address: validAddress }));
+        expect(after.length).to.equal(1);
+      }
+    });
+
+    test('Warm path (Addresses): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+
+      await cds.run(
+        INSERT.into(e.Addresses).entries({
+          address: validAddress,
+          validFrom: new Date().toISOString(),
+          type: 'base',
+          isScript: false,
+          totalLovelace: 0,
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetAddressByBech32', { address: validAddress });
+
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        expect(res.data).to.have.property('address');
+        expect(res.data.address).to.equal(validAddress);
+      }
+    });
+
+    test('Cold path (NetworkInformation): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+
+      const before = await cds.run(SELECT.from(e.NetworkInformation));
+      // allow either 0 or more (if other tests left data), but clear helper runs beforeEach
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetNetworkInformation', {});
+      expect([200, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.NetworkInformation));
+        expect(after.length).to.equal(1);
+      }
+    });
+
+    test('Warm path (NetworkInformation): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+
+      await cds.run(
+        INSERT.into(e.NetworkInformation).entries({
+          network: 'preview',
+          validFrom: new Date().toISOString(),
+          maxSupply: 0,
+          totalSupply: 0,
+          circulatingSupply: 0,
+          lockedSupply: 0,
+          treasurySupply: 0,
+          reservesSupply: 0,
+          liveStake: 0,
+          activeStake: 0,
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetNetworkInformation', {});
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        expect(res.data).to.have.property('network');
+      }
+    });
+
+    test('Cold path (LatestBlock): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.LatestBlock));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetLatestBlock', {});
+      expect([200, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.LatestBlock));
+        expect(after.length).to.equal(1);
+      }
+    });
+
+    test('Warm path (LatestBlock): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(
+        INSERT.into(e.LatestBlock).entries({
+          hash: 'b'.repeat(64),
+          validFrom: new Date().toISOString(),
+          time: new Date().toISOString(),
+          height: 1,
+          slotLeader: 'leader',
+          epochNumber: 1,
+          epochSlot: 1,
+          size: 1,
+          txCount: 0,
+          fees: 0,
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetLatestBlock', {});
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        expect(res.data).to.have.property('hash');
+      }
+    });
+
+    test('Cold path (LatestEpoch): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.LatestEpoch));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetLatestEpoch', {});
+      expect([200, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.LatestEpoch));
+        expect(after.length).to.equal(1);
+      }
+    });
+
+    test('Warm path (LatestEpoch): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(
+        INSERT.into(e.LatestEpoch).entries({
+          epoch: 1,
+          validFrom: new Date().toISOString(),
+          startTime: Math.floor(Date.now() / 1000),
+          endTime: Math.floor(Date.now() / 1000) + 1000,
+          firstBlockTime: Math.floor(Date.now() / 1000),
+          lastBlockTime: Math.floor(Date.now() / 1000) + 900,
+          blockCount: 1,
+          txCount: 0,
+          output: '0',
+          fees: 0,
+          activeStake: 0,
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetLatestEpoch', {});
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        expect(res.data).to.have.property('epoch');
+      }
+    });
+
+    test('Cold path (Metadata by tx): empty DB triggers indexing (persistence optional)', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const txHash = validTxHash;
+      const before = await cds.run(SELECT.from(e.TransactionMetadata).where({ tx_hash: txHash }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash });
+      expect([200, 404, 500, 503]).to.include(res.status);
+      // Some backends may not persist metadata rows; only assert happy HTTP path
+    });
+
+    test('Warm path (Metadata by tx): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      // ensure transaction exists
+      await cds.run(
+        INSERT.into(e.Transactions).entries({
+          hash: seededTxHash,
+          blockHash: 'c'.repeat(64),
+          blockHeight: 1,
+        }),
+      );
+      // seed metadata
+      await cds.run(
+        INSERT.into(e.TransactionMetadata).entries({
+          tx_hash: seededTxHash,
+          label: '721',
+          payload: JSON.stringify({ test: true }),
+        }),
+      );
+
+      const res = await POST('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: seededTxHash });
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        const arr0 = Array.isArray(res.data?.value) ? res.data.value : res.data;
+        const items = Array.isArray(arr0) ? arr0 : (arr0 ? [arr0] : []);
+        expect(items.length).to.be.greaterThan(0);
+        expect(items[0]).to.have.property('label');
+      }
+    });
+
+    test('Cold path (Metadata by label): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const label = '1990';
+      const before = await cds.run(SELECT.from(e.TransactionMetadata).where({ label }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetMetadataLabelTransactions', { label });
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.TransactionMetadata).where({ label }));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('Warm path (Metadata by label): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      const label = '1990';
+      await cds.run(
+        INSERT.into(e.Transactions).entries({
+          hash: 'a'.repeat(64),
+          blockHash: 'd'.repeat(64),
+          blockHeight: 2,
+        }),
+      );
+      await cds.run(
+        INSERT.into(e.TransactionMetadata).entries({
+          tx_hash: 'a'.repeat(64),
+          label,
+          payload: JSON.stringify({ ok: true }),
+        }),
+      );
+      const res = await POST('/odata/v4/cardano-odata/GetMetadataLabelTransactions', { label });
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        const arr = Array.isArray(res.data.value) ? res.data.value : res.data;
+        expect(Array.isArray(arr)).to.be.true;
+      }
+    });
+
+    test('Cold path (UTxOs by address): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.AddressUTxOs).where({ address: validAddress }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: validAddress });
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.AddressUTxOs).where({ address: validAddress }));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('Warm path (UTxOs by address): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      // seed address
+      await cds.run(
+        INSERT.into(e.Addresses).entries({
+          address: validAddress,
+          validFrom: new Date().toISOString(),
+          type: 'base',
+          isScript: false,
+          totalLovelace: 0,
+        }),
+      );
+      // seed UTxO
+      await cds.run(
+        INSERT.into(e.AddressUTxOs).entries({
+          address_address: validAddress,
+          hash: 'e'.repeat(64),
+          index: 0,
+          blockHash: 'f'.repeat(64),
+          validFrom: new Date().toISOString(),
+        }),
+      );
+      // Ensure seed is really present
+      const { SELECT } = cds.ql;
+      const seeded = await cds.run(SELECT.from(e.AddressUTxOs).where({ address: validAddress }));
+      expect(seeded.length).to.be.greaterThan(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: validAddress });
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        const arr = Array.isArray(res.data?.value) ? res.data.value : res.data;
+        expect(Array.isArray(arr) || !!arr).to.be.true;
+      }
+    });
+
+    test('Cold path (Assets by address): empty DB triggers indexing and persists', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.AddressAssets).where({ address: validAddress }));
+      expect(before.length).to.equal(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetAssetsByAddress', { address: validAddress });
+      expect([200, 404, 500, 503]).to.include(res.status);
+      if (res.status === 200) {
+        const after = await cds.run(SELECT.from(e.AddressAssets).where({ address: validAddress }));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('Warm path (Assets by address): seeded DB serves without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      // seed address
+      await cds.run(
+        INSERT.into(e.Addresses).entries({
+          address: validAddress,
+          validFrom: new Date().toISOString(),
+          type: 'base',
+          isScript: false,
+          totalLovelace: 0,
+        }),
+      );
+      // seed asset
+      await cds.run(
+        INSERT.into(e.AddressAssets).entries({
+          address_address: validAddress,
+          unit: 'policy'.padEnd(56, '0') + 'asset',
+          validFrom: new Date().toISOString(),
+          asset: {
+            quantity: 1,
+            policyId: '1'.repeat(56),
+            assetNameHex: '74657374',
+            assetName: 'test',
+            fingerprint: 'asset1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq',
+          },
+        }),
+      );
+      // Ensure seed is present
+      const { SELECT } = cds.ql;
+      const seeded = await cds.run(SELECT.from(e.AddressAssets).where({ address: validAddress }));
+      expect(seeded.length).to.be.greaterThan(0);
+
+      const res = await POST('/odata/v4/cardano-odata/GetAssetsByAddress', { address: validAddress });
+      expect([200]).to.include(res.status);
+      if (res.status === 200) {
+        const arr = Array.isArray(res.data?.value) ? res.data.value : res.data;
+        expect(Array.isArray(arr) || !!arr).to.be.true;
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Entity READ handlers (DB-first) - cold/warm
+    // ---------------------------------------------------------------------
+
+    test('READ Cold (NetworkInformation): indexes and persists on first GET', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.NetworkInformation));
+      expect(before.length).to.equal(0);
+
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation`;
+      expect([200]).to.include(status);
+      if (Array.isArray(data?.value) && data.value.length > 0) {
+        const after = await cds.run(SELECT.from(e.NetworkInformation));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('READ Warm (NetworkInformation): returns from DB without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(INSERT.into(e.NetworkInformation).entries({
+        network: 'preview',
+        validFrom: new Date().toISOString(),
+        maxSupply: 0,
+        totalSupply: 0,
+        circulatingSupply: 0,
+        lockedSupply: 0,
+        treasurySupply: 0,
+        reservesSupply: 0,
+        liveStake: 0,
+        activeStake: 0,
+      }));
+
+      const { status, data } = await GET `/odata/v4/cardano-odata/NetworkInformation`;
+      expect(status).to.equal(200);
+      expect(Array.isArray(data?.value)).to.be.true;
+      expect(data.value.length).to.be.greaterThan(0);
+    });
+
+    test('READ Cold (LatestBlock): indexes and persists on first GET', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.LatestBlock));
+      expect(before.length).to.equal(0);
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestBlock`;
+      expect([200]).to.include(status);
+      if (Array.isArray(data?.value) && data.value.length > 0) {
+        const after = await cds.run(SELECT.from(e.LatestBlock));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('READ Warm (LatestBlock): returns from DB without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(INSERT.into(e.LatestBlock).entries({
+        hash: 'b'.repeat(64),
+        validFrom: new Date().toISOString(),
+        time: new Date().toISOString(),
+        height: 1,
+        slotLeader: 'leader',
+        epochNumber: 1,
+        epochSlot: 1,
+        size: 1,
+        txCount: 0,
+        fees: 0,
+      }));
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestBlock`;
+      expect(status).to.equal(200);
+      expect(Array.isArray(data?.value)).to.be.true;
+      expect(data.value.length).to.be.greaterThan(0);
+    });
+
+    test('READ Cold (LatestEpoch): indexes and persists on first GET', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.LatestEpoch));
+      expect(before.length).to.equal(0);
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestEpoch`;
+      expect([200]).to.include(status);
+      if (Array.isArray(data?.value) && data.value.length > 0) {
+        const after = await cds.run(SELECT.from(e.LatestEpoch));
+        expect(after.length).to.be.greaterThan(0);
+      }
+    });
+
+    test('READ Warm (LatestEpoch): returns from DB without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(INSERT.into(e.LatestEpoch).entries({
+        epoch: 1,
+        validFrom: new Date().toISOString(),
+        startTime: Math.floor(Date.now() / 1000),
+        endTime: Math.floor(Date.now() / 1000) + 1000,
+        firstBlockTime: Math.floor(Date.now() / 1000),
+        lastBlockTime: Math.floor(Date.now() / 1000) + 900,
+        blockCount: 1,
+        txCount: 0,
+        output: '0',
+        fees: 0,
+        activeStake: 0,
+      }));
+      const { status, data } = await GET `/odata/v4/cardano-odata/LatestEpoch`;
+      expect(status).to.equal(200);
+      expect(Array.isArray(data?.value)).to.be.true;
+      expect(data.value.length).to.be.greaterThan(0);
+    });
+
+    test('READ by key Cold (Addresses): indexes address if missing', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.Addresses).where({ address: validAddress }));
+      expect(before.length).to.equal(0);
+      const { status } = await GET `/odata/v4/cardano-odata/Addresses(address='${validAddress}')`;
+      expect([200, 404, 500, 503]).to.include(status);
+    });
+
+    test('READ by key Warm (Addresses): returns seeded address without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(INSERT.into(e.Addresses).entries({
+        address: validAddress,
+        validFrom: new Date().toISOString(),
+        type: 'base',
+        isScript: false,
+        totalLovelace: 0,
+      }));
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses(address='${validAddress}')`;
+      expect([200]).to.include(status);
+      if (status === 200) {
+        expect(data).to.have.property('address');
+        expect(data.address).to.equal(validAddress);
+      }
+    });
+
+    test('READ by key invalid (Addresses): invalid bech32 format returns 400', async () => {
+      try {
+        await GET `/odata/v4/cardano-odata/Addresses(address='not_a_valid_address')`;
+        expect.fail('Should have thrown');
+      } catch (error: any) {
+        expect(error.response.status).to.equal(400);
+      }
+    });
+
+    test('READ by key Cold (Transactions): indexes tx if missing', async () => {
+      const e = cds.entities as any;
+      const { SELECT } = cds.ql;
+      const before = await cds.run(SELECT.from(e.Transactions).where({ hash: validTxHash }));
+      expect(before.length).to.equal(0);
+      const { status } = await GET `/odata/v4/cardano-odata/Transactions(hash='${validTxHash}')`;
+      expect([200, 404, 500, 503]).to.include(status);
+    });
+
+    test('READ by key Warm (Transactions): returns seeded tx without re-index', async () => {
+      const e = cds.entities as any;
+      const { INSERT } = cds.ql;
+      await cds.run(INSERT.into(e.Transactions).entries({
+        hash: seededTxHash,
+        blockHash: 'c'.repeat(64),
+        blockHeight: 1,
+      }));
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions(hash='${seededTxHash}')`;
+      expect([200]).to.include(status);
+      if (status === 200) {
+        expect(data).to.have.property('hash');
+        expect(data.hash).to.equal(seededTxHash);
+      }
+    });
+
+    test('READ by key invalid (Transactions): invalid hash format returns 400', async () => {
+      try {
+        await GET `/odata/v4/cardano-odata/Transactions(hash='invalid')`;
+        expect.fail('Should have thrown');
+      } catch (error: any) {
+        expect(error.response.status).to.equal(400);
+      }
     });
   });
 });

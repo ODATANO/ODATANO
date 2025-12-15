@@ -31,7 +31,7 @@ export const CONFIG = {
   koiosApiUrl: KOIOS_URLS[NETWORK],
   primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 8000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
-  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 1),
+  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 60000),
   logLevel: process.env.LOG_LEVEL || 'info',
 };
 

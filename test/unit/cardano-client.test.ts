@@ -228,6 +228,26 @@ describe('CardanoClient', () => {
     });
   });
 
+  describe('withTimeout', () => {
+    test('rejects with TimeoutError when the timeout elapses', async () => {
+      const localClient = new CardanoClient([new MockBackend('primary')]);
+      const neverResolving = new Promise<void>(() => {});
+
+      const p: Promise<unknown> = (localClient as any).withTimeout(
+        neverResolving,
+        25,
+        'primary'
+      );
+
+      await expect(p).rejects.toBeInstanceOf(TimeoutError);
+      await expect(p).rejects.toMatchObject({
+        statusCode: 503,
+        backendName: 'primary',
+        message: 'Backend timeout after 25ms',
+      });
+    });
+  });
+
   describe('Error Accumulation', () => {
     test('accumulates all backend errors in AllBackendsFailedError', async () => {
       const error1 = new TimeoutError('primary', 8000);

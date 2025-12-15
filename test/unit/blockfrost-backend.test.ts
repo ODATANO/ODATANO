@@ -1,6 +1,6 @@
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { NotFoundError } from '../../srv/utils/errors';
+import { BackendError, BackendInitError, NotFoundError } from '../../srv/utils/errors';
 
 // Mock @blockfrost/blockfrost-js
 jest.mock('@blockfrost/blockfrost-js');
@@ -33,6 +33,9 @@ describe('BlockfrostBackend', () => {
     backend = new BlockfrostBackend();
     await backend.init();
   });
+
+  describe('constructor', () => {
+    
 
   it('creates BlockFrostAPI with projectId and customBackend', () => {
     expect(MockedBlockFrostAPI).toHaveBeenCalledTimes(1);
@@ -387,6 +390,14 @@ describe('BlockfrostBackend', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('returns empty array when API response is not an array', async () => {
+      mockApi.metadataTxsLabel.mockResolvedValue({ not: 'array' } as any);
+
+      const result = await backend.getMetadataLabelTransactions('721');
+
+      expect(result).toEqual([]);
+    });
   });
 
   describe('error handling', () => {
@@ -408,4 +419,37 @@ describe('BlockfrostBackend', () => {
       await expect(backend.getAddress('addr_test123')).rejects.toThrow();
     });
   });
+  
+   describe('Constructor - Configuration validation', () => {
+    test('throws BackendInitError when CONFIG.blockfrostApiKey is not set', async () => {
+      jest.resetModules();
+      jest.clearAllMocks();
+
+      jest.doMock('../../config/config', () => ({
+        CONFIG: { blockfrostApiKey: undefined },
+      }));
+
+      jest.isolateModules(() => {
+        const { BlockfrostBackend: FreshBlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
+        const { BackendInitError: FreshBackendInitError } = require('../../srv/utils/errors');
+        expect(() => new FreshBlockfrostBackend()).toThrow(FreshBackendInitError);
+        expect(() => new FreshBlockfrostBackend()).toThrow('Failed to initialize backend: blockfrost');
+      });
+    });
+
+    test('does not throw when CONFIG.blockfrostApiKey is set', async () => {
+      jest.resetModules();
+      jest.clearAllMocks();
+
+      jest.doMock('../../config/config', () => ({
+        CONFIG: { blockfrostApiKey: 'present-key' },
+      }));
+
+      jest.isolateModules(() => {
+        const { BlockfrostBackend: FreshBlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
+        expect(() => new FreshBlockfrostBackend()).not.toThrow();
+      });
+    });
+  }); 
+});
 });

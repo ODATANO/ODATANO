@@ -118,6 +118,15 @@ describe('ODATANO Milestone 1 Error Handling', () => {
       expect(data.error.message).to.include('label is required');
     });
 
+    test('GetMetadataLabelTransactions with empty label (whitespace only)', async () => {
+      const { status, data } = await POST(
+        '/odata/v4/cardano-odata/GetMetadataLabelTransactions',
+        { label: '   ' }
+      ).catch(err => err.response);
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('Label cannot be empty');
+    });
+
     test('GetUTxOsByAddress without address parameter', async () => {
       const { status, data } = await POST(
         '/odata/v4/cardano-odata/GetUTxOsByAddress',
@@ -127,6 +136,16 @@ describe('ODATANO Milestone 1 Error Handling', () => {
       expect(data.error.message).to.include('address is required');
     });
 
+    test('GetUTxOsByAddress with invalid bech32 address', async () => {
+      const { status, data } = await POST(
+        '/odata/v4/cardano-odata/GetUTxOsByAddress',
+        { address: 'invalid_address_format' }
+      ).catch(err => err.response);
+      expect(status).to.equal(400);
+        // CDS validates pattern before our service code runs
+        expect(data.error.message).to.match(/pattern|bech32/i);
+    });
+
     test('GetAssetsByAddress without address parameter', async () => {
       const response = await POST(
         '/odata/v4/cardano-odata/GetAssetsByAddress',
@@ -134,6 +153,16 @@ describe('ODATANO Milestone 1 Error Handling', () => {
       ).catch(err => err.response);
       expect(response.status).to.equal(400);
       expect(response.data.error.message).to.include('address is required');
+    });
+
+    test('GetAssetsByAddress with invalid bech32 address', async () => {
+      const response = await POST(
+        '/odata/v4/cardano-odata/GetAssetsByAddress',
+        { address: 'not_valid_bech32' }
+      ).catch(err => err.response);
+      expect(response.status).to.equal(400);
+        // CDS validates pattern before our service code runs  
+        expect(response.data.error.message).to.match(/pattern|bech32/i);
     });
   });
 

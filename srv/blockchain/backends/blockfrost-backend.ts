@@ -25,7 +25,7 @@ export class BlockfrostBackend implements CardanoBackend {
 constructor() {
   const projectId = CONFIG.blockfrostApiKey;
   if (!projectId) {
-    throw new BackendInitError('blockfrost', 'BLOCKFROST_KEY is not set');
+      throw new BackendInitError('blockfrost', new Error('CONFIG.blockfrostApiKey is not set'));
   }
 
   this.api = new BlockFrostAPI({ projectId });

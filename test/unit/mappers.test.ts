@@ -11,6 +11,7 @@ import {
   mapTransactionInputAssets,
   mapTransactionOutputAssets,
   mapTransactionMetadata,
+  mapError,
 } from '../../srv/utils/mappers';
 import type {
   Network,
@@ -24,6 +25,8 @@ import type {
   TxOutputLine,
   MetadataLabelTx,
 } from '../../srv/utils/types';
+
+import Request from '@sap/cds' 
 
 describe('mappers', () => {
   describe('mapNetworkInfo', () => {
@@ -231,6 +234,7 @@ describe('mappers', () => {
   describe('mapAddressUtxos', () => {
     test('maps UTxO array correctly', () => {
       const address = 'addr_test1qz123';
+      const validFrom = '2024-12-01T00:00:00Z';
       const validTo = '2024-12-31T23:59:59Z';
       const utxoData: UTxO[] = [
         {
@@ -253,7 +257,7 @@ describe('mappers', () => {
         },
       ];
 
-      const result = mapAddressUtxos(address, validTo, utxoData);
+      const result = mapAddressUtxos(address, validTo, validFrom, utxoData);
 
       expect(result).toHaveLength(2);
       expect(result[0].address_address).toBe(address);
@@ -266,7 +270,7 @@ describe('mappers', () => {
     });
 
     test('returns empty array for non-array input', () => {
-      const result = mapAddressUtxos('addr', '2024-12-31', null as any);
+      const result = mapAddressUtxos('addr', '2024-12-01', '2024-12-31', null as any);
       expect(result).toEqual([]);
     });
   });
@@ -275,13 +279,14 @@ describe('mappers', () => {
     test('maps assets correctly and filters lovelace', () => {
       const address = 'addr_test1qz123';
       const validTo = '2024-12-31T23:59:59Z';
+      const validFrom = '2024-12-01T00:00:00Z';
       const assets: Amount[] = [
         { unit: 'lovelace', quantity: '5000000' },
         { unit: '7eae28af48c06b8b28b7a32a14c3f6cc8f4e5aa9d9e2c4b1a8f7e6d5' + Buffer.from('SUNDAE').toString('hex'), quantity: '1000' },
         { unit: 'c'.repeat(56) + Buffer.from('Token').toString('hex'), quantity: '500' },
       ];
 
-      const result = mapAddressAssets(address, validTo, assets);
+      const result = mapAddressAssets(address, validTo, validFrom, assets);
 
       expect(result).toHaveLength(2); // lovelace filtered out
       expect(result[0].address_address).toBe(address);
@@ -292,7 +297,7 @@ describe('mappers', () => {
     });
 
     test('returns empty array for non-array input', () => {
-      const result = mapAddressAssets('addr', '2024-12-31', null as any);
+      const result = mapAddressAssets('addr', '2024-12-01', '2024-12-31', null as any);
       expect(result).toEqual([]);
     });
   });
@@ -510,6 +515,34 @@ describe('mappers', () => {
       const result = mapTransactionMetadata(null as any);
       expect(result).toEqual([]);
     });
+
+    describe('mapError', () => {
+  test('rejects request with BackendError', () => {
+    const mockReject = jest.fn();
+    const req = { reject: mockReject } as any;
+    
+    const backendError = new Error('Backend error');
+    Object.setPrototypeOf(backendError, { statusCode: 400, code: 'INVALID_INPUT', target: 'field' });
+    
+    mapError(req, backendError, 'TestContext');
+    
+    expect(mockReject).toHaveBeenCalled();
+  });
+
+  test('rejects request with generic error', () => {
+    const mockReject = jest.fn();
+    const req = { reject: mockReject } as any;
+    
+    const error = new Error('Generic error');
+    mapError(req, error, 'TestContext');
+    
+    expect(mockReject).toHaveBeenCalledWith(
+      500,
+      expect.stringContaining('TestContext: Internal server error')
+    );
+  });
+});
+    
   });
 });
 

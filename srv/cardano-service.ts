@@ -424,9 +424,6 @@ export default class CardanoService extends cds.ApplicationService {
       if (!address) {
         return rejectMissing(req, 'GetUTxOsByAddress', 'address');
       }
-      if (!isBech32Address(address)) {
-        return rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
-      }
 
       return this.handleRequest(req, async (db) => {
         let rows = await db.run(
@@ -452,9 +449,6 @@ export default class CardanoService extends cds.ApplicationService {
       // Validate input before business logic
       if (!address) {
         return rejectMissing(req, 'GetAssetsByAddress', 'address');
-      }
-      if (!isBech32Address(address)) {
-        return rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
       }
 
       return this.handleRequest(req, async (db) => {
