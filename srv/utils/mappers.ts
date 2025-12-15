@@ -249,9 +249,7 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   };
 }
 
-export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
-  const nowIso = new Date().toISOString();
-
+export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
   if (!Array.isArray(addressUtxosData)) return [];
   
   return addressUtxosData.map((utxo: UtxosProviderData) => ({
@@ -262,14 +260,12 @@ export function mapAddressUtxos(addr: string, validTo: string, addressUtxosData:
     utxodata_dataHash: utxo.datumHash,
     utxodata_inlineDatum: null,
     utxodata_referenceScriptHash: utxo.scriptRef,
-    validFrom: nowIso,
+    validFrom: validFrom,
     validTo: validTo,
   }));
 }
 
-export function mapAddressAssets(addr: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
-  const nowIso = new Date().toISOString();
-
+export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
   if (!Array.isArray(AssetAssets)) return [];
 
   return AssetAssets
@@ -280,8 +276,8 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
       return {
         address_address: addr,
         unit: asset.unit,
-        validFrom: nowIso,
-        validTo,
+        validFrom: validFrom,
+        validTo: validTo,
         asset_quantity: Number(asset.quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,

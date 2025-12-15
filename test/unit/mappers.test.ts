@@ -231,6 +231,7 @@ describe('mappers', () => {
   describe('mapAddressUtxos', () => {
     test('maps UTxO array correctly', () => {
       const address = 'addr_test1qz123';
+      const validFrom = '2024-12-01T00:00:00Z';
       const validTo = '2024-12-31T23:59:59Z';
       const utxoData: UTxO[] = [
         {
@@ -253,7 +254,7 @@ describe('mappers', () => {
         },
       ];
 
-      const result = mapAddressUtxos(address, validTo, utxoData);
+      const result = mapAddressUtxos(address, validFrom, validTo, utxoData);
 
       expect(result).toHaveLength(2);
       expect(result[0].address_address).toBe(address);
@@ -266,7 +267,7 @@ describe('mappers', () => {
     });
 
     test('returns empty array for non-array input', () => {
-      const result = mapAddressUtxos('addr', '2024-12-31', null as any);
+      const result = mapAddressUtxos('addr', '2024-12-01', '2024-12-31', null as any);
       expect(result).toEqual([]);
     });
   });
@@ -274,6 +275,7 @@ describe('mappers', () => {
   describe('mapAddressAssets', () => {
     test('maps assets correctly and filters lovelace', () => {
       const address = 'addr_test1qz123';
+      const validFrom = '2024-12-01T00:00:00Z';
       const validTo = '2024-12-31T23:59:59Z';
       const assets: Amount[] = [
         { unit: 'lovelace', quantity: '5000000' },
@@ -281,7 +283,7 @@ describe('mappers', () => {
         { unit: 'c'.repeat(56) + Buffer.from('Token').toString('hex'), quantity: '500' },
       ];
 
-      const result = mapAddressAssets(address, validTo, assets);
+      const result = mapAddressAssets(address, validFrom, validTo, assets);
 
       expect(result).toHaveLength(2); // lovelace filtered out
       expect(result[0].address_address).toBe(address);
@@ -292,7 +294,7 @@ describe('mappers', () => {
     });
 
     test('returns empty array for non-array input', () => {
-      const result = mapAddressAssets('addr', '2024-12-31', null as any);
+      const result = mapAddressAssets('addr', '2024-12-01', '2024-12-31', null as any);
       expect(result).toEqual([]);
     });
   });

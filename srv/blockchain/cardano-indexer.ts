@@ -127,9 +127,11 @@ export class CardanoIndexer {
     );
 
     const validTo = AddrEntity.validTo ?? new Date().toISOString();
+    const validFrom = AddrEntity.validFrom ?? new Date().toISOString();
 
     const assetEntities = mapAddressAssets(
       addr,
+      validFrom,
       validTo, 
       addrData.amount
     );
@@ -144,6 +146,7 @@ export class CardanoIndexer {
 
     const utxoEntities = mapAddressUtxos(
       addr,
+      validFrom,
       validTo,
       utxoData
     );
