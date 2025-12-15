@@ -168,10 +168,7 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
 
-  const totalLovelace =
-    Array.isArray(addressData?.amount)
-      ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
-      : 0;
+  const totalLovelace = Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0);
 
   return {
     address,

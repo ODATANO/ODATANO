@@ -19,7 +19,7 @@ module.exports = {
 
   collectCoverageFrom: ['srv/**/*.ts', '!srv/**/*.d.ts', '!**/node_modules/**'],
   coverageThreshold: {
-    global: { statements: 80, branches: 70, functions: 80, lines: 80 },
+    global: { statements: 85, branches: 70, functions: 85, lines: 80 },
   },
 
   openHandlesTimeout: 0,
