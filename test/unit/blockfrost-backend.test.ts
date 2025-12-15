@@ -2,7 +2,14 @@ import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-back
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { BackendError, BackendInitError, NotFoundError } from '../../srv/utils/errors';
 
-// Mock @blockfrost/blockfrost-js
+// Mock config module
+jest.mock('../../config/config', () => ({
+  CONFIG: {
+    blockfrostApiKey: 'test_key',
+    blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
+  },
+}));
+
 jest.mock('@blockfrost/blockfrost-js');
 const MockedBlockFrostAPI = BlockFrostAPI as jest.MockedClass<typeof BlockFrostAPI>;
 
@@ -50,6 +57,8 @@ describe('BlockfrostBackend', () => {
   it('init() resolves successfully', async () => {
     await expect(backend.init()).resolves.toBeUndefined();
   });
+
+});
 
   describe('healthCheck', () => {
     it('returns true on healthy backend', async () => {
@@ -451,5 +460,4 @@ describe('BlockfrostBackend', () => {
       });
     });
   }); 
-});
 });
