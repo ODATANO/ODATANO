@@ -42,9 +42,9 @@
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
     "pretest": "npm run cds:types && npm run db:deploy",
-    "test": "jest --runInBand --forceExit",
-    "test:coverage": "jest --runInBand --coverage --forceExit",
-    "test:integration": "npm test -- --testPathPattern=integration --forceExit",
+    "test": "jest --runInBand",
+    "test:coverage": "jest --runInBand --coverage",
+    "test:integration": "npm test -- --testPathPattern=integration",
     "test:unit": "npm test -- --testPathPattern=unit"
   }
 }

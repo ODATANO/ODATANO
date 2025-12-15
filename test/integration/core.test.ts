@@ -1,8 +1,6 @@
 import cds from '@sap/cds';
 
 jest.setTimeout(20000);
-import util from 'node:util';
-
 
 describe('ODATANO Milestone 1 - Complete Service Tests', () => {
 

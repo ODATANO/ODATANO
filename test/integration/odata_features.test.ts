@@ -1,6 +1,5 @@
 import cds from '@sap/cds';
-
-const { GET, POST, expect } = cds.test(__dirname + '/../../');
+jest.setTimeout(20000);
 
 describe('ODATANO Milestone 2 - OData Query Features', () => {
 

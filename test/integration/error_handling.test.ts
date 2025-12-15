@@ -9,7 +9,6 @@ describe('ODATANO Milestone 1 Error Handling', () => {
   // INPUT VALIDATION ERRORS (400)
   // ============================================================================
 
-
   describe('400 - Invalid Input', () => {
     test('GetTransactionByHash with invalid hash format', async () => {
       const response = await POST(
