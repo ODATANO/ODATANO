@@ -106,6 +106,14 @@ export class CardanoIndexer {
 
   /**
    * Index a single address (Addresses + AddressAssets + AddressUTxOs)
+   * 
+   * Performance note: This method requires 2 backend API calls:
+   * 1. getAddress - for address metadata and balance
+   * 2. getAddressUtxos - for UTxO details
+   * 
+   * These are separate API endpoints and cannot be combined. When indexing
+   * multiple addresses (e.g., from a transaction), use _ensureAddresses which
+   * processes them in parallel.
    */
   async indexAddress(tx: Transaction, addr: string): Promise<any> {
     const addrData = await cardano.getAddress(addr);
@@ -263,22 +271,33 @@ export class CardanoIndexer {
 
   /**
    * Helper: collect all involved addresses from a txUtxos set
+   * 
+   * Performance: Uses Set for O(1) deduplication instead of array includes
+   * which would be O(n) per insertion.
    */
   private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
     const set = new Set<string>();
 
-    for (const i of txUtxos.inputs ?? []) {
+    // Efficiently collect addresses from both inputs and outputs
+    const inputs = txUtxos.inputs ?? [];
+    const outputs = txUtxos.outputs ?? [];
+    
+    for (const i of inputs) {
       if (i.address) set.add(i.address);
     }
-    for (const o of txUtxos.outputs ?? []) {
+    for (const o of outputs) {
       if (o.address) set.add(o.address);
     }
 
-    return [...set];
+    return Array.from(set);
   }
 
   /**
-   * Helper: index multiple addresses with assets
+   * Helper: index multiple addresses with assets in parallel
+   * 
+   * Performance: Uses Promise.all to fetch all addresses concurrently
+   * rather than sequentially, significantly reducing total indexing time
+   * for transactions with multiple unique addresses.
    */
   private async _ensureAddresses(
     tx: Transaction,

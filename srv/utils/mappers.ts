@@ -31,8 +31,63 @@ import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
 import { CONFIG } from '../../config/config';
 
+/**
+ * Data Mappers Module
+ * 
+ * This module transforms data from Cardano backend providers (Blockfrost, Koios)
+ * into database entity format. Performance optimizations include:
+ * 
+ * 1. Centralized helper functions (hexToUtf8, parseAssetUnit) reduce code
+ *    duplication and improve maintainability
+ * 2. Single Date.now() call per function avoids redundant timestamp generation
+ * 3. Early array validation with guards (if !Array.isArray) prevents
+ *    unnecessary processing
+ * 4. Efficient Set-based deduplication in collection functions
+ * 5. Minimal object allocations and in-place transformations where possible
+ */
 
 const MAX_AGE_MS = CONFIG.indexTtlMs;
+
+// -----------------------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------------------
+
+/**
+ * Convert hex string to UTF-8 string, falling back to hex if conversion fails.
+ * This helper reduces code duplication and improves performance by centralizing
+ * the conversion logic.
+ * 
+ * @param hex - Hexadecimal string to convert
+ * @returns UTF-8 string or original hex on error
+ */
+function hexToUtf8(hex: string): string {
+  if (!hex) return hex;
+  try {
+    return Buffer.from(hex, 'hex').toString('utf8');
+  } catch {
+    return hex;
+  }
+}
+
+/**
+ * Parse asset unit (policyId + assetNameHex) into components.
+ * Optimizes repeated parsing logic across multiple mapper functions.
+ * 
+ * @param unit - Asset unit string (56 char policyId + asset name hex)
+ * @returns Object with policyId and assetName
+ */
+function parseAssetUnit(unit: string): { policyId: string | null; assetName: string | null } {
+  if (unit === 'lovelace') {
+    return { policyId: null, assetName: 'lovelace' };
+  }
+  
+  const policyId = unit.slice(0, 56);
+  const assetNameHex = unit.slice(56);
+  const assetName = hexToUtf8(assetNameHex);
+  
+  return { policyId, assetName };
+}
+
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------
@@ -102,31 +157,13 @@ export function mapTransactionInputAssets(
     const inputIndex = input.outputIndex ?? idx;
 
     return input.amount.map(a => {
-      const unit = a.unit;
-      const quantity = a.quantity;
-
-      let policyId: string | null = null;
-      let assetName: string | null = null;
-
-      if (unit === 'lovelace') {
-        assetName = 'lovelace';
-      } else {
-        const policy = unit.slice(0, 56);
-        const assetNameHex = unit.slice(56);
-        policyId = policy;
-
-        try {
-          assetName = Buffer.from(assetNameHex, 'hex').toString('utf8');
-        } catch {
-          assetName = assetNameHex;
-        }
-      }
+      const { policyId, assetName } = parseAssetUnit(a.unit);
 
       return {
         input_tx_hash: txHash,
         input_inputIndex: inputIndex,
-        unit,
-        asset_quantity: Number(quantity),
+        unit: a.unit,
+        asset_quantity: Number(a.quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -145,31 +182,13 @@ export function mapTransactionOutputAssets(
     const outputIndex = output.outputIndex ?? idx;
 
     return output.amount.map(a => {
-      const unit = a.unit;
-      const quantity = a.quantity;
-
-      let policyId: string | null = null;
-      let assetName: string | null = null;
-
-      if (unit === 'lovelace') {
-        assetName = 'lovelace';
-      } else {
-        const policy = unit.slice(0, 56);
-        const assetNameHex = unit.slice(56);
-        policyId = policy;
-
-        try {
-          assetName = Buffer.from(assetNameHex, 'hex').toString('utf8');
-        } catch {
-          assetName = assetNameHex;
-        }
-      }
+      const { policyId, assetName } = parseAssetUnit(a.unit);
 
       return {
         output_tx_hash: txHash,
         output_outputIndex: outputIndex,
-        unit: unit,
-        asset_quantity: Number(quantity),
+        unit: a.unit,
+        asset_quantity: Number(a.quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -209,12 +228,16 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
 // -----------------------------------------------------------------------------
 
 export function mapAddress(address: string, addressData: AddressProviderData): AddressRow {
-  const nowIso = new Date().toISOString();
-  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+  
+  // Performance: Lovelace is typically the first entry, so find() is efficient
   const totalLovelace =
     Array.isArray(addressData?.amount)
       ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
       : 0;
+  
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
@@ -252,14 +275,7 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
     .map((asset: AmountProviderData) => {
-      const assetNameHex = asset.unit.slice(56);
-
-      let assetName: string;
-      try {
-        assetName = Buffer.from(assetNameHex, 'hex').toString('utf8');
-      } catch {
-        assetName = assetNameHex;
-      }
+      const { policyId, assetName } = parseAssetUnit(asset.unit);
 
       return {
         address_address: addr,
@@ -267,15 +283,16 @@ export function mapAddressAssets(addr: string, validTo: string, AssetAssets: Amo
         validFrom: nowIso,
         validTo,
         asset_quantity: Number(asset.quantity),
-        asset_policyId: asset.unit.slice(0, 56),
+        asset_policyId: policyId,
         asset_assetName: assetName,
       };
     });
 }
 
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
-  const nowIso = new Date().toISOString();
-  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
   return {
     network: CONFIG.network,
     validFrom: nowIso,
@@ -292,8 +309,9 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
 }
 
 export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latestEpochData: LatestEpochRow) : LatestBlockRow {
-  const nowIso = new Date().toISOString();
-  const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
   return {
     validFrom: nowIso,
     validTo: validToIso,
@@ -311,8 +329,9 @@ export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latest
 } 
 
 export function mapLatestEpoch(providerEpochData: LatestEpochProviderData) : LatestEpochRow {
-const nowIso = new Date().toISOString();
-const validToIso = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
   return {
     validFrom: nowIso,
     validTo: validToIso,
