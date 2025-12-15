@@ -1,6 +1,6 @@
 using {odatano.cardano} from '../db/schema';
 
-service CardanoODataService {
+service CardanoODataService @(impl: 'srv/cardano-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections
     // ---------------------------------------------------------------------------

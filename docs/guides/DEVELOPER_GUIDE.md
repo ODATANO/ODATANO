@@ -101,7 +101,6 @@ ODATANO/
 ├── srv/
 │   ├── cardano-service.cds     # OData service definition
 │   ├── cardano-service.ts      # Service implementation (TypeScript)
-│   ├── cardano-service.js      # TypeScript loader wrapper
 │   ├── blockchain/
 │   │   ├── blockfrost-backend.ts # Blockfrost API adapter
 │   │   ├── koios-backend.ts    # Koios API adapter
@@ -209,7 +208,7 @@ curl http://localhost:4004/odata/v4/cardano-odata/$metadata
 
 ## Core Components
 
-### 1. OData Service Handler (srv/cardano-service.js)
+### 1. OData Service Handler (srv/cardano-service.ts)
 
 The main service file contains entity handlers and OData actions.
 
@@ -245,15 +244,6 @@ class CardanoService extends cds.ApplicationService {
 }
 
 export default CardanoService;
-```
-
-**Note:** CAP requires a `.js` wrapper file (`srv/cardano-service.js`) to load
-TypeScript:
-
-```javascript
-// srv/cardano-service.js
-require("ts-node/register");
-module.exports = require("./cardano-service.ts").default;
 ```
 
 #### Entity Handler Pattern (TypeScript)
@@ -537,7 +527,7 @@ service CardanoOData {
 }
 ```
 
-#### Step 3: Implement Handler (srv/cardano-service.js)
+#### Step 3: Implement Handler (srv/cardano-service.ts)
 
 ```javascript
 this.on("GetAddressTransactions", async (req) => {
@@ -690,10 +680,6 @@ try {
 ---
 
 ## Testing
-
-Note: `srv/cardano-service.js` is intentionally committed as a small runtime
-entrypoint used by the CAP/Jest test harness. It only re-exports the TypeScript
-implementation (`srv/cardano-service.ts`) and contains no business logic.
 
 ### Test Structure
 

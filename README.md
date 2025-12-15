@@ -51,8 +51,7 @@ failover (Blockfrost primary, Koios fallback), and full OData query capabilities
                                  │
 ┌────────────────────────────────▼───────────────────────────────┐
 │                    CAP Service Layer                           │
-│      - cardano-service.ts (Entities + Actions)                 │
-│      - cardano-service.js (TypeScript loader wrapper)          │
+│      - cardano-service.ts (Entities + Actions)                 │         
 │      - validators.ts (Input validation)                        │
 │      - mappers.ts (Data transformation)                        │
 └────────────────────────────────┬───────────────────────────────┘
@@ -99,19 +98,6 @@ the data on demand by querying the Cardano backend and re-indexing the result.
 
 No background jobs or periodic crawlers are used.\
 All refresh operations are strictly request-driven.
-
-### Provider Semantics
-
-ODATANO supports multiple Cardano data providers and applies a deterministic
-fallback strategy.
-
-- A primary backend (e.g. Blockfrost) is queried first.
-- If the primary backend fails (timeout, network error, or backend error), a
-  fallback backend (e.g. Koios) is used.
-- Provider responses are normalized into a canonical internal data model before
-  persistence.
-- Consumers always interact with stable OData entities, independent of the
-  underlying provider.
 
 ## Installation
 
@@ -210,10 +196,6 @@ curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')"
 ```
 
 ## Testing
-
-Note: `srv/cardano-service.js` is intentionally committed as a small runtime
-entrypoint used by the CAP/Jest test harness. It only re-exports the TypeScript
-implementation (`srv/cardano-service.ts`) and contains no business logic.
 
 ### Run All Tests
 
