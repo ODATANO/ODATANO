@@ -26,7 +26,7 @@ import type {
   MetadataLabelTx,
 } from '../../srv/utils/types';
 
-import Request from '@sap/cds' 
+import Request, { tx } from '@sap/cds' 
 
 describe('mappers', () => {
   describe('mapNetworkInfo', () => {
@@ -542,8 +542,24 @@ describe('mappers', () => {
     );
   });
 });
-    
-  });
-});
 
+describe('mapTransaction', () => {
+  test('sets blockTimeIso to null when providerTx.blockTime is null', () => {
+    const providerTx: any = {
+      blockTime: null,
+      hash: 'tx',
+      blockHash: 'bh',
+      blockHeight: 1,
+      fee: '0',
+      size: 1,
+    };
+
+    const result = mapTransaction(providerTx);
+
+    expect(result.blockTime).toBeNull();
+  });    
+  });
+  });
+
+});
 

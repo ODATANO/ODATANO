@@ -71,10 +71,6 @@ export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderD
   if (!Array.isArray(txInputs)) return [];
 
   return txInputs.map((input, idx: number) => {
-    const lovelaceEntry = Array.isArray(input.amount)
-      ? input.amount.find((a: AmountProviderData) => a.unit === 'lovelace')
-      : null;
-    const valueLovelace = lovelaceEntry?.quantity ?? '0';
     const inputIndex = input.outputIndex ?? idx;
     return {
       tx_hash: txHash,
@@ -149,11 +145,7 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   if (!Array.isArray(txOutputs)) return [];
 
   return txOutputs.map((output, idx: number) => {
-
-    const lovelaceEntry = Array.isArray(output.amount)
-      ? output.amount.find((a) => a.unit === 'lovelace')
-      : null;
-    const valueLovelace = lovelaceEntry?.quantity ?? '0';
+    
     const outputIndex = output.outputIndex ?? idx;
 
     return {
