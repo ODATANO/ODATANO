@@ -49,11 +49,8 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
       : null;
 
   const hasMetadata =
-    providerTx.metadata != null &&
-    (Array.isArray(providerTx.metadata)
-      ? providerTx.metadata.length > 0
-      : Object.keys(providerTx.metadata).length > 0);
-
+    providerTx.metadata != null && (Array.isArray(providerTx.metadata));
+     
   const hasInputs =
     Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
 

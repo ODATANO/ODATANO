@@ -1,7 +1,4 @@
-using {
-    temporal,
-    cuid
-} from '@sap/cds/common';
+using {temporal, } from '@sap/cds/common';
 
 namespace odatano.cardano;
 
