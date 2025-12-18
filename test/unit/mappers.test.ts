@@ -1,7 +1,7 @@
 import {
   mapNetworkInfo,
-  mapLatestBlock,
-  mapLatestEpoch,
+  mapBlock,
+  mapEpoch,
   mapTransaction,
   mapAddress,
   mapAddressUtxos,
@@ -15,8 +15,8 @@ import {
 } from '../../srv/utils/mappers';
 import type {
   Network,
-  LatestBlock,
-  LatestEpoch,
+  BlockData,
+  EpochData,
   Transaction,
   Address,
   UTxO,
@@ -62,9 +62,9 @@ describe('mappers', () => {
     });
   });
 
-  describe('mapLatestBlock', () => {
+  describe('mapBlock', () => {
     test('maps provider block data correctly', () => {
-      const providerBlockData: LatestBlock = {
+      const providerBlockData: BlockData = {
         hash: 'abc123def456',
         time: 1701619200,
         height: 9876543,
@@ -92,7 +92,7 @@ describe('mappers', () => {
         activeStake: 22000000000000000,
       };
 
-      const result = mapLatestBlock(providerBlockData, latestEpochData);
+      const result = mapBlock(providerBlockData, latestEpochData);
 
       expect(result.hash).toBe('abc123def456');
       expect(result.height).toBe(9876543);
@@ -102,14 +102,12 @@ describe('mappers', () => {
       expect(result.size).toBe(65432);
       expect(result.txCount).toBe(42);
       expect(result.fees).toBe(5000000);
-      expect(result.validFrom).toBeDefined();
-      expect(result.validTo).toBeDefined();
     });
   });
 
-  describe('mapLatestEpoch', () => {
+  describe('mapEpoch', () => {
     test('maps provider epoch data correctly', () => {
-      const providerData: LatestEpoch = {
+      const providerData: EpochData = {
         epoch: 450,
         start_time: 1701600000,
         end_time: 1701686400,
@@ -122,7 +120,7 @@ describe('mappers', () => {
         active_stake: '22000000000000000',
       };
 
-      const result = mapLatestEpoch(providerData);
+      const result = mapEpoch(providerData);
 
       expect(result.epoch).toBe(450);
       expect(result.startTime).toBe(1701600000);
@@ -134,8 +132,6 @@ describe('mappers', () => {
       expect(result.output).toBe('1000000000000');
       expect(result.fees).toBe(100000000);
       expect(result.activeStake).toBe(22000000000000000);
-      expect(result.validFrom).toBeDefined();
-      expect(result.validTo).toBeDefined();
     });
   });
 
@@ -201,6 +197,7 @@ describe('mappers', () => {
           { unit: 'lovelace', quantity: '5000000' },
           { unit: 'abc.token1', quantity: '100' },
         ],
+        utxos: [],
       };
 
       const result = mapAddress(address, providerData);
@@ -224,6 +221,7 @@ describe('mappers', () => {
         amount: [
           { unit: 'abc.token1', quantity: '100' },
         ],
+        utxos: [],
       };
 
       const result = mapAddress(address, providerData);
@@ -558,6 +556,135 @@ describe('mapTransaction', () => {
 
     expect(result.blockTime).toBeNull();
   });    
+  });
+
+  describe('mapPool', () => {
+    test('maps provider pool data correctly', () => {
+      const { mapPool } = require('../../srv/utils/mappers');
+      const providerPoolData = {
+        poolId: 'pool1abc123',
+        vrfKeyHash: 'vrf123',
+        blocksMinted: 100,
+        blocksEpoch: 10,
+        liveStake: 1000000,
+        liveSize: 0.5,
+        liveDelegators: 50,
+        liveSaturation: 0.3,
+        activeStake: 900000,
+        activeSize: 0.45,
+        pledge: 100000,
+        margin: 0.05,
+        fixedCost: 340000000,
+        rewardAccount: 'stake1reward',
+      };
+
+      const result = mapPool(providerPoolData);
+
+      expect(result).toMatchObject({
+        poolId: 'pool1abc123',
+        vrfKeyHash: 'vrf123',
+        blocksMinted: 100,
+        liveStake: 1000000,
+        pledge: 100000,
+      });
+    });
+  });
+
+  describe('mapDrep', () => {
+    test('maps provider drep data correctly', () => {
+      const { mapDrep } = require('../../srv/utils/mappers');
+      const providerDrepData = {
+        drepId: 'drep1abc123',
+        hex: 'abc123',
+        amount: '1000000',
+        hasScript: false,
+        lastActiveEpoch: 100,
+        retired: false,
+        expired: false,
+      };
+
+      const result = mapDrep(providerDrepData);
+
+      expect(result).toMatchObject({
+        drepId: 'drep1abc123',
+        hex: 'abc123',
+        amount: 1000000,
+        hasScript: false,
+        lastActiveEpoch: 100,
+      });
+    });
+
+    test('handles boolean conversions', () => {
+      const { mapDrep } = require('../../srv/utils/mappers');
+      const providerDrepData = {
+        drepId: 'drep1',
+        hex: 'hex',
+        amount: '0',
+        hasScript: 1, // truthy value
+        lastActiveEpoch: 0,
+        retired: 'yes', // truthy string
+        expired: null, // falsy
+      };
+
+      const result = mapDrep(providerDrepData);
+
+      expect(result.hasScript).toBe(true);
+      expect(result.retired).toBe(true);
+      expect(result.expired).toBe(false);
+    });
+  });
+
+  describe('mapAccount', () => {
+    test('maps provider account data correctly', () => {
+      const { mapAccount } = require('../../srv/utils/mappers');
+      const providerAccountData = {
+        stakeaddress: 'stake1abc123',
+        active: true,
+        activeEpoch: 100,
+        controlledAmount: '1000000',
+        rewardsSum: '50000',
+        withdrawalsSum: '10000',
+        reservesSum: '0',
+        treasurySum: '0',
+        withdrawableAmount: '40000',
+      };
+
+      const result = mapAccount(providerAccountData);
+
+      expect(result).toMatchObject({
+        stakeAddress: 'stake1abc123',
+        active: true,
+        activeEpoch: 100,
+        controlledAmount: 1000000,
+        rewardsSum: 50000,
+        withdrawalsSum: 10000,
+        withdrawableAmount: 40000,
+      });
+    });
+
+    test('handles numeric string conversions', () => {
+      const { mapAccount } = require('../../srv/utils/mappers');
+      const providerAccountData = {
+        stakeaddress: 'stake1',
+        active: false,
+        activeEpoch: 0,
+        controlledAmount: '999999999999',
+        rewardsSum: '123456',
+        withdrawalsSum: '654321',
+        reservesSum: '111',
+        treasurySum: '222',
+        withdrawableAmount: '333',
+      };
+
+      const result = mapAccount(providerAccountData);
+
+      expect(result.controlledAmount).toBe(999999999999);
+      expect(result.rewardsSum).toBe(123456);
+      expect(result.withdrawalsSum).toBe(654321);
+      expect(result.reservesSum).toBe(111);
+      expect(result.treasurySum).toBe(222);
+      expect(result.withdrawableAmount).toBe(333);
+    });
   });
   });
 

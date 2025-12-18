@@ -33,3 +33,11 @@ export function isPolicyId(s: unknown): s is string {
 export function isBech32Address(s: unknown): s is string {
   return typeof s === "string" && BECH32_ADDRESS_REGEX.test(s);
 }
+
+/**
+ * Checks if a string is a valid bech32 stake address for the current network.
+ * Preview network uses pattern: stake_test1 + base32 chars (minimum 53 additional characters).
+ */
+export function isBech32StakeAddress(s: unknown): s is string {
+  return typeof s === "string" && BECH32_STAKE_REGEX.test(s);
+}

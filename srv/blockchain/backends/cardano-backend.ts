@@ -3,9 +3,12 @@ import {
   Address,
   UTxO,
   Network,
-  LatestBlock,
-  LatestEpoch,
-  MetadataLabelTx
+  BlockData,
+  EpochData,
+  MetadataLabelTx,
+  PoolData, 
+  DrepData, 
+  AccountData
 } from '../../utils/types';
 
 export interface CardanoBackend {
@@ -18,6 +21,11 @@ export interface CardanoBackend {
   getNetworkInformation(): Promise<Network>;
   getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]>;
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
-  getLatestBlock(): Promise<LatestBlock>;
-  getLatestEpoch(): Promise<LatestEpoch>;
+  getLatestBlock(): Promise<BlockData>;
+  getBlock(blockHash: string): Promise<BlockData>;
+  getLatestEpoch(): Promise<EpochData>;
+  getEpoch(epochNumber: Number): Promise<EpochData>;
+  getPool(poolId: string): Promise<PoolData>;
+  getDrep(drepId: string): Promise<DrepData>;
+  getAccount(accountId: string): Promise<AccountData>;
 }

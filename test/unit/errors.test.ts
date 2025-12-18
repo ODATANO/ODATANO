@@ -9,6 +9,8 @@ import {
   isNotFoundError,
   isTimeoutError,
   isUnauthorizedError,
+  isForbiddenError,
+  isRateLimitedError,
   getErrorStatus,
   getErrorMessage,
   RateLimitedError,
@@ -611,5 +613,123 @@ describe('normalizeBackendError', () => {
         expect(err.target).toBe('txHash');
       });
     }); 
+
+    describe('isForbiddenError', () => {
+      test('returns true for 403 status', () => {
+        const err = { status: 403 };
+        expect(isForbiddenError(err)).toBe(true);
+      });
+
+      test('returns true for 403 response status', () => {
+        const err = { response: { status: 403 } };
+        expect(isForbiddenError(err)).toBe(true);
+      });
+
+      test('returns true for forbidden message', () => {
+        const err = { message: 'Forbidden access' };
+        expect(isForbiddenError(err)).toBe(true);
+      });
+
+      test('returns false for non-forbidden errors', () => {
+        const err = { status: 404 };
+        expect(isForbiddenError(err)).toBe(false);
+      });
+    });
+
+    describe('isRateLimitedError', () => {
+      test('returns true for 429 status', () => {
+        const err = { status: 429 };
+        expect(isRateLimitedError(err)).toBe(true);
+      });
+
+      test('returns true for 429 response status', () => {
+        const err = { response: { status: 429 } };
+        expect(isRateLimitedError(err)).toBe(true);
+      });
+
+      test('returns true for rate limit message', () => {
+        const err = { message: 'rate limit exceeded' };
+        expect(isRateLimitedError(err)).toBe(true);
+      });
+
+      test('returns true for too many requests message', () => {
+        const err = { message: 'Too many requests' };
+        expect(isRateLimitedError(err)).toBe(true);
+      });
+
+      test('returns false for non-rate-limit errors', () => {
+        const err = { status: 500 };
+        expect(isRateLimitedError(err)).toBe(false);
+      });
+    });
+
+    describe('getErrorStatus', () => {
+      test('returns status from error', () => {
+        const err = { status: 404 };
+        expect(getErrorStatus(err)).toBe(404);
+      });
+
+      test('returns status from response', () => {
+        const err = { response: { status: 503 } };
+        expect(getErrorStatus(err)).toBe(503);
+      });
+
+      test('returns 500 for errors without status', () => {
+        const err = { message: 'Some error' };
+        expect(getErrorStatus(err)).toBe(500);
+      });
+
+      test('returns 500 for null/undefined', () => {
+        expect(getErrorStatus(null)).toBe(500);
+        expect(getErrorStatus(undefined)).toBe(500);
+      });
+    });
+
+    describe('getErrorMessage', () => {
+      test('extracts message from response.data.message', () => {
+        const err = { response: { data: { message: 'Response error' } } };
+        expect(getErrorMessage(err)).toBe('Response error');
+      });
+
+      test('extracts message from response.data.error', () => {
+        const err = { response: { data: { error: 'Error description' } } };
+        expect(getErrorMessage(err)).toBe('Error description');
+      });
+
+      test('extracts message from error.message', () => {
+        const err = { message: 'Direct message' };
+        expect(getErrorMessage(err)).toBe('Direct message');
+      });
+
+      test('returns Unknown error for empty errors', () => {
+        expect(getErrorMessage({})).toBe('Unknown error');
+        expect(getErrorMessage(null)).toBe('Unknown error');
+      });
+    });
+
+    describe('normalizeBackendError - additional cases', () => {
+      test('converts rate limited error', () => {
+        const err = { status: 429, message: 'Rate limit exceeded' };
+        const result = normalizeBackendError(err, 'blockfrost');
+        
+        expect(result).toBeInstanceOf(RateLimitedError);
+        expect(result.statusCode).toBe(503);
+      });
+
+      test('converts forbidden error', () => {
+        const err = { status: 403, message: 'Forbidden' };
+        const result = normalizeBackendError(err, 'koios');
+        
+        expect(result).toBeInstanceOf(ForbiddenError);
+        expect(result.statusCode).toBe(403);
+      });
+
+      test('returns BackendError as-is', () => {
+        const err = new BackendError('Test', 500, ERROR_CODES.INTERNAL_ERROR, 'backend');
+        const result = normalizeBackendError(err, 'backend');
+        
+        expect(result).toBe(err);
+      });
+    });
 });
 }); 

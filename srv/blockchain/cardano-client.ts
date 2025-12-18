@@ -10,9 +10,12 @@ import {
   Address,
   UTxO,
   Network,
-  LatestBlock,
-  LatestEpoch,
-  MetadataLabelTx
+  BlockData,
+  EpochData,
+  MetadataLabelTx,
+  PoolData, 
+  DrepData, 
+  AccountData
 } from '../utils/types';
 
 const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs) || 8000;
@@ -158,13 +161,30 @@ private async initBackends(): Promise<void> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
   }
 
-  getLatestBlock(): Promise<LatestBlock> {
+  getLatestBlock(): Promise<BlockData> {
     return this.withFallback(b => b.getLatestBlock());
   }
+
+  getBlock(blockHash: string): Promise<BlockData> {
+    return this.withFallback(b => b.getBlock(blockHash));
+  }
   
-  getLatestEpoch(): Promise<LatestEpoch> {
+  getLatestEpoch(): Promise<EpochData> {
     return this.withFallback(b => b.getLatestEpoch());
   }
+
+  getEpoch(epochNumber: Number): Promise<EpochData> {
+    return this.withFallback(b => b.getEpoch(epochNumber));
+  }
+  getPool(poolId: string): Promise<PoolData> {
+    return this.withFallback(b => b.getPool(poolId));
+  }
+  getDrep(drepId: string): Promise<DrepData> {
+    return this.withFallback(b => b.getDrep(drepId));
+  }
+  getAccount(accountId: string): Promise<AccountData> {
+    return this.withFallback(b => b.getAccount(accountId));
+  } 
 }
 
 const backends: CardanoBackend[] = [];

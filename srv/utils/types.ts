@@ -8,6 +8,7 @@ export type JSONValue =
   | { [key: string]: JSONValue }
   | JSONValue[]
   | null;
+
 export interface Amount {
   unit: string;
   quantity: string;
@@ -59,7 +60,7 @@ export interface Transaction {
   outputAmount?: Amount[];
   inputs: TxInputLine[];
   outputs: TxOutputLine[];
-  metadata?: unknown;
+  metadata?: MetadataLabelTx[];
 }
 
 export interface Address {
@@ -68,6 +69,7 @@ export interface Address {
   type: string;
   isScript: boolean;
   amount: Amount[];
+  utxos: UTxO[];
 }
 
 export interface UTxO {
@@ -80,7 +82,7 @@ export interface UTxO {
     scriptRef?: Hex | null;
 }
 
-export interface LatestBlock {
+export interface BlockData {
     time: number;
     height: number | null;
     hash: string;
@@ -112,7 +114,7 @@ export interface Network{
     stake: Stake;
 }
 
-export interface LatestEpoch{
+export interface EpochData{
     epoch: number;
     start_time: number;
     end_time: number;
@@ -129,4 +131,46 @@ export interface MetadataLabelTx {
   txHash: Hex;
   label: number | string;
   json?: JSONValue;
+}
+
+export interface AccountData {
+  stakeaddress: string;
+  active: boolean;
+  activeEpoch: number;
+  controlledAmount: string;
+  rewardsSum: string;
+  withdrawalsSum: string; 
+  reservesSum: string;
+  treasurySum: string;
+  withdrawableAmount: string;
+  poolId: string | null;
+  drepId : string | null;
+  addresses: Address[];
+}
+
+export interface PoolData {
+  poolId: string; 
+  vrfKeyHash: string;
+  blocksMinted: number; 
+  blocksEpoch: number; 
+  liveStake: Lovelace; 
+  liveSize: number; 
+  liveSaturation: number; 
+  liveDelegators: number; 
+  activeStake: Lovelace;
+  activeSize: number; 
+  pledge: Lovelace; 
+  margin: number; 
+  fixedCost: Lovelace; 
+  rewardAccount  : string;
+}
+
+export interface DrepData {
+    drepId: string; 
+        hex: string; 
+        amount: string;
+        hasScript: boolean; 
+        lastActiveEpoch: number; 
+        retired: boolean; 
+        expired: boolean; 
 }

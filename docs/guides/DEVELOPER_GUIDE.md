@@ -22,6 +22,17 @@
 
 ## Architecture Overview
 
+### Service Surface (entities & actions)
+
+- Entities: NetworkInformation, Blocks, Epochs, Transactions, TransactionInputs,
+  TransactionOutputs, TransactionInputAssets, TransactionOutputAssets,
+  TransactionMetadata, Addresses, AddressAssets, AddressUTxOs, UTxOAssets,
+  Pools, Accounts, Dreps.
+- Actions: GetNetworkInformation, GetLatestBlock, GetLatestEpoch,
+  GetBlockByHash, GetEpochByNumber, GetTransactionByHash, GetMetadataByTxHash,
+  GetMetadataLabelTransactions, GetAddressByBech32, GetUTxOsByAddress,
+  GetAssetsByAddress, GetPoolById, GetAccountByStakingAddress, GetDrepById.
+
 ### Layered Architecture
 
 ```
@@ -114,12 +125,8 @@ ODATANO/
 │       ├── logger.ts           # Structured logging
 │       └── types.ts            # TypeScript type definitions
 ├── test/
-│   ├── integration/
-│   │   └── m1_core.test.ts     # Core endpoint tests (83 tests)
-│   └── unit/
-│       ├── validators.test.ts  # Validator tests
-│       ├── errors.test.ts      # Error mapping tests
-│       └── mappers.test.ts     # Mapper tests
+│   ├── integration/            # End-to-end OData and error-path tests
+│   └── unit/                   # Service, backend, and utility tests
 ├── docs/
 │   ├── DEVELOPER_GUIDE.md      # This file
 │   ├── USER_GUIDE.md

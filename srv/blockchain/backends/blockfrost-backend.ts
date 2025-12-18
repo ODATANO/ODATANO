@@ -6,14 +6,18 @@ import { BackendInitError } from '../../utils/errors';
 
 import {
   Transaction,
-  LatestBlock,
+  BlockData,
   Address,
   UTxO,
   Network,
-  LatestEpoch,
+  EpochData,
   JSONValue,
   MetadataLabelTx,
+  PoolData,
+  AccountData,
+  DrepData, 
 } from '../../utils/types';
+
 
 // ---------------------------------------------------------------------------
 // Blockfrost Backend Implementation
@@ -50,7 +54,7 @@ constructor() {
     );
   }
 
-  async getLatestBlock(): Promise<LatestBlock> {
+  async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
         const latestBlock = await this.api.blocksLatest();
@@ -72,7 +76,29 @@ constructor() {
     );
   }
 
-  async getLatestEpoch(): Promise<LatestEpoch> {
+  async getBlock(blockHash: string): Promise<BlockData> {
+     return handleBackendRequest(
+      async () => {
+        const blockdata = await this.api.blocks(blockHash);
+        return {
+          time: blockdata.time,
+          height: blockdata.height,
+          hash: blockdata.hash,
+          slot: blockdata.slot,
+          slotLeader: blockdata.slot_leader,
+          epoch: blockdata.epoch,
+          epochSlot: blockdata.epoch_slot,
+          size: blockdata.size,
+          txCount: blockdata.tx_count,
+          fees: blockdata.fees,
+        };
+      },
+      this.name,
+      'GetBlock'
+    );
+  }
+
+  async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
         const latestEpoch = await this.api.epochsLatest();
@@ -93,6 +119,29 @@ constructor() {
       'LatestEpoch'
     );
   }
+
+   async getEpoch(epochNumber: number): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+        const epochData = await this.api.epochs(epochNumber);
+        return {
+          epoch: epochData.epoch,
+          start_time: epochData.start_time,
+          end_time: epochData.end_time,
+          first_block_time: epochData.first_block_time,
+          last_block_time: epochData.last_block_time,
+          block_count: epochData.block_count,
+          tx_count: epochData.tx_count,
+          output: epochData.output,
+          fees: epochData.fees,
+          active_stake: epochData.active_stake,
+        };
+      },
+      this.name,
+      'GetEpoch'
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Health Check
   // ---------------------------------------------------------------------------
@@ -109,6 +158,13 @@ constructor() {
         const tx = await this.api.txs(hash);
         const txUtxos = await this.api.txsUtxos(hash);
         const txMetadata = await this.api.txsMetadata(hash);
+
+        const metadata = txMetadata.length > 0 ? txMetadata.map(md => ({
+          txHash: hash,
+          label: md.label,
+          json_metadata: md.json_metadata as JSONValue | null,
+        })) : undefined;
+
         return {
           hash: tx.hash,
           blockHash: tx.block,
@@ -151,7 +207,7 @@ constructor() {
             isCollateral: output.collateral,
             referenceScriptHash: output.reference_script_hash,
           })),
-          metadata: txMetadata,
+          metadata: metadata,
         };
       },
       this.name,
@@ -206,12 +262,24 @@ constructor() {
     return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
+
+        const address_utxos = await this.api.addressesUtxos(address);
+
         return {
           address: address_data.address,
           stakeAddress: address_data.stake_address,
           type: address_data.type,
           isScript: address_data.script,
           amount: address_data.amount,
+          utxos: address_utxos.map(utxo => ({
+            txHash: utxo.tx_hash,
+            outputIndex: utxo.output_index,
+            address: utxo.address,
+            amount: utxo.amount,
+            blockHash: utxo.block,
+            datumHash: utxo.data_hash,
+            scriptRef: utxo.reference_script_hash,
+          })),
         };
       },
       this.name,
@@ -235,6 +303,79 @@ constructor() {
       },
       this.name,
       'AddressUTxOs'
+    );
+  }
+
+  async getPool(poolId: string): Promise<PoolData> {
+   return handleBackendRequest(
+      async () => {
+        const poolData = await this.api.poolsById(poolId);
+        return {
+          poolId: poolData.pool_id,
+          vrfKeyHash: poolData.vrf_key,
+          blocksMinted: poolData.blocks_minted,
+          blocksEpoch: poolData.blocks_epoch,
+          liveStake: parseInt(poolData.live_stake || '0', 10),
+          liveSize: poolData.live_size,
+          liveDelegators: poolData.live_delegators,
+          liveSaturation: poolData.live_saturation,
+          activeStake: parseInt(poolData.active_stake || '0', 10),
+          activeSize: poolData.active_size,
+          pledge: parseInt(poolData.live_pledge || '0', 10),
+          margin: poolData.margin_cost,
+          fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
+          rewardAccount: poolData.reward_account,
+        }
+      },
+      this.name,
+      'PoolData'
+    ); 
+  }
+
+  async getDrep(drepId: string): Promise<DrepData> {
+    return handleBackendRequest(
+      async () => {
+        const drepData = await this.api.governance.drepsById(drepId);
+        return {
+          drepId: drepData.drep_id,
+          hex: drepData.hex,
+          amount: drepData.amount,
+          hasScript: drepData.has_script,
+          lastActiveEpoch: drepData.last_active_epoch ?? 0,
+          expired: drepData.expired,    
+          retired: drepData.retired,  
+        };    
+      },
+      this.name,
+      'DrepData'
+    );
+  }
+
+  async getAccount(stakeAddress: string): Promise<AccountData> {
+    return handleBackendRequest(
+      async () => {
+        const accountData = await this.api.accounts(stakeAddress);
+        const addressData = await this.api.accountsAddresses(stakeAddress);
+        const addresses = await Promise.all(
+          addressData.map(address => this.getAddress(address.address))
+        );
+        return {
+          stakeaddress: accountData.stake_address,
+          active: accountData.active,
+          activeEpoch: accountData.active_epoch ?? 0,
+          controlledAmount: accountData.controlled_amount,
+          rewardsSum:  accountData.rewards_sum,
+          withdrawalsSum: accountData.withdrawals_sum,
+          reservesSum: accountData.reserves_sum,
+          treasurySum: accountData.treasury_sum,
+          withdrawableAmount: accountData.withdrawable_amount,
+          poolId: accountData.pool_id,
+          drepId : accountData.drep_id ?? null,
+          addresses: addresses,
+        };
+      },
+      this.name,
+      'AccountData'
     );
   }
 }

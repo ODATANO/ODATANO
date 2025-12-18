@@ -7,7 +7,7 @@ import {
   AllBackendsFailedError 
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
-import type { Transaction, Address, UTxO, Network, LatestBlock, LatestEpoch } from '../../srv/utils/types';
+import type { Transaction, Address, UTxO, Network,EpochData, AccountData, BlockData, DrepData, PoolData } from '../../srv/utils/types';
 
 // Mock backends
 class MockBackend implements CardanoBackend {
@@ -31,7 +31,13 @@ class MockBackend implements CardanoBackend {
   getMetadataLabelTransactions = jest.fn();
   getLatestBlock = jest.fn();
   getLatestEpoch = jest.fn();
-}
+  getAccount = jest.fn();
+  getBlock = jest.fn();
+  getDrep = jest.fn();
+  getEpoch = jest.fn();
+  getPool= jest.fn();
+  }
+    
 
 describe('CardanoClient', () => {
   let primaryBackend: MockBackend;
@@ -178,7 +184,7 @@ describe('CardanoClient', () => {
     });
 
     test('getLatestBlock uses fallback', async () => {
-      const block: Partial<LatestBlock> = { hash: 'block123', height: 9876543 };
+      const block: Partial<BlockData> = { hash: 'block123', height: 9876543 };
       primaryBackend.getLatestBlock.mockResolvedValue(block);
 
       const result = await client.getLatestBlock();
@@ -188,7 +194,7 @@ describe('CardanoClient', () => {
     });
 
     test('getLatestEpoch uses fallback', async () => {
-      const epoch: Partial<LatestEpoch> = { epoch: 450, block_count: 21600 };
+      const epoch: Partial<EpochData> = { epoch: 450, block_count: 21600 };
       primaryBackend.getLatestEpoch.mockResolvedValue(epoch);
 
       const result = await client.getLatestEpoch();
@@ -280,6 +286,111 @@ describe('CardanoClient', () => {
       } catch (err: any) {
         expect(err.statusCode).toBe(404); // Last error's status
       }
+    });
+  });
+
+  describe('Additional Backend Methods', () => {
+    test('getBlock calls backend with fallback', async () => {
+      const blockHash = 'block123';
+      const blockData: Partial<BlockData> = { 
+        hash: blockHash, 
+        height: 100,
+        time: 1000,
+      };
+      
+      primaryBackend.getBlock.mockResolvedValue(blockData);
+
+      const result = await client.getBlock(blockHash);
+
+      expect(result).toEqual(blockData);
+      expect(primaryBackend.getBlock).toHaveBeenCalledWith(blockHash);
+    });
+
+    test('getLatestEpoch calls backend with fallback', async () => {
+      const epochData: Partial<EpochData> = { 
+        epoch: 100,
+        start_time: 1000,
+      };
+      
+      primaryBackend.getLatestEpoch.mockResolvedValue(epochData);
+
+      const result = await client.getLatestEpoch();
+
+      expect(result).toEqual(epochData);
+      expect(primaryBackend.getLatestEpoch).toHaveBeenCalled();
+    });
+
+    test('getEpoch calls backend with epoch number', async () => {
+      const epochNumber = 100;
+      const epochData: Partial<EpochData> = { 
+        epoch: epochNumber,
+        start_time: 1000,
+      };
+      
+      primaryBackend.getEpoch.mockResolvedValue(epochData);
+
+      const result = await client.getEpoch(epochNumber);
+
+      expect(result).toEqual(epochData);
+      expect(primaryBackend.getEpoch).toHaveBeenCalledWith(epochNumber);
+    });
+
+    test('getPool calls backend with pool ID', async () => {
+      const poolId = 'pool1abc123';
+      const poolData: Partial<PoolData> = { 
+        poolId,
+        liveStake: 1000000,
+      };
+      
+      primaryBackend.getPool.mockResolvedValue(poolData);
+
+      const result = await client.getPool(poolId);
+
+      expect(result).toEqual(poolData);
+      expect(primaryBackend.getPool).toHaveBeenCalledWith(poolId);
+    });
+
+    test('getDrep calls backend with drep ID', async () => {
+      const drepId = 'drep1abc123';
+      const drepData: Partial<DrepData> = { 
+        drepId,
+        amount: '1000000',
+      };
+      
+      primaryBackend.getDrep.mockResolvedValue(drepData);
+
+      const result = await client.getDrep(drepId);
+
+      expect(result).toEqual(drepData);
+      expect(primaryBackend.getDrep).toHaveBeenCalledWith(drepId);
+    });
+
+    test('getAccount calls backend with account ID', async () => {
+      const accountId = 'stake1abc123';
+      const accountData: Partial<AccountData> = { 
+        stakeaddress: accountId,
+        active: true,
+      };
+      
+      primaryBackend.getAccount.mockResolvedValue(accountData);
+
+      const result = await client.getAccount(accountId);
+
+      expect(result).toEqual(accountData);
+      expect(primaryBackend.getAccount).toHaveBeenCalledWith(accountId);
+    });
+
+    test('getBlock falls back on primary failure', async () => {
+      const blockHash = 'block123';
+      const blockData: Partial<BlockData> = { hash: blockHash };
+      
+      primaryBackend.getBlock.mockRejectedValue(new BackendError('Failed', 500, ERROR_CODES.INTERNAL_ERROR, 'primary'));
+      fallbackBackend.getBlock.mockResolvedValue(blockData);
+
+      const result = await client.getBlock(blockHash);
+
+      expect(result).toEqual(blockData);
+      expect(fallbackBackend.getBlock).toHaveBeenCalledWith(blockHash);
     });
   });
 });

@@ -325,28 +325,62 @@ describe('KoiosBackend', () => {
     };
 
     test('fetches and parses address correctly', async () => {
-      mockAxiosInstance.get.mockResolvedValue({ data: [mockKoiosAddress] });
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: [mockKoiosAddress] })
+        .mockResolvedValueOnce({ 
+          data: [{
+            utxos: [
+              {
+                tx_hash: 'utxo_tx_hash',
+                tx_index: 0,
+                amount: [{ unit: 'lovelace', quantity: '5000000' }],
+                block_hash: 'block_hash',
+                datum_hash: null,
+                script_ref: null,
+              }
+            ]
+          }]
+        });
 
       const result = await backend.getAddress(mockAddress);
 
       expect(mockAxiosInstance.get).toHaveBeenCalledWith(`/address_info?address=${mockAddress}`);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(`/address_utxos?address=${mockAddress}`);
       expect(result).toEqual({
         address: mockAddress,
         stakeAddress: 'stake_test1uz123',
         type: 'payment',
         isScript: false,
         amount: '5000000',
+        utxos: [
+          {
+            txHash: 'utxo_tx_hash',
+            outputIndex: 0,
+            address: mockAddress,
+            amount: [{ unit: 'lovelace', quantity: '5000000' }],
+            blockHash: 'block_hash',
+            datumHash: null,
+            scriptRef: null,
+          }
+        ],
       });
     });
 
     test('handles null stake_address', async () => {
-      mockAxiosInstance.get.mockResolvedValue({
-        data: [{ ...mockKoiosAddress, stake_address: null }],
-      });
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({
+          data: [{ ...mockKoiosAddress, stake_address: null }],
+        })
+        .mockResolvedValueOnce({ 
+          data: [{
+            utxos: []
+          }]
+        });
 
       const result = await backend.getAddress(mockAddress);
 
       expect(result.stakeAddress).toBeNull();
+      expect(result.utxos).toEqual([]);
     });
 
     test('throws error when address not found', async () => {
@@ -582,6 +616,316 @@ describe('KoiosBackend', () => {
       });
 
       await expect(backend.getTransactionMetadata(mockTxHash)).rejects.toThrow(ProviderBadResponseError);
+    });
+  });
+
+  describe('getBlock', () => {
+    test('fetches and returns block data', async () => {
+      const blockHash = 'block123';
+      mockAxiosInstance.post.mockResolvedValue({
+        data: [{
+          block_hash: blockHash,
+          block_height: 100,
+          time: 1000,
+          slot_no: 1000,
+          epoch_no: 10,
+          epoch_slot: 100,
+          slot_leader: 'leader',
+          block_size: 1000,
+          tx_count: 5,
+          fees: '5000',
+        }],
+      });
+
+      const result = await backend.getBlock(blockHash);
+
+      expect(result).toMatchObject({
+        hash: blockHash,
+        height: 100,
+      });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/block_info', { _block_hashes: [blockHash] });
+    });
+
+    test('throws error when block data is empty', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: [] });
+
+      await expect(backend.getBlock('block123')).rejects.toThrow(ProviderBadResponseError);
+    });
+  });
+
+  describe('getEpoch', () => {
+    test('fetches and returns epoch data', async () => {
+      const epochNumber = 100;
+      mockAxiosInstance.post.mockResolvedValue({
+        data: [{
+          epoch_no: epochNumber,
+          start_time: 1000,
+          end_time: 2000,
+          first_block_time: 1000,
+          last_block_time: 2000,
+          block_count: 100,
+          tx_count: 500,
+          output: '1000000',
+          fees: '5000',
+          active_stake: '50000000',
+        }],
+      });
+
+      const result = await backend.getEpoch(epochNumber);
+
+      expect(result).toMatchObject({
+        epoch: epochNumber,
+        start_time: 1000,
+      });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/epoch_info', { _epoch_nos: [epochNumber] });
+    });
+
+    test('throws error when epoch data is empty', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: [] });
+
+      await expect(backend.getEpoch(100)).rejects.toThrow(ProviderBadResponseError);
+    });
+  });
+
+  describe('getPool', () => {
+    test('fetches and returns pool data', async () => {
+      const poolId = 'pool1abc123';
+      mockAxiosInstance.post.mockResolvedValue({
+        data: [{
+          pool_bech32_id: poolId,
+          vrf_key: 'vrf123',
+          blocks_minted: 100,
+          blocks_epoch: 10,
+          live_stake: '1000000',
+          live_size: 0.5,
+          live_delegators: 50,
+          live_saturation: 0.3,
+          active_stake: '900000',
+          active_size: 0.45,
+          live_pledge: '100000',
+          margin_cost: 0.05,
+          fixed_cost: '340000000',
+          reward_account: 'stake1reward',
+        }],
+      });
+
+      const result = await backend.getPool(poolId);
+
+      expect(result).toMatchObject({
+        poolId,
+        liveStake: 1000000,
+      });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/pool_info', { _pool_bech32_ids: [poolId] });
+    });
+
+    test('throws error when pool not found', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: [] });
+
+      await expect(backend.getPool('pool123')).rejects.toThrow(ProviderBadResponseError);
+      await expect(backend.getPool('pool123')).rejects.toThrow('Pool not found');
+    });
+  });
+
+  describe('getDrep', () => {
+    test('fetches and returns drep data', async () => {
+      const drepId = 'drep1abc123';
+      mockAxiosInstance.post.mockResolvedValue({
+        data: [{
+          drep_id: drepId,
+          hex: 'abc123',
+          amount: '1000000',
+          has_script: false,
+          last_active_epoch: 100,
+          expired: false,
+          retired: false,
+        }],
+      });
+
+      const result = await backend.getDrep(drepId);
+
+      expect(result).toMatchObject({
+        drepId,
+        amount: '1000000',
+      });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/drep_info', { _drep_ids: [drepId] });
+    });
+
+    test('throws error when drep not found', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: [] });
+
+      await expect(backend.getDrep('drep123')).rejects.toThrow(ProviderBadResponseError);
+      await expect(backend.getDrep('drep123')).rejects.toThrow('Drep not found');
+    });
+  });
+
+  describe('getAccount', () => {
+    test('fetches and returns account data with addresses', async () => {
+      const accountId = 'stake1abc123';
+      
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          data: [{
+            stake_address: accountId,
+            active: true,
+            active_epoch: 100,
+            controlled_amount: '1000000',
+            rewards_sum: '50000',
+            withdrawals_sum: '10000',
+            reserves_sum: '0',
+            treasury_sum: '0',
+            withdrawable_amount: '40000',
+            pool_id: 'pool123',
+            drep_id: 'drep123',
+          }],
+        })
+        .mockResolvedValueOnce({
+          data: [],
+        });
+      
+      const result = await backend.getAccount(accountId);
+
+      expect(result).toMatchObject({
+        stakeaddress: accountId,
+        active: true,
+        controlledAmount: '1000000',
+        rewardsSum: '50000',
+        withdrawalsSum: '10000',
+        reservesSum: '0',
+        treasurySum: '0',
+        withdrawableAmount: '40000',
+        poolId: 'pool123',
+        drepId: 'drep123',
+      });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/account_info', { _stake_addresses: [accountId] });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/account_addresses', { _stake_addresses: [accountId] });
+      expect(Array.isArray(result.addresses)).toBe(true);
+    });
+
+    test('throws error when account not found', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: [] });
+
+      await expect(backend.getAccount('stake123')).rejects.toThrow(ProviderBadResponseError);
+      await expect(backend.getAccount('stake123')).rejects.toThrow('Account not found');
+    });
+
+    test('handles missing pool_id and drep_id', async () => {
+      const accountId = 'stake1xyz789';
+      
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          data: [{
+            stake_address: accountId,
+            active: false,
+            active_epoch: 50,
+            controlled_amount: '500000',
+            rewards_sum: '25000',
+            withdrawals_sum: '5000',
+            reserves_sum: '0',
+            treasury_sum: '0',
+            withdrawable_amount: '20000',
+            pool_id: null,
+            drep_id: null,
+          }],
+        })
+        .mockResolvedValueOnce({
+          data: [],
+        });
+      
+      const result = await backend.getAccount(accountId);
+
+      expect(result).toMatchObject({
+        stakeaddress: accountId,
+        active: false,
+        poolId: null,
+        drepId: null,
+      });
+      expect(Array.isArray(result.addresses)).toBe(true);
+    });
+
+    test('fetches and maps multiple addresses via Promise.all', async () => {
+      const accountId = 'stake1multiaddr';
+      
+      // Mock the POST calls first
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          data: [{
+            stake_address: accountId,
+            active: true,
+            active_epoch: 150,
+            controlled_amount: '3000000',
+            rewards_sum: '150000',
+            withdrawals_sum: '30000',
+            reserves_sum: '0',
+            treasury_sum: '0',
+            withdrawable_amount: '120000',
+            pool_id: 'pool789',
+            drep_id: null,
+          }],
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { address: 'addr_test1qqaaa111' },
+            { address: 'addr_test1qqbbb222' },
+            { address: 'addr_test1qqccc333' },
+          ],
+        });
+
+      // Mock GET requests using mockImplementation to handle Promise.all concurrency
+      mockAxiosInstance.get.mockImplementation((url: string) => {
+        if (url.includes('address_info?address=addr_test1qqaaa111')) {
+          return Promise.resolve({
+            data: [{
+              address: 'addr_test1qqaaa111',
+              stake_address: accountId,
+              address_type: 'shelley',
+              is_script: false,
+              total_balance: '1000000',
+            }],
+          });
+        } else if (url.includes('address_utxos?address=addr_test1qqaaa111')) {
+          return Promise.resolve({
+            data: [{ utxos: [] }],
+          });
+        } else if (url.includes('address_info?address=addr_test1qqbbb222')) {
+          return Promise.resolve({
+            data: [{
+              address: 'addr_test1qqbbb222',
+              stake_address: accountId,
+              address_type: 'shelley',
+              is_script: false,
+              total_balance: '500000',
+            }],
+          });
+        } else if (url.includes('address_utxos?address=addr_test1qqbbb222')) {
+          return Promise.resolve({
+            data: [{ utxos: [] }],
+          });
+        } else if (url.includes('address_info?address=addr_test1qqccc333')) {
+          return Promise.resolve({
+            data: [{
+              address: 'addr_test1qqccc333',
+              stake_address: accountId,
+              address_type: 'shelley',
+              is_script: false,
+              total_balance: '500000',
+            }],
+          });
+        } else if (url.includes('address_utxos?address=addr_test1qqccc333')) {
+          return Promise.resolve({
+            data: [{ utxos: [] }],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected GET call: ${url}`));
+      });
+
+      const result = await backend.getAccount(accountId);
+
+      expect(result.addresses).toHaveLength(3);
+      expect(result.addresses[0].address).toBe('addr_test1qqaaa111');
+      expect(result.addresses[1].address).toBe('addr_test1qqbbb222');
+      expect(result.addresses[2].address).toBe('addr_test1qqccc333');
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/account_addresses', { _stake_addresses: [accountId] });
+      expect(mockAxiosInstance.get).toHaveBeenCalled();
     });
   });
 });

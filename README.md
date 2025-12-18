@@ -17,10 +17,9 @@ standardized REST API.
 
 For the current functionality status and roadmap across milestones, see
 [docs/requirments & milestones/MILESTONES_FINAL.md](docs/requirments%20%26%20milestones/MILESTONES_FINAL.md).
-The project is at Milestone 1 completion with 9 read actions, multi-provider
-failover (Blockfrost primary, Koios fallback), and full OData query capabilities
-($filter, $select, $expand, $top, $skip, $count). Latest test run: 11 suites,
-274 tests, statements 93% coverage.
+The project is at Milestone 1 completion with multi-provider failover
+(Blockfrost primary, Koios fallback) and full OData query capabilities ($filter,
+$select, $expand, $top, $skip, $count).
 
 ## Features
 
@@ -35,8 +34,8 @@ failover (Blockfrost primary, Koios fallback), and full OData query capabilities
   persisted to database with TTL-based refresh (see
   [Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md))
 - **Type Safety**: Full TypeScript implementation with CAP type generation
-- **Comprehensive Testing**: 276 tests with 90%+ code coverage and 100% pass
-  rate
+- **Comprehensive Testing**: Unit + integration suites with near-complete
+  coverage (service ~99/97 statements/branches; Blockfrost backend 100%)
 - **CI/CD**: Automated testing on Node.js 20.x and 22.x with Codecov integration
 - **Enterprise Features**: Error handling, structured logging (Pino), input
   validation, and monitoring
@@ -236,30 +235,47 @@ npm run test:unit
 
 ### Entities (GET)
 
-| Entity                | Description                              | Example                 |
-| --------------------- | ---------------------------------------- | ----------------------- |
-| `NetworkInformation`  | Network statistics (supply, stake)       | `/NetworkInformation`   |
-| `LatestBlock`         | Most recent block data                   | `/LatestBlock`          |
-| `LatestEpoch`         | Current epoch data                       | `/LatestEpoch`          |
-| `Transactions`        | Transaction details with inputs/outputs  | `/Transactions('hash')` |
-| `Addresses`           | Address balances and metadata            | `/Addresses('addr...')` |
-| `AddressAssets`       | Native assets at an address              | `/AddressAssets`        |
-| `AddressUTxOs`        | Unspent outputs at an address            | `/AddressUTxOs`         |
-| `TransactionMetadata` | Transaction metadata by label or tx hash | `/TransactionMetadata`  |
+| Entity                    | Description                              | Primary key / filter          | Example                                       |
+| ------------------------- | ---------------------------------------- | ----------------------------- | --------------------------------------------- |
+| `NetworkInformation`      | Network statistics (supply, stake)       | single row (temporal)         | `/NetworkInformation`                         |
+| `Blocks`                  | Block headers (latest via action/filter) | `hash`                        | `/Blocks?$top=1&$orderby=height desc`         |
+| `Epochs`                  | Epoch summaries                          | `epoch`                       | `/Epochs?$top=1&$orderby=epoch desc`          |
+| `Transactions`            | Transaction details with inputs/outputs  | `hash` (Blake2b256)           | `/Transactions('hash')`                       |
+| `TransactionInputs`       | Inputs of a transaction                  | `tx`, `inputIndex`            | `/TransactionInputs?$filter=tx eq 'hash'`     |
+| `TransactionOutputs`      | Outputs of a transaction                 | `tx`, `outputIndex`           | `/TransactionOutputs?$filter=tx eq 'hash'`    |
+| `TransactionInputAssets`  | Assets per transaction input             | `input`, `unit`               | `/TransactionInputAssets?$top=10`             |
+| `TransactionOutputAssets` | Assets per transaction output            | `output`, `unit`              | `/TransactionOutputAssets?$top=10`            |
+| `TransactionMetadata`     | Transaction metadata by tx + label       | `tx`, `label`                 | `/TransactionMetadata?$filter=tx eq 'hash'`   |
+| `Addresses`               | Address balances and metadata            | `address` (bech32)            | `/Addresses('addr...')`                       |
+| `AddressAssets`           | Native assets at an address              | `address`, `unit`             | `/AddressAssets?$filter=address eq 'addr...'` |
+| `AddressUTxOs`            | Unspent outputs at an address            | `address`, `hash`, `index`    | `/AddressUTxOs?$filter=address eq 'addr...'`  |
+| `UTxOAssets`              | Assets contained in a specific UTxO      | `utxo`, `unit`                | `/UTxOAssets?$top=10`                         |
+| `Pools`                   | Stake pools                              | `poolId` (hash format)        | `/Pools('pool1...')`                          |
+| `Accounts`                | Stake accounts (by stake address)        | `stakeAddress` (stake bech32) | `/Accounts('stake1...')`                      |
+| `Dreps`                   | Delegated representatives                | `drepId` (hash format)        | `/Dreps('drep1...')`                          |
+
+> For the most recent block or epoch, call the actions `GetLatestBlock` /
+> `GetLatestEpoch`, or query `Blocks?$orderby=height desc&$top=1` and
+> `Epochs?$orderby=epoch desc&$top=1`.
 
 ### Actions (POST)
 
-| Action                         | Parameters | Description                 |
-| ------------------------------ | ---------- | --------------------------- |
-| `GetNetworkInformation`        | -          | Fetch current network stats |
-| `GetLatestBlock`               | -          | Get latest block            |
-| `GetLatestEpoch`               | -          | Get current epoch           |
-| `GetTransactionByHash`         | `txHash`   | Lookup transaction          |
-| `GetMetadataByTxHash`          | `txHash`   | Get tx metadata             |
-| `GetAddressByBech32`           | `address`  | Get address info            |
-| `GetUTxOsByAddress`            | `address`  | Get address UTxOs           |
-| `GetAssetsByAddress`           | `address`  | Get address assets          |
-| `GetMetadataLabelTransactions` | `label`    | Find txs by metadata label  |
+| Action                         | Parameters    | Description                       |
+| ------------------------------ | ------------- | --------------------------------- |
+| `GetNetworkInformation`        | -             | Fetch current network stats       |
+| `GetLatestBlock`               | -             | Get latest block                  |
+| `GetLatestEpoch`               | -             | Get current epoch                 |
+| `GetBlockByHash`               | `blockHash`   | Fetch a specific block by hash    |
+| `GetEpochByNumber`             | `epochNumber` | Fetch a specific epoch by number  |
+| `GetTransactionByHash`         | `txHash`      | Lookup transaction (64-hex)       |
+| `GetMetadataByTxHash`          | `txHash`      | Get tx metadata (64-hex)          |
+| `GetMetadataLabelTransactions` | `label`       | Find txs by metadata label        |
+| `GetAddressByBech32`           | `address`     | Get address info (bech32)         |
+| `GetUTxOsByAddress`            | `address`     | Get address UTxOs (bech32)        |
+| `GetAssetsByAddress`           | `address`     | Get address assets (bech32)       |
+| `GetPoolById`                  | `poolId`      | Fetch a pool by pool hash         |
+| `GetAccountByStakingAddress`   | `address`     | Fetch an account by stake address |
+| `GetDrepById`                  | `drepId`      | Fetch a drep by id                |
 
 ### OData Query Examples
 
@@ -280,40 +296,50 @@ GET /Addresses?$count=true
 GET /Transactions?$expand=inputs,outputs
 ```
 
+## Validation and data freshness
+
+- **Validation**
+  - Transaction / pool / drep IDs: 64-char hex (`isTxHash`)
+  - Addresses: network-aware bech32 (`isBech32Address` for addr)
+  - Stake addresses: network-aware bech32 stake HRP (`isBech32StakeAddress`)
+  - Empty label strings are rejected for metadata reads
+- **Caching and TTL**
+  - Temporal CDS entities: only currently valid rows are returned
+  - TTL (`INDEX_TTL_MS`): stale or missing rows trigger on-demand reindexing
+  - No background jobs; refresh is request-driven
+
 ## Important parts of the project structure
 
 ```
 ODATANO/
-├── config/                 # Configuration
-│   └── config.ts           # Centralized config (network, timeouts, TTL, log level)
+├── config/
+│   └── config.ts               # Centralized config (network, timeouts, TTL, log level)
 │
-├── db/                     # Database schema
-│   └── schema.cds          # CDS data model
+├── db/
+│   └── schema.cds              # CDS data model with temporal entities
 │
-├── srv/                    # Service implementation
-│   ├── cardano-service.ts  # Main OData service
-│   ├── cardano-service.cds # Service definition
-│   │  
-│   ├── blockchain/         # Blockchain integration
-│   │   ├── backends/       # Provider adapters
-│   │   │   ├── blockfrost-backend.ts  # Blockfrost adapter
-│   │   │   ├── cardano-backend.ts     # Backend interface
-│   │   │   └── koios-backend.ts       # Koios adapter
-│   │   ├── cardano-client.ts          # Client with fallback logic
-│   │   └── cardano-indexer.ts         # Lazy indexing with TTL
-│   │
-│   └── utils/              # Utilities
-│       ├── backend-request-handler.ts # Backend error handling wrapper
-│       ├── errors.ts       # Error hierarchy and normalization
-│       ├── logger.ts       # Pino structured logging
-│       ├── mappers.ts      # Data transformation
-│       ├── types.ts        # TypeScript types
-│       └── validators.ts   # Input validation (network-aware)
-│   
-├── test/               # Test suites
-│   ├── integration/    # End-to-end tests
-│   └── unit/           # Unit tests
-└── docs/               # Documentation
+├── srv/
+│   ├── cardano-service.cds     # Service definition (entities + actions)
+│   ├── cardano-service.ts      # Main OData service (validation, cache-hit/miss flows)
+│   ├── blockchain/
+│   │   ├── backends/
+│   │   │   ├── blockfrost-backend.ts  # Blockfrost adapter (primary)
+│   │   │   ├── koios-backend.ts       # Koios adapter (fallback)
+│   │   │   └── cardano-backend.ts     # Backend interface contract
+│   │   ├── cardano-client.ts          # Provider orchestration + timeouts/failover
+│   │   └── cardano-indexer.ts         # Lazy indexing + TTL + persistence mapping
+│   └── utils/
+│       ├── backend-request-handler.ts # Backend error handling wrapper (maps provider errors)
+│       ├── errors.ts                 # Error hierarchy and normalization helpers
+│       ├── logger.ts                 # Pino structured logging
+│       ├── mappers.ts                # Data transformation to CDS entities
+│       ├── types.ts                  # Shared types
+│       └── validators.ts             # Network-aware validators (tx hash, policy, addr/stake)
+│
+├── test/
+│   ├── integration/                  # End-to-end OData and error-path tests
+│   └── unit/                         # Service, backend, and utility tests
+└── docs/                             # Documentation (Quick Start, User, Developer, concepts)
 ```
 
 ## Technology Stack

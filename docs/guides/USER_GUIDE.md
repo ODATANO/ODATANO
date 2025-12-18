@@ -67,8 +67,8 @@ http://localhost:4004/odata/v4/cardano-odata/$metadata
 
 ```http
 GET /NetworkInformation
-GET /LatestBlock
-GET /LatestEpoch
+GET /Blocks?$orderby=height desc&$top=1
+GET /Epochs?$orderby=epoch desc&$top=1
 ```
 
 Actions (equivalent):
@@ -91,7 +91,7 @@ GET /Transactions
 
 ```json
 {
-    "value": []
+  "value": []
 }
 ```
 
@@ -112,36 +112,40 @@ Content-Type: application/json
 
 ```json
 {
-    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
-    "blockHeight": 12345,
-    "fee": "200000",
-    "timestamp": "2025-11-18T10:30:00Z",
-    "inputs": [
-        {
-            "address": "addr_test1...",
-            "amount": "5000000"
-        }
-    ],
-    "outputs": [
-        {
-    - **Fix:** Use Cardano address matching your configured network HRP
-    (`addr1...` for mainnet, `addr_test1...` for preview/preprod)
-
-    - ✅ Valid (preview): `addr_test1qz0wmc...`
-    - ✅ Valid (mainnet): `addr1qz0wmc...`
-    - ❌ Invalid: `0x123456...` (Ethereum format)
-    ]
+  "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "blockHeight": 12345,
+  "fee": "200000",
+  "timestamp": "2025-11-18T10:30:00Z",
+  "inputs": [
+    {
+      "address": "addr_test1...",
+      "amount": "5000000"
+    }
+  ],
+  "outputs": [
+    {
+      "address": "addr_test1...",
+      "amount": "5000000"
+    }
+  ]
 }
 ```
+
+**Address format note:** Use a Cardano address matching your configured network
+HRP (`addr1...` for mainnet, `addr_test1...` for preview/preprod). Examples:
+
+- ✅ Valid (preview): `addr_test1qz0wmc...`
+- ✅ Valid (mainnet): `addr1qz0wmc...`
+- ❌ Invalid: `0x123456...` (Ethereum format)
 
 **Response (Invalid Hash - 400):**
 
 ```json
 {
-    "error": {
-        "code": "400",
-        "message": "Invalid transaction hash format"
-    }
+  "error": {
+    "code": "400",
+    "message": "Invalid transaction hash format"
+  }
 }
 ```
 
@@ -159,7 +163,7 @@ GET /Addresses
 
 ```json
 {
-    "value": []
+  "value": []
 }
 ```
 
@@ -178,15 +182,15 @@ Content-Type: application/json
 
 ```json
 {
-    "address": "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0",
-    "balance": "5000000",
-    "assets": [
-        {
-            "policyId": "7eae28f73815e14bf9f4d6f94c6f03cc0e3e5aa9d9e2c4b1a8f7e6d5c4b3a2",
-            "assetName": "SUNDAE",
-            "quantity": "1000"
-        }
-    ]
+  "address": "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0",
+  "balance": "5000000",
+  "assets": [
+    {
+      "policyId": "7eae28f73815e14bf9f4d6f94c6f03cc0e3e5aa9d9e2c4b1a8f7e6d5c4b3a2",
+      "assetName": "SUNDAE",
+      "quantity": "1000"
+    }
+  ]
 }
 ```
 
@@ -194,10 +198,10 @@ Content-Type: application/json
 
 ```json
 {
-    "error": {
-        "code": "400",
-        "message": "Invalid address format"
-    }
+  "error": {
+    "code": "400",
+    "message": "Invalid address format"
+  }
 }
 ```
 
@@ -220,6 +224,49 @@ Content-Type: application/json
 
 {
     "address": "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0"
+}
+```
+
+---
+
+### 4. Pools, Accounts, and Dreps
+
+#### Pools
+
+```http
+GET /Pools('pool1...')
+
+POST /GetPoolById
+Content-Type: application/json
+
+{
+  "poolId": "pool1..."
+}
+```
+
+#### Accounts
+
+```http
+GET /Accounts('stake1...')
+
+POST /GetAccountByStakingAddress
+Content-Type: application/json
+
+{
+  "address": "stake1..."
+}
+```
+
+#### Dreps
+
+```http
+GET /Dreps('drep1...')
+
+POST /GetDrepById
+Content-Type: application/json
+
+{
+  "drepId": "drep1..."
 }
 ```
 
@@ -327,15 +374,15 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32 \
 const fetch = require("node-fetch");
 
 const response = await fetch(
-    "http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32",
-    {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            address:
-                "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0",
-        }),
-    },
+  "http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      address:
+        "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0",
+    }),
+  },
 );
 
 const data = await response.json();
@@ -390,10 +437,10 @@ properties, and actions.
 
 ```json
 {
-    "error": {
-        "code": "400",
-        "message": "Invalid transaction hash format"
-    }
+  "error": {
+    "code": "400",
+    "message": "Invalid transaction hash format"
+  }
 }
 ```
 
@@ -409,10 +456,10 @@ properties, and actions.
 
 ```json
 {
-    "error": {
-        "code": "400",
-        "message": "Invalid address format"
-    }
+  "error": {
+    "code": "400",
+    "message": "Invalid address format"
+  }
 }
 ```
 
@@ -437,10 +484,10 @@ properties, and actions.
 
 ```json
 {
-    "error": {
-        "code": "400",
-        "message": "Missing hash parameter"
-    }
+  "error": {
+    "code": "400",
+    "message": "Missing hash parameter"
+  }
 }
 ```
 
@@ -448,7 +495,7 @@ properties, and actions.
 
 ```json
 {
-    "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+  "hash": "0000000000000000000000000000000000000000000000000000000000000000"
 }
 ```
 
@@ -456,10 +503,10 @@ properties, and actions.
 
 ```json
 {
-    "error": {
-        "code": "503",
-        "message": "Provider service unavailable"
-    }
+  "error": {
+    "code": "503",
+    "message": "Provider service unavailable"
+  }
 }
 ```
 
@@ -474,10 +521,10 @@ properties, and actions.
 
 ```json
 {
-    "error": {
-        "code": "404",
-        "message": "Resource not found"
-    }
+  "error": {
+    "code": "404",
+    "message": "Resource not found"
+  }
 }
 ```
 
@@ -706,12 +753,12 @@ queries.
 
 ```javascript
 const response = await fetch(
-    "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
-    {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hash: "0".repeat(64) }),
-    },
+  "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hash: "0".repeat(64) }),
+  },
 );
 ```
 

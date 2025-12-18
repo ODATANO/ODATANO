@@ -23,7 +23,8 @@
     "ts-jest": "^29.4.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "cds-plugin-ui5": "^0.13.0"
   },
   "cds": {
     "requires": {
@@ -46,6 +47,13 @@
     "test": "jest --runInBand",
     "test:coverage": "jest --runInBand --coverage",
     "test:integration": "npm test -- --testPathPattern=integration",
-    "test:unit": "npm test -- --testPathPattern=unit"
-  }
+    "test:unit": "npm test -- --testPathPattern=unit",
+    "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false"
+  },
+  "workspaces": [
+    "app/*"
+  ],
+  "sapux": [
+    "app/odatano"
+  ]
 }

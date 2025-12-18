@@ -5,14 +5,18 @@ import { ProviderBadResponseError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
 import {
   Transaction,
-  LatestBlock,
+  BlockData,
   Address,
   UTxO,
   Network,
-  LatestEpoch,
+  EpochData,
   JSONValue,
   MetadataLabelTx,
+  PoolData, 
+  DrepData, 
+  AccountData
 } from '../../utils/types';
+import { P } from 'pino';
 
 // ---------------------------------------------------------------------------
 // Koios Backend Implementation
@@ -88,7 +92,7 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  async getLatestBlock(): Promise<LatestBlock> {
+  async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
         // get tip first
@@ -102,17 +106,19 @@ export class KoiosBackend implements CardanoBackend {
           throw new ProviderBadResponseError('Block data not available', this.name);
         }
 
+        const data = blockData.data[0];
+
         return {
-          time: blockData.data[0].time,
-          height: blockData.data[0].block_height,
-          hash: blockData.data[0].block_hash,
-          slot: blockData.data[0].slot_no,
-          epoch: blockData.data[0].epoch_no,
-          epochSlot: blockData.data[0].epoch_slot_no,
-          slotLeader: blockData.data[0].vrf_key,
-          size: blockData.data[0].block_size,
-          txCount: blockData.data[0].tx_count,
-          fees: blockData.data[0].total_fees,
+          time: data.time,
+          height: data.block_height,
+          hash: data.block_hash,
+          slot: data.slot_no,
+          epoch: data.epoch_no,
+          epochSlot: data.epoch_slot_no,
+          slotLeader: data.vrf_key,
+          size: data.block_size,
+          txCount: data.tx_count,
+          fees: data.total_fees,
         };
       },
       this.name,
@@ -120,7 +126,37 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  async getLatestEpoch(): Promise<LatestEpoch> {
+  async getBlock(blockHash: string): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => {
+      
+        const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
+
+        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
+          throw new ProviderBadResponseError('Block data not available', this.name);
+        }
+
+        const data = blockData.data[0];
+
+        return {
+          time: data.time,
+          height: data.block_height,
+          hash: data.block_hash,
+          slot: data.slot_no,
+          epoch: data.epoch_no,
+          epochSlot: data.epoch_slot_no,
+          slotLeader: data.vrf_key,
+          size: data.block_size,
+          txCount: data.tx_count,
+          fees: data.total_fees,
+        };
+      },
+      this.name,
+      'GetBlock'
+    );
+  }
+
+  async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
         // get tip first
@@ -133,21 +169,54 @@ export class KoiosBackend implements CardanoBackend {
           throw new ProviderBadResponseError('Epoch data not available', this.name);
         }
 
+       const data = epochData.data[0];
+
         return {
-          epoch: epochData.data[0].epoch_no,
-          start_time: epochData.data[0].start_time,
-          end_time: epochData.data[0].end_time,
-          first_block_time: epochData.data[0].first_block_time,
-          last_block_time: epochData.data[0].last_block_time,
-          block_count: epochData.data[0].block_count,
-          tx_count: epochData.data[0].tx_count,
-          output: epochData.data[0].total_output,
-          fees: epochData.data[0].total_fees,
-          active_stake: epochData.data[0].active_stake,
+          epoch: data.epoch_no,
+          start_time: data.start_time,
+          end_time: data.end_time,
+          first_block_time: data.first_block_time,
+          last_block_time: data.last_block_time,
+          block_count: data.block_count,
+          tx_count: data.tx_count,
+          output: data.total_output,
+          fees: data.total_fees,
+          active_stake: data.active_stake,
         };
       },
       this.name,
-      'LatestEpoch'
+      'GetEpoch'
+    );
+  }
+
+  async getEpoch(epochNumber: number): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+
+        // get data of the tip epoch
+        const epochData = await this.api.post('/epoch_info', { _epoch_nos: [epochNumber] });
+        
+        if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
+          throw new ProviderBadResponseError('Epoch data not available', this.name);
+        }
+
+        const data = epochData.data[0];
+
+        return {
+          epoch: data.epoch_no,
+          start_time: data.start_time,
+          end_time: data.end_time,
+          first_block_time: data.first_block_time,
+          last_block_time: data.last_block_time,
+          block_count: data.block_count,
+          tx_count: data.tx_count,
+          output: data.total_output,
+          fees: data.total_fees,
+          active_stake: data.active_stake,
+        };
+      },
+      this.name,
+      'GetEpoch'
     );
   }
 
@@ -161,6 +230,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const addressData = data[0];
+        const addressUtxos = await this.getAddressUtxos(address)
 
         return {
           address: address,
@@ -168,6 +238,7 @@ export class KoiosBackend implements CardanoBackend {
           type: addressData.address_type,
           isScript: addressData.is_script,
           amount: addressData.total_balance,
+          utxos: addressUtxos,
         };
       },
       this.name,
@@ -217,7 +288,7 @@ export class KoiosBackend implements CardanoBackend {
         // Koios /totals doesn't have all the fields, so we provide reasonable defaults
         return {
           supply: {
-            max: '45000000000000000', // Fixed Cardano max supply
+            max: '45000000000000000',
             total: latest.supply || '0',
             circulating: latest.circulation || '0',
             locked: '0', // Not available in /totals
@@ -280,5 +351,109 @@ async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
     'TransactionMetadata'
   );
 }
+
+async getPool(poolId: string): Promise<PoolData> {
+  return handleBackendRequest(
+    async () => {
+      const body = {
+       _pool_bech32_ids: [poolId],
+      };
+      const { data } = await this.api.post('/pool_info', body);
+
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new ProviderBadResponseError('Pool not found', this.name);
+      }
+
+      const poolData = data[0];
+      return {
+        poolId: poolData.pool_bech32_id,
+        vrfKeyHash: poolData.vrf_key,
+        blocksMinted: poolData.blocks_minted,
+        blocksEpoch: poolData.blocks_epoch,
+        liveStake: parseInt(poolData.live_stake || '0', 10),
+        liveSize: poolData.live_size,
+        liveDelegators: poolData.live_delegators,
+        liveSaturation: poolData.live_saturation,
+        activeStake: parseInt(poolData.active_stake || '0', 10),
+        activeSize: poolData.active_size,
+        pledge: parseInt(poolData.live_pledge || '0', 10),
+        margin: poolData.margin_cost,
+        fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
+        rewardAccount: poolData.reward_account,
+      };
+    },
+    this.name,
+    'PoolData'
+  );
+}
+  async getDrep(drepId: string): Promise<DrepData> {
+    return handleBackendRequest(
+    async () => {
+      const body = {
+       _drep_ids: [drepId],
+      };
+
+      const { data } = await this.api.post('/drep_info', body);
+
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new ProviderBadResponseError('Drep not found', this.name);
+      }
+      const drepData = data[0];
+      return {
+        drepId: drepData.drep_id,
+        hex: drepData.hex,
+        amount: drepData.amount,
+        hasScript: drepData.has_script,
+        lastActiveEpoch: drepData.last_active_epoch ?? 0,
+        expired: drepData.expired,
+        retired: drepData.retired,  
+      };
+    },
+    this.name,
+    'DrepData'
+  );
+}  
+  
+async getAccount(accountId: string): Promise<AccountData> {
+  return handleBackendRequest(
+    async () => {
+      const body = {
+       _stake_addresses: [accountId],
+      };
+      const { data } = await this.api.post('/account_info', body);
+
+       if (!Array.isArray(data) || data.length === 0) {
+        throw new ProviderBadResponseError('Account not found', this.name);
+      }
+
+      const addressBody = {
+        _stake_addresses: [accountId],
+      };
+      const addressDataResponse = await this.api.post('/account_addresses', addressBody); 
+      
+      const addresses = await Promise.all(
+          addressDataResponse.data.map((address: any) => this.getAddress(address.address))
+        );
+
+      const accountData = data[0];
+      return {
+        stakeaddress: accountData.stake_address,
+        active: accountData.active,
+        activeEpoch: accountData.active_epoch ?? 0,
+        controlledAmount: accountData.controlled_amount,
+        rewardsSum: accountData.rewards_sum,
+        withdrawalsSum: accountData.withdrawals_sum,
+        reservesSum: accountData.reserves_sum,
+        treasurySum: accountData.treasury_sum,
+        withdrawableAmount: accountData.withdrawable_amount,
+        poolId: accountData.pool_id || null,
+        drepId : accountData.drep_id || null,
+        addresses: addresses,
+      };
+    },
+    this.name,
+    'AccountData'
+  );
+  }
 }
 

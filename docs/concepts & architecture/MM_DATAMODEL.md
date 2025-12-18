@@ -23,7 +23,7 @@ erDiagram
         decimal activeStake
     }
 
-    LatestEpoch {
+    Epochs {
         int    epoch PK
         int    startTime
         int    endTime
@@ -36,7 +36,7 @@ erDiagram
         decimal activeStake
     }
 
-    LatestBlock {
+    Blocks {
         string hash PK
         string time
         int    height
@@ -48,12 +48,53 @@ erDiagram
         decimal fees
     }
 
+    Pools {
+        string  poolId PK
+        string  vrfKeyHash
+        int     blocksMinted
+        int     blocksEpoch
+        decimal liveStake
+        decimal liveSize
+        decimal liveSaturation
+        int     liveDelegators
+        decimal activeStake
+        decimal activeSize
+        decimal pledge
+        decimal margin
+        decimal fixedCost
+        string  rewardAccount
+    }
+
+    Dreps {
+        string  drepId PK
+        string  hex
+        decimal amount
+        boolean hasScript
+        int     lastActiveEpoch
+        boolean retired
+        boolean expired
+    }
+
     Addresses {
         string  address PK
         string  stakeAddress
         string  type
         boolean isScript
         decimal totalLovelace
+    }
+
+    Accounts {
+        string  stakeAddress PK
+        boolean active
+        int     activeEpoch
+        decimal controlledAmount
+        decimal rewardsSum
+        decimal withdrawalsSum
+        decimal reservesSum
+        decimal treasurySum
+        decimal withdrawableAmount
+        string  poolId
+        string  drepId
     }
 
     AddressAssets {
@@ -85,9 +126,8 @@ erDiagram
     }
 
     UTxOAssets {
-        string ID PK
-        string utxo
-        string unit
+        string utxo PK
+        string unit PK
         AssetSlice asset
     }
 
@@ -151,14 +191,19 @@ erDiagram
     %% RELATIONSHIPS
     %% -----------------------------------------------------
 
-    %% Epoch <-> Latest Blocks
-    LatestEpoch ||--o{ LatestBlock : hasBlocks
-    %% (via LatestBlock.epochNumber -> LatestEpoch.epoch)
+    %% Epoch <-> Blocks
+    Epochs ||--o{ Blocks : hasBlocks
+    %% (via Blocks.epochNumber -> Epochs.epoch)
 
     %% Address relations
     Addresses   ||--o{ AddressAssets : has
     Addresses   ||--o{ AddressUTxOs  : has
     AddressUTxOs ||--o{ UTxOAssets   : contains
+
+    %% Accounts relations
+    Accounts ||--o{ Addresses : controls
+    Accounts }o--|| Pools     : delegatesTo
+    Accounts }o--|| Dreps     : votesWith
 
     %% Transactions and related data
     Transactions ||--o{ TransactionMetadata     : has

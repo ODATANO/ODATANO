@@ -71,8 +71,15 @@ curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
 - Latest block / epoch
 
 ```bash
-curl http://localhost:4004/odata/v4/cardano-odata/LatestBlock
-curl http://localhost:4004/odata/v4/cardano-odata/LatestEpoch
+curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetLatestBlock
+curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetLatestEpoch
+```
+
+Or via OData query on the collections:
+
+```bash
+curl "http://localhost:4004/odata/v4/cardano-odata/Blocks?$orderby=height desc&$top=1"
+curl "http://localhost:4004/odata/v4/cardano-odata/Epochs?$orderby=epoch desc&$top=1"
 ```
 
 - Transaction by hash
@@ -89,6 +96,22 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
 curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32 \
   -H "Content-Type: application/json" \
   -d '{"address":"addr_test1..."}'
+```
+
+- Pool / account / drep lookups
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetPoolById \
+  -H "Content-Type: application/json" \
+  -d '{"poolId":"pool1..."}'
+
+curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAccountByStakingAddress \
+  -H "Content-Type: application/json" \
+  -d '{"address":"stake1..."}'
+
+curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetDrepById \
+  -H "Content-Type: application/json" \
+  -d '{"drepId":"drep1..."}'
 ```
 
 - Address UTxOs and Assets

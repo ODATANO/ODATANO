@@ -1,7 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import logger from '../srv/utils/logger';
 
-const BASE = 'http://localhost:4004/odata/v4/cardano-odata';
+const BASE = 'http://localhost:4004/odata/v4/';
 
 interface ExampleRequest {
   name: string;
@@ -37,7 +37,7 @@ const examples: ExampleRequest[] = [
 
 (async () => {
   for (const ex of examples) {
-    logger.info({ name: ex.name }, `=== ${ex.name} ===`);
+    logger.info({ namQe: ex.name }, `=== ${ex.name} ===`);
 
     try {
       const res = await axios.get(ex.url, { timeout: 10_000 });

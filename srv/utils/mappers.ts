@@ -6,9 +6,12 @@ import {
   TxOutputLine as TxOutputProviderData,
   Amount as AmountProviderData,
   Network as NetworkInfoProviderData,
-  LatestBlock as LatestBlockProviderData,
-  LatestEpoch as LatestEpochProviderData,
+  BlockData as BlockProviderData,
+  EpochData as EpochProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
+  PoolData as PoolProviderData,
+  DrepData as DrepProviderData,
+  AccountData as AccountProviderData,
 } from './types';
 
 import {
@@ -22,8 +25,11 @@ import {
   TransactionOutputAsset as TransactionOutputAssetRow,
   NetworkInformation as NetworkInfoRow,
   TransactionMetadata as TransactionMetadataRow,
-  LatestBlock as LatestBlockRow,
-  LatestEpoch as LatestEpochRow,
+  Block as BlockRow,
+  Epoch as EpochRow,
+  Pool as PoolRow,
+  Drep as DrepRow,
+  Account as AccountRow,
 } from '#cds-models/CardanoODataService';
 
 import type { Request } from '@sap/cds';
@@ -41,6 +47,18 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     providerTx.blockTime != null
       ? new Date(providerTx.blockTime * 1000).toISOString()
       : null;
+
+  const hasMetadata =
+    providerTx.metadata != null &&
+    (Array.isArray(providerTx.metadata)
+      ? providerTx.metadata.length > 0
+      : Object.keys(providerTx.metadata).length > 0);
+
+  const hasInputs =
+    Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
+
+  const hasOutputs =
+    Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
 
   return {
     hash: providerTx.hash,
@@ -61,17 +79,25 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     poolRetireCount: providerTx.poolRetireCount ?? null,
     assetMintOrBurnCount: providerTx.assetMintOrBurnCount ?? null,
     redeemerCount: providerTx.redeemerCount ?? null,
-    validContract: providerTx.validContract ?? null,  
+    validContract: providerTx.validContract ?? null,
+    hasInputs: hasInputs,
+    hasOutputs: hasOutputs,
+    hasMetadata: hasMetadata,
   };
 }
 // -----------------------------------------------------------------------------
 // Transaction Inputs
 // -----------------------------------------------------------------------------
-export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderData[]): TransactionInputRow[] {
+export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   if (!Array.isArray(txInputs)) return [];
 
   return txInputs.map((input, idx: number) => {
     const inputIndex = input.outputIndex ?? idx;
+
+    const hasAddress = Array.isArray(input.address) && input.address.length > 0;
+    const hasAmount = Array.isArray(input.amount) && input.amount.length > 0;
+
+    console.log('Mapping input:', input);
     return {
       tx_hash: txHash,
       inputIndex: inputIndex,
@@ -81,6 +107,8 @@ export function mapTransactionInputs(txHash: string,  txInputs: TxInputProviderD
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
       isCollateral: Boolean(input.isCollateral),
       isReference: Boolean(input.isReference),
+      hasAddress: hasAddress,
+      hasAmount: hasAmount,
     };
   });
 }
@@ -96,7 +124,7 @@ export function mapTransactionInputAssets(
 
     const inputIndex = input.outputIndex ?? idx;
 
-     return input.amount.map(a => {
+    return input.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
 
       return {
@@ -145,8 +173,10 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   if (!Array.isArray(txOutputs)) return [];
 
   return txOutputs.map((output, idx: number) => {
-    
+
     const outputIndex = output.outputIndex ?? idx;
+    const hasAddress = Array.isArray(output.address) && output.address.length > 0;
+    const hasAmount = Array.isArray(output.amount) && output.amount.length > 0;
 
     return {
       tx_hash: txHash,
@@ -155,6 +185,8 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
       utxo_dataHash: output.dataHash || null,
       utxo_inlineDatum: output.inlineDatum || null,
       utxo_referenceScriptHash: output.referenceScriptHash || null,
+      hasAddresses: hasAddress,
+      hasAmounts: hasAmount,
     };
   });
 }
@@ -170,6 +202,9 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 
   const totalLovelace = Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0);
 
+  const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
+  const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
+
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
@@ -184,7 +219,7 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
   if (!Array.isArray(addressUtxosData)) return [];
-  
+
   return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
     hash: utxo.txHash,
@@ -199,7 +234,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
 }
 
 export function mapAddressAssets(addr: string, validTo: string, validFrom: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
- 
+
   if (!Array.isArray(AssetAssets)) return [];
 
   return AssetAssets
@@ -219,7 +254,7 @@ export function mapAddressAssets(addr: string, validTo: string, validFrom: strin
 }
 
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
-  
+
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
@@ -229,8 +264,8 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
     validFrom: nowIso,
     validTo: validToIso,
     maxSupply: Number(providerNetworkData.supply.max),
-    circulatingSupply: Number( providerNetworkData.supply.circulating),
-    totalSupply:  Number(providerNetworkData.supply.total),
+    circulatingSupply: Number(providerNetworkData.supply.circulating),
+    totalSupply: Number(providerNetworkData.supply.total),
     lockedSupply: Number(providerNetworkData.supply.locked),
     treasurySupply: Number(providerNetworkData.supply.treasury),
     reservesSupply: Number(providerNetworkData.supply.reserves),
@@ -239,33 +274,24 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   };
 }
 
-export function mapLatestBlock(providerBlockData: LatestBlockProviderData,latestEpochData: LatestEpochRow) : LatestBlockRow {
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
-  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochRow): BlockRow {
   return {
-    validFrom: nowIso,
-    validTo: validToIso,
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
-    hash: providerBlockData.hash,  
+    hash: providerBlockData.hash,
     slotLeader: String(providerBlockData.slot ?? null),
-    epochNumber: latestEpochData.epoch,
-    epoch: latestEpochData, 
+    epochNumber: epochData.epoch,
+    epoch: epochData,
     epochSlot: providerBlockData.epochSlot,
     size: providerBlockData.size,
     txCount: providerBlockData.txCount,
     fees: Number(providerBlockData.fees),
   };
-} 
+}
 
-export function mapLatestEpoch(providerEpochData: LatestEpochProviderData) : LatestEpochRow {
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
-  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
+
   return {
-    validFrom: nowIso,
-    validTo: validToIso,
     epoch: providerEpochData.epoch,
     startTime: providerEpochData.start_time,
     endTime: providerEpochData.end_time,
@@ -302,6 +328,51 @@ export function mapTransactionMetadata(
 
 
   return rows;
+}
+
+export function mapPool(providerPoolData: PoolProviderData): PoolRow {
+  return {
+    poolId: providerPoolData.poolId,
+    vrfKeyHash: providerPoolData.vrfKeyHash,
+    blocksMinted: providerPoolData.blocksMinted,
+    blocksEpoch: providerPoolData.blocksEpoch,
+    liveStake: Number(providerPoolData.liveStake),
+    liveSize: providerPoolData.liveSize,
+    liveDelegators: providerPoolData.liveDelegators,
+    liveSaturation: providerPoolData.liveSaturation,
+    activeStake: Number(providerPoolData.activeStake),
+    activeSize: providerPoolData.activeSize,
+    pledge: Number(providerPoolData.pledge),
+    margin: Number(providerPoolData.margin),
+    fixedCost: Number(providerPoolData.fixedCost),
+    rewardAccount: providerPoolData.rewardAccount,
+  };
+}
+export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
+  return {
+
+    drepId  : providerDrepData.drepId,
+    hex: providerDrepData.hex,
+    amount: Number(providerDrepData.amount),
+    hasScript: Boolean(providerDrepData.hasScript),
+    lastActiveEpoch: providerDrepData.lastActiveEpoch,
+    retired: Boolean(providerDrepData.retired),
+    expired: Boolean(providerDrepData.expired),
+  };
+}
+
+export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
+  return {
+    stakeAddress: providerAccountData.stakeaddress,
+    active: providerAccountData.active,
+    activeEpoch: providerAccountData.activeEpoch,
+    controlledAmount: Number(providerAccountData.controlledAmount),
+    rewardsSum: Number(providerAccountData.rewardsSum),
+    withdrawalsSum: Number(providerAccountData.withdrawalsSum),
+    reservesSum: Number(providerAccountData.reservesSum),
+    treasurySum: Number(providerAccountData.treasurySum),
+    withdrawableAmount: Number(providerAccountData.withdrawableAmount),
+  };
 }
 
 export function mapError(req: Request, err: unknown, ctx: string) {

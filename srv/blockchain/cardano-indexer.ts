@@ -13,10 +13,10 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
-  TransactionMetadata as TransactionMetadataEntity,
-  NetworkInformation as NetworkInformationEntity,
-  LatestBlock as LatestBlockEntity,
-  LatestEpoch as LatestEpochEntity,
+  TransactionMetadata, 
+  NetworkInformation,
+  Block ,
+  Epoch,
 } from '#cds-models/CardanoODataService';
 
 import {
@@ -29,14 +29,17 @@ import {
   mapAddressAssets,
   mapAddressUtxos,
   mapNetworkInfo,
-  mapLatestBlock,
-  mapLatestEpoch,
+  mapBlock,
+  mapEpoch,
+  mapAccount,
+  mapDrep,
+  mapPool,
   mapTransactionMetadata,
 } from '../utils/mappers';
 
 import { Transaction as TransactionProviderData } from '../utils/types';
 
-const { UPSERT } = cds.ql;
+const { UPSERT, SELECT } = cds.ql;
 
 export class CardanoIndexer {
   /**
@@ -58,8 +61,10 @@ export class CardanoIndexer {
 
     const txRow = mapTransaction(providerTx);
 
-    await tx.run(
-      UPSERT.into(Transactions).entries(txRow)
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Transactions).entries(txRow)
+      )
     );
 
     if (providerTx.inputs || providerTx.outputs) {
@@ -70,37 +75,55 @@ export class CardanoIndexer {
 
       // Inputs + InputAssets
       const inputRows = mapTransactionInputs(txHash, providerTx.inputs || []);
-
       const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs || []);
 
       if (inputRows.length) {
-        await tx.run(
-          UPSERT.into(TransactionInputs).entries(inputRows)
+        await this._runWithRetry(() =>
+          tx.run(
+            UPSERT.into(TransactionInputs).entries(inputRows)
+          )
         );
       }
 
       if (inputAssetRows.length) {
-        await tx.run(
-          UPSERT.into(TransactionInputAssets).entries(inputAssetRows)
+        await this._runWithRetry(() =>
+          tx.run(
+            UPSERT.into(TransactionInputAssets).entries(inputAssetRows)
+          )
         );
       }
-
+      
       // Outputs + OutputAssets
       const outputRows = mapTransactionOutputs(txHash, providerTx.outputs || []);
       const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs || []);
 
       if (outputRows.length) {
-        await tx.run(
-          UPSERT.into(TransactionOutputs).entries(outputRows)
+        await this._runWithRetry(() =>
+          tx.run(
+            UPSERT.into(TransactionOutputs).entries(outputRows)
+          )
         );
       }
 
       if (outputAssetRows.length) {
-        await tx.run(
-          UPSERT.into(TransactionOutputAssets).entries(outputAssetRows)
+        await this._runWithRetry(() =>
+          tx.run(
+            UPSERT.into(TransactionOutputAssets).entries(outputAssetRows)
+          )
         );
       }
     }
+
+    const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
+
+    if (metadataRows.length) {
+      await this._runWithRetry(() =>
+        tx.run(
+          UPSERT.into(TransactionMetadata).entries(metadataRows)
+        )
+      );
+    }
+
     return txRow;
   }
 
@@ -114,8 +137,10 @@ export class CardanoIndexer {
 
     const AddrEntity = mapAddress(addr, addrData);
 
-    await tx.run(
-      UPSERT.into(Addresses).entries(AddrEntity)
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Addresses).entries(AddrEntity)
+      )
     );
 
     const validTo = AddrEntity.validTo ?? new Date().toISOString();
@@ -129,8 +154,10 @@ export class CardanoIndexer {
     );
 
     if (assetEntities.length) {
-      await tx.run(
-        UPSERT.into(AddressAssets).entries(assetEntities)
+      await this._runWithRetry(() =>
+        tx.run(
+          UPSERT.into(AddressAssets).entries(assetEntities)
+        )
       );
     }
 
@@ -146,8 +173,10 @@ export class CardanoIndexer {
     logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
     if (utxoEntities.length) {
-      await tx.run(
-        UPSERT.into(AddressUTxOs).entries(utxoEntities)
+      await this._runWithRetry(() =>
+        tx.run(
+          UPSERT.into(AddressUTxOs).entries(utxoEntities)
+        )
       );
     }
 
@@ -164,15 +193,17 @@ export class CardanoIndexer {
   async indexTransactionMetadata(
     tx: Transaction,
     txHash: string,
-  ): Promise<TransactionMetadataEntity[]> {
+  ): Promise<TransactionMetadata[]> {
 
     const metadata = await cardano.getTransactionMetadata(txHash);
 
     const rows = mapTransactionMetadata(metadata);
 
     if (rows.length) {
-      await tx.run(
-        UPSERT.into(TransactionMetadataEntity).entries(rows)
+      await this._runWithRetry(() =>
+        tx.run(
+          UPSERT.into(TransactionMetadata).entries(rows)
+        )
       );
     }
     return rows;
@@ -188,16 +219,15 @@ export class CardanoIndexer {
   async indexMetadataLabelTransactions(
     tx: Transaction,
     label: string | number,
-  ): Promise<TransactionMetadataEntity[]> {
+  ): Promise<TransactionMetadata[]> {
     
     const labelTxs = await cardano.getMetadataLabelTransactions(label);
 
-    const rows = mapTransactionMetadata(labelTxs);
-
     if (!Array.isArray(labelTxs) || labelTxs.length === 0) {
       return [];
-    } 
+    }
 
+    const rows: TransactionMetadata[] = [];
     for (const entry of labelTxs) {
       const numericLabel = Number(entry.label);
       if (Number.isNaN(numericLabel)) continue;
@@ -210,8 +240,10 @@ export class CardanoIndexer {
     }
 
     if (rows.length) {
-      await tx.run(
-        UPSERT.into(TransactionMetadataEntity).entries(rows)
+      await this._runWithRetry(() =>
+        tx.run(
+          UPSERT.into(TransactionMetadata).entries(rows)
+        )
       );
     }
 
@@ -221,12 +253,14 @@ export class CardanoIndexer {
   /**
    * Index network information
    */
-  async indexNetworkInformation(tx: Transaction): Promise<NetworkInformationEntity> {
+  async indexNetworkInformation(tx: Transaction): Promise<NetworkInformation> {
     const netInfo = await cardano.getNetworkInformation();
     const netEntity = mapNetworkInfo(netInfo);
 
-    await tx.run(
-      UPSERT.into(NetworkInformationEntity).entries(netEntity)
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(NetworkInformation).entries(netEntity)
+      )
     );
     return netEntity;
   }
@@ -234,10 +268,10 @@ export class CardanoIndexer {
   /**
    * Index latest block information
    */
-  async indexLatestBlock(tx: Transaction): Promise<LatestBlockEntity> {
+  async indexLatestBlock(tx: Transaction): Promise<Block> {
     const blockInfo = await cardano.getLatestBlock();
     
-    let latestEpoch = await tx.run(SELECT.one.from(LatestEpochEntity));
+    let latestEpoch = await tx.run(SELECT.one.from(Epoch));
     if (!latestEpoch) {
       try {
         latestEpoch = await this.indexLatestEpoch(tx);
@@ -245,9 +279,34 @@ export class CardanoIndexer {
         throw new Error('LatestEpoch data not found for LatestBlock indexing');
       }
     }
-    const blockEntity = mapLatestBlock(blockInfo, latestEpoch); 
-    await tx.run(
-      UPSERT.into(LatestBlockEntity).entries([blockEntity])
+    const blockEntity = mapBlock(blockInfo, latestEpoch); 
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Block).entries([blockEntity])
+      )
+    );
+    return blockEntity;
+  }
+
+   /**
+   * Index spec. block information
+   */
+  async indexBlock(tx: Transaction, blockHash: string): Promise<Block> {
+    const blockInfo = await cardano.getBlock(blockHash);
+    
+    let latestEpoch = await tx.run(SELECT.one.from(Epoch));
+    if (!latestEpoch) {
+      try {
+        latestEpoch = await this.indexLatestEpoch(tx);
+      } catch (error) {
+        throw new Error('LatestEpoch data not found for LatestBlock indexing');
+      }
+    }
+    const blockEntity = mapBlock(blockInfo, latestEpoch); 
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Block).entries([blockEntity])
+      )
     );
     return blockEntity;
   }
@@ -255,14 +314,64 @@ export class CardanoIndexer {
   /**
    * Index latest epoch information
    */
-  async indexLatestEpoch(tx: Transaction): Promise<LatestEpochEntity> {
+  async indexLatestEpoch(tx: Transaction): Promise<Epoch> {
     const epochInfo = await cardano.getLatestEpoch();
-    const epochEntity = mapLatestEpoch(epochInfo);  
-    await tx.run(
-      UPSERT.into(LatestEpochEntity).entries([epochEntity])
+    const epochEntity = mapEpoch(epochInfo);  
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Epoch).entries([epochEntity])
+      )
     );
     return epochEntity;
   }
+
+   /**
+   * Index spec. epoch information
+   */
+  async indexEpoch(tx: Transaction,epochNumber: number): Promise<Epoch> {
+    const epochInfo = await cardano.getEpoch(epochNumber);
+    const epochEntity = mapEpoch(epochInfo);  
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into(Epoch).entries([epochEntity])
+      )
+    );
+    return epochEntity;
+  }
+
+  async indexAccount(tx: Transaction, accountId: string) {
+    const accountInfo = await cardano.getAccount(accountId);
+    const accountEntity = mapAccount(accountInfo);
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into('Account').entries([accountEntity])
+      )
+    );
+    return accountEntity;
+  }
+  
+  async indexDrep(tx: Transaction, drepId: string)  {
+    const drepInfo = await cardano.getDrep(drepId);
+    const drepEntity = mapDrep(drepInfo);
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into('Drep').entries([drepEntity])
+      )
+    );
+    return drepEntity;
+  }
+  
+  async indexPool(tx: Transaction, poolId: string)  {
+    const poolInfo = await cardano.getPool(poolId);
+    const poolEntity = mapPool(poolInfo);
+    await this._runWithRetry(() =>
+      tx.run(
+        UPSERT.into('Pool').entries([poolEntity])
+      )
+    );
+    return poolEntity;
+  } 
+
 
   /**
    * Helper: collect all involved addresses from a txUtxos set
@@ -290,8 +399,27 @@ export class CardanoIndexer {
     tx: Transaction,
     bech32List: string[]
   ): Promise<void> {
-    await Promise.all(
-    bech32List.map(bech32 => this.indexAddress(tx, bech32)));
+    for (const bech32 of bech32List) {
+      await this.indexAddress(tx, bech32);
+    }
+  }
+
+  private async _runWithRetry<T>(fn: () => Promise<T>, maxRetries = 5): Promise<T> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        const code = err?.code;
+        const msg = err?.message || '';
+        if ((code === 'SQLITE_BUSY' || code === 'SQLITE_BUSY_SNAPSHOT' || msg.includes('database is locked')) && attempt < maxRetries) {
+          await new Promise(res => setTimeout(res, 200 * (attempt + 1)));
+          attempt++;
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 }
 

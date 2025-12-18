@@ -307,7 +307,7 @@ export class ConfigError extends Error {
 
 export class BackendInitError extends Error {
   constructor(
-    public readonly backendName: string,
+    public readonly backendName: String,
     public readonly originalError: unknown
   ) {
     super(`Failed to initialize backend: ${backendName}`);
