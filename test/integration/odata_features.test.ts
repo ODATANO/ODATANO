@@ -288,4 +288,35 @@ describe('ODATANO Milestone 2 - OData Query Features', () => {
       }
     });
   });
+
+    describe('OData Query Capabilities', () => {
+    test('$top and $skip work on collections', async () => {
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$top=5`;
+      expect(status).to.equal(200);
+      expect(Array.isArray(data.value)).to.be.true;
+      if (data.value.length > 0) {
+        expect(data.value.length).to.be.at.most(5);
+      }
+    });
+
+    test('$count returns count metadata', async () => {
+      const { status, data } = await GET `/odata/v4/cardano-odata/Addresses?$count=true`;
+      expect(status).to.equal(200);
+      expect(data['@odata.count']).to.exist;
+    });
+
+    test('$select filters properties', async () => {
+      const { status, data } = await GET `/odata/v4/cardano-odata/Transactions?$select=hash,fee`;
+      expect(status).to.equal(200);
+      expect(Array.isArray(data.value)).to.be.true;
+    });
+
+    test('GET /$metadata - OData metadata is accessible', async () => {
+      const { status, data } = await GET(`/odata/v4/cardano-odata/$metadata`);
+      expect(status).to.equal(200);
+      expect(data).to.include('Transactions');
+      expect(data).to.include('Addresses');
+      expect(data).to.include('NetworkInformation');
+    });
+  });
 });

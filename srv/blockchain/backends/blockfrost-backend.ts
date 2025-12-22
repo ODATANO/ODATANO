@@ -54,27 +54,6 @@ constructor() {
     );
   }
 
-  async getLatestBlock(): Promise<BlockData> {
-    return handleBackendRequest(
-      async () => {
-        const latestBlock = await this.api.blocksLatest();
-        return {
-          time: latestBlock.time,
-          height: latestBlock.height,
-          hash: latestBlock.hash,
-          slot: latestBlock.slot,
-          slotLeader: latestBlock.slot_leader,
-          epoch: latestBlock.epoch,
-          epochSlot: latestBlock.epoch_slot,
-          size: latestBlock.size,
-          txCount: latestBlock.tx_count,
-          fees: latestBlock.fees,
-        };
-      },
-      this.name,
-      'LatestBlock'
-    );
-  }
 
   async getBlock(blockHash: string): Promise<BlockData> {
      return handleBackendRequest(
@@ -95,28 +74,6 @@ constructor() {
       },
       this.name,
       'GetBlock'
-    );
-  }
-
-  async getLatestEpoch(): Promise<EpochData> {
-    return handleBackendRequest(
-      async () => {
-        const latestEpoch = await this.api.epochsLatest();
-        return {
-          epoch: latestEpoch.epoch,
-          start_time: latestEpoch.start_time,
-          end_time: latestEpoch.end_time,
-          first_block_time: latestEpoch.first_block_time,
-          last_block_time: latestEpoch.last_block_time,
-          block_count: latestEpoch.block_count,
-          tx_count: latestEpoch.tx_count,
-          output: latestEpoch.output,
-          fees: latestEpoch.fees,
-          active_stake: latestEpoch.active_stake,
-        };
-      },
-      this.name,
-      'LatestEpoch'
     );
   }
 
@@ -141,14 +98,6 @@ constructor() {
       'GetEpoch'
     );
   }
-
-  // ---------------------------------------------------------------------------
-  // Health Check
-  // ---------------------------------------------------------------------------
-  async healthCheck(): Promise<boolean> {
-    return (await this.api.health()).is_healthy;
-  }
-  
   // ---------------------------------------------------------------------------
   // Transaction
   // ---------------------------------------------------------------------------
@@ -169,23 +118,12 @@ constructor() {
           hash: tx.hash,
           blockHash: tx.block,
           blockHeight: tx.block_height,
-          blockTime: tx.block_time,
+          blockTime: this.numberToIsoTimestamp(tx.block_time),
           slot: tx.slot,
           index: tx.index,
           fee: parseInt(tx.fees, 10),
           deposit: parseInt(tx.deposit, 10),
           size: tx.size,
-          utxoCount: tx.utxo_count,
-          withdrawalCount: tx.withdrawal_count,
-          mirCertCount: tx.mir_cert_count,
-          delegationCount: tx.delegation_count,
-          stakeCertCount: tx.stake_cert_count,
-          poolUpdateCount: tx.pool_update_count,
-          poolRetireCount: tx.pool_retire_count,
-          assetMintOrBurnCount: tx.asset_mint_or_burn_count,
-          redeemerCount: tx.redeemer_count,
-          validContract: tx.valid_contract,
-          outputAmount: tx.output_amount,
           inputs: txUtxos.inputs.map(input => ({
             address: input.address,
             txHash: input.tx_hash,
@@ -309,9 +247,11 @@ constructor() {
   async getPool(poolId: string): Promise<PoolData> {
    return handleBackendRequest(
       async () => {
+        
         const poolData = await this.api.poolsById(poolId);
+
         return {
-          poolId: poolData.pool_id,
+          poolId: poolData.hex,
           vrfKeyHash: poolData.vrf_key,
           blocksMinted: poolData.blocks_minted,
           blocksEpoch: poolData.blocks_epoch,
@@ -333,9 +273,11 @@ constructor() {
   }
 
   async getDrep(drepId: string): Promise<DrepData> {
+    
     return handleBackendRequest(
       async () => {
         const drepData = await this.api.governance.drepsById(drepId);
+        
         return {
           drepId: drepData.drep_id,
           hex: drepData.hex,
@@ -355,7 +297,10 @@ constructor() {
     return handleBackendRequest(
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
+        
         const addressData = await this.api.accountsAddresses(stakeAddress);
+        
+        
         const addresses = await Promise.all(
           addressData.map(address => this.getAddress(address.address))
         );
@@ -378,4 +323,12 @@ constructor() {
       'AccountData'
     );
   }
-}
+numberToIsoTimestamp(value: unknown): string | null {
+  const n =
+    typeof value === 'number' ? value :
+    typeof value === 'bigint' ? Number(value) :
+    typeof value === 'string' ? Number(value) :
+    NaN;
+
+  return new Date(n * 1000).toISOString();
+} }

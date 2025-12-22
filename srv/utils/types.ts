@@ -1,6 +1,9 @@
 export type Hex = string;
 export type Lovelace = number;
 
+// ---------------------------------------------------------------------------------------
+// JSON Value Type
+// ---------------------------------------------------------------------------------------
 export type JSONValue =
   | string
   | number
@@ -9,10 +12,18 @@ export type JSONValue =
   | JSONValue[]
   | null;
 
+// ---------------------------------------------------------------------------------------
+// Amount Data Structure Type
+// -----------------------------------------------------------------------------
+
 export interface Amount {
   unit: string;
   quantity: string;
 }
+
+// ---------------------------------------------------------------------------------------
+// Transaction Input Data Structure Type
+// -----------------------------------------------------------------------------
 
 export interface TxInputLine {
   address: string;
@@ -26,6 +37,10 @@ export interface TxInputLine {
   isReference?: boolean;
 }
 
+// ---------------------------------------------------------------------------------------
+// Transaction Output Data Structure Type
+// -----------------------------------------------------------------------------
+
 export interface TxOutputLine {
   address: string;
   amount: Amount[];
@@ -37,6 +52,10 @@ export interface TxOutputLine {
   referenceScriptHash?: Hex | null;
 }
 
+// ---------------------------------------------------------------------------------------
+// Transaction Data Structure Type
+// -----------------------------------------------------------------------------
+
 export interface Transaction {
   hash: Hex;
   blockHash: Hex;
@@ -46,23 +65,15 @@ export interface Transaction {
   fee: Lovelace;
   deposit: Lovelace;
   size: number;
-  utxoCount: number;
-  withdrawalCount: number;
-  mirCertCount: number;
-  delegationCount: number;
-  stakeCertCount: number;
-  poolUpdateCount: number;
-  poolRetireCount: number;
-  assetMintOrBurnCount: number;
-  redeemerCount: number;
-  validContract: boolean;
-  blockTime: number;
+  blockTime: string | null;
   outputAmount?: Amount[];
   inputs: TxInputLine[];
   outputs: TxOutputLine[];
   metadata?: MetadataLabelTx[];
 }
-
+// -----------------------------------------------------------------------------
+// Address Data Structure Type
+// -----------------------------------------------------------------------------
 export interface Address {
   address: string;
   stakeAddress: string | null;
@@ -71,7 +82,9 @@ export interface Address {
   amount: Amount[];
   utxos: UTxO[];
 }
-
+// -----------------------------------------------------------------------------
+// UTxO Data Structure Type
+// -----------------------------------------------------------------------------
 export interface UTxO {
     txHash: Hex;
     outputIndex: number;
@@ -81,7 +94,9 @@ export interface UTxO {
     datumHash?: Hex | null;
     scriptRef?: Hex | null;
 }
-
+// -----------------------------------------------------------------------------
+// Block Data Structure Type
+// ---------------------------------------------------------------------------
 export interface BlockData {
     time: number;
     height: number | null;
@@ -95,6 +110,9 @@ export interface BlockData {
     fees?: string | null;
 }
 
+// -----------------------------------------------------------------------------
+// Supply Data Structure Type
+// ---------------------------------------------------------------------------
 export interface Supply{
     max: string;
     total: string;
@@ -104,16 +122,25 @@ export interface Supply{
     reserves: string;
 }
 
+// -----------------------------------------------------------------------------
+// Stake Data Structure Type
+// ---------------------------------------------------------------------------
 export interface Stake{
     live: string;
     active: string;
 }
 
+// -----------------------------------------------------------------------------
+// Network Information Data Structure Type
+// ---------------------------------------------------------------------------
 export interface Network{
     supply: Supply;
     stake: Stake;
 }
 
+// -----------------------------------------------------------------------------
+// Epoch Data Structure Type
+// ---------------------------------------------------------------------------
 export interface EpochData{
     epoch: number;
     start_time: number;
@@ -126,13 +153,18 @@ export interface EpochData{
     fees: string;
     active_stake: string | null;
 }
-
+// ----------------------------------------------------------------------------
+// Transaction MetadataLabelTxData Structure Type
+// ---------------------------------------------------------------------------
 export interface MetadataLabelTx {
   txHash: Hex;
   label: number | string;
   json?: JSONValue;
 }
 
+// ---------------------------------------------------------------------------
+// Account Data Structure Type
+// ---------------------------------------------------------------------------
 export interface AccountData {
   stakeaddress: string;
   active: boolean;
@@ -148,6 +180,9 @@ export interface AccountData {
   addresses: Address[];
 }
 
+// ---------------------------------------------------------------------------
+// Pool Data Structure Type
+// ---------------------------------------------------------------------------
 export interface PoolData {
   poolId: string; 
   vrfKeyHash: string;
@@ -165,6 +200,9 @@ export interface PoolData {
   rewardAccount  : string;
 }
 
+// ---------------------------------------------------------------------------
+// DREP Data Structure Type
+// ---------------------------------------------------------------------------
 export interface DrepData {
     drepId: string; 
         hex: string; 

@@ -21,9 +21,6 @@ import {
 const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs) || 8000;
 const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs) || 8000;
 
-// ---------------------------------------------------------------------------
-// Cardano Client with multiple backends, timeouts and fallbacks
-// ---------------------------------------------------------------------------
 export class CardanoClient {
   private backends: CardanoBackend[];
   private initialized = false;
@@ -161,18 +158,10 @@ private async initBackends(): Promise<void> {
     return this.withFallback(b => b.getMetadataLabelTransactions(label));
   }
 
-  getLatestBlock(): Promise<BlockData> {
-    return this.withFallback(b => b.getLatestBlock());
-  }
-
   getBlock(blockHash: string): Promise<BlockData> {
     return this.withFallback(b => b.getBlock(blockHash));
   }
   
-  getLatestEpoch(): Promise<EpochData> {
-    return this.withFallback(b => b.getLatestEpoch());
-  }
-
   getEpoch(epochNumber: Number): Promise<EpochData> {
     return this.withFallback(b => b.getEpoch(epochNumber));
   }
@@ -182,19 +171,52 @@ private async initBackends(): Promise<void> {
   getDrep(drepId: string): Promise<DrepData> {
     return this.withFallback(b => b.getDrep(drepId));
   }
-  getAccount(accountId: string): Promise<AccountData> {
-    return this.withFallback(b => b.getAccount(accountId));
+  getAccount(stakeAddress: string): Promise<AccountData> {
+    return this.withFallback(b => b.getAccount(stakeAddress));
+
   } 
 }
 
 const backends: CardanoBackend[] = [];
 
-if (CONFIG.blockfrostApiKey) {
-  backends.push(new BlockfrostBackend());
+// Build backends from configuration
+for (const backendName of CONFIG.backends) {
+  if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
+    backends.push(new BlockfrostBackend());
+  } else if (backendName === 'koios') {
+    backends.push(new KoiosBackend());
+  }
 }
 
-backends.push(new KoiosBackend());
+// Fallback if no backends configured
+if (backends.length === 0) {
+  if (CONFIG.blockfrostApiKey) {
+    backends.push(new BlockfrostBackend());
+  }
+  backends.push(new KoiosBackend());
+}
 
 export const cardanoClient = new CardanoClient(backends);
 
 export default cardanoClient;
+
+// ---------------------------------------------------------------------------
+// Factory for creating client with specific backends (for testing)
+// ---------------------------------------------------------------------------
+export function createCardanoClientForBackends(backendNames: string[]): CardanoClient {
+  const testBackends: CardanoBackend[] = [];
+
+  for (const backendName of backendNames) {
+    if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
+      testBackends.push(new BlockfrostBackend());
+    } else if (backendName === 'koios') {
+      testBackends.push(new KoiosBackend());
+    }
+  }
+
+  if (testBackends.length === 0) {
+    throw new ConfigError(`No valid backends configured: ${backendNames.join(',')}`);
+  }
+
+  return new CardanoClient(testBackends);
+}

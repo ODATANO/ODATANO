@@ -170,39 +170,28 @@ entity Accounts : temporal {
 
 }
 
-
 // -----------------------------------------------------
 // Transactions Entitys
 // -----------------------------------------------------
 entity Transactions {
-    key hash                 : Blake2b256 @assert.format: '^[a-f0-9]{64}$'; // transaction hash as hex
-        blockHash            : Blake2b256; // block hash containing the transaction
-        blockHeight          : Integer; // block height containing the transaction
-        blockTime            : Timestamp; // block time containing the transaction
-        slot                 : Integer64; // slot number containing the transaction
-        txIndex              : Integer; // transaction index within the block
-        fee                  : Lovelace; // transaction fee in lovelace
-        deposit              : Lovelace; // deposit change in lovelace
-        size                 : Integer; // transaction size in bytes
-        utxoCount            : Integer; // number of utxos created by the transaction
-        withdrawalCount      : Integer; // number of withdrawals in the transaction
-        mirCertCount         : Integer; // number of MIR certificates in the transaction
-        delegationCount      : Integer; // number of delegations in the transaction
-        stakeCertCount       : Integer; // number of stake certificates in the transaction
-        poolUpdateCount      : Integer; // number of pool updates in the transaction
-        poolRetireCount      : Integer; // number of pool retirements in the transaction
-        assetMintOrBurnCount : Integer; // number of asset minting or burning operations in the transaction
-        redeemerCount        : Integer; // number of redeemers in the transaction
-        validContract        : Boolean; // true if the transaction's smart contracts are valid
-        metadata             : Composition of many TransactionMetadata // transaction metadata
-                                   on metadata.tx = $self;
-        inputs               : Composition of many TransactionInputs // transaction inputs
-                                   on inputs.tx = $self;
-        outputs              : Composition of many TransactionOutputs // transaction outputs
-                                   on outputs.tx = $self;
-        hasMetadata          : Boolean; // indicates if transaction has metadata
-        hasInputs            : Boolean; // indicates if transaction has inputs
-        hasOutputs           : Boolean; // indicates if transaction has outputs
+    key hash        : Blake2b256 @assert.format: '^[a-f0-9]{64}$'; // transaction hash as hex
+        blockHash   : Blake2b256; // block hash containing the transaction
+        blockHeight : Integer; // block height containing the transaction
+        blockTime   : Timestamp; // block time containing the transaction
+        slot        : Integer64; // slot number containing the transaction
+        txIndex     : Integer; // transaction index within the block
+        fee         : Lovelace; // transaction fee in lovelace
+        deposit     : Lovelace; // deposit change in lovelace
+        size        : Integer; // transaction size in bytes
+        metadata    : Composition of many TransactionMetadata // transaction metadata
+                          on metadata.tx = $self;
+        inputs      : Composition of many TransactionInputs // transaction inputs
+                          on inputs.tx = $self;
+        outputs     : Composition of many TransactionOutputs // transaction outputs
+                          on outputs.tx = $self;
+        hasMetadata : Boolean; // indicates if transaction has metadata
+        hasInputs   : Boolean; // indicates if transaction has inputs
+        hasOutputs  : Boolean; // indicates if transaction has outputs
 }
 
 // -----------------------------------------------------

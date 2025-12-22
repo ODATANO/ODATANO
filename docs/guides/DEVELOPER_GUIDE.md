@@ -28,10 +28,12 @@
   TransactionOutputs, TransactionInputAssets, TransactionOutputAssets,
   TransactionMetadata, Addresses, AddressAssets, AddressUTxOs, UTxOAssets,
   Pools, Accounts, Dreps.
-- Actions: GetNetworkInformation, GetLatestBlock, GetLatestEpoch,
-  GetBlockByHash, GetEpochByNumber, GetTransactionByHash, GetMetadataByTxHash,
-  GetMetadataLabelTransactions, GetAddressByBech32, GetUTxOsByAddress,
-  GetAssetsByAddress, GetPoolById, GetAccountByStakingAddress, GetDrepById.
+- Actions: GetNetworkInformation, GetBlockByHash, GetEpochByNumber,
+  GetTransactionByHash, GetMetadataByTxHash, GetMetadataLabelTransactions,
+  GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetPoolById,
+  GetAccountByStakeAddress, GetDrepById, GetInputsByTransaction,
+  GetOutputsByTransaction, GetAssetsByTransactionInput,
+  GetAssetsByTransactionOutput.
 
 ### Layered Architecture
 
@@ -195,9 +197,11 @@ curl http://localhost:4004/odata/v4/cardano-odata/$metadata
         "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
         "db:deploy": "cds deploy",
         "pretest": "npm run cds:types && npm run db:deploy",
-        "test": "jest --runInBand --forceExit",
-        "test:coverage": "jest --runInBand --coverage --forceExit",
-        "test:integration": "npm test -- --testPathPattern=integration --forceExit",
+        "test": "jest --runInBand",
+        "test:coverage": "jest --runInBand --coverage",
+        "test:integration": "npm test -- --testPathPattern=integration",
+        "test:integration:blockfrost": "npm test -- --testPathPattern=core.blockfrost.test.ts",
+        "test:integration:koios": "npm test -- --testPathPattern=core.koios.test.ts",
         "test:unit": "npm test -- --testPathPattern=unit"
     }
 }
@@ -206,10 +210,11 @@ curl http://localhost:4004/odata/v4/cardano-odata/$metadata
 **Script Notes:**
 
 - `--runInBand`: Run tests serially (required for database operations)
-- `--forceExit`: Force Jest to exit after tests complete (workaround for async
-  resource cleanup)
 - `pretest`: Automatically generates TypeScript types and deploys database
   schema before tests
+- Integration tests run against both Blockfrost and Koios backends (see
+  [Integration Test Guide](../../test/integration/README.md))
+- Koios tests run always; Blockfrost tests run only when `BLOCKFROST_KEY` is set
 
 ---
 

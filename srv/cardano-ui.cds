@@ -61,6 +61,12 @@ annotate srv.Blocks with @(
             $Type : 'UI.DataFieldForAction',
             Action: 'CardanoODataService.EntityContainer/GetLatestBlock',
             Label : 'Refresh Latest Block'
+        },
+
+        {
+            $Type : 'UI.DataFieldForAction',
+            action: 'CardanoODataService.EntityContainer/GetBlockByHash',
+            Label : 'Get Block by Hash'
         }
     ]
 );
@@ -88,7 +94,13 @@ annotate srv.Epochs with @(
             $Type : 'UI.DataFieldForAction',
             Action: 'CardanoODataService.EntityContainer/GetLatestEpoch',
             Label : 'Refresh Latest Epoch'
-        }
+        },
+        {
+            $Type : 'UI.DataFieldForAction',
+            Action: 'CardanoODataService.EntityContainer/GetEpochByNumber',
+            Label : 'Get Epoch by Number'
+        },
+
     ]
 );
 
@@ -118,26 +130,20 @@ annotate srv.Addresses with @(
             Label : 'Get Address by Bech32'
         }
     ],
-    UI.Facets         : [{
-        $Type     : 'UI.CollectionFacet',
-        ID        : 'AddressDetails',
-        Label     : 'Details',
-        Facets    : [
-            {
-                $Type : 'UI.ReferenceFacet',
-                Label : 'Assets',
-                Target: 'assets/@UI.LineItem'
-            },
-            {
-                $Type : 'UI.ReferenceFacet',
-                Label : 'UTxOs',
-                Target: 'utxos/@UI.LineItem'
-            }
-        ],
-        @UI.Hidden: (not hasAssets
-        or not hasUTxOs)
-
-    }]
+    UI.Facets         : [
+        {
+            $Type        : 'UI.ReferenceFacet',
+            Label        : 'Assets',
+            Target       : 'assets/@UI.LineItem',
+            ![@UI.Hidden]: (not hasAssets)
+        },
+        {
+            $Type        : 'UI.ReferenceFacet',
+            Label        : 'UTxOs',
+            Target       : 'utxos/@UI.LineItem',
+            ![@UI.Hidden]: (not hasUTxOs)
+        }
+    ],
 );
 
 // ----------------------------------------------------------------------------
@@ -244,3 +250,79 @@ annotate srv.TransactionOutputAssets with @UI.LineItem: [
     {Value: asset.policyId},
     {Value: asset.assetName}
 ];
+
+// ----------------------------------------------------------------------------
+// Pools
+// ----------------------------------------------------------------------------
+annotate srv.Pools with @(
+    UI.HeaderInfo     : {
+        TypeName      : 'Pool',
+        TypeNamePlural: 'Pools',
+        Title         : {Value: poolId}
+    },
+    UI.SelectionFields: [poolId],
+    UI.LineItem       : [
+        {Value: poolId},
+        {Value: vrfKeyHash},
+        {Value: blocksMinted},
+        {Value: blocksEpoch},
+        {Value: liveStake},
+        {Value: liveSize},
+        {Value: liveSaturation},
+        {Value: liveDelegators},
+        {Value: activeStake},
+        {Value: activeSize},
+        {Value: pledge},
+        {Value: margin},
+        {Value: fixedCost},
+        {Value: rewardAccount}
+    ]
+);
+
+
+// ----------------------------------------------------------------------------
+// Dreps
+// ----------------------------------------------------------------------------
+annotate srv.Dreps with @(
+    UI.HeaderInfo     : {
+        TypeName      : 'DRep',
+        TypeNamePlural: 'DReps',
+        Title         : {Value: drepId}
+    },
+    UI.SelectionFields: [drepId],
+    UI.LineItem       : [
+        {Value: drepId},
+        {Value: hex},
+        {Value: amount},
+        {Value: hasScript},
+        {Value: lastActiveEpoch},
+        {Value: retired},
+        {Value: expired}
+    ]
+);
+
+// ----------------------------------------------------------------------------
+// Accounts
+// ----------------------------------------------------------------------------
+annotate srv.Accounts with @(
+    UI.HeaderInfo     : {
+        TypeName      : 'Account',
+        TypeNamePlural: 'Accounts',
+        Title         : {Value: account_id}
+    },
+    UI.SelectionFields: [account_id],
+    UI.LineItem       : [
+        {Value: stakeAddress},
+        {Value: active},
+        {Value: activeEpoch},
+        {Value: controlledAmount},
+        {Value: rewardsSum},
+        {Value: withdrawalsSum},
+        {Value: reservesSum},
+        {Value: treasurySum},
+        {Value: withdrawableAmount},
+        {Value: poolId},
+        {Value: drepId},
+        {Value: hasAddresses}
+    ]
+);

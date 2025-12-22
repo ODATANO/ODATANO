@@ -141,16 +141,6 @@ erDiagram
         decimal  fee
         decimal  deposit
         int      size
-        int      utxoCount
-        int      withdrawalCount
-        int      mirCertCount
-        int      delegationCount
-        int      stakeCertCount
-        int      poolUpdateCount
-        int      poolRetireCount
-        int      assetMintOrBurnCount
-        int      redeemerCount
-        boolean  validContract
     }
 
     TransactionMetadata {
@@ -187,10 +177,6 @@ erDiagram
         AssetSlice asset
     }
 
-    %% -----------------------------------------------------
-    %% RELATIONSHIPS
-    %% -----------------------------------------------------
-
     %% Epoch <-> Blocks
     Epochs ||--o{ Blocks : hasBlocks
     %% (via Blocks.epochNumber -> Epochs.epoch)
@@ -207,6 +193,15 @@ erDiagram
 
     %% Transactions and related data
     Transactions ||--o{ TransactionMetadata     : has
+    Transactions ||--o{ TransactionInputs       : has
+    Transactions ||--o{ TransactionOutputs      : has
+
+    TransactionInputs  ||--o{ TransactionInputAssets   : contains
+    TransactionOutputs ||--o{ TransactionOutputAssets  : contains
+
+    %% Inputs/Outputs reference Addresses
+    Addresses ||--o{ TransactionInputs  : usedBy
+    Addresses ||--o{ TransactionOutputs : usedBy
     Transactions ||--o{ TransactionInputs       : has
     Transactions ||--o{ TransactionOutputs      : has
 

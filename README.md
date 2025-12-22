@@ -7,6 +7,9 @@ V4 access to Cardano blockchain data. It features intelligent caching,
 multi-provider fallback, and comprehensive blockchain data exposure through a
 standardized REST API.
 
+The project is funded by Cardano Catalyst Fund14.
+([Offical Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
+
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
@@ -15,11 +18,9 @@ standardized REST API.
 
 ## Milestone Status
 
-For the current functionality status and roadmap across milestones, see
-[docs/requirments & milestones/MILESTONES_FINAL.md](docs/requirments%20%26%20milestones/MILESTONES_FINAL.md).
-The project is at Milestone 1 completion with multi-provider failover
-(Blockfrost primary, Koios fallback) and full OData query capabilities ($filter,
-$select, $expand, $top, $skip, $count).
+Milestone 1 is nearly complete: multi-provider failover (Blockfrost primary,
+Koios fallback), defensive mappers/validators, and full OData query support
+($filter, $select, $expand, $top, $skip, $count).
 
 ## Features
 
@@ -28,8 +29,7 @@ $select, $expand, $top, $skip, $count).
 - **Multi-Network Support**: Mainnet, Preview, and Preprod network
   configurations
 - **Multi-Provider Architecture**: Blockfrost (primary) + Koios (fallback) with
-  automatic failover (I am also planning a way to access Cardano directly via a
-  running node in the future)
+  automatic failover (future: direct node access)
 - **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
   persisted to database with TTL-based refresh (see
   [Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md))
@@ -111,7 +111,7 @@ All refresh operations are strictly request-driven.
 ```bash
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
-npm install
+npm ci
 ```
 
 ### 2. Configure Environment
@@ -135,6 +135,9 @@ BLOCKFROST_KEY=your_blockfrost_api_key_here
 # Timeout settings (milliseconds) - optional
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=8000
+
+# Enabled Backends (comma-separated)
+BACKENDS=blockfrost,koios
 
 # Lazy Indexing Time-To-Live (milliseconds) - optional
 INDEX_TTL_MS=60000
@@ -214,6 +217,9 @@ npm run test:coverage
 npm run test:integration
 ```
 
+- See the Integration Test Guide:
+  [test/integration/README.md](test/integration/README.md)
+
 ### Run Only Unit Tests
 
 ```bash
@@ -235,47 +241,44 @@ npm run test:unit
 
 ### Entities (GET)
 
-| Entity                    | Description                              | Primary key / filter          | Example                                       |
-| ------------------------- | ---------------------------------------- | ----------------------------- | --------------------------------------------- |
-| `NetworkInformation`      | Network statistics (supply, stake)       | single row (temporal)         | `/NetworkInformation`                         |
-| `Blocks`                  | Block headers (latest via action/filter) | `hash`                        | `/Blocks?$top=1&$orderby=height desc`         |
-| `Epochs`                  | Epoch summaries                          | `epoch`                       | `/Epochs?$top=1&$orderby=epoch desc`          |
-| `Transactions`            | Transaction details with inputs/outputs  | `hash` (Blake2b256)           | `/Transactions('hash')`                       |
-| `TransactionInputs`       | Inputs of a transaction                  | `tx`, `inputIndex`            | `/TransactionInputs?$filter=tx eq 'hash'`     |
-| `TransactionOutputs`      | Outputs of a transaction                 | `tx`, `outputIndex`           | `/TransactionOutputs?$filter=tx eq 'hash'`    |
-| `TransactionInputAssets`  | Assets per transaction input             | `input`, `unit`               | `/TransactionInputAssets?$top=10`             |
-| `TransactionOutputAssets` | Assets per transaction output            | `output`, `unit`              | `/TransactionOutputAssets?$top=10`            |
-| `TransactionMetadata`     | Transaction metadata by tx + label       | `tx`, `label`                 | `/TransactionMetadata?$filter=tx eq 'hash'`   |
-| `Addresses`               | Address balances and metadata            | `address` (bech32)            | `/Addresses('addr...')`                       |
-| `AddressAssets`           | Native assets at an address              | `address`, `unit`             | `/AddressAssets?$filter=address eq 'addr...'` |
-| `AddressUTxOs`            | Unspent outputs at an address            | `address`, `hash`, `index`    | `/AddressUTxOs?$filter=address eq 'addr...'`  |
-| `UTxOAssets`              | Assets contained in a specific UTxO      | `utxo`, `unit`                | `/UTxOAssets?$top=10`                         |
-| `Pools`                   | Stake pools                              | `poolId` (hash format)        | `/Pools('pool1...')`                          |
-| `Accounts`                | Stake accounts (by stake address)        | `stakeAddress` (stake bech32) | `/Accounts('stake1...')`                      |
-| `Dreps`                   | Delegated representatives                | `drepId` (hash format)        | `/Dreps('drep1...')`                          |
+| Entity                    | Description                             | Primary key(s) (service)                            | Example                                                            |
+| ------------------------- | --------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------ |
+| `NetworkInformation`      | Network statistics (supply, stake)      | temporal single row                                 | `/NetworkInformation`                                              |
+| `Blocks`                  | Block headers                           | `hash`                                              | `/Blocks(hash='...')`                                              |
+| `Epochs`                  | Epoch summaries                         | `epoch`                                             | `/Epochs(epoch=300)`                                               |
+| `Transactions`            | Transaction details with inputs/outputs | `hash` (Blake2b256)                                 | `/Transactions('...64hex...')`                                     |
+| `TransactionInputs`       | Inputs of a transaction                 | `tx_hash` + `inputIndex`                            | `/TransactionInputs?$filter=tx_hash eq '...64hex...'`              |
+| `TransactionOutputs`      | Outputs of a transaction                | `tx_hash` + `outputIndex`                           | `/TransactionOutputs?$filter=tx_hash eq '...64hex...'`             |
+| `TransactionInputAssets`  | Assets per transaction input            | `input_tx_hash` + `input_inputIndex` + `unit`       | `/TransactionInputAssets?$filter=input_tx_hash eq '...64hex...'`   |
+| `TransactionOutputAssets` | Assets per transaction output           | `output_tx_hash` + `output_outputIndex` + `unit`    | `/TransactionOutputAssets?$filter=output_tx_hash eq '...64hex...'` |
+| `TransactionMetadata`     | Transaction metadata by tx + label      | `tx_hash` + `label`                                 | `/TransactionMetadata(tx_hash='...64hex...',label='721')`          |
+| `Addresses`               | Address balances and metadata           | `address` (bech32)                                  | `/Addresses('addr_test1...')`                                      |
+| `AddressAssets`           | Native assets at an address             | `address_address` + `unit`                          | `/AddressAssets?$filter=address_address eq 'addr_test1...'`        |
+| `AddressUTxOs`            | Unspent outputs at an address           | `address_address` + `hash` + `index`                | `/AddressUTxOs?$filter=address_address eq 'addr_test1...'`         |
+| `UTxOAssets`              | Assets contained in a specific UTxO     | `utxo_address_address` + `utxo_hash` + `utxo_index` | `/UTxOAssets?$filter=utxo_hash eq '...64hex...'`                   |
+| `Pools`                   | Stake pools                             | `poolId`                                            | `/Pools('pool1...')`                                               |
+| `Accounts`                | Stake accounts (by stake address)       | `stakeAddress` (bech32 stake)                       | `/Accounts('stake_test1...')`                                      |
+| `Dreps`                   | Delegated representatives               | `drepId`                                            | `/Dreps('drep1...')`                                               |
 
-> For the most recent block or epoch, call the actions `GetLatestBlock` /
-> `GetLatestEpoch`, or query `Blocks?$orderby=height desc&$top=1` and
-> `Epochs?$orderby=epoch desc&$top=1`.
+> For the most recent block or epoch, query `Blocks?$orderby=height desc&$top=1`
+> and `Epochs?$orderby=epoch desc&$top=1`.
 
 ### Actions (POST)
 
-| Action                         | Parameters    | Description                       |
-| ------------------------------ | ------------- | --------------------------------- |
-| `GetNetworkInformation`        | -             | Fetch current network stats       |
-| `GetLatestBlock`               | -             | Get latest block                  |
-| `GetLatestEpoch`               | -             | Get current epoch                 |
-| `GetBlockByHash`               | `blockHash`   | Fetch a specific block by hash    |
-| `GetEpochByNumber`             | `epochNumber` | Fetch a specific epoch by number  |
-| `GetTransactionByHash`         | `txHash`      | Lookup transaction (64-hex)       |
-| `GetMetadataByTxHash`          | `txHash`      | Get tx metadata (64-hex)          |
-| `GetMetadataLabelTransactions` | `label`       | Find txs by metadata label        |
-| `GetAddressByBech32`           | `address`     | Get address info (bech32)         |
-| `GetUTxOsByAddress`            | `address`     | Get address UTxOs (bech32)        |
-| `GetAssetsByAddress`           | `address`     | Get address assets (bech32)       |
-| `GetPoolById`                  | `poolId`      | Fetch a pool by pool hash         |
-| `GetAccountByStakingAddress`   | `address`     | Fetch an account by stake address |
-| `GetDrepById`                  | `drepId`      | Fetch a drep by id                |
+| Action                         | Parameters     | Description                         |
+| ------------------------------ | -------------- | ----------------------------------- |
+| `GetNetworkInformation`        | -              | Fetch current network stats         |
+| `GetBlockByHash`               | `blockHash`    | Fetch a specific block by hash      |
+| `GetEpochByNumber`             | `epochNumber`  | Fetch a specific epoch by number    |
+| `GetTransactionByHash`         | `txHash`       | Lookup transaction (64-hex)         |
+| `GetMetadataByTxHash`          | `txHash`       | Get transaction metadata (64-hex)   |
+| `GetMetadataLabelTransactions` | `label`        | Find transactions by metadata label |
+| `GetAddressByBech32`           | `address`      | Get address info (bech32)           |
+| `GetUTxOsByAddress`            | `address`      | Get address UTxOs (bech32)          |
+| `GetAssetsByAddress`           | `address`      | Get address assets (bech32)         |
+| `GetPoolById`                  | `poolId`       | Fetch a pool by pool hash           |
+| `GetAccountByStakeAddress`     | `stakeAddress` | Fetch an account by stake address   |
+| `GetDrepById`                  | `drepId`       | Fetch a drep by id                  |
 
 ### OData Query Examples
 

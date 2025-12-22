@@ -71,12 +71,10 @@ GET /Blocks?$orderby=height desc&$top=1
 GET /Epochs?$orderby=epoch desc&$top=1
 ```
 
-Actions (equivalent):
+Action (equivalent for network info):
 
 ```http
 POST /GetNetworkInformation
-POST /GetLatestBlock
-POST /GetLatestEpoch
 ```
 
 ### 2. Transaction Lookup
@@ -247,13 +245,13 @@ Content-Type: application/json
 #### Accounts
 
 ```http
-GET /Accounts('stake1...')
+GET /Accounts('stake_test1...')
 
-POST /GetAccountByStakingAddress
+POST /GetAccountByStakeAddress
 Content-Type: application/json
 
 {
-  "address": "stake1..."
+  "stakeAddress": "stake_test1..."
 }
 ```
 

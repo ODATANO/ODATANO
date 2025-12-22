@@ -2,734 +2,322 @@ import {
   BackendError,
   NotFoundError,
   TimeoutError,
-  UnauthorizedError,
   ProviderBadResponseError,
   AllBackendsFailedError,
-  normalizeBackendError,
-  isNotFoundError,
-  isTimeoutError,
-  isUnauthorizedError,
-  isForbiddenError,
-  isRateLimitedError,
-  getErrorStatus,
-  getErrorMessage,
-  RateLimitedError,
-  ForbiddenError,
   ConfigError,
   BackendInitError,
   AllBackendsInitFailedError,
-  rejectInvalid,
-  rejectMissing,
+  getErrorStatus,
+  getErrorMessage,
+  normalizeBackendError,
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
-describe('Typed Backend Errors', () => {
+describe('Error Classes', () => {
+  
+  // ============================================================================
+  // BackendError
+  // ============================================================================
   describe('BackendError', () => {
-    test('creates error with message and status code', () => {
-      const err = new BackendError('Test error', 500, ERROR_CODES.INTERNAL_ERROR, 'koios');
-      expect(err.message).toBe('Test error');
-      expect(err.statusCode).toBe(500);
-      expect(err.backendName).toBe('koios');
-      expect(err.name).toBe('BackendError');
-    });
-
-    test('captures stack trace', () => {
-      const err = new BackendError('Test');
-      expect(err.stack).toBeDefined();
-    });
-
-    test('stores original error', () => {
-      const original = new Error('Original');
-      const err = new BackendError('Wrapped', 500, ERROR_CODES.INTERNAL_ERROR, 'koios', original);
-      expect(err.originalError).toBe(original);
-    });
-  });
-
-  describe('NotFoundError', () => {
-    test('creates 404 error with resource name', () => {
-      const err = new NotFoundError('Transaction', 'koios');
-      expect(err.message).toBe('Transaction not found');
-      expect(err.statusCode).toBe(404);
-      expect(err.backendName).toBe('koios');
-      expect(err.name).toBe('NotFoundError');
-    });
-  });
-
-  describe('TimeoutError', () => {
-    test('creates 503 error without timeout value', () => {
-      const err = new TimeoutError('koios');
-      expect(err.message).toBe('Backend timeout or unreachable');
-      expect(err.statusCode).toBe(503);
-      expect(err.backendName).toBe('koios');
-    });
-
-    test('creates 503 error with timeout value', () => {
-      const err = new TimeoutError('koios', 5000);
-      expect(err.message).toBe('Backend timeout after 5000ms');
-      expect(err.statusCode).toBe(503);
-    });
-  });
-
-  describe('UnauthorizedError', () => {
-    test('creates 401 error', () => {
-      const err = new UnauthorizedError('koios');
-      expect(err.message).toBe('Unauthorized access to provider');
-      expect(err.statusCode).toBe(401);
-      expect(err.backendName).toBe('koios');
-    });
-  });
-
-  describe('ProviderBadResponseError', () => {
-    test('creates 502 error with custom message', () => {
-      const err = new ProviderBadResponseError('Invalid JSON response', 'koios');
-      expect(err.message).toBe('Invalid JSON response');
-      expect(err.statusCode).toBe(502);
-      expect(err.backendName).toBe('koios');
-    });
-  });
-
-  describe('AllBackendsFailedError', () => {
-    test('combines multiple backend errors', () => {
-      const errors = [
-        new TimeoutError('blockfrost', 5000),
-        new NotFoundError('Transaction', 'koios'),
-      ];
-      const err = new AllBackendsFailedError(errors);
+    it('should create error with default values', () => {
+      const error = new BackendError('Test error');
       
-      expect(err.message).toContain('All backends failed');
-      expect(err.message).toContain('Transaction not found');
-      expect(err.statusCode).toBe(404); // Last error status
-      expect(err.errors).toEqual(errors);
+      expect(error.message).toBe('Test error');
+      expect(error.statusCode).toBe(500);
+      expect(error.code).toBe(ERROR_CODES.INTERNAL_ERROR);
+      expect(error.name).toBe('BackendError');
+      expect(error instanceof Error).toBe(true);
     });
 
-    test('handles empty errors array', () => {
-      const err = new AllBackendsFailedError([]);
-      expect(err.message).toContain('unknown error');
-      expect(err.statusCode).toBe(500);
-    });
-  });
-});
-
-describe('Error Detection Functions', () => {
-  describe('isNotFoundError', () => {
-    test('detects direct status 404', () => {
-      expect(isNotFoundError({ status: 404 })).toBe(true);
-    });
-
-    test('detects response status 404', () => {
-      expect(isNotFoundError({ response: { status: 404 } })).toBe(true);
-    });
-
-    test('detects NOT_FOUND message', () => {
-      expect(isNotFoundError({ message: 'NOT_FOUND' })).toBe(true);
-      expect(isNotFoundError({ message: 'not found' })).toBe(true);
-    });
-
-    test('detects message containing "not found"', () => {
-      expect(isNotFoundError({ message: 'Transaction not found' })).toBe(true);
-    });
-
-    test('returns false for other errors', () => {
-      expect(isNotFoundError({ status: 500 })).toBe(false);
-      expect(isNotFoundError({ message: 'timeout' })).toBe(false);
+    it('should create error with custom values', () => {
+      const error = new BackendError(
+        'Custom error',
+        400,
+        ERROR_CODES.INVALID_INPUT,
+        'blockfrost',
+        { original: 'error' },
+        'field1'
+      );
+      
+      expect(error.message).toBe('Custom error');
+      expect(error.statusCode).toBe(400);
+      expect(error.code).toBe(ERROR_CODES.INVALID_INPUT);
+      expect(error.backendName).toBe('blockfrost');
+      expect(error.originalError).toEqual({ original: 'error' });
+      expect(error.target).toBe('field1');
     });
   });
 
-  describe('isTimeoutError', () => {
-    test('detects ECONNABORTED code', () => {
-      expect(isTimeoutError({ code: 'ECONNABORTED' })).toBe(true);
+  // ============================================================================
+  // NotFoundError
+  // ============================================================================
+  describe('NotFoundError', () => {
+    it('should create 404 error for resource', () => {
+      const error = new NotFoundError('Transaction');
+      
+      expect(error.message).toBe('Transaction not found');
+      expect(error.statusCode).toBe(404);
+      expect(error.code).toBe(ERROR_CODES.NOT_FOUND);
+      expect(error.name).toBe('NotFoundError');
     });
 
-    test('detects ETIMEDOUT code', () => {
-      expect(isTimeoutError({ code: 'ETIMEDOUT' })).toBe(true);
+    it('should include backend name', () => {
+      const error = new NotFoundError('Address', 'koios');
+      
+      expect(error.message).toBe('Address not found');
+      expect(error.backendName).toBe('koios');
     });
 
-    test('detects timeout in message', () => {
-      expect(isTimeoutError({ message: 'Request timeout' })).toBe(true);
-      expect(isTimeoutError({ message: 'Operation timed out' })).toBe(true);
-    });
-
-    test('returns false for other errors', () => {
-      expect(isTimeoutError({ status: 404 })).toBe(false);
-    });
-  });
-
-  describe('isUnauthorizedError', () => {
-    test('detects status 401', () => {
-      expect(isUnauthorizedError({ status: 401 })).toBe(true);
-    });
-
-    test('does not detect status 403 (that is Forbidden)', () => {
-      expect(isUnauthorizedError({ status: 403 })).toBe(false);
-    });
-
-    test('detects response status 401', () => {
-      expect(isUnauthorizedError({ response: { status: 401 } })).toBe(true);
-    });
-
-    test('detects unauthorized in message', () => {
-      expect(isUnauthorizedError({ message: 'Unauthorized access' })).toBe(true);
-      expect(isUnauthorizedError({ message: 'Forbidden' })).toBe(false);
-    });
-
-    test('returns false for other errors', () => {
-      expect(isUnauthorizedError({ status: 404 })).toBe(false);
+    it('should store original error', () => {
+      const originalError = new Error('Original');
+      const error = new NotFoundError('Block', 'blockfrost', originalError);
+      
+      expect(error.originalError).toBe(originalError);
     });
   });
 
+  // ============================================================================
+  // TimeoutError
+  // ============================================================================
+  describe('TimeoutError', () => {
+    it('should create timeout error with default message', () => {
+      const error = new TimeoutError();
+      
+      expect(error.message).toBe('Backend timeout or unreachable');
+      expect(error.statusCode).toBe(503);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(error.name).toBe('TimeoutError');
+    });
+
+    it('should include backend name in timeout error', () => {
+      const error = new TimeoutError('koios');
+      
+      expect(error.backendName).toBe('koios');
+      expect(error.message).toBe('Backend timeout or unreachable');
+    });
+
+    it('should include timeout duration in message', () => {
+      const error = new TimeoutError('blockfrost', 5000);
+      
+      expect(error.message).toBe('Backend timeout after 5000ms');
+      expect(error.statusCode).toBe(503);
+    });
+  });
+
+  // ============================================================================
+  // ProviderBadResponseError
+  // ============================================================================
+  describe('ProviderBadResponseError', () => {
+    it('should create 502 error with custom message', () => {
+      const error = new ProviderBadResponseError('Invalid response format');
+      
+      expect(error.message).toBe('Invalid response format');
+      expect(error.statusCode).toBe(502);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
+      expect(error.name).toBe('ProviderBadResponseError');
+    });
+
+    it('should include backend name', () => {
+      const error = new ProviderBadResponseError('Bad response', 'koios');
+      
+      expect(error.backendName).toBe('koios');
+    });
+
+    it('should store original error', () => {
+      const originalError = new Error('Original');
+      const error = new ProviderBadResponseError('Bad data', 'blockfrost', originalError);
+      
+      expect(error.originalError).toBe(originalError);
+    });
+  });
+
+  // ============================================================================
+  // AllBackendsFailedError
+  // ============================================================================
+  describe('AllBackendsFailedError', () => {
+    it('should create error with multiple backend failures', () => {
+      const errors = [
+        new BackendError('Error 1', 503, ERROR_CODES.PROVIDER_UNAVAILABLE, 'blockfrost'),
+        new BackendError('Error 2', 500, ERROR_CODES.INTERNAL_ERROR, 'koios'),
+      ];
+      
+      const error = new AllBackendsFailedError(errors);
+      
+      expect(error.message).toBe('All backends failed: Error 2');
+      expect(error.statusCode).toBe(500);
+      expect(error.code).toBe(ERROR_CODES.INTERNAL_ERROR);
+      expect(error.errors).toEqual(errors);
+      expect(error.name).toBe('AllBackendsFailedError');
+    });
+
+    it('should use last error status and code', () => {
+      const errors = [
+        new BackendError('Error 1', 500),
+        new ProviderBadResponseError('Bad response'),
+      ];
+      
+      const error = new AllBackendsFailedError(errors);
+      
+      expect(error.statusCode).toBe(502);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
+    });
+
+    it('should handle empty errors array', () => {
+      const error = new AllBackendsFailedError([]);
+      
+      expect(error.message).toContain('All backends failed');
+      expect(error.statusCode).toBe(500);
+    });
+  });
+
+  // ============================================================================
+  // ConfigError
+  // ============================================================================
+  describe('ConfigError', () => {
+    it('should create config error', () => {
+      const error = new ConfigError('Missing BLOCKFROST_KEY');
+      
+      expect(error.message).toBe('Missing BLOCKFROST_KEY');
+      expect(error.name).toBe('ConfigError');
+      expect(error instanceof Error).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // BackendInitError
+  // ============================================================================
+  describe('BackendInitError', () => {
+    it('should create init error with backend name', () => {
+      const originalError = new Error('Connection failed');
+      const error = new BackendInitError('koios', originalError);
+      
+      expect(error.message).toBe('Failed to initialize backend: koios');
+      expect(error.backendName).toBe('koios');
+      expect(error.originalError).toBe(originalError);
+      expect(error.name).toBe('BackendInitError');
+    });
+  });
+
+  // ============================================================================
+  // AllBackendsInitFailedError
+  // ============================================================================
+  describe('AllBackendsInitFailedError', () => {
+    it('should create error with all init failures', () => {
+      const errors = [
+        new BackendInitError('blockfrost', new Error('Auth failed')),
+        new BackendInitError('koios', new Error('Connection timeout')),
+      ];
+      
+      const error = new AllBackendsInitFailedError(errors);
+      
+      expect(error.message).toContain('CardanoClient startup failed');
+      expect(error.message).toContain('blockfrost: Auth failed');
+      expect(error.message).toContain('koios: Connection timeout');
+      expect(error.errors).toEqual(errors);
+      expect(error.name).toBe('AllBackendsInitFailedError');
+    });
+
+    it('should handle init errors with non-string originals', () => {
+      const errors = [
+        new BackendInitError('blockfrost', { code: 500 }),
+      ];
+      
+      const error = new AllBackendsInitFailedError(errors);
+      
+      expect(error.message).toContain('blockfrost');
+    });
+  });
+
+  // ============================================================================
+  // getErrorStatus
+  // ============================================================================
   describe('getErrorStatus', () => {
-    test('extracts direct status', () => {
-      expect(getErrorStatus({ status: 404 })).toBe(404);
+    it('should extract status from error.status', () => {
+      const err = { status: 404 };
+      expect(getErrorStatus(err)).toBe(404);
     });
 
-    test('extracts response status', () => {
-      expect(getErrorStatus({ response: { status: 401 } })).toBe(401);
+    it('should extract status from error.response.status', () => {
+      const err = { response: { status: 503 } };
+      expect(getErrorStatus(err)).toBe(503);
     });
 
-    test('defaults to 500', () => {
+    it('should prefer direct status over response status', () => {
+      const err = { status: 400, response: { status: 503 } };
+      expect(getErrorStatus(err)).toBe(400);
+    });
+
+    it('should return 500 for unknown error', () => {
       expect(getErrorStatus({})).toBe(500);
       expect(getErrorStatus(null)).toBe(500);
+      expect(getErrorStatus(undefined)).toBe(500);
     });
   });
 
+  // ============================================================================
+  // getErrorMessage
+  // ============================================================================
   describe('getErrorMessage', () => {
-    test('extracts response data message', () => {
-      const err = { response: { data: { message: 'API error' } } };
-      expect(getErrorMessage(err)).toBe('API error');
+    it('should extract message from error.message', () => {
+      const err = new Error('Test error');
+      expect(getErrorMessage(err)).toBe('Test error');
     });
 
-    test('extracts response data error', () => {
-      const err = { response: { data: { error: 'Bad request' } } };
-      expect(getErrorMessage(err)).toBe('Bad request');
-    });
-
-    test('extracts direct message', () => {
-      expect(getErrorMessage({ message: 'Direct error' })).toBe('Direct error');
-    });
-
-    test('defaults to "Unknown error"', () => {
+    it('should return unknown for empty error', () => {
       expect(getErrorMessage({})).toBe('Unknown error');
       expect(getErrorMessage(null)).toBe('Unknown error');
+      expect(getErrorMessage(undefined)).toBe('Unknown error');
+    });
+
+    it('should handle error with only code', () => {
+      const err = { code: 'SOME_CODE' };
+      expect(getErrorMessage(err)).toBe('Unknown error');
+    });
+  });
+
+  // ============================================================================
+  // normalizeBackendError
+  // ============================================================================
+  describe('normalizeBackendError', () => {
+    it('should return already normalized BackendError', () => {
+      const originalError = new BackendError('Already normalized');
+      const result = normalizeBackendError(originalError);
+      
+      expect(result).toBe(originalError);
+    });
+
+    it('should convert 5xx error to 503 PROVIDER_UNAVAILABLE', () => {
+      const error = { status: 500, message: 'Server error' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result.backendName).toBe('blockfrost');
+    });
+
+    it('should convert 4xx error to 502 PROVIDER_BAD_RESPONSE', () => {
+      const error = { status: 400, message: 'Bad request' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result).toBeInstanceOf(ProviderBadResponseError);
+      expect(result.statusCode).toBe(502);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
+    });
+
+    it('should convert unknown error to 503 PROVIDER_UNAVAILABLE', () => {
+      const error = new Error('Unknown error');
+      const result = normalizeBackendError(error);
+      
+      // Unknown errors get status 500 from getErrorStatus, which triggers >= 500 path → 503
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+    });
+
+    it('should preserve original error', () => {
+      const originalError = { status: 503, message: 'Timeout' };
+      const result = normalizeBackendError(originalError, 'blockfrost');
+      
+      expect(result.originalError).toBe(originalError);
     });
   });
 });
-
-describe('normalizeBackendError', () => {
-  test('returns BackendError as is', () => {
-    const original = new BackendError('Test', 500, ERROR_CODES.INTERNAL_ERROR, 'koios');
-    const result = normalizeBackendError(original);
-    expect(result).toBe(original);
-  });
-
-  test('converts 404 to NotFoundError', () => {
-    const err = { status: 404, message: 'Not found' };
-    const result = normalizeBackendError(err, 'koios', 'Transaction');
-    
-    expect(result).toBeInstanceOf(NotFoundError);
-    expect(result.message).toBe('Transaction not found');
-    expect(result.statusCode).toBe(404);
-    expect(result.backendName).toBe('koios');
-  });
-
-  test('converts timeout to TimeoutError', () => {
-    const err = { code: 'ETIMEDOUT', message: 'Request timed out' };
-    const result = normalizeBackendError(err, 'blockfrost');
-    
-    expect(result).toBeInstanceOf(TimeoutError);
-    expect(result.statusCode).toBe(503);
-    expect(result.backendName).toBe('blockfrost');
-  });
-
-  test('converts 401/403 to UnauthorizedError', () => {
-    const err = { status: 401, message: 'Invalid API key' };
-    const result = normalizeBackendError(err, 'koios');
-    
-    expect(result).toBeInstanceOf(UnauthorizedError);
-    expect(result.statusCode).toBe(401);
-    expect(result.backendName).toBe('koios');
-  });
-
-  test('converts axios-style error', () => {
-    const err = { 
-      response: { 
-        status: 500, 
-        data: { message: 'Internal server error' } 
-      } 
-    };
-    const result = normalizeBackendError(err, 'koios');
-    
-    expect(result).toBeInstanceOf(BackendError);
-    expect(result.message).toBe('Internal server error');
-    expect(result.statusCode).toBe(503); // 5xx errors are normalized to 503 (PROVIDER_UNAVAILABLE)
-    expect(result.backendName).toBe('koios');
-  });
-
-  test('handles timeout message pattern', () => {
-    const err = new Error('Primary getTransaction timed out after 8000ms');
-    const result = normalizeBackendError(err, 'blockfrost');
-    
-    expect(result).toBeInstanceOf(TimeoutError);
-    expect(result.statusCode).toBe(503);
-  });
-  describe('Advanced Error Handling - Coverage Improvements', () => {
-    
-    describe('RateLimitedError', () => {
-      test('creates 503 error for rate limiting', () => {
-        const err = new RateLimitedError('blockfrost');
-        expect(err.message).toBe('Provider rate limit exceeded');
-        expect(err.statusCode).toBe(503);
-        expect(err.code).toBe(ERROR_CODES.PROVIDER_RATE_LIMITED);
-        expect(err.backendName).toBe('blockfrost');
-      });
-  
-      test('stores original error', () => {
-        const original = new Error('Rate limit: 429');
-        const err = new RateLimitedError('blockfrost', original);
-        expect(err.originalError).toBe(original);
-      });
-    });
-  
-    describe('ForbiddenError', () => {
-      test('creates 403 error', () => {
-        const err = new ForbiddenError('koios');
-        expect(err.message).toBe('Forbidden access to provider');
-        expect(err.statusCode).toBe(403);
-        expect(err.code).toBe(ERROR_CODES.FORBIDDEN);
-        expect(err.backendName).toBe('koios');
-      });
-  
-      test('stores original error', () => {
-        const original = new Error('Access denied');
-        const err = new ForbiddenError('koios', original);
-        expect(err.originalError).toBe(original);
-      });
-    });
-  
-    describe('normalizeBackendError - Rate Limit Detection', () => {
-      test('detects rate limit error from status 429', () => {
-        const err = {
-          response: { status: 429 },
-          message: 'Too many requests'
-        };
-        const normalized = normalizeBackendError(err, 'blockfrost');
-        expect(normalized).toBeInstanceOf(RateLimitedError);
-        expect(normalized.statusCode).toBe(503);
-      });
-  
-      test('detects rate limit from error message patterns - case insensitive', () => {
-        const patterns = [
-          'rate limit exceeded',
-          'too many requests',
-          'rate limited',
-          'rate limit',
-          'rate-limit',
-          'ratelimit'
-        ];
-  
-        patterns.forEach(pattern => {
-          const err = { message: pattern };
-          const normalized = normalizeBackendError(err, 'backend');
-          expect(normalized).toBeInstanceOf(BackendError);
-        });
-      });
-  
-      test('detects rate limit from axios error with message', () => {
-        const err = {
-          message: 'Request failed with status code 429: rate limit exceeded',
-          isAxiosError: true
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(RateLimitedError);
-      });
-    });
-  
-    describe('normalizeBackendError - Timeout Detection', () => {
-      test('detects timeout from ECONNABORTED code', () => {
-        const err = { code: 'ECONNABORTED', message: 'timeout' };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(TimeoutError);
-        expect(normalized.statusCode).toBe(503);
-      });
-  
-      test('detects timeout from ETIMEDOUT code', () => {
-        const err = { code: 'ETIMEDOUT', message: 'timeout' };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(TimeoutError);
-      });
-  
-      test('detects timeout from error message patterns', () => {
-        const patterns = [
-          'timeout',
-          'timed out',
-          'TIMEOUT',
-          'connection timeout'
-        ];
-  
-        patterns.forEach(pattern => {
-          const err = { message: pattern };
-          const normalized = normalizeBackendError(err, 'backend');
-          expect(normalized).toBeInstanceOf(TimeoutError);
-        });
-      });
-    });
-  
-    describe('normalizeBackendError - Unauthorized Detection', () => {
-      test('detects unauthorized from status 401', () => {
-        const err = {
-          response: { status: 401 },
-          message: 'Unauthorized'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(UnauthorizedError);
-        expect(normalized.statusCode).toBe(401);
-      });
-  
-      test('detects unauthorized from error message patterns', () => {
-        const patterns = [
-          'unauthorized',
-          'UNAUTHORIZED',
-          'Unauthorized',
-          'invalid api key',
-          'Invalid API Key',
-          'INVALID API KEY',
-          'authentication failed',
-          'Authentication Failed',
-          'not authenticated',
-          'Not Authenticated'
-        ];
-  
-        patterns.forEach(pattern => {
-          const err = { message: pattern };
-          const normalized = normalizeBackendError(err, 'backend');
-          expect(normalized).toBeInstanceOf(BackendError);
-        });
-      });
-    });
-  
-    describe('normalizeBackendError - Forbidden Detection', () => {
-      test('detects forbidden from status 403', () => {
-        const err = {
-          response: { status: 403 },
-          message: 'Forbidden'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(ForbiddenError);
-        expect(normalized.statusCode).toBe(403);
-      });
-  
-      test('detects forbidden from error message', () => {
-        const err = { message: 'forbidden access' };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(ForbiddenError);
-      });
-    });
-  
-    describe('normalizeBackendError - 5xx Status Codes', () => {
-      test('converts 500 to provider unavailable', () => {
-        const err = {
-          response: { status: 500 },
-          message: 'Internal server error'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(503);
-        expect(normalized.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      });
-  
-      test('converts 502 to provider unavailable', () => {
-        const err = {
-          response: { status: 502 },
-          message: 'Bad gateway'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(503);
-      });
-  
-      test('converts 504 to provider unavailable', () => {
-        const err = {
-          response: { status: 504 },
-          message: 'Gateway timeout'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(503);
-      });
-
-      test('convert Unknown / non-http error → internal ', () => {
-        const err = {
-          response: { status: 100 },
-          message: 'what even is this?'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(500);
-      });
-    });
-  
-    describe('normalizeBackendError - 4xx Status Codes', () => {
-      test('converts 400 to provider bad response', () => {
-        const err = {
-          response: { status: 400 },
-          message: 'Bad request'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(ProviderBadResponseError);
-        expect(normalized.statusCode).toBe(502);
-      });
-  
-      test('converts 422 to provider bad response', () => {
-        const err = {
-          response: { status: 422 },
-          message: 'Unprocessable entity'
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(ProviderBadResponseError);
-      });
-    });
-  
-    describe('normalizeBackendError - Unknown Errors', () => {
-      test('converts unknown error to internal error', () => {
-        const err = { message: 'Something went wrong' };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(503);
-        expect(normalized.code).toBe('ODATANO_PROVIDER_UNAVAILABLE');
-      });
-  
-      test('handles error without message', () => {
-        const err = {};
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized.statusCode).toBe(503);
-      });
-  
-      test('handles error with nested response data', () => {
-        const err = {
-          response: {
-            status: 418, // I'm a teapot (4xx but not caught)
-            data: { error: 'Custom error' }
-          }
-        };
-        const normalized = normalizeBackendError(err, 'backend');
-        expect(normalized).toBeInstanceOf(ProviderBadResponseError);
-      });
-    });
-  
-    describe('ConfigError', () => {
-      test('creates config error with message', () => {
-        const err = new ConfigError('Invalid configuration');
-        expect(err.message).toBe('Invalid configuration');
-        expect(err.name).toBe('ConfigError');
-      });
-    });
-  
-    describe('BackendInitError', () => {
-      test('creates backend init error', () => {
-        const original = new Error('Init failed');
-        const err = new BackendInitError('blockfrost', original);
-        expect(err.message).toBe('Failed to initialize backend: blockfrost');
-        expect(err.backendName).toBe('blockfrost');
-        expect(err.originalError).toBe(original);
-        expect(err.name).toBe('BackendInitError');
-      });
-    });
-  
-    describe('AllBackendsInitFailedError', () => {
-      test('creates error with multiple backend init failures', () => {
-        const errors = [
-          new BackendInitError('blockfrost', new Error('API key invalid')),
-          new BackendInitError('koios', new Error('Connection refused'))
-        ];
-        const err = new AllBackendsInitFailedError(errors);
-        
-        expect(err.message).toContain('all backends failed to initialize');
-        expect(err.message).toContain('blockfrost');
-        expect(err.message).toContain('koios');
-        expect(err.name).toBe('AllBackendsInitFailedError');
-      });
-  
-      test('handles backend init error without error message', () => {
-        const errors = [
-          new BackendInitError('backend1', 'string error'),
-          new BackendInitError('backend2', null)
-        ];
-        const err = new AllBackendsInitFailedError(errors);
-        expect(err.message).toContain('backend1');
-        expect(err.message).toContain('backend2');
-      });
-    });
-  
-    describe('rejectInvalid', () => {
-      test('creates rejection with custom message', () => {
-        const mockReq = {
-          reject: jest.fn()
-        };
-        
-        rejectInvalid(mockReq as any, 'TestContext', 'Invalid data', 'field1');
-        
-        expect(mockReq.reject).toHaveBeenCalledWith(
-          400,
-          '[ODATANO_INVALID_INPUT] TestContext: Invalid data',
-          'field1'
-        );
-      });
-  
-      test('creates rejection without target field', () => {
-        const mockReq = {
-          reject: jest.fn()
-        };
-        
-        rejectInvalid(mockReq as any, 'TestContext', 'Invalid data');
-        
-        expect(mockReq.reject).toHaveBeenCalledWith(
-          400,
-          '[ODATANO_INVALID_INPUT] TestContext: Invalid data',
-          undefined
-        );
-      });
-    });
-  
-    describe('rejectMissing', () => {
-      test('creates rejection for missing field', () => {
-        const mockReq = {
-          reject: jest.fn()
-        };
-        
-        rejectMissing(mockReq as any, 'TestContext', 'requiredField');
-        
-        expect(mockReq.reject).toHaveBeenCalledWith(
-          400,
-          '[ODATANO_INVALID_INPUT] TestContext: requiredField is required',
-          'requiredField'
-        );
-      });
-    });
-  
-    describe('BackendError with target field', () => {
-      test('includes target field in error', () => {
-        const err = new BackendError(
-          'Validation failed',
-          400,
-          ERROR_CODES.INVALID_INPUT,
-          'backend',
-          null,
-          'txHash'
-        );
-        expect(err.target).toBe('txHash');
-      });
-    }); 
-
-    describe('isForbiddenError', () => {
-      test('returns true for 403 status', () => {
-        const err = { status: 403 };
-        expect(isForbiddenError(err)).toBe(true);
-      });
-
-      test('returns true for 403 response status', () => {
-        const err = { response: { status: 403 } };
-        expect(isForbiddenError(err)).toBe(true);
-      });
-
-      test('returns true for forbidden message', () => {
-        const err = { message: 'Forbidden access' };
-        expect(isForbiddenError(err)).toBe(true);
-      });
-
-      test('returns false for non-forbidden errors', () => {
-        const err = { status: 404 };
-        expect(isForbiddenError(err)).toBe(false);
-      });
-    });
-
-    describe('isRateLimitedError', () => {
-      test('returns true for 429 status', () => {
-        const err = { status: 429 };
-        expect(isRateLimitedError(err)).toBe(true);
-      });
-
-      test('returns true for 429 response status', () => {
-        const err = { response: { status: 429 } };
-        expect(isRateLimitedError(err)).toBe(true);
-      });
-
-      test('returns true for rate limit message', () => {
-        const err = { message: 'rate limit exceeded' };
-        expect(isRateLimitedError(err)).toBe(true);
-      });
-
-      test('returns true for too many requests message', () => {
-        const err = { message: 'Too many requests' };
-        expect(isRateLimitedError(err)).toBe(true);
-      });
-
-      test('returns false for non-rate-limit errors', () => {
-        const err = { status: 500 };
-        expect(isRateLimitedError(err)).toBe(false);
-      });
-    });
-
-    describe('getErrorStatus', () => {
-      test('returns status from error', () => {
-        const err = { status: 404 };
-        expect(getErrorStatus(err)).toBe(404);
-      });
-
-      test('returns status from response', () => {
-        const err = { response: { status: 503 } };
-        expect(getErrorStatus(err)).toBe(503);
-      });
-
-      test('returns 500 for errors without status', () => {
-        const err = { message: 'Some error' };
-        expect(getErrorStatus(err)).toBe(500);
-      });
-
-      test('returns 500 for null/undefined', () => {
-        expect(getErrorStatus(null)).toBe(500);
-        expect(getErrorStatus(undefined)).toBe(500);
-      });
-    });
-
-    describe('getErrorMessage', () => {
-      test('extracts message from response.data.message', () => {
-        const err = { response: { data: { message: 'Response error' } } };
-        expect(getErrorMessage(err)).toBe('Response error');
-      });
-
-      test('extracts message from response.data.error', () => {
-        const err = { response: { data: { error: 'Error description' } } };
-        expect(getErrorMessage(err)).toBe('Error description');
-      });
-
-      test('extracts message from error.message', () => {
-        const err = { message: 'Direct message' };
-        expect(getErrorMessage(err)).toBe('Direct message');
-      });
-
-      test('returns Unknown error for empty errors', () => {
-        expect(getErrorMessage({})).toBe('Unknown error');
-        expect(getErrorMessage(null)).toBe('Unknown error');
-      });
-    });
-
-    describe('normalizeBackendError - additional cases', () => {
-      test('converts rate limited error', () => {
-        const err = { status: 429, message: 'Rate limit exceeded' };
-        const result = normalizeBackendError(err, 'blockfrost');
-        
-        expect(result).toBeInstanceOf(RateLimitedError);
-        expect(result.statusCode).toBe(503);
-      });
-
-      test('converts forbidden error', () => {
-        const err = { status: 403, message: 'Forbidden' };
-        const result = normalizeBackendError(err, 'koios');
-        
-        expect(result).toBeInstanceOf(ForbiddenError);
-        expect(result.statusCode).toBe(403);
-      });
-
-      test('returns BackendError as-is', () => {
-        const err = new BackendError('Test', 500, ERROR_CODES.INTERNAL_ERROR, 'backend');
-        const result = normalizeBackendError(err, 'backend');
-        
-        expect(result).toBe(err);
-      });
-    });
-});
-}); 

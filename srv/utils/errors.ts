@@ -59,51 +59,6 @@ export class TimeoutError extends BackendError {
 }
 
 /**
- * Backend rate limited
- */
-export class RateLimitedError extends BackendError {
-  constructor(backendName?: string, originalError?: any) {
-    super(
-      'Provider rate limit exceeded',
-      503, // M1 choice: treat as retryable upstream overload
-      ERROR_CODES.PROVIDER_RATE_LIMITED,
-      backendName,
-      originalError
-    );
-  }
-}
-
-/**
- * Unauthorized access to backend
- */
-export class UnauthorizedError extends BackendError {
-  constructor(backendName?: string, originalError?: any) {
-    super(
-      'Unauthorized access to provider',
-      401,
-      ERROR_CODES.UNAUTHORIZED,
-      backendName,
-      originalError
-    );
-  }
-}
-
-/**
- * Forbidden access to backend
- */
-export class ForbiddenError extends BackendError {
-  constructor(backendName?: string, originalError?: any) {
-    super(
-      'Forbidden access to provider',
-      403,
-      ERROR_CODES.FORBIDDEN,
-      backendName,
-      originalError
-    );
-  }
-}
-
-/**
  * Invalid / unexpected data from backend (provider contract mismatch)
  */
 export class ProviderBadResponseError extends BackendError {
@@ -155,64 +110,6 @@ export interface HttpErrorLike {
   [k: string]: any;
 }
 
-export function isNotFoundError(err: HttpErrorLike | unknown): boolean {
-  const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.status === 404) return true;
-  if (e.response?.status === 404) return true;
-
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg === 'not_found' || msg === 'not found') return true;
-  if (msg.includes('not found')) return true;
-
-  return false;
-}
-
-export function isTimeoutError(err: HttpErrorLike | unknown): boolean {
-  const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') return true;
-
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('timeout') || msg.includes('timed out')) return true;
-
-  return false;
-}
-
-export function isUnauthorizedError(err: HttpErrorLike | unknown): boolean {
-  const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.status === 401 || e.response?.status === 401) return true;
-
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('unauthor')) return true;
-
-  return false;
-}
-
-export function isForbiddenError(err: HttpErrorLike | unknown): boolean {
-  const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.status === 403 || e.response?.status === 403) return true;
-
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('forbidden')) return true;
-
-  return false;
-}
-
-export function isRateLimitedError(err: HttpErrorLike | unknown): boolean {
-  const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.status === 429) return true;
-  if (e.response?.status === 429) return true;
-
-  const msg = (e.message ?? '').toLowerCase();
-  if (msg.includes('rate limit') || msg.includes('too many requests')) return true;
-
-  return false;
-}
-
 export function getErrorStatus(err: HttpErrorLike | unknown): number {
   const e = (err ?? {}) as HttpErrorLike;
   return e.status ?? e.response?.status ?? 500;
@@ -220,9 +117,6 @@ export function getErrorStatus(err: HttpErrorLike | unknown): number {
 
 export function getErrorMessage(err: HttpErrorLike | unknown): string {
   const e = (err ?? {}) as HttpErrorLike;
-
-  if (e.response?.data?.message) return e.response.data.message;
-  if (e.response?.data?.error) return e.response.data.error;
 
   if (e.message) return e.message;
 
@@ -243,27 +137,6 @@ export function normalizeBackendError(
 ): BackendError {
   // Already normalized
   if (err instanceof BackendError) return err;
-
-  // Specific types first
-  if (isNotFoundError(err)) {
-    return new NotFoundError(resource ?? 'Resource', backendName, err);
-  }
-
-  if (isTimeoutError(err)) {
-    return new TimeoutError(backendName, undefined, err);
-  }
-
-  if (isRateLimitedError(err)) {
-    return new RateLimitedError(backendName, err);
-  }
-
-  if (isUnauthorizedError(err)) {
-    return new UnauthorizedError(backendName, err);
-  }
-
-  if (isForbiddenError(err)) {
-    return new ForbiddenError(backendName, err);
-  }
 
   const message = getErrorMessage(err);
   const status = getErrorStatus(err);

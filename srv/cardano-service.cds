@@ -1,48 +1,60 @@
-using {odatano.cardano} from '../db/schema';
+using {odatano.cardano as srv} from '../db/schema';
 
 service CardanoODataService @(impl: 'srv/cardano-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections
     // ---------------------------------------------------------------------------
-    // general network informations
-    entity NetworkInformation      as projection on cardano.NetworkInformation;
-    entity Blocks                  as projection on cardano.Blocks;
-    entity Epochs                  as projection on cardano.Epochs;
-    entity Pools                   as projection on cardano.Pools;
-    entity Dreps                   as projection on cardano.Dreps;
+    // Network informations
+    entity NetworkInformation      as projection on srv.NetworkInformation;
 
-    // core entities
-    entity Transactions            as projection on cardano.Transactions;
-    entity Addresses               as projection on cardano.Addresses;
-    entity Accounts                as projection on cardano.Accounts;
+    // General blockchain entities
+    entity Blocks                  as projection on srv.Blocks;
+    entity Epochs                  as projection on srv.Epochs;
+    entity Pools                   as projection on srv.Pools;
+    entity Dreps                   as projection on srv.Dreps;
 
-    // address details
-    entity AddressAssets           as projection on cardano.AddressAssets;
-    entity AddressUTxOs            as projection on cardano.AddressUTxOs;
+    // Transactions and related entities
+    entity Transactions            as projection on srv.Transactions;
+    entity TransactionInputs       as projection on srv.TransactionInputs;
+    entity TransactionOutputs      as projection on srv.TransactionOutputs;
+    entity TransactionInputAssets  as projection on srv.TransactionInputAssets;
+    entity TransactionOutputAssets as projection on srv.TransactionOutputAssets;
 
-    // asset details
-    entity UTxOAssets              as projection on cardano.UTxOAssets;
+    // Addresses, Accounts and related entities
+    entity Accounts                as projection on srv.Accounts;
+    entity Addresses               as projection on srv.Addresses;
+    entity AddressAssets           as projection on srv.AddressAssets;
+    entity AddressUTxOs            as projection on srv.AddressUTxOs;
 
-    // transaction details
-    entity TransactionInputs       as projection on cardano.TransactionInputs;
-    entity TransactionOutputs      as projection on cardano.TransactionOutputs;
-    entity TransactionInputAssets  as projection on cardano.TransactionInputAssets;
-    entity TransactionOutputAssets as projection on cardano.TransactionOutputAssets;
-    entity TransactionMetadata     as projection on cardano.TransactionMetadata;
+    // UTxOAsset details
+    entity UTxOAssets              as projection on srv.UTxOAssets;
 
-    action GetNetworkInformation()                             returns NetworkInformation;
-    action GetLatestBlock()                                    returns Blocks;
-    action GetLatestEpoch()                                    returns Epochs;
-    action GetBlockByHash(blockHash: cardano.Blake2b256)       returns Blocks;
-    action GetEpochByNumber(epochNumber: Integer)              returns Epochs;
-    action GetPoolById(poolId: String)                         returns Pools;
-    action GetDrepById(drepId: String)                         returns Dreps;
-    action GetAccountByStakingAddress(address: cardano.bech32) returns Accounts;
-    action GetTransactionByHash(txHash: cardano.Blake2b256)    returns Transactions;
-    action GetAddressByBech32(address: cardano.bech32)         returns Addresses;
-    action GetMetadataByTxHash(txHash: cardano.Blake2b256)     returns TransactionMetadata;
-    action GetMetadataLabelTransactions(label: String)         returns many TransactionInputs;
-    action GetUTxOsByAddress(address: cardano.bech32)          returns many AddressUTxOs;
-    action GetAssetsByAddress(address: cardano.bech32)         returns many AddressAssets;
+    // Transaction metadata
+    entity TransactionMetadata     as projection on srv.TransactionMetadata;
 
+    // ---------------------------------------------------------------------------
+    // Actions
+    // ---------------------------------------------------------------------------
+    // Network Information
+    action GetNetworkInformation()                            returns NetworkInformation;
+    // Blocks
+    action GetBlockByHash(blockHash: srv.Blake2b256)          returns Blocks;
+    // Epochs
+    action GetEpochByNumber(epochNumber: Integer)             returns Epochs;
+    // Pools
+    action GetPoolById(poolId: String)                        returns Pools;
+    // Dreps
+    action GetDrepById(drepId: String)                        returns Dreps;
+    // Accounts
+    action GetAccountByStakeAddress(stakeAddress: srv.bech32) returns Accounts;
+    // Transactions
+    action GetTransactionByHash(txHash: srv.Blake2b256)       returns Transactions;
+    // Addresses
+    action GetAddressByBech32(address: srv.bech32)            returns Addresses;
+    // Transaction Metadata
+    action GetMetadataByTxHash(txHash: srv.Blake2b256)        returns TransactionMetadata;
+    action GetMetadataLabelTransactions(label: String)        returns many Transactions;
+    // UTxOs and Assets
+    action GetUTxOsByAddress(address: srv.bech32)             returns many AddressUTxOs;
+    action GetAssetsByAddress(address: srv.bech32)            returns many AddressAssets;
 }

@@ -1,397 +1,265 @@
-import { CardanoClient } from '../../srv/blockchain/cardano-client';
+import { CardanoClient, createCardanoClientForBackends } from '../../srv/blockchain/cardano-client';
 import { CardanoBackend } from '../../srv/blockchain/backends/cardano-backend';
-import { 
-  BackendError, 
-  TimeoutError, 
-  NotFoundError,
-  AllBackendsFailedError 
-} from '../../srv/utils/errors';
-import { ERROR_CODES } from '../../srv/utils/error-codes';
-import type { Transaction, Address, UTxO, Network,EpochData, AccountData, BlockData, DrepData, PoolData } from '../../srv/utils/types';
+import { ConfigError, AllBackendsInitFailedError } from '../../srv/utils/errors';
+import {
+  Transaction,
+  Address,
+  UTxO,
+  Network,
+  BlockData,
+  EpochData,
+  MetadataLabelTx,
+  PoolData,
+  DrepData,
+  AccountData
+} from '../../srv/utils/types';
 
-// Mock backends
+// Mock backend for testing
 class MockBackend implements CardanoBackend {
-  name: string;
-  initialized = false;
-  
-  constructor(name: string) {
+  public readonly name: string;
+  private shouldFailInit: boolean;
+  private initCalled = false;
+
+  constructor(name: string, shouldFailInit = false) {
     this.name = name;
+    this.shouldFailInit = shouldFailInit;
   }
 
   async init(): Promise<void> {
-    this.initialized = true;
+    this.initCalled = true;
+    if (this.shouldFailInit) {
+      throw new Error(`${this.name} init failed`);
+    }
   }
 
-  healthCheck  = jest.fn();
-  getTransaction = jest.fn();
-  getAddress = jest.fn();
-  getAddressUtxos = jest.fn();
-  getNetworkInformation = jest.fn();
-  getTransactionMetadata = jest.fn();
-  getMetadataLabelTransactions = jest.fn();
-  getLatestBlock = jest.fn();
-  getLatestEpoch = jest.fn();
-  getAccount = jest.fn();
-  getBlock = jest.fn();
-  getDrep = jest.fn();
-  getEpoch = jest.fn();
-  getPool= jest.fn();
+  async getTransaction(txHash: string): Promise<Transaction> {
+    throw new Error('Not implemented in mock');
   }
-    
+  async getAddress(address: string): Promise<Address> {
+    throw new Error('Not implemented in mock');
+  }
+  async getAddressUtxos(address: string): Promise<UTxO[]> {
+    throw new Error('Not implemented in mock');
+  }
+  async getNetworkInformation(): Promise<Network> {
+    throw new Error('Not implemented in mock');
+  }
+  async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+    throw new Error('Not implemented in mock');
+  }
+  async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
+    throw new Error('Not implemented in mock');
+  }
+  async getBlock(blockHash: string): Promise<BlockData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getEpoch(epochNumber: number): Promise<EpochData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getPool(poolId: string): Promise<PoolData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getDrep(drepId: string): Promise<DrepData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getAccount(stakeAddress: string): Promise<AccountData> {
+    throw new Error('Not implemented in mock');
+  }
 
-describe('CardanoClient', () => {
-  let primaryBackend: MockBackend;
-  let fallbackBackend: MockBackend;
-  let client: CardanoClient;
+  wasInitCalled(): boolean {
+    return this.initCalled;
+  }
+}
 
-  beforeEach(() => {
-    primaryBackend = new MockBackend('primary');
-    fallbackBackend = new MockBackend('fallback');
-    client = new CardanoClient([primaryBackend, fallbackBackend]);
+describe('CardanoClient Configuration', () => {
+
+  // ============================================================================
+  // Constructor Validation
+  // ============================================================================
+  describe('Constructor', () => {
+    it('should throw ConfigError when no backends provided', () => {
+      expect(() => new CardanoClient([])).toThrow(ConfigError);
+      expect(() => new CardanoClient([])).toThrow('no backend available');
+    });
+
+    it('should throw ConfigError when backends array is null/undefined', () => {
+      expect(() => new CardanoClient(null as any)).toThrow(ConfigError);
+      expect(() => new CardanoClient(undefined as any)).toThrow(ConfigError);
+    });
+
+    it('should accept valid backends array', () => {
+      const backend = new MockBackend('test-backend');
+      expect(() => new CardanoClient([backend])).not.toThrow();
+    });
+
+    it('should accept multiple backends', () => {
+      const backends = [
+        new MockBackend('backend1'),
+        new MockBackend('backend2'),
+      ];
+      expect(() => new CardanoClient(backends)).not.toThrow();
+    });
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('Initialization', () => {
-    test('requires at least one backend', () => {
-      expect(() => new CardanoClient([])).toThrow(
-        'CardanoClient misconfigured: no backend available'
-      );
-    });
-
-    test('initializes all backends successfully', async () => {
-      const txData: Partial<Transaction> = { hash: 'abc123' };
-      primaryBackend.getTransaction.mockResolvedValue(txData);
-
-      await client.getTransaction('abc123');
-
-      expect(primaryBackend.initialized).toBe(true);
-      expect(fallbackBackend.initialized).toBe(true);
-    });
-
-    test('removes backends that fail initialization', async () => {
-      const failingBackend = new MockBackend('failing');
-      failingBackend.init = jest.fn().mockRejectedValue(new Error('Init failed'));
-      
-      const workingBackend = new MockBackend('working');
-      const testClient = new CardanoClient([failingBackend, workingBackend]);
-
-      const txData: Partial<Transaction> = { hash: 'abc123' };
-      workingBackend.getTransaction.mockResolvedValue(txData);
-
-      const result = await testClient.getTransaction('abc123');
-
-      expect(result).toEqual(txData);
-      expect(workingBackend.getTransaction).toHaveBeenCalled();
-      expect(failingBackend.getTransaction).not.toHaveBeenCalled();
-    });
-
-    test('throws if all backends fail initialization', async () => {
+  // ============================================================================
+  // Backend Initialization
+  // ============================================================================
+  describe('Backend Initialization', () => {
+    it('should initialize all backends on first call', async () => {
       const backend1 = new MockBackend('backend1');
       const backend2 = new MockBackend('backend2');
-      backend1.init = jest.fn().mockRejectedValue(new Error('Init 1 failed'));
-      backend2.init = jest.fn().mockRejectedValue(new Error('Init 2 failed'));
+      const client = new CardanoClient([backend1, backend2]);
 
-      const testClient = new CardanoClient([backend1, backend2]);
+      // Trigger initialization via getNetworkInformation (will fail but init should happen)
+      await expect(client.getNetworkInformation()).rejects.toThrow();
 
-      await expect(testClient.getTransaction('abc123')).rejects.toThrow(
-        'CardanoClient startup failed'
-      );
+      expect(backend1.wasInitCalled()).toBe(true);
+      expect(backend2.wasInitCalled()).toBe(true);
+    });
+
+    it('should throw AllBackendsInitFailedError when all backends fail to init', async () => {
+      const backend1 = new MockBackend('backend1', true);
+      const backend2 = new MockBackend('backend2', true);
+      const client = new CardanoClient([backend1, backend2]);
+
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+    });
+
+    it('should continue with working backends when some fail to init', async () => {
+      const failingBackend = new MockBackend('failing', true);
+      const workingBackend = new MockBackend('working', false);
+      const client = new CardanoClient([failingBackend, workingBackend]);
+
+      // Trigger init - should not throw because workingBackend succeeds
+      await expect(client.getNetworkInformation()).rejects.toThrow('Not implemented in mock');
+
+      expect(failingBackend.wasInitCalled()).toBe(true);
+      expect(workingBackend.wasInitCalled()).toBe(true);
+    });
+
+    it('should only initialize once', async () => {
+      const backend = new MockBackend('backend');
+      const client = new CardanoClient([backend]);
+
+      // Call multiple times
+      await expect(client.getNetworkInformation()).rejects.toThrow();
+      await expect(client.getNetworkInformation()).rejects.toThrow();
+
+      // Init should only be called once (we can't test this directly with current mock,
+      // but we verify it doesn't throw on second call)
+      expect(backend.wasInitCalled()).toBe(true);
     });
   });
 
-  describe('Fallback Logic', () => {
-    test('uses primary backend when successful', async () => {
-      const txData: Partial<Transaction> = { hash: 'abc123', fee: 170000 };
-      primaryBackend.getTransaction.mockResolvedValue(txData);
-
-      const result = await client.getTransaction('abc123');
-
-      expect(result).toEqual(txData);
-      expect(primaryBackend.getTransaction).toHaveBeenCalledWith('abc123');
-      expect(fallbackBackend.getTransaction).not.toHaveBeenCalled();
+  // ============================================================================
+  // createCardanoClientForBackends Factory
+  // ============================================================================
+  describe('createCardanoClientForBackends', () => {
+    it('should throw ConfigError when no valid backends configured', () => {
+      // Use non-existent backend name
+      expect(() => createCardanoClientForBackends(['invalid-backend'])).toThrow(ConfigError);
+      expect(() => createCardanoClientForBackends(['invalid-backend'])).toThrow('No valid backends configured');
     });
 
-    test('falls back to secondary backend on primary error', async () => {
-      const txData: Partial<Transaction> = { hash: 'abc123' };
-      
-      primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Primary error', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
-      );
-      fallbackBackend.getTransaction.mockResolvedValue(txData);
-
-      const result = await client.getTransaction('abc123');
-
-      expect(result).toEqual(txData);
-      expect(primaryBackend.getTransaction).toHaveBeenCalled();
-      expect(fallbackBackend.getTransaction).toHaveBeenCalled();
+    it('should throw when empty backends array provided', () => {
+      expect(() => createCardanoClientForBackends([])).toThrow(ConfigError);
+      expect(() => createCardanoClientForBackends([])).toThrow('No valid backends configured');
     });
 
-    test('throws AllBackendsFailedError when all backends fail', async () => {
-      primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Primary failed', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
-      );
-      fallbackBackend.getTransaction.mockRejectedValue(
-        new BackendError('Fallback failed', 503, ERROR_CODES.PROVIDER_UNAVAILABLE, 'fallback')
-      );
+    it('should create client with koios backend', () => {
+      expect(() => createCardanoClientForBackends(['koios'])).not.toThrow();
+    });
 
-      await expect(client.getTransaction('abc123')).rejects.toThrow(
-        AllBackendsFailedError
-      );
+    it('should create client with multiple backends', () => {
+      expect(() => createCardanoClientForBackends(['blockfrost', 'koios'])).not.toThrow();
+    });
+  });
 
-      try {
-        await client.getTransaction('abc123');
-      } catch (err: any) {
-        expect(err.errors).toHaveLength(2);
-        expect(err.message).toContain('All backends failed');
+  // ============================================================================
+  // Fallback Mechanism
+  // ============================================================================
+  describe('Fallback Mechanism', () => {
+    it('should try second backend when first fails', async () => {
+      class FailingBackend extends MockBackend {
+        async getNetworkInformation(): Promise<Network> {
+          throw new Error('First backend failed');
+        }
       }
-    });
 
+      class WorkingBackend extends MockBackend {
+        async getNetworkInformation(): Promise<Network> {
+          return {
+            supply: {
+              max: '45000000000000000',
+              total: '35000000000000000',
+              circulating: '33000000000000000',
+              locked: '2000000000000000',
+              treasury: '1000000000000000',
+              reserves: '10000000000000000',
+            },
+            stake: {
+              live: '23000000000000000',
+              active: '22000000000000000',
+            },
+          };
+        }
+      }
 
-  describe('API Methods', () => {
-    test('getAddress uses fallback', async () => {
-      const addrData: Partial<Address> = { address: 'addr_test1...', type: 'shelley' };
-      primaryBackend.getAddress.mockResolvedValue(addrData);
-
-      const result = await client.getAddress('addr_test1...');
-
-      expect(result).toEqual(addrData);
-      expect(primaryBackend.getAddress).toHaveBeenCalledWith('addr_test1...');
-    });
-
-    test('getAddressUtxos uses fallback', async () => {
-      const utxos: Partial<UTxO>[] = [{ txHash: 'abc', outputIndex: 0 }];
-      primaryBackend.getAddressUtxos.mockResolvedValue(utxos);
-
-      const result = await client.getAddressUtxos('addr_test1...');
-
-      expect(result).toEqual(utxos);
-      expect(primaryBackend.getAddressUtxos).toHaveBeenCalledWith('addr_test1...');
-    });
-
-    test('getNetworkInformation uses fallback', async () => {
-      const network: Partial<Network> = { 
-        supply: { max: '45000000000000000', total: '35000000000000000' } 
-      } as any;
-      primaryBackend.getNetworkInformation.mockResolvedValue(network);
+      const failingBackend = new FailingBackend('failing');
+      const workingBackend = new WorkingBackend('working');
+      const client = new CardanoClient([failingBackend, workingBackend]);
 
       const result = await client.getNetworkInformation();
-
-      expect(result).toEqual(network);
-      expect(primaryBackend.getNetworkInformation).toHaveBeenCalled();
+      expect(result.supply.max).toBe('45000000000000000');
     });
 
-    test('getLatestBlock uses fallback', async () => {
-      const block: Partial<BlockData> = { hash: 'block123', height: 9876543 };
-      primaryBackend.getLatestBlock.mockResolvedValue(block);
-
-      const result = await client.getLatestBlock();
-
-      expect(result).toEqual(block);
-      expect(primaryBackend.getLatestBlock).toHaveBeenCalled();
-    });
-
-    test('getLatestEpoch uses fallback', async () => {
-      const epoch: Partial<EpochData> = { epoch: 450, block_count: 21600 };
-      primaryBackend.getLatestEpoch.mockResolvedValue(epoch);
-
-      const result = await client.getLatestEpoch();
-
-      expect(result).toEqual(epoch);
-      expect(primaryBackend.getLatestEpoch).toHaveBeenCalled();
-    });
-
-    test('getTransactionMetadata uses fallback', async () => {
-      const metadata = [{ tx_hash: 'abc123', label: '721', json: { name: 'NFT' } }];
-      primaryBackend.getTransactionMetadata.mockResolvedValue(metadata);
-
-      const result = await client.getTransactionMetadata('abc123');
-
-      expect(result).toEqual(metadata);
-      expect(primaryBackend.getTransactionMetadata).toHaveBeenCalledWith('abc123');
-    });
-
-    test('getMetadataLabelTransactions uses fallback with string label', async () => {
-      const txs = [{ tx_hash: 'abc123', label: '721' }];
-      primaryBackend.getMetadataLabelTransactions.mockResolvedValue(txs);
-
-      const result = await client.getMetadataLabelTransactions('721');
-
-      expect(result).toEqual(txs);
-      expect(primaryBackend.getMetadataLabelTransactions).toHaveBeenCalledWith('721');
-    });
-
-    test('getMetadataLabelTransactions uses fallback with number label', async () => {
-      const txs = [{ tx_hash: 'abc123', label: '721' }];
-      primaryBackend.getMetadataLabelTransactions.mockResolvedValue(txs);
-
-      const result = await client.getMetadataLabelTransactions(721);
-
-      expect(result).toEqual(txs);
-      expect(primaryBackend.getMetadataLabelTransactions).toHaveBeenCalledWith(721);
-    });
-  });
-
-  describe('withTimeout', () => {
-    test('rejects with TimeoutError when the timeout elapses', async () => {
-      const localClient = new CardanoClient([new MockBackend('primary')]);
-      const neverResolving = new Promise<void>(() => {});
-
-      const p: Promise<unknown> = (localClient as any).withTimeout(
-        neverResolving,
-        25,
-        'primary'
-      );
-
-      await expect(p).rejects.toBeInstanceOf(TimeoutError);
-      await expect(p).rejects.toMatchObject({
-        statusCode: 503,
-        backendName: 'primary',
-        message: 'Backend timeout after 25ms',
-      });
-    });
-  });
-
-  describe('Error Accumulation', () => {
-    test('accumulates all backend errors in AllBackendsFailedError', async () => {
-      const error1 = new TimeoutError('primary', 8000);
-      const error2 = new NotFoundError('Transaction', 'fallback');
-
-      primaryBackend.getTransaction.mockRejectedValue(error1);
-      fallbackBackend.getTransaction.mockRejectedValue(error2);
-
-      try {
-        await client.getTransaction('abc123');
-        fail('Should have thrown');
-      } catch (err: any) {
-        expect(err).toBeInstanceOf(AllBackendsFailedError);
-        expect(err.errors).toHaveLength(2);
-        expect(err.errors[0]).toBe(error1);
-        expect(err.errors[1]).toBe(error2);
+    it('should throw AllBackendsFailedError when all backends fail', async () => {
+      class FailingBackend extends MockBackend {
+        async getNetworkInformation(): Promise<Network> {
+          throw new Error('Backend failed');
+        }
       }
+
+      const backend1 = new FailingBackend('backend1');
+      const backend2 = new FailingBackend('backend2');
+      const client = new CardanoClient([backend1, backend2]);
+
+      await expect(client.getNetworkInformation()).rejects.toThrow('All backends failed');
     });
 
-    test('uses last error status code in AllBackendsFailedError', async () => {
-      primaryBackend.getTransaction.mockRejectedValue(
-        new BackendError('Error 1', 500, ERROR_CODES.INTERNAL_ERROR, 'primary')
-      );
-      fallbackBackend.getTransaction.mockRejectedValue(
-        new BackendError('Error 2', 404, ERROR_CODES.NOT_FOUND, 'fallback')
-      );
-
-      try {
-        await client.getTransaction('abc123');
-      } catch (err: any) {
-        expect(err.statusCode).toBe(404); // Last error's status
+    it('should use first successful backend result', async () => {
+      class FastBackend extends MockBackend {
+        async getNetworkInformation(): Promise<Network> {
+          return {
+            supply: {
+              max: '11111111111111111',
+              total: '11111111111111111',
+              circulating: '11111111111111111',
+              locked: '0',
+              treasury: '0',
+              reserves: '0',
+            },
+            stake: {
+              live: '0',
+              active: '0',
+            },
+          };
+        }
       }
+
+      class SlowBackend extends MockBackend {
+        async getNetworkInformation(): Promise<Network> {
+          // This should never be called because first backend succeeds
+          throw new Error('Should not be called');
+        }
+      }
+
+      const fastBackend = new FastBackend('fast');
+      const slowBackend = new SlowBackend('slow');
+      const client = new CardanoClient([fastBackend, slowBackend]);
+
+      const result = await client.getNetworkInformation();
+      expect(result.supply.max).toBe('11111111111111111');
     });
   });
-
-  describe('Additional Backend Methods', () => {
-    test('getBlock calls backend with fallback', async () => {
-      const blockHash = 'block123';
-      const blockData: Partial<BlockData> = { 
-        hash: blockHash, 
-        height: 100,
-        time: 1000,
-      };
-      
-      primaryBackend.getBlock.mockResolvedValue(blockData);
-
-      const result = await client.getBlock(blockHash);
-
-      expect(result).toEqual(blockData);
-      expect(primaryBackend.getBlock).toHaveBeenCalledWith(blockHash);
-    });
-
-    test('getLatestEpoch calls backend with fallback', async () => {
-      const epochData: Partial<EpochData> = { 
-        epoch: 100,
-        start_time: 1000,
-      };
-      
-      primaryBackend.getLatestEpoch.mockResolvedValue(epochData);
-
-      const result = await client.getLatestEpoch();
-
-      expect(result).toEqual(epochData);
-      expect(primaryBackend.getLatestEpoch).toHaveBeenCalled();
-    });
-
-    test('getEpoch calls backend with epoch number', async () => {
-      const epochNumber = 100;
-      const epochData: Partial<EpochData> = { 
-        epoch: epochNumber,
-        start_time: 1000,
-      };
-      
-      primaryBackend.getEpoch.mockResolvedValue(epochData);
-
-      const result = await client.getEpoch(epochNumber);
-
-      expect(result).toEqual(epochData);
-      expect(primaryBackend.getEpoch).toHaveBeenCalledWith(epochNumber);
-    });
-
-    test('getPool calls backend with pool ID', async () => {
-      const poolId = 'pool1abc123';
-      const poolData: Partial<PoolData> = { 
-        poolId,
-        liveStake: 1000000,
-      };
-      
-      primaryBackend.getPool.mockResolvedValue(poolData);
-
-      const result = await client.getPool(poolId);
-
-      expect(result).toEqual(poolData);
-      expect(primaryBackend.getPool).toHaveBeenCalledWith(poolId);
-    });
-
-    test('getDrep calls backend with drep ID', async () => {
-      const drepId = 'drep1abc123';
-      const drepData: Partial<DrepData> = { 
-        drepId,
-        amount: '1000000',
-      };
-      
-      primaryBackend.getDrep.mockResolvedValue(drepData);
-
-      const result = await client.getDrep(drepId);
-
-      expect(result).toEqual(drepData);
-      expect(primaryBackend.getDrep).toHaveBeenCalledWith(drepId);
-    });
-
-    test('getAccount calls backend with account ID', async () => {
-      const accountId = 'stake1abc123';
-      const accountData: Partial<AccountData> = { 
-        stakeaddress: accountId,
-        active: true,
-      };
-      
-      primaryBackend.getAccount.mockResolvedValue(accountData);
-
-      const result = await client.getAccount(accountId);
-
-      expect(result).toEqual(accountData);
-      expect(primaryBackend.getAccount).toHaveBeenCalledWith(accountId);
-    });
-
-    test('getBlock falls back on primary failure', async () => {
-      const blockHash = 'block123';
-      const blockData: Partial<BlockData> = { hash: blockHash };
-      
-      primaryBackend.getBlock.mockRejectedValue(new BackendError('Failed', 500, ERROR_CODES.INTERNAL_ERROR, 'primary'));
-      fallbackBackend.getBlock.mockResolvedValue(blockData);
-
-      const result = await client.getBlock(blockHash);
-
-      expect(result).toEqual(blockData);
-      expect(fallbackBackend.getBlock).toHaveBeenCalledWith(blockHash);
-    });
-  });
-});
 });

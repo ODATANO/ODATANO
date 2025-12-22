@@ -17,6 +17,7 @@ import {
   AccountData
 } from '../../utils/types';
 import { P } from 'pino';
+import e from 'express';
 
 // ---------------------------------------------------------------------------
 // Koios Backend Implementation
@@ -24,6 +25,7 @@ import { P } from 'pino';
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
+  
 
   constructor() {
     this.api = axios.create({
@@ -36,19 +38,11 @@ export class KoiosBackend implements CardanoBackend {
     return;
   }
 
-  async healthCheck(): Promise<boolean> {
-    try {
-      const response = await this.api.get('/health');
-      return response.status === 200;
-    } catch (err) {
-      return false;
-    } 
-  }
 
   async getTransaction(txHash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get(`/tx_info?tx_hash=${txHash}`);
+        const { data } = await this.api.post('/tx_info', { _tx_hashes: [txHash] });
 
         if (!data || !Array.isArray(data) || data.length === 0) {
           throw new ProviderBadResponseError('Transaction not found', this.name);
@@ -74,7 +68,7 @@ export class KoiosBackend implements CardanoBackend {
           assetMintOrBurnCount: tx.asset_mint_or_burn_count,
           redeemerCount: tx.redeemer_count,
           validContract: tx.valid_contract,
-          blockTime: Number(tx.tx_validity_start * 1000),
+          blockTime: this.toIsoFromSeconds(tx.block_time),
           outputAmount: tx.output_amount,
           inputs: tx.inputs.map((input: any) => ({
             address: input.address,
@@ -92,56 +86,16 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  async getLatestBlock(): Promise<BlockData> {
-    return handleBackendRequest(
-      async () => {
-        // get tip first
-        const tipData = await this.api.get('/tip');
-
-        const blockHash = tipData.data.hash;
-        // get data of the tip block
-        const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
-
-        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
-          throw new ProviderBadResponseError('Block data not available', this.name);
-        }
-
-        const data = blockData.data[0];
-
-        return {
-          time: data.time,
-          height: data.block_height,
-          hash: data.block_hash,
-          slot: data.slot_no,
-          epoch: data.epoch_no,
-          epochSlot: data.epoch_slot_no,
-          slotLeader: data.vrf_key,
-          size: data.block_size,
-          txCount: data.tx_count,
-          fees: data.total_fees,
-        };
-      },
-      this.name,
-      'LatestBlock'
-    );
-  }
-
   async getBlock(blockHash: string): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
-      
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
-
-        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
-          throw new ProviderBadResponseError('Block data not available', this.name);
-        }
-
         const data = blockData.data[0];
 
         return {
-          time: data.time,
+          time: data.block_time,
           height: data.block_height,
-          hash: data.block_hash,
+          hash: data.hash,
           slot: data.slot_no,
           epoch: data.epoch_no,
           epochSlot: data.epoch_slot_no,
@@ -156,46 +110,15 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  async getLatestEpoch(): Promise<EpochData> {
-    return handleBackendRequest(
-      async () => {
-        // get tip first
-        const tipData = await this.api.get('/tip');
-
-        // get data of the tip epoch
-        const epochData = await this.api.post('/epoch_info', { _epoch_nos: [tipData.data.epoch_no] });
-        
-        if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
-          throw new ProviderBadResponseError('Epoch data not available', this.name);
-        }
-
-       const data = epochData.data[0];
-
-        return {
-          epoch: data.epoch_no,
-          start_time: data.start_time,
-          end_time: data.end_time,
-          first_block_time: data.first_block_time,
-          last_block_time: data.last_block_time,
-          block_count: data.block_count,
-          tx_count: data.tx_count,
-          output: data.total_output,
-          fees: data.total_fees,
-          active_stake: data.active_stake,
-        };
-      },
-      this.name,
-      'GetEpoch'
-    );
-  }
-
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
 
-        // get data of the tip epoch
-        const epochData = await this.api.post('/epoch_info', { _epoch_nos: [epochNumber] });
+        // get data of the given epoch
+        let epochData;
         
+        epochData = await this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } });
+      
         if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
           throw new ProviderBadResponseError('Epoch data not available', this.name);
         }
@@ -223,7 +146,7 @@ export class KoiosBackend implements CardanoBackend {
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get(`/address_info?address=${address}`);
+        const { data } = await this.api.post('/address_info', { _addresses: [address] });
 
         if (!data || !Array.isArray(data) || data.length === 0) {
           throw new ProviderBadResponseError('Address not found', this.name);
@@ -249,21 +172,21 @@ export class KoiosBackend implements CardanoBackend {
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get(`/address_utxos?address=${address}`);
+        const { data } = await this.api.post('/address_utxos', { _addresses: [address] });
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new ProviderBadResponseError('Address UTxOs not found', this.name);
+          return [];
         }
         
-        const addressData = data[0];
-        return addressData.utxos.map((utxo: any) => ({
+        // data is array of utxos directly, not nested
+        return data.map((utxo: any) => ({
           txHash: utxo.tx_hash,
           outputIndex: utxo.tx_index,
           address: address,
-          amount: utxo.amount,
+          amount: utxo.value,
           blockHash: utxo.block_hash,
           datumHash: utxo.datum_hash || null,
-          scriptRef: utxo.script_ref || null,
+          scriptRef: utxo.reference_script || null,
         }));
       },
       this.name,
@@ -355,31 +278,38 @@ async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
 async getPool(poolId: string): Promise<PoolData> {
   return handleBackendRequest(
     async () => {
-      const body = {
-       _pool_bech32_ids: [poolId],
-      };
-      const { data } = await this.api.post('/pool_info', body);
+      
+    // Koios only accepts bech32 pool IDs (pool...). Reject anything else to avoid decode errors.
+    const isBech32PoolId = poolId.startsWith('pool');
+    
+    if (!isBech32PoolId) {
+      throw new ProviderBadResponseError('Pool id must be bech32 (starts with "pool")', this.name);
+    }
 
-      if (!Array.isArray(data) || data.length === 0) {
+    const requestBody = { _pool_bech32_ids: [poolId] };
+  
+    const response = await this.api.post('/pool_info', requestBody);
+    
+      if (!Array.isArray(response.data) || response.data.length === 0) {
         throw new ProviderBadResponseError('Pool not found', this.name);
       }
 
-      const poolData = data[0];
+      const poolData = response.data[0];
       return {
-        poolId: poolData.pool_bech32_id,
-        vrfKeyHash: poolData.vrf_key,
-        blocksMinted: poolData.blocks_minted,
-        blocksEpoch: poolData.blocks_epoch,
+        poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
+        vrfKeyHash: poolData.vrf_key_hash,
+        blocksMinted: poolData.block_count,
+        blocksEpoch: poolData.epoch_no,
         liveStake: parseInt(poolData.live_stake || '0', 10),
-        liveSize: poolData.live_size,
-        liveDelegators: poolData.live_delegators,
-        liveSaturation: poolData.live_saturation,
+        liveSize: poolData.live_size || 0,
+        liveDelegators: poolData.live_delegators || 0,
+        liveSaturation: poolData.live_saturation || 0,
         activeStake: parseInt(poolData.active_stake || '0', 10),
-        activeSize: poolData.active_size,
-        pledge: parseInt(poolData.live_pledge || '0', 10),
-        margin: poolData.margin_cost,
+        activeSize: poolData.active_size || 0,
+        pledge: parseInt(poolData.pledge || '0', 10),
+        margin: poolData.margin || 0,
         fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
-        rewardAccount: poolData.reward_account,
+        rewardAccount: poolData.reward_addr,
       };
     },
     this.name,
@@ -431,14 +361,16 @@ async getAccount(accountId: string): Promise<AccountData> {
       };
       const addressDataResponse = await this.api.post('/account_addresses', addressBody); 
       
+      // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
+      const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses || []);
       const addresses = await Promise.all(
-          addressDataResponse.data.map((address: any) => this.getAddress(address.address))
+          addressesFlat.map((addr: string) => this.getAddress(addr))
         );
 
       const accountData = data[0];
       return {
         stakeaddress: accountData.stake_address,
-        active: accountData.active,
+        active: accountData.active ?? false,
         activeEpoch: accountData.active_epoch ?? 0,
         controlledAmount: accountData.controlled_amount,
         rewardsSum: accountData.rewards_sum,
@@ -454,6 +386,18 @@ async getAccount(accountId: string): Promise<AccountData> {
     this.name,
     'AccountData'
   );
+}
+  
+  toIsoFromSeconds(value: unknown): string | null {
+    const n =
+      typeof value === 'number' ? value :
+      typeof value === 'bigint' ? Number(value) :
+      typeof value === 'string' ? Number(value) :
+      NaN;
+    if (!Number.isFinite(n)) {
+      return null;
+    }
+    return new Date(n * 1000).toISOString();
   }
 }
 

@@ -14,16 +14,13 @@ import {
 export interface CardanoBackend {
   name: string;
   init(): Promise<void>;
-  healthCheck(): Promise<boolean>;
   getTransaction(txHash: string): Promise<Transaction>;
   getAddress(address: string): Promise<Address>;
   getAddressUtxos(address: string): Promise<UTxO[]>;
   getNetworkInformation(): Promise<Network>;
   getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]>;
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
-  getLatestBlock(): Promise<BlockData>;
   getBlock(blockHash: string): Promise<BlockData>;
-  getLatestEpoch(): Promise<EpochData>;
   getEpoch(epochNumber: Number): Promise<EpochData>;
   getPool(poolId: string): Promise<PoolData>;
   getDrep(drepId: string): Promise<DrepData>;

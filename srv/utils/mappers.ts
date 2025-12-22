@@ -34,7 +34,6 @@ import {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
-import { ERROR_CODES } from './error-codes';
 import { CONFIG } from '../../config/config';
 
 const MAX_AGE_MS = CONFIG.indexTtlMs;
@@ -43,40 +42,21 @@ const MAX_AGE_MS = CONFIG.indexTtlMs;
 // -----------------------------------------------------------------------------
 
 export function mapTransaction(providerTx: TransactionProviderData): TransactionRow {
-  const blockTimeIso =
-    providerTx.blockTime != null
-      ? new Date(providerTx.blockTime * 1000).toISOString()
-      : null;
-
-  const hasMetadata =
-    providerTx.metadata != null && (Array.isArray(providerTx.metadata));
-     
-  const hasInputs =
-    Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
-
-  const hasOutputs =
-    Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
+  // Determine presence of optional data
+  const hasMetadata = providerTx.metadata != null && (Array.isArray(providerTx.metadata));
+  const hasInputs = Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
+  const hasOutputs = Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
 
   return {
     hash: providerTx.hash,
     blockHash: providerTx.blockHash,
     blockHeight: providerTx.blockHeight ?? null,
-    blockTime: blockTimeIso,
+    blockTime: providerTx.blockTime ?? null,
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
     fee: providerTx.fee != null ? Number(providerTx.fee) : 0,
     deposit: providerTx.deposit != null ? Number(providerTx.deposit) : 0,
     size: providerTx.size ?? null,
-    utxoCount: providerTx.utxoCount ?? null,
-    withdrawalCount: providerTx.withdrawalCount ?? null,
-    mirCertCount: providerTx.mirCertCount ?? null,
-    delegationCount: providerTx.delegationCount ?? null,
-    stakeCertCount: providerTx.stakeCertCount ?? null,
-    poolUpdateCount: providerTx.poolUpdateCount ?? null,
-    poolRetireCount: providerTx.poolRetireCount ?? null,
-    assetMintOrBurnCount: providerTx.assetMintOrBurnCount ?? null,
-    redeemerCount: providerTx.redeemerCount ?? null,
-    validContract: providerTx.validContract ?? null,
     hasInputs: hasInputs,
     hasOutputs: hasOutputs,
     hasMetadata: hasMetadata,
@@ -86,15 +66,14 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
 // Transaction Inputs
 // -----------------------------------------------------------------------------
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
-  if (!Array.isArray(txInputs)) return [];
-
   return txInputs.map((input, idx: number) => {
+    
+    // Determine input index, defaulting to array index if not provided
     const inputIndex = input.outputIndex ?? idx;
-
+    // Check presence of address and amount arrays
     const hasAddress = Array.isArray(input.address) && input.address.length > 0;
     const hasAmount = Array.isArray(input.amount) && input.amount.length > 0;
 
-    console.log('Mapping input:', input);
     return {
       tx_hash: txHash,
       inputIndex: inputIndex,
@@ -117,9 +96,10 @@ export function mapTransactionInputAssets(
   if (!Array.isArray(inputs)) return [];
 
   return inputs.flatMap((input, idx) => {
-    if (!Array.isArray(input.amount) || input.amount.length === 0) return [];
 
     const inputIndex = input.outputIndex ?? idx;
+
+    if (!Array.isArray(input.amount)) return [];
 
     return input.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
@@ -136,39 +116,11 @@ export function mapTransactionInputAssets(
   });
 }
 
-export function mapTransactionOutputAssets(
-  txHash: string,
-  outputs: TxOutputProviderData[]
-): TransactionOutputAssetRow[] {
-  if (!Array.isArray(outputs)) return [];
-  return outputs.flatMap((output, idx) => {
-    if (!Array.isArray(output.amount) || output.amount.length === 0) return [];
-
-    const outputIndex = output.outputIndex ?? idx;
-
-    return output.amount.map(a => {
-      const { policyId, assetName } = parseAssetUnit(a.unit);
-
-      return {
-        output_tx_hash: txHash,
-        output_outputIndex: outputIndex,
-        unit: a.unit,
-        asset_quantity: Number(a.quantity),
-        asset_policyId: policyId,
-        asset_assetName: assetName,
-      };
-    });
-  });
-}
-
 // -----------------------------------------------------------------------------
 // Transaction Outputs
 // -----------------------------------------------------------------------------
 
 export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
-
-  if (!Array.isArray(txOutputs)) return [];
-
   return txOutputs.map((output, idx: number) => {
 
     const outputIndex = output.outputIndex ?? idx;
@@ -188,6 +140,31 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   });
 }
 
+export function mapTransactionOutputAssets(
+  txHash: string,
+  outputs: TxOutputProviderData[]
+): TransactionOutputAssetRow[] {
+
+  return outputs.flatMap((output, idx) => {
+
+    const outputIndex = output.outputIndex ?? idx;
+
+    if (!Array.isArray(output.amount)) return [];
+
+    return output.amount.map(a => {
+      const { policyId, assetName } = parseAssetUnit(a.unit);
+
+      return {
+        output_tx_hash: txHash,
+        output_outputIndex: outputIndex,
+        unit: a.unit,
+        asset_quantity: Number(a.quantity),
+        asset_policyId: policyId,
+        asset_assetName: assetName,
+      };
+    });
+  });
+}
 // -----------------------------------------------------------------------------
 // Addresses
 // -----------------------------------------------------------------------------
@@ -197,7 +174,9 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
 
-  const totalLovelace = Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0);
+  const totalLovelace = Array.isArray(addressData.amount) 
+    ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
+    : 0;
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
@@ -205,19 +184,18 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
-    type: addressData.type,
-    isScript: addressData.isScript,
+    type: addressData.type ?? 'base',
+    isScript: addressData.isScript ?? false,
     totalLovelace: totalLovelace,
     validFrom: nowIso,
     validTo: validToIso,
+    hasAssets: hasAssets,
+    hasUTxOs: hasUtxos,
   };
 }
 
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
-
-  if (!Array.isArray(addressUtxosData)) return [];
-
-  return addressUtxosData.map((utxo: UtxosProviderData) => ({
+    return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
     hash: utxo.txHash,
     index: utxo.outputIndex,
@@ -232,7 +210,9 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
 
 export function mapAddressAssets(addr: string, validTo: string, validFrom: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
 
-  if (!Array.isArray(AssetAssets)) return [];
+  if (!Array.isArray(AssetAssets)) {
+    return [];
+  }
 
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
@@ -250,6 +230,9 @@ export function mapAddressAssets(addr: string, validTo: string, validFrom: strin
     });
 }
 
+// -----------------------------------------------------------------------------
+// Network Information
+// -----------------------------------------------------------------------------
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
 
   const now = Date.now();
@@ -271,6 +254,9 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   };
 }
 
+// -----------------------------------------------------------------------------
+// Blocks
+// -----------------------------------------------------------------------------
 export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochRow): BlockRow {
   return {
     time: new Date(providerBlockData.time * 1000).toISOString(),
@@ -286,6 +272,9 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochR
   };
 }
 
+// -----------------------------------------------------------------------------
+// Epochs
+// -----------------------------------------------------------------------------
 export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
 
   return {
@@ -302,31 +291,30 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   };
 }
 
+// -----------------------------------------------------------------------------
+// Transaction Metadata
+// -----------------------------------------------------------------------------
 export function mapTransactionMetadata(
   providerLabels: MetadataLabelTxProviderData[],
 ): TransactionMetadataRow[] {
-  if (!Array.isArray(providerLabels)) return [];
 
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
-    const numericLabel = Number(lbl.label);
-
-    if (Number.isNaN(numericLabel)) {
-      continue;
-    }
-
+    
     rows.push({
       tx_hash: lbl.txHash,
-      label: numericLabel.toString(),
+      label: lbl.label.toString(),
       payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
     });
   }
 
-
   return rows;
 }
 
+// -----------------------------------------------------------------------------
+// Pools
+// -----------------------------------------------------------------------------
 export function mapPool(providerPoolData: PoolProviderData): PoolRow {
   return {
     poolId: providerPoolData.poolId,
@@ -345,6 +333,10 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
     rewardAccount: providerPoolData.rewardAccount,
   };
 }
+
+// -----------------------------------------------------------------------------
+// DREPs
+// -----------------------------------------------------------------------------
 export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   return {
 
@@ -358,8 +350,15 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   };
 }
 
+// -----------------------------------------------------------------------------
+// Accounts
+// -----------------------------------------------------------------------------
 export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
+    validFrom: validFrom,
+    validTo: validTo,
     stakeAddress: providerAccountData.stakeaddress,
     active: providerAccountData.active,
     activeEpoch: providerAccountData.activeEpoch,
@@ -372,6 +371,9 @@ export function mapAccount(providerAccountData: AccountProviderData): AccountRow
   };
 }
 
+// -----------------------------------------------------------------------------
+// Error Mapping
+// -----------------------------------------------------------------------------
 export function mapError(req: Request, err: unknown, ctx: string) {
   const r = req as any;
 
@@ -382,10 +384,6 @@ export function mapError(req: Request, err: unknown, ctx: string) {
       err.target
     );
   }
-  return req.reject(
-    500,
-    fmt(ERROR_CODES.INTERNAL_ERROR, ctx, 'Internal server error')
-  );
 }
 
 // -----------------------------------------------------------------------------
