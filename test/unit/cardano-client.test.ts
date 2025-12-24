@@ -32,37 +32,34 @@ class MockBackend implements CardanoBackend {
     }
   }
 
-  async getTransaction(txHash: string): Promise<Transaction> {
+  async getTransaction(_txHash: string): Promise<Transaction> {
     throw new Error('Not implemented in mock');
   }
-  async getAddress(address: string): Promise<Address> {
+  async getAddress(_address: string): Promise<Address> {
     throw new Error('Not implemented in mock');
   }
-  async getAddressUtxos(address: string): Promise<UTxO[]> {
+  async getAddressUtxos(_address: string): Promise<UTxO[]> {
     throw new Error('Not implemented in mock');
   }
   async getNetworkInformation(): Promise<Network> {
     throw new Error('Not implemented in mock');
   }
-  async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+  async getTransactionMetadata(_txHash: string): Promise<MetadataLabelTx[]> {
     throw new Error('Not implemented in mock');
   }
-  async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
+  async getBlock(_blockHash: string): Promise<BlockData> {
     throw new Error('Not implemented in mock');
   }
-  async getBlock(blockHash: string): Promise<BlockData> {
+  async getEpoch(_epochNumber: number): Promise<EpochData> {
     throw new Error('Not implemented in mock');
   }
-  async getEpoch(epochNumber: number): Promise<EpochData> {
+  async getPool(_poolId: string): Promise<PoolData> {
     throw new Error('Not implemented in mock');
   }
-  async getPool(poolId: string): Promise<PoolData> {
+  async getDrep(_drepId: string): Promise<DrepData> {
     throw new Error('Not implemented in mock');
   }
-  async getDrep(drepId: string): Promise<DrepData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getAccount(stakeAddress: string): Promise<AccountData> {
+  async getAccount(_stakeAddress: string): Promise<AccountData> {
     throw new Error('Not implemented in mock');
   }
 

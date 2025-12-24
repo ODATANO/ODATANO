@@ -37,24 +37,23 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
     // ---------------------------------------------------------------------------
     // Network Information
     action GetNetworkInformation()                            returns NetworkInformation;
-    // Blocks
-    action GetBlockByHash(blockHash: srv.Blake2b256)          returns Blocks;
-    // Epochs
+    // Blocks by Block Hash
+    action GetBlockByHash(hash: srv.Blake2b256)               returns Blocks;
+    // Epochs by Epoch Number
     action GetEpochByNumber(epochNumber: Integer)             returns Epochs;
-    // Pools
+    // Pools by Pool Id
     action GetPoolById(poolId: String)                        returns Pools;
-    // Dreps
+    // Dreps by Drep Id
     action GetDrepById(drepId: String)                        returns Dreps;
-    // Accounts
+    // Accounts by Stake Address
     action GetAccountByStakeAddress(stakeAddress: srv.bech32) returns Accounts;
-    // Transactions
-    action GetTransactionByHash(txHash: srv.Blake2b256)       returns Transactions;
-    // Addresses
+    // Transactions by Tx Hash
+    action GetTransactionByHash(hash: srv.Blake2b256)         returns Transactions;
+    // Transaction Metadata by Tx Hash
+    action GetMetadataByTxHash(tx_hash: srv.Blake2b256)       returns TransactionMetadata;
+    // Addresses Info by Bech32 Address
     action GetAddressByBech32(address: srv.bech32)            returns Addresses;
-    // Transaction Metadata
-    action GetMetadataByTxHash(txHash: srv.Blake2b256)        returns TransactionMetadata;
-    action GetMetadataLabelTransactions(label: String)        returns many Transactions;
-    // UTxOs and Assets
+    // UTxOs and Assets by Bech32 Address
     action GetUTxOsByAddress(address: srv.bech32)             returns many AddressUTxOs;
     action GetAssetsByAddress(address: srv.bech32)            returns many AddressAssets;
 }

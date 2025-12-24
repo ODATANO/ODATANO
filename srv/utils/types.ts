@@ -65,7 +65,7 @@ export interface Transaction {
   fee: Lovelace;
   deposit: Lovelace;
   size: number;
-  blockTime: string | null;
+  blockTime: number;
   outputAmount?: Amount[];
   inputs: TxInputLine[];
   outputs: TxOutputLine[];

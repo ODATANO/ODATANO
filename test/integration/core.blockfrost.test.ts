@@ -10,10 +10,16 @@ process.env.BACKENDS = 'blockfrost';
 
 // Import and run the shared test suite
 import { createBackendTestSuite } from './core-test-suite';
+import { createErrorBackendSuite } from './error-handling.backend';
 
 // Run tests only if Blockfrost API key is configured
 if (process.env.BLOCKFROST_KEY) {
   createBackendTestSuite({
+    name: 'blockfrost',
+    enabled: true,
+  });
+  // Also include backend-focused error handling suite
+  createErrorBackendSuite({
     name: 'blockfrost',
     enabled: true,
   });

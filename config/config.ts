@@ -46,7 +46,7 @@ export const CONFIG = {
   koiosApiKey: process.env.KOIOS_API_KEY ?? '',
   primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 8000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
-  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 60000),
+  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 600000),
   logLevel: process.env.LOG_LEVEL || 'info',
   // Backend configuration
   backends: parseAvailableBackends(),

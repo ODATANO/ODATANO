@@ -32,6 +32,9 @@ jobs:
       
       - name: Type check
         run: npm run typecheck
+        
+      - name: Lint codebase
+        run: npm run lint  
 
       - name: Deploy database
         run: npm run db:deploy

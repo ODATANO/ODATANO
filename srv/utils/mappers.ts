@@ -208,7 +208,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
   }));
 }
 
-export function mapAddressAssets(addr: string, validTo: string, validFrom: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
+export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
 
   if (!Array.isArray(AssetAssets)) {
     return [];
@@ -222,7 +222,7 @@ export function mapAddressAssets(addr: string, validTo: string, validFrom: strin
         address_address: addr,
         unit: asset.unit,
         validFrom: validFrom,
-        validTo,
+        validTo: validTo,
         asset_quantity: Number(asset.quantity),
         asset_policyId: policyId,
         asset_assetName: assetName,
@@ -300,15 +300,14 @@ export function mapTransactionMetadata(
 
   const rows: TransactionMetadataRow[] = [];
 
-  for (const lbl of providerLabels) {
-    
-    rows.push({
-      tx_hash: lbl.txHash,
-      label: lbl.label.toString(),
-      payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
-    });
-  }
-
+  for (const [idx, lbl] of providerLabels.entries()) {
+  rows.push({
+    id: idx,
+    tx_hash: lbl.txHash,
+    label: lbl.label.toString(),
+    payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
+  });
+ }
   return rows;
 }
 
@@ -375,8 +374,6 @@ export function mapAccount(providerAccountData: AccountProviderData): AccountRow
 // Error Mapping
 // -----------------------------------------------------------------------------
 export function mapError(req: Request, err: unknown, ctx: string) {
-  const r = req as any;
-
   if (err instanceof BackendError) {
     return req.reject(
       err.statusCode,

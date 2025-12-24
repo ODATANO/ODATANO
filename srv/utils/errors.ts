@@ -25,7 +25,8 @@ export class BackendError extends Error {
 import { Request } from '@sap/cds'; 
 
 /**
- * Resource not found in backend
+ * Resource not found in backend (404)
+ * This is NOT a provider error - it's a valid response indicating the resource doesn't exist
  */
 export class NotFoundError extends BackendError {
   constructor(resource: string, backendName?: string, originalError?: any) {
@@ -40,13 +41,15 @@ export class NotFoundError extends BackendError {
 }
 
 /**
- * Backend timeout or unreachable
+ * Provider unavailable or timeout (503)
+ * Indicates a temporary issue - retrying may help
+ * Examples: network timeout, 5xx errors, service down
  */
-export class TimeoutError extends BackendError {
-  constructor(backendName?: string, timeoutMs?: number, originalError?: any) {
+export class ProviderUnavailableError extends BackendError {
+  constructor(message: string, backendName?: string, timeoutMs?: number, originalError?: any) {
     const msg = timeoutMs
-      ? `Backend timeout after ${timeoutMs}ms`
-      : 'Backend timeout or unreachable';
+      ? `${message} (timeout after ${timeoutMs}ms)`
+      : message;
 
     super(
       msg,
@@ -59,14 +62,20 @@ export class TimeoutError extends BackendError {
 }
 
 /**
- * Invalid / unexpected data from backend (provider contract mismatch)
+ * Provider rate limit exceeded (429)
+ * Indicates too many requests - client should back off and retry later
+ * Examples: Blockfrost 10 req/sec limit, Koios tier limits
  */
-export class ProviderBadResponseError extends BackendError {
-  constructor(message: string, backendName?: string, originalError?: any) {
+export class RateLimitError extends BackendError {
+  constructor(message: string, backendName?: string, retryAfter?: number, originalError?: any) {
+    const msg = retryAfter
+      ? `${message} (retry after ${retryAfter}s)`
+      : message;
+
     super(
-      message,
-      502,
-      ERROR_CODES.PROVIDER_BAD_RESPONSE,
+      msg,
+      429,
+      ERROR_CODES.PROVIDER_RATE_LIMITED,
       backendName,
       originalError
     );
@@ -75,6 +84,7 @@ export class ProviderBadResponseError extends BackendError {
 
 /**
  * All backends failed
+ * Aggregates multiple backend errors and returns the most relevant status
  */
 export class AllBackendsFailedError extends BackendError {
   constructor(public readonly errors: BackendError[], originalError?: any) {
@@ -82,8 +92,8 @@ export class AllBackendsFailedError extends BackendError {
 
     super(
       `All backends failed: ${lastError?.message ?? 'unknown error'}`,
-      lastError?.statusCode ?? 500,
-      lastError?.code ?? ERROR_CODES.INTERNAL_ERROR,
+      lastError?.statusCode ?? 502,
+      lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
       undefined,
       originalError
     );
@@ -129,44 +139,94 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
 
 /**
  * Normalizes any backend error into a typed BackendError
+ * 
+ * Priority:
+ * 1. Check message for "not found" → 404 (even if provider returns 5xx)
+ * 2. Check HTTP status 429 or rate limit messages → 429
+ * 3. Check HTTP status 404 → 404
+ * 4. Check HTTP status 5xx → 503 (retry-able)
+ * 5. Check HTTP status 4xx → 404 if "not found", otherwise 503
+ * 6. Unknown/network errors → 503
  */
 export function normalizeBackendError(
   err: any,
   backendName?: string,
-  resource?: string
 ): BackendError {
   // Already normalized
   if (err instanceof BackendError) return err;
 
   const message = getErrorMessage(err);
   const status = getErrorStatus(err);
+  const messageLower = message.toLowerCase();
 
-  // Upstream 5xx → retryable provider failure
+  // Priority 1: Message indicates "not found" or equivalent → always 404
+  // This also handles providers returning wrong status codes for missing resources
+  const notFoundHints = [
+    'not found',
+    'has not been found',
+    'does not exist',
+    'no data',
+    'no records',
+    'empty result',
+    'not available',
+    'no metadata',
+    'invalid address',
+    'malformed address',
+  ];
+  if (notFoundHints.some(h => messageLower.includes(h))) {
+    return new NotFoundError('Resource', backendName, err);
+  }
+
+  // Priority 2: Rate limiting detection (status 429 or message patterns)
+  if (status === 429 || 
+      messageLower.includes('rate limit') || 
+      messageLower.includes('too many requests') ||
+      messageLower.includes('quota exceeded')) {
+    // Try to extract retry-after header
+    const retryAfter = err.response?.headers?.["retry-after"] || 
+                       err.response?.headers?.["x-ratelimit-reset"];
+    return new RateLimitError(
+      message || 'Rate limit exceeded',
+      backendName,
+      retryAfter ? parseInt(retryAfter, 10) : undefined,
+      err
+    );
+  }
+
+  // Priority 3: Explicit 404 status
+  if (status === 404) {
+    return new NotFoundError('Resource', backendName, err);
+  }
+
+  // Priority 4: 5xx errors → Provider unavailable (retry-able)
   if (status >= 500) {
-    return new BackendError(
-      message,
-      503,
-      ERROR_CODES.PROVIDER_UNAVAILABLE,
+    return new ProviderUnavailableError(
+      message || 'Provider returned server error',
       backendName,
+      undefined,
       err
     );
   }
 
-  // Any other upstream 4xx (not caught above) → provider contract/request mismatch
+  // Priority 5: Other 4xx → Check if it's a disguised "not found"
   if (status >= 400) {
-    return new ProviderBadResponseError(
-      message,
+    if (messageLower.includes('not found') || messageLower.includes('does not exist')) {
+      return new NotFoundError('Resource', backendName, err);
+    }
+    // Other 4xx like bad requests → treat as unavailable
+    return new ProviderUnavailableError(
+      message || 'Provider request failed',
       backendName,
+      undefined,
       err
     );
   }
 
-  // Unknown / non-http error → internal
-  return new BackendError(
-    message,
-    500,
-    ERROR_CODES.INTERNAL_ERROR,
+  // Priority 6: Network/unknown errors → Provider unavailable
+  return new ProviderUnavailableError(
+    message || 'Provider communication failed',
     backendName,
+    undefined,
     err
   );
 }

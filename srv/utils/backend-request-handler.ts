@@ -12,13 +12,12 @@ import { mapError } from './mappers';
  */
 export async function handleBackendRequest<T>(
   fn: () => Promise<T>,
-  backendName: string,
-  resourceName?: string
+  backendName: string
 ): Promise<T> {
   try {
     return await fn();
   } catch (err: any) {
-    throw normalizeBackendError(err, backendName, resourceName);
+    throw normalizeBackendError(err, backendName);
   }
 }
 /** * General request handler for CardanoService
@@ -35,8 +34,13 @@ export async function handleRequest(
     const db = cds.tx(req);
     try {
       return await handler(db);
-    } catch (e) {
-      logger.error({ err: e }, `[CardanoService] ${context} error`);
+    } catch (e: any) {
+      // 404 errors are expected - log as debug, not error
+      if (e?.statusCode === 404) {
+        logger.debug({ err: e }, `[CardanoService] ${context} - resource not found`);
+      } else {
+        logger.error({ err: e }, `[CardanoService] ${context} error`);
+      }
       return mapError(req, e, context);
     }
   }

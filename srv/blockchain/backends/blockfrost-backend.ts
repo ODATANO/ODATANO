@@ -2,7 +2,7 @@ import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError } from '../../utils/errors';
+import { BackendInitError, NotFoundError } from '../../utils/errors';
 
 import {
   Transaction,
@@ -49,8 +49,7 @@ constructor() {
           stake: networkInfo.stake,
         };
       },
-      this.name,
-      'NetworkInformation'
+      this.name
     );
   }
 
@@ -72,8 +71,7 @@ constructor() {
           fees: blockdata.fees,
         };
       },
-      this.name,
-      'GetBlock'
+      this.name
     );
   }
 
@@ -94,8 +92,7 @@ constructor() {
           active_stake: epochData.active_stake,
         };
       },
-      this.name,
-      'GetEpoch'
+      this.name
     );
   }
   // ---------------------------------------------------------------------------
@@ -116,9 +113,9 @@ constructor() {
 
         return {
           hash: tx.hash,
-          blockHash: tx.block,
+          blockHash:  tx.block,
           blockHeight: tx.block_height,
-          blockTime: this.numberToIsoTimestamp(tx.block_time),
+          blockTime : tx.block_time,
           slot: tx.slot,
           index: tx.index,
           fee: parseInt(tx.fees, 10),
@@ -148,48 +145,29 @@ constructor() {
           metadata: metadata,
         };
       },
-      this.name,
-      'Transaction'
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Metadata Label Transactions
-  // ---------------------------------------------------------------------------
-  async getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
-    return handleBackendRequest(
-      async () => {
-        const txLabelData = await this.api.metadataTxsLabel(label);
-        if (!Array.isArray(txLabelData)) return [];
-
-        return txLabelData.map(md => ({
-          txHash: md.tx_hash,
-          label: label,
-          json: md.json_metadata as JSONValue | null,
-        }));
-      },
-      this.name,
-      'MetadataLabelTransactions'
+      this.name
     );
   }
 
   // ---------------------------------------------------------------------------
   //  Transaction Metadata
   // ---------------------------------------------------------------------------
-  async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+  async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(
       async () => {
-        const txMetadata = await this.api.txsMetadata(txHash);
-        if (!Array.isArray(txMetadata)) return [];
+        const txMetadata = await this.api.txsMetadata(tx_hash);
+        
+        if (txMetadata.length === 0 || txMetadata === null) {
+          throw new NotFoundError('Transaction metadata', this.name);
+        }
 
         return txMetadata.map(md => ({
-          txHash: txHash,
+          txHash: tx_hash,
           label: md.label,
           json: md.json_metadata as JSONValue | null,
         }));
       },
-      this.name,
-      'TransactionMetadata'
+      this.name
     );
   }
 
@@ -220,8 +198,7 @@ constructor() {
           })),
         };
       },
-      this.name,
-      'Address'
+      this.name
     );
   }
 
@@ -239,8 +216,7 @@ constructor() {
           scriptRef: utxo.reference_script_hash,
         }));
       },
-      this.name,
-      'AddressUTxOs'
+      this.name
     );
   }
 
@@ -251,7 +227,7 @@ constructor() {
         const poolData = await this.api.poolsById(poolId);
 
         return {
-          poolId: poolData.hex,
+          poolId: poolData.pool_id,
           vrfKeyHash: poolData.vrf_key,
           blocksMinted: poolData.blocks_minted,
           blocksEpoch: poolData.blocks_epoch,
@@ -267,8 +243,7 @@ constructor() {
           rewardAccount: poolData.reward_account,
         }
       },
-      this.name,
-      'PoolData'
+      this.name
     ); 
   }
 
@@ -288,8 +263,7 @@ constructor() {
           retired: drepData.retired,  
         };    
       },
-      this.name,
-      'DrepData'
+      this.name
     );
   }
 
@@ -319,16 +293,7 @@ constructor() {
           addresses: addresses,
         };
       },
-      this.name,
-      'AccountData'
+      this.name
     );
   }
-numberToIsoTimestamp(value: unknown): string | null {
-  const n =
-    typeof value === 'number' ? value :
-    typeof value === 'bigint' ? Number(value) :
-    typeof value === 'string' ? Number(value) :
-    NaN;
-
-  return new Date(n * 1000).toISOString();
-} }
+}

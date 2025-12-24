@@ -16,14 +16,17 @@ if (!process.env.KOIOS_API_URL) {
 
 // Import and run the shared test suite
 import { createBackendTestSuite } from './core-test-suite';
+import { createErrorBackendSuite } from './error-handling.backend';
 
 // Run tests with Koios backend
 // Note: Some features like metadata label queries are not supported by Koios
 createBackendTestSuite({
   name: 'koios',
   enabled: true,
-  // Koios limitations on preview network
-  skipTests: [
-    'MetaData', // Koios does not support metadata for preview network
-  ],
+});
+
+// Also include backend-focused error handling suite in the same file
+createErrorBackendSuite({
+  name: 'koios',
+  enabled: true,
 });

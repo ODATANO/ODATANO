@@ -10,7 +10,6 @@ const logger = pino({
       translateTime: 'HH:MM:ss',
       ignore: 'pid,hostname'
     }
-  }
-});
+  }});
 
 export default logger;

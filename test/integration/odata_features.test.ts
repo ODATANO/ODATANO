@@ -3,7 +3,7 @@ jest.setTimeout(20000);
 
 describe('ODATANO Milestone 2 - OData Query Features', () => {
 
-  const { GET, POST, expect } = cds.test(__dirname + '/../../');
+  const { GET, expect } = cds.test(__dirname + '/../../');
   
   // ============================================================================
   // $FILTER TESTS

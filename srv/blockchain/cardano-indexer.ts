@@ -42,10 +42,8 @@ import {
 } from '../utils/mappers';
 
 import { Transaction as TransactionProviderData } from '../utils/types';
-import { P } from 'pino';
-import { get } from 'http';
 
-const { UPSERT, SELECT } = cds.ql;
+const { UPSERT } = cds.ql;
 
 export class CardanoIndexer {
   /**
@@ -118,6 +116,7 @@ export class CardanoIndexer {
     logger.debug({ addrData }, 'indexAddress: provider response');
 
     const AddrEntity = mapAddress(addr, addrData);
+    
     tx.run(UPSERT.into(Addresses).entries(AddrEntity))
 
     const validTo = AddrEntity.validTo ?? new Date().toISOString();
@@ -130,8 +129,8 @@ export class CardanoIndexer {
       addrData.amount
     );
 
-    if (assetEntities.length) {
-     tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
+    if (assetEntities.length > 0) {
+      tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
@@ -161,47 +160,14 @@ export class CardanoIndexer {
    */
   async indexTransactionMetadata(
     tx: CapTransaction,
-    txHash: string,
+    tx_hash: string,
   ): Promise<TransactionMetadata[]> {
-
-    const metadata = await cardano.getTransactionMetadata(txHash);
+    const metadata = await cardano.getTransactionMetadata(tx_hash);
     const rows = mapTransactionMetadata(metadata);
 
     if (rows.length) {
       await tx.run(UPSERT.into(TransactionMetadata).entries(rows))
     }
-    return rows;
-  }
-
-  /**
-   * Index metadata for all transactions of a given label
-   * using cardano.getMetadataLabelTransactions(label)
-   *
-   * @param tx     CAP transaction
-   * @param label  metadata label (numeric or string)
-   */
-  async indexMetadataLabelTransactions(
-    tx: CapTransaction,
-    label: string | number,
-  ): Promise<TransactionMetadata[]> {
-    
-    const labelTxs = await cardano.getMetadataLabelTransactions(label);
-    const rows: TransactionMetadata[] = [];
-    for (const entry of labelTxs) {
-    
-      rows.push({
-        tx_hash: entry.txHash,
-        label: entry.label.toString(),
-        payload: entry.json !== undefined ? JSON.stringify(entry.json) : null,
-      });
-    }
-
-    if (rows.length) {
-     
-        tx.run(UPSERT.into(TransactionMetadata).entries(rows))
-
-    }
-
     return rows;
   }
 

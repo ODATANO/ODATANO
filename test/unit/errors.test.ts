@@ -1,8 +1,8 @@
 import {
   BackendError,
   NotFoundError,
-  TimeoutError,
-  ProviderBadResponseError,
+  ProviderUnavailableError,
+  RateLimitError,
   AllBackendsFailedError,
   ConfigError,
   BackendInitError,
@@ -77,55 +77,70 @@ describe('Error Classes', () => {
   });
 
   // ============================================================================
-  // TimeoutError
+  // ProviderUnavailableError
   // ============================================================================
-  describe('TimeoutError', () => {
-    it('should create timeout error with default message', () => {
-      const error = new TimeoutError();
+  describe('ProviderUnavailableError', () => {
+    it('should create 503 error with message', () => {
+      const error = new ProviderUnavailableError('Service down');
       
-      expect(error.message).toBe('Backend timeout or unreachable');
+      expect(error.message).toBe('Service down');
       expect(error.statusCode).toBe(503);
       expect(error.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(error.name).toBe('TimeoutError');
+      expect(error.name).toBe('ProviderUnavailableError');
     });
 
-    it('should include backend name in timeout error', () => {
-      const error = new TimeoutError('koios');
+    it('should include backend name', () => {
+      const error = new ProviderUnavailableError('Timeout', 'koios');
       
       expect(error.backendName).toBe('koios');
-      expect(error.message).toBe('Backend timeout or unreachable');
+      expect(error.message).toBe('Timeout');
     });
 
     it('should include timeout duration in message', () => {
-      const error = new TimeoutError('blockfrost', 5000);
+      const error = new ProviderUnavailableError('Backend timeout', 'blockfrost', 5000);
       
-      expect(error.message).toBe('Backend timeout after 5000ms');
+      expect(error.message).toBe('Backend timeout (timeout after 5000ms)');
       expect(error.statusCode).toBe(503);
+    });
+
+    it('should store original error', () => {
+      const originalError = new Error('Network error');
+      const error = new ProviderUnavailableError('Connection failed', 'koios', undefined, originalError);
+      
+      expect(error.originalError).toBe(originalError);
     });
   });
 
   // ============================================================================
-  // ProviderBadResponseError
+  // RateLimitError
   // ============================================================================
-  describe('ProviderBadResponseError', () => {
-    it('should create 502 error with custom message', () => {
-      const error = new ProviderBadResponseError('Invalid response format');
+  describe('RateLimitError', () => {
+    it('should create 429 error with message', () => {
+      const error = new RateLimitError('Rate limit exceeded');
       
-      expect(error.message).toBe('Invalid response format');
-      expect(error.statusCode).toBe(502);
-      expect(error.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
-      expect(error.name).toBe('ProviderBadResponseError');
+      expect(error.message).toBe('Rate limit exceeded');
+      expect(error.statusCode).toBe(429);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_RATE_LIMITED);
+      expect(error.name).toBe('RateLimitError');
     });
 
     it('should include backend name', () => {
-      const error = new ProviderBadResponseError('Bad response', 'koios');
+      const error = new RateLimitError('Too many requests', 'blockfrost');
       
-      expect(error.backendName).toBe('koios');
+      expect(error.backendName).toBe('blockfrost');
+      expect(error.message).toBe('Too many requests');
+    });
+
+    it('should include retry-after duration in message', () => {
+      const error = new RateLimitError('Rate limit exceeded', 'koios', 60);
+      
+      expect(error.message).toBe('Rate limit exceeded (retry after 60s)');
+      expect(error.statusCode).toBe(429);
     });
 
     it('should store original error', () => {
-      const originalError = new Error('Original');
-      const error = new ProviderBadResponseError('Bad data', 'blockfrost', originalError);
+      const originalError = new Error('Quota exceeded');
+      const error = new RateLimitError('Rate limited', 'blockfrost', undefined, originalError);
       
       expect(error.originalError).toBe(originalError);
     });
@@ -153,20 +168,20 @@ describe('Error Classes', () => {
     it('should use last error status and code', () => {
       const errors = [
         new BackendError('Error 1', 500),
-        new ProviderBadResponseError('Bad response'),
+        new ProviderUnavailableError('Service down', 'koios'),
       ];
       
       const error = new AllBackendsFailedError(errors);
       
-      expect(error.statusCode).toBe(502);
-      expect(error.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
+      expect(error.statusCode).toBe(503);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
     });
 
     it('should handle empty errors array', () => {
       const error = new AllBackendsFailedError([]);
       
       expect(error.message).toContain('All backends failed');
-      expect(error.statusCode).toBe(500);
+      expect(error.statusCode).toBe(502);
     });
   });
 
@@ -286,22 +301,86 @@ describe('Error Classes', () => {
       expect(result).toBe(originalError);
     });
 
-    it('should convert 5xx error to 503 PROVIDER_UNAVAILABLE', () => {
+    it('should convert message "not found" to 404 NotFoundError (even with 5xx status)', () => {
+      const error = { status: 500, message: 'Transaction not found' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result.code).toBe(ERROR_CODES.NOT_FOUND);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should convert 404 status to NotFoundError', () => {
+      const error = { status: 404, message: 'Resource not found' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result.code).toBe(ERROR_CODES.NOT_FOUND);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should convert 5xx error to 503 ProviderUnavailableError', () => {
       const error = { status: 500, message: 'Server error' };
       const result = normalizeBackendError(error, 'blockfrost');
       
       expect(result.statusCode).toBe(503);
       expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result.backendName).toBe('blockfrost');
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
     });
 
-    it('should convert 4xx error to 502 PROVIDER_BAD_RESPONSE', () => {
-      const error = { status: 400, message: 'Bad request' };
+    it('should convert 429 status to RateLimitError', () => {
+      const error = { status: 429, message: 'Too many requests' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(429);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_RATE_LIMITED);
+      expect(result).toBeInstanceOf(RateLimitError);
+    });
+
+    it('should convert rate limit message to RateLimitError (even without 429 status)', () => {
+      const error = { status: 403, message: 'Rate limit exceeded' };
       const result = normalizeBackendError(error, 'koios');
       
-      expect(result).toBeInstanceOf(ProviderBadResponseError);
-      expect(result.statusCode).toBe(502);
-      expect(result.code).toBe(ERROR_CODES.PROVIDER_BAD_RESPONSE);
+      expect(result.statusCode).toBe(429);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_RATE_LIMITED);
+      expect(result).toBeInstanceOf(RateLimitError);
+    });
+
+    it('should extract retry-after header from rate limit error', () => {
+      const error = {
+        status: 429,
+        message: 'Too many requests',
+        response: {
+          headers: { 'retry-after': '60' }
+        }
+      };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.message).toContain('retry after 60s');
+      expect(result).toBeInstanceOf(RateLimitError);
+    });
+
+    it('should convert network error to 503 ProviderUnavailableError', () => {
+      const error = { message: 'Network timeout' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+    });
+
+    it('should check message for "not found" in 4xx range', () => {
+      const error = { status: 400, message: 'Resource does not exist' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should preserve original error', () => {
+      const error = { status: 503, message: 'Service down' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.originalError).toBeDefined();
     });
 
     it('should convert unknown error to 503 PROVIDER_UNAVAILABLE', () => {
@@ -318,6 +397,117 @@ describe('Error Classes', () => {
       const result = normalizeBackendError(originalError, 'blockfrost');
       
       expect(result.originalError).toBe(originalError);
+    });
+
+    it('should convert 400 error to ProviderUnavailable when not "not found"', () => {
+      const error = { status: 400, message: 'Invalid request format' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 401 error to ProviderUnavailable', () => {
+      const error = { status: 401, message: 'Unauthorized' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 403 error to ProviderUnavailable (when not rate limit)', () => {
+      const error = { status: 403, message: 'Forbidden' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 405 error to ProviderUnavailable', () => {
+      const error = { status: 405, message: 'Method Not Allowed' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 502 error to ProviderUnavailable', () => {
+      const error = { status: 502, message: 'Bad Gateway' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 503 error to ProviderUnavailable', () => {
+      const error = { status: 503, message: 'Service Unavailable' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert 504 error to ProviderUnavailable', () => {
+      const error = { status: 504, message: 'Gateway Timeout' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should prioritize message "not found" over 4xx status (400)', () => {
+      const error = { status: 400, message: 'The resource does not exist' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should prioritize message "not found" over 5xx status (503)', () => {
+      const error = { status: 503, message: 'Address has not been found' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should detect "no data" as not found', () => {
+      const error = { status: 200, message: 'No data available for this transaction' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should detect "empty result" as not found', () => {
+      const error = { status: 500, message: 'Empty result set' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should detect "invalid address" as not found', () => {
+      const error = { status: 400, message: 'Invalid address for network' };
+      const result = normalizeBackendError(error, 'blockfrost');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should detect "malformed address" as not found', () => {
+      const error = { status: 503, message: 'Malformed address format' };
+      const result = normalizeBackendError(error, 'koios');
+      
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
     });
   });
 });

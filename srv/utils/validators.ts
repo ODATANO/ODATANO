@@ -1,9 +1,9 @@
 import { CONFIG } from "../../config/config";
 
 // --- Regular Expressions ---
-export const TX_HASH_REGEX = /^[a-fA-F0-9]{64}$/;
-export const POLICY_ID_REGEX = /^[a-fA-F0-9]{56}$/;
-export const POOL_ID_REGEX = /^([0-9a-f]{56}|pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60})$/;
+export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
+export const POLICY_ID_REGEX = /^[a-f0-9]{56}$/;
+export const POOL_ID_REGEX = /^([a-f0-9]{56}|pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60})$/;
 export const DREP_ID_REGEX =
   /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/;
   
@@ -31,6 +31,10 @@ export function isPoolId(s: unknown): s is string {
  */
 export function isDrepId(s: unknown): s is string {
   return typeof s === "string" && DREP_ID_REGEX.test(s);
+}
+
+export function isBlockHash(s: unknown): s is string {
+  return typeof s === "string" && TX_HASH_REGEX.test(s);
 }
 
 /**

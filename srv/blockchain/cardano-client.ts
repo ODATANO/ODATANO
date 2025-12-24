@@ -1,7 +1,7 @@
 import { CardanoBackend } from './backends/cardano-backend';
 import { BlockfrostBackend } from './backends/blockfrost-backend';
 import { KoiosBackend } from './backends/koios-backend';
-import { BackendError, ConfigError, AllBackendsFailedError, TimeoutError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import logger from '../utils/logger';
 import { CONFIG } from '../../config/config';
 
@@ -83,7 +83,7 @@ private async initBackends(): Promise<void> {
       promise,
       new Promise<T>((_, reject) =>
         setTimeout(
-          () => reject(new TimeoutError(backendName, ms)),
+          () => reject(new ProviderUnavailableError('Backend timeout', backendName, ms)),
           ms
         )
       ),
@@ -119,15 +119,27 @@ private async initBackends(): Promise<void> {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
         
-        logger.warn(
-          { 
-            backend: backend.name, 
-            error: backendError.message,
-            statusCode: backendError.statusCode,
-            code: backendError.code 
-          }, 
-          'Backend failed'
-        );
+        // 404 errors are expected - log as debug, not warn
+        if (backendError.statusCode === 404) {
+          logger.debug(
+            { 
+              backend: backend.name, 
+              error: backendError.message,
+              code: backendError.code 
+            }, 
+            'Backend: resource not found'
+          );
+        } else {
+          logger.warn(
+            { 
+              backend: backend.name, 
+              error: backendError.message,
+              statusCode: backendError.statusCode,
+              code: backendError.code 
+            }, 
+            'Backend failed'
+          );
+        }
       }
     }
 
@@ -150,16 +162,12 @@ private async initBackends(): Promise<void> {
     return this.withFallback(b => b.getNetworkInformation());
   }
 
-  getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
-    return this.withFallback(b => b.getTransactionMetadata(txHash));
+  getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
+    return this.withFallback(b => b.getTransactionMetadata(tx_hash));
   }
 
-  getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]> {
-    return this.withFallback(b => b.getMetadataLabelTransactions(label));
-  }
-
-  getBlock(blockHash: string): Promise<BlockData> {
-    return this.withFallback(b => b.getBlock(blockHash));
+  getBlock(block_hash: string): Promise<BlockData> {
+    return this.withFallback(b => b.getBlock(block_hash));
   }
   
   getEpoch(epochNumber: Number): Promise<EpochData> {

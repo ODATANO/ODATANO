@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import indexer from './blockchain/cardano-indexer';
-import { isTxHash, isBech32Address, isBech32StakeAddress, isPoolId, isDrepId } from './utils/validators';
+import { isTxHash, isBlockHash, isBech32Address, isBech32StakeAddress, isPoolId, isDrepId } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
@@ -57,36 +57,40 @@ export default class CardanoService extends cds.ApplicationService {
     // Blocks READ & GetLatestBlock / GetBlockByHash Actions 
     // ------------------------------------------------------------------------
     this.on('READ', Blocks, async (req: Request) => {
-      const blockHash = (req.data as { hash?: string })?.hash;
+      const hash = (req.data as { hash?: string })?.hash;
+      // validate input before business logic
+      if (hash && !isBlockHash(hash)) {
+        return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
+      }
       
       return handleRequest(req, async (db) => { 
-        if (blockHash) {
-          const existing = await db.run(SELECT.one.from(Blocks).where({ hash: blockHash }));
+        if (hash) {
+          const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
           
           if (existing) {
             return existing;
           }
-          logger.debug({ blockHash },'[CardanoService] Indexing block via indexer');
-          return await indexer.indexBlock(db, blockHash);
+          logger.debug({ hash: hash },'[CardanoService] Indexing block via indexer');
+          return await indexer.indexBlock(db, hash);
         }
         return db.run(req.query);
       });
     });
 
     this.on('GetBlockByHash', async (req: Request) => {
-     const blockHash = (req.data?.blockHash as string | undefined) ?? undefined;
+     const hash = (req.data?.hash as string | undefined) ?? undefined;
       // validate input before business logic
-      if (!blockHash) {
-        return rejectMissing(req, 'Blocks', 'blockHash');
+      if (!hash) {
+        return rejectMissing(req, 'Blocks', 'hash');
       }
-      if (!isTxHash(blockHash)) {
-        return rejectInvalid(req, 'Blocks', 'blockHash');
+      if (!isTxHash(hash)) {
+        return rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
       }
 
       return handleRequest(req, async (db) => {
-        let row = await db.run(SELECT.one.from(Blocks).where({ hash: blockHash }));
+        let row = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
         if (!row) {
-          row = await indexer.indexBlock(db, blockHash);
+          row = await indexer.indexBlock(db, hash);
         }
         return row;
       });
@@ -328,6 +332,7 @@ export default class CardanoService extends cds.ApplicationService {
         );
         if (!rows || rows.length === 0) {
           await indexer.indexAddress(db, address);
+          
           rows = await db.run(
             SELECT.from(AddressAssets).where({ address }),
           );
@@ -397,22 +402,22 @@ export default class CardanoService extends cds.ApplicationService {
     });
 
     this.on('GetTransactionByHash', async (req: Request) => {
-      const { txHash } = req.data as { txHash?: string };
+      const { hash } = req.data as { hash?: string };
 
       // Validate input before business logic
-      if (!txHash) {
-        return rejectMissing(req, 'GetTransactionByHash', 'txHash');
+      if (!hash) {
+        return rejectMissing(req, 'GetTransactionByHash', 'hash');
       }
-      if (!isTxHash(txHash)) {
-        return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'txHash');
+      if (!isTxHash(hash)) {
+        return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
       }
 
       return handleRequest(req, async (db) => {
         const existing = await db.run(
-          SELECT.one.from(Transactions).where({ hash: txHash }));
+          SELECT.one.from(Transactions).where({ hash }));
         if (existing) return existing;
-        logger.debug({ txHash },'[CardanoService] Indexing transaction via indexer');
-        return await indexer.indexTransaction(db, txHash);
+        logger.debug({ hash },'[CardanoService] Indexing transaction via indexer');
+        return await indexer.indexTransaction(db, hash);
       });
     });
     // ------------------------------------------------------------------------
@@ -447,92 +452,48 @@ export default class CardanoService extends cds.ApplicationService {
     // Metadata READ & GetMetadataByTxHash / GetMetadataLabelTransactions Actions
     // ------------------------------------------------------------------------
     this.on('READ', TransactionMetadata, async (req: Request) => {
-      const readData = req.data as { tx?: string; hash?: string; label?: string };
-      const rawQuery = (req as any)?.req?.query ?? {};
-
-      // For simple validation we only need a single hash value; prioritize data, then query.
-      const txHash = readData.tx ?? readData.hash ?? (typeof rawQuery.hash === 'string' ? rawQuery.hash : undefined);
-      const label = readData.label ?? (typeof rawQuery.label === 'string' ? rawQuery.label : undefined);
-
-      if (txHash && !isTxHash(txHash)) {
+      const { tx_hash } = req.data as { tx_hash?: string };
+      
+      if (tx_hash && !isTxHash(tx_hash)) {
         return rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
       }
 
-      // Validate label is not empty string
-      if (label && label.trim().length === 0) {
-        return rejectInvalid(req, 'TransactionMetadata', 'Label cannot be empty', 'label');
-      }
-
       return handleRequest(req, async (db) => {
-        if (txHash) {
-          const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: txHash }));
-          if (existing && existing.length > 0) {
-            return { ...existing[0], hash: txHash };
-          }
-          logger.debug({ txHash },'[CardanoService] Indexing transaction metadata via indexer');
-          const indexed = await indexer.indexTransactionMetadata(db, txHash);
-          if (Array.isArray(indexed) && indexed.length > 0) return { ...indexed[0], hash: txHash };
-          return indexed;
-        }
-        if (label) {
-          const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ label}));
-          if (existing && existing.length > 0) {
-            return existing[0];
-          }
-          logger.debug({ label },'[CardanoService] Indexing metadata label via indexer');
-          const indexed = await indexer.indexMetadataLabelTransactions(db, label);
-          if (Array.isArray(indexed) && indexed.length > 0) return indexed[0];
-          return indexed;
+        if (tx_hash) {
+          const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
+  
+          if(existing) return existing;
+          
+          logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+          return await indexer.indexTransactionMetadata(db, tx_hash);
+         
         }
         return await db.run(req.query);
       });
     });
 
     this.on('GetMetadataByTxHash', async (req: Request) => {
-      const { txHash } = req.data as { txHash?: string };
+      const { tx_hash } = req.data as { tx_hash?: string };
 
       // Validate input before business logic
-      if (!txHash) {
-        return rejectMissing(req, 'GetMetadataByTxHash', 'txHash');
+      if (!tx_hash) {
+        return rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
       }
-      if (!isTxHash(txHash)) {
-        return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'txHash');
+      if (!isTxHash(tx_hash)) {
+        return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
       }
 
       return handleRequest(req, async (db) => {
-        if (txHash) {
+        if (tx_hash) {
         const existing = await db.run(
-          SELECT.from(TransactionMetadata).where({ tx_hash: txHash }),
+          SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }),
         );
         if (existing && existing.length > 0) return existing;
-        logger.debug({ txHash },'[CardanoService] Indexing transaction metadata via indexer');
-        return await indexer.indexTransactionMetadata(db, txHash);
+        logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+        return await indexer.indexTransactionMetadata(db, tx_hash);
         }
       });
     });
-
-    this.on('GetMetadataLabelTransactions', async (req: Request) => {
-      const { label } = req.data as { label?: string };
-
-      // Validate input before business logic
-      if (!label) {
-        return rejectMissing(req, 'GetMetadataLabelTransactions', 'label');
-      }
-      if (label.trim().length === 0) {
-        return rejectInvalid(req, 'GetMetadataLabelTransactions', 'Label cannot be empty', 'label');
-      }
-      // Proceed with handling the request
-      return handleRequest(req, async (db) => {
-        const existing = await db.run(
-          SELECT.from(TransactionMetadata).where({ label }),
-        );
-        if (existing && existing.length > 0) {
-          return existing;
-        }
-        logger.debug({ label },'[CardanoService] Indexing metadata label via indexer');
-        return await indexer.indexMetadataLabelTransactions(db, label);
-        });
-      });
 
     return super.init();
   }

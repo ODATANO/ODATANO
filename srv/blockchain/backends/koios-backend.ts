@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest} from '../../utils/backend-request-handler';
-import { ProviderBadResponseError } from '../../utils/errors';
+import { NotFoundError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
 import {
   Transaction,
@@ -14,10 +14,9 @@ import {
   MetadataLabelTx,
   PoolData, 
   DrepData, 
-  AccountData
+  AccountData,
+  Amount
 } from '../../utils/types';
-import { P } from 'pino';
-import e from 'express';
 
 // ---------------------------------------------------------------------------
 // Koios Backend Implementation
@@ -42,34 +41,23 @@ export class KoiosBackend implements CardanoBackend {
   async getTransaction(txHash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/tx_info', { _tx_hashes: [txHash] });
+        const { data } = await this.api.post('/tx_info', { _tx_hashes: [txHash] , _inputs: true, _metadata: true, _assets: true});
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new ProviderBadResponseError('Transaction not found', this.name);
+          throw new NotFoundError('Transaction', this.name);
         }
 
         const tx = data[0];
         return {
           hash: tx.tx_hash,
           blockHash: tx.block_hash,
-          blockHeight: tx.block_height,
+          blockHeight: Number(tx.block_height),
+          blockTime: tx.block_time,
           slot: tx.slot_no,
           index: tx.tx_index,
           fee: parseInt(tx.tx_fee || '0', 10),
           deposit: parseInt(tx.deposit || '0', 10),
           size: tx.tx_size,
-          utxoCount: tx.utxo_count,
-          withdrawalCount: tx.withdrawal_count,
-          mirCertCount: tx.mir_cert_count,
-          delegationCount: tx.delegation_count,
-          stakeCertCount: tx.stake_cert_count,
-          poolUpdateCount: tx.pool_update_count,
-          poolRetireCount: tx.pool_retire_count,
-          assetMintOrBurnCount: tx.asset_mint_or_burn_count,
-          redeemerCount: tx.redeemer_count,
-          validContract: tx.valid_contract,
-          blockTime: this.toIsoFromSeconds(tx.block_time),
-          outputAmount: tx.output_amount,
           inputs: tx.inputs.map((input: any) => ({
             address: input.address,
             txHash: input.tx_hash,
@@ -81,8 +69,7 @@ export class KoiosBackend implements CardanoBackend {
           metadata: tx.metadata,
         };
       },
-      this.name,
-      'Transaction'
+      this.name
     );
   }
 
@@ -105,8 +92,7 @@ export class KoiosBackend implements CardanoBackend {
           fees: data.total_fees,
         };
       },
-      this.name,
-      'GetBlock'
+      this.name
     );
   }
 
@@ -120,7 +106,7 @@ export class KoiosBackend implements CardanoBackend {
         epochData = await this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } });
       
         if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
-          throw new ProviderBadResponseError('Epoch data not available', this.name);
+          throw new NotFoundError('Epoch', this.name);
         }
 
         const data = epochData.data[0];
@@ -138,8 +124,7 @@ export class KoiosBackend implements CardanoBackend {
           active_stake: data.active_stake,
         };
       },
-      this.name,
-      'GetEpoch'
+      this.name
     );
   }
 
@@ -149,23 +134,46 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.post('/address_info', { _addresses: [address] });
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new ProviderBadResponseError('Address not found', this.name);
+          throw new NotFoundError('Address', this.name);
         }
 
         const addressData = data[0];
         const addressUtxos = await this.getAddressUtxos(address)
+        const totals = new Map<string, bigint>();
 
+        for (const u of addressData.utxo_set ?? []) {
+          // ADA
+          totals.set(
+            'lovelace',
+            (totals.get('lovelace') ?? 0n) + BigInt(u.value)
+          );
+
+          // Native assets
+          for (const a of u.asset_list ?? []) {
+            const unit = `${a.policy_id}${a.asset_name}`;
+            totals.set(
+              unit,
+              (totals.get(unit) ?? 0n) + BigInt(a.quantity)
+            );
+          }
+        }
+
+        const amount: Amount[] = Array.from(totals.entries()).map(
+          ([unit, quantity]) => ({
+            unit,
+            quantity: quantity.toString(),
+          })
+        );
         return {
           address: address,
           stakeAddress: addressData.stake_address || null,
           type: addressData.address_type,
           isScript: addressData.is_script,
-          amount: addressData.total_balance,
+          amount: amount,
           utxos: addressUtxos,
         };
       },
-      this.name,
-      'Address'
+      this.name
     );
   }
 
@@ -177,8 +185,7 @@ export class KoiosBackend implements CardanoBackend {
         if (!data || !Array.isArray(data) || data.length === 0) {
           return [];
         }
-        
-        // data is array of utxos directly, not nested
+                
         return data.map((utxo: any) => ({
           txHash: utxo.tx_hash,
           outputIndex: utxo.tx_index,
@@ -189,8 +196,7 @@ export class KoiosBackend implements CardanoBackend {
           scriptRef: utxo.reference_script || null,
         }));
       },
-      this.name,
-      'AddressUTxOs'
+      this.name
     );
   }
 
@@ -203,7 +209,7 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
 
         if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new ProviderBadResponseError('Network information not available', this.name);
+          throw new NotFoundError('Network information', this.name);
         }
         
         const latest = data[0];
@@ -224,54 +230,39 @@ export class KoiosBackend implements CardanoBackend {
           },
         };
       },
-      this.name,
-      'NetworkInformation'
+      this.name
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // METADATA
-  // ---------------------------------------------------------------------------
-  async getMetadataLabelTransactions(_label: string | number): Promise<MetadataLabelTx[]> {
-    throw new ProviderBadResponseError('Metadata label transactions not supported by Koios', this.name);
-  }
-
-async getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> {
+async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
   return handleBackendRequest(
     async () => {
       const body = {
-        _tx_hashes: [txHash],
-      };
+        _tx_hashes: [tx_hash],
+        _inputs: false,
+        _metadata: true,
+        _assets: false,
+        _withdrawals: false,
+        _certs: false,
+        _scripts: false,
+        _bytecode: false,
+     };
 
-      const { data } = await this.api.post('/tx_metadata', body);
-
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new ProviderBadResponseError('Transaction metadata not found', this.name);
+      const { data } = await this.api.post('/tx_info', body);
+      
+      if (data.length === 0 || data[0].metadata === null) {
+        throw new NotFoundError('Transaction metadata', this.name);
       }
 
-      const first = data[0];
-      const txHashFromResponse = (first.tx_hash ?? txHash);
-      const metadataObj = first.metadata ?? {};
-
-      const labels: MetadataLabelTx[] = Object.entries(metadataObj).map(
-        ([labelKey, value]) => {
-          const numeric = Number(labelKey);
-          const parsedLabel = Number.isFinite(numeric) ? numeric : labelKey;
-          return {
-            txHash: txHashFromResponse,
-            label: parsedLabel,
-            json: value as JSONValue,
-          };
-        }
-      );
-
-      if (!labels.length) {
-        throw new ProviderBadResponseError('Transaction metadata not found', this.name);
-      }
+      const labels: MetadataLabelTx[] = Object.entries(data[0].metadata).map(
+        ([label, json]) => ({
+          txHash: tx_hash,
+          label: +label,
+          json: json as JSONValue,
+      }));
       return labels;
     },
-    this.name,
-    'TransactionMetadata'
+    this.name
   );
 }
 
@@ -279,11 +270,10 @@ async getPool(poolId: string): Promise<PoolData> {
   return handleBackendRequest(
     async () => {
       
-    // Koios only accepts bech32 pool IDs (pool...). Reject anything else to avoid decode errors.
     const isBech32PoolId = poolId.startsWith('pool');
     
     if (!isBech32PoolId) {
-      throw new ProviderBadResponseError('Pool id must be bech32 (starts with "pool")', this.name);
+      throw new NotFoundError('Pool (invalid format)', this.name);
     }
 
     const requestBody = { _pool_bech32_ids: [poolId] };
@@ -291,7 +281,7 @@ async getPool(poolId: string): Promise<PoolData> {
     const response = await this.api.post('/pool_info', requestBody);
     
       if (!Array.isArray(response.data) || response.data.length === 0) {
-        throw new ProviderBadResponseError('Pool not found', this.name);
+        throw new NotFoundError('Pool', this.name);
       }
 
       const poolData = response.data[0];
@@ -312,8 +302,7 @@ async getPool(poolId: string): Promise<PoolData> {
         rewardAccount: poolData.reward_addr,
       };
     },
-    this.name,
-    'PoolData'
+    this.name
   );
 }
   async getDrep(drepId: string): Promise<DrepData> {
@@ -326,8 +315,9 @@ async getPool(poolId: string): Promise<PoolData> {
       const { data } = await this.api.post('/drep_info', body);
 
       if (!Array.isArray(data) || data.length === 0) {
-        throw new ProviderBadResponseError('Drep not found', this.name);
+        throw new NotFoundError('Drep', this.name);
       }
+
       const drepData = data[0];
       return {
         drepId: drepData.drep_id,
@@ -339,8 +329,7 @@ async getPool(poolId: string): Promise<PoolData> {
         retired: drepData.retired,  
       };
     },
-    this.name,
-    'DrepData'
+    this.name
   );
 }  
   
@@ -353,7 +342,7 @@ async getAccount(accountId: string): Promise<AccountData> {
       const { data } = await this.api.post('/account_info', body);
 
        if (!Array.isArray(data) || data.length === 0) {
-        throw new ProviderBadResponseError('Account not found', this.name);
+        throw new NotFoundError('Account', this.name);
       }
 
       const addressBody = {
@@ -383,21 +372,6 @@ async getAccount(accountId: string): Promise<AccountData> {
         addresses: addresses,
       };
     },
-    this.name,
-    'AccountData'
+    this.name
   );
-}
-  
-  toIsoFromSeconds(value: unknown): string | null {
-    const n =
-      typeof value === 'number' ? value :
-      typeof value === 'bigint' ? Number(value) :
-      typeof value === 'string' ? Number(value) :
-      NaN;
-    if (!Number.isFinite(n)) {
-      return null;
-    }
-    return new Date(n * 1000).toISOString();
-  }
-}
-
+}}

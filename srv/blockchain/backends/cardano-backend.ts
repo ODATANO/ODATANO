@@ -18,7 +18,6 @@ export interface CardanoBackend {
   getAddress(address: string): Promise<Address>;
   getAddressUtxos(address: string): Promise<UTxO[]>;
   getNetworkInformation(): Promise<Network>;
-  getMetadataLabelTransactions(label: string | number): Promise<MetadataLabelTx[]>;
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
   getBlock(blockHash: string): Promise<BlockData>;
   getEpoch(epochNumber: Number): Promise<EpochData>;

@@ -177,7 +177,7 @@ entity Transactions {
     key hash        : Blake2b256 @assert.format: '^[a-f0-9]{64}$'; // transaction hash as hex
         blockHash   : Blake2b256; // block hash containing the transaction
         blockHeight : Integer; // block height containing the transaction
-        blockTime   : Timestamp; // block time containing the transaction
+        blockTime   : Integer64; // block time as integer unix timestamp
         slot        : Integer64; // slot number containing the transaction
         txIndex     : Integer; // transaction index within the block
         fee         : Lovelace; // transaction fee in lovelace
@@ -240,7 +240,8 @@ entity TransactionOutputAssets {
 // Transaction Metadata
 // -----------------------------------------------------
 entity TransactionMetadata {
+    key id      : Integer; // internal unique id
     key tx      : Association to Transactions; // transaction association
-    key label   : String; // metadata label as string
+        label   : String; // metadata label as string
         payload : LargeString; // metadata payload as JSON string
 }

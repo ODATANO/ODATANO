@@ -226,6 +226,12 @@ npm run test:integration
 npm run test:unit
 ```
 
+### Highlighted Tests
+
+- [test/unit/blockfrost-backend.test.ts](test/unit/blockfrost-backend.test.ts):
+  covers `BlockfrostBackend` constructor behavior (throws on missing
+  `BLOCKFROST_KEY`, initializes `BlockFrostAPI` when provided).
+
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
@@ -265,39 +271,19 @@ npm run test:unit
 
 ### Actions (POST)
 
-| Action                         | Parameters     | Description                         |
-| ------------------------------ | -------------- | ----------------------------------- |
-| `GetNetworkInformation`        | -              | Fetch current network stats         |
-| `GetBlockByHash`               | `blockHash`    | Fetch a specific block by hash      |
-| `GetEpochByNumber`             | `epochNumber`  | Fetch a specific epoch by number    |
-| `GetTransactionByHash`         | `txHash`       | Lookup transaction (64-hex)         |
-| `GetMetadataByTxHash`          | `txHash`       | Get transaction metadata (64-hex)   |
-| `GetMetadataLabelTransactions` | `label`        | Find transactions by metadata label |
-| `GetAddressByBech32`           | `address`      | Get address info (bech32)           |
-| `GetUTxOsByAddress`            | `address`      | Get address UTxOs (bech32)          |
-| `GetAssetsByAddress`           | `address`      | Get address assets (bech32)         |
-| `GetPoolById`                  | `poolId`       | Fetch a pool by pool hash           |
-| `GetAccountByStakeAddress`     | `stakeAddress` | Fetch an account by stake address   |
-| `GetDrepById`                  | `drepId`       | Fetch a drep by id                  |
-
-### OData Query Examples
-
-```bash
-# Filter transactions by fee
-GET /Transactions?$filter=fee gt 1000000
-
-# Select specific fields
-GET /Addresses?$select=address,totalLovelace
-
-# Pagination
-GET /Transactions?$top=10&$skip=0
-
-# Count results
-GET /Addresses?$count=true
-
-# Expand related data
-GET /Transactions?$expand=inputs,outputs
-```
+| Action                     | Parameters     | Description                       |
+| -------------------------- | -------------- | --------------------------------- |
+| `GetNetworkInformation`    | -              | Fetch current network stats       |
+| `GetBlockByHash`           | `hash`         | Fetch a specific block by hash    |
+| `GetEpochByNumber`         | `epochNumber`  | Fetch a specific epoch by number  |
+| `GetTransactionByHash`     | `hash`         | Lookup transaction (64-hex)       |
+| `GetMetadataByTxHash`      | `tx_hash`      | Get transaction metadata (64-hex) |
+| `GetAddressByBech32`       | `address`      | Get address info (bech32)         |
+| `GetUTxOsByAddress`        | `address`      | Get address UTxOs (bech32)        |
+| `GetAssetsByAddress`       | `address`      | Get address assets (bech32)       |
+| `GetPoolById`              | `poolId`       | Fetch a pool by pool ID           |
+| `GetAccountByStakeAddress` | `stakeAddress` | Fetch an account by stake address |
+| `GetDrepById`              | `drepId`       | Fetch a drep by ID                |
 
 ## Validation and data freshness
 
@@ -356,14 +342,16 @@ ODATANO/
 
 ## Environment Variables
 
-| Variable              | Required | Default   | Description                                            |
-| --------------------- | -------- | --------- | ------------------------------------------------------ |
-| `LOG_LEVEL`           | No       | `info`    | Logging level (trace, debug, info, warn, error, fatal) |
-| `NETWORK`             | No       | `preview` | Cardano network (mainnet, preview, preprod)            |
-| `BLOCKFROST_KEY`      | Yes      | -         | Blockfrost API project ID                              |
-| `PRIMARY_TIMEOUT_MS`  | No       | `8000`    | Primary backend timeout in milliseconds                |
-| `FALLBACK_TIMEOUT_MS` | No       | `10000`   | Fallback backend timeout in milliseconds               |
-| `INDEX_TTL_MS`        | No       | `60000`   | Cache TTL in milliseconds (1 minute default)           |
+| Variable                  | Required | Default            | Description                                            |
+| ------------------------- | -------- | ------------------ | ------------------------------------------------------ |
+| `LOG_LEVEL`               | No       | `info`             | Logging level (trace, debug, info, warn, error, fatal) |
+| `NETWORK`                 | No       | `preview`          | Cardano network (mainnet, preview, preprod)            |
+| `BLOCKFROST_KEY`          | Yes      | -                  | Blockfrost API project ID                              |
+| `PRIMARY_TIMEOUT_MS`      | No       | `8000`             | Primary backend timeout in milliseconds                |
+| `FALLBACK_TIMEOUT_MS`     | No       | `10000`            | Fallback backend timeout in milliseconds               |
+| `BACKENDS`                | No       | `blockfrost,koios` | Comma-separated list of backends                       |
+| `INDEX_TTL_MS`            | No       | `60000`            | Cache TTL in milliseconds (1 minute default)           |
+| BACKENDS=blockfrost,koios |          |                    |                                                        |
 
 ## License
 
