@@ -133,6 +133,7 @@ export class CardanoIndexer {
       tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
     }
 
+    console.log('Indexing UTxOs for address:', addr);
     const utxoData = await cardano.getAddressUtxos(addr);
 
     const utxoEntities = mapAddressUtxos(

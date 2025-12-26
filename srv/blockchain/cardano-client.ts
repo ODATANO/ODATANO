@@ -27,49 +27,46 @@ export class CardanoClient {
   private initPromise: Promise<void> | null = null;
 
   constructor(backends: CardanoBackend[]) {
-   if (!backends || backends.length === 0) {
-    throw new ConfigError(
-      'CardanoClient misconfigured: no backend available. Check CONFIG and API keys.'
-    );
+    if (!backends || backends.length === 0) {
+      throw new ConfigError(
+        'CardanoClient misconfigured: no backend available. Check CONFIG and API keys.'
+      );
+    }
+    this.backends = backends;
   }
-  this.backends = backends;
-}
 
   // ---------------------------------------------------------------------------
   // Init-Lifecycle
   // ---------------------------------------------------------------------------
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
-
     if (!this.initPromise) {
       this.initPromise = this.initBackends();
     }
     await this.initPromise;
   }
 
-private async initBackends(): Promise<void> {
-  const initialized: CardanoBackend[] = [];
-  const initErrors: BackendInitError[] = [];
+  private async initBackends(): Promise<void> {
+    const initialized: CardanoBackend[] = [];
+    const initErrors: BackendInitError[] = [];
 
-  for (const backend of this.backends) {
-    try {
-      logger.info({ backend: backend.name }, 'Initializing backend');
-      await backend.init();
-      initialized.push(backend);
-      logger.info({ backend: backend.name }, 'Backend initialized successfully');
-    } catch (err: any) {
-      initErrors.push(new BackendInitError(backend.name, err));
-      logger.error({ backend: backend.name, err }, 'Failed to initialize backend');
+    for (const backend of this.backends) {
+      try {
+        logger.info({ backend: backend.name }, 'Initializing backend');
+        await backend.init();
+        initialized.push(backend);
+        logger.info({ backend: backend.name }, 'Backend initialized successfully');
+      } catch (err: any) {
+        initErrors.push(new BackendInitError(backend.name, err));
+        logger.error({ backend: backend.name, err }, 'Failed to initialize backend');
+      }
     }
+    if (initialized.length === 0) {
+      throw new AllBackendsInitFailedError(initErrors);
+    }
+    this.backends = initialized;
+    this.initialized = true;
   }
-
-  if (initialized.length === 0) {
-    throw new AllBackendsInitFailedError(initErrors);
-  }
-
-  this.backends = initialized;
-  this.initialized = true;
-}
 
   // ---------------------------------------------------------------------------
   // Intern: Timeout & Fallback
@@ -149,27 +146,21 @@ private async initBackends(): Promise<void> {
   getTransaction(txHash: string): Promise<Transaction> {
     return this.withFallback(b => b.getTransaction(txHash));
   }
-
   getAddress(address: string): Promise<Address> {
     return this.withFallback(b => b.getAddress(address));
   }
-
   getAddressUtxos(address: string): Promise<UTxO[]> {
     return this.withFallback(b => b.getAddressUtxos(address));
   }
-
   getNetworkInformation(): Promise<Network> {
     return this.withFallback(b => b.getNetworkInformation());
   }
-
   getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getTransactionMetadata(tx_hash));
   }
-
   getBlock(block_hash: string): Promise<BlockData> {
     return this.withFallback(b => b.getBlock(block_hash));
   }
-  
   getEpoch(epochNumber: Number): Promise<EpochData> {
     return this.withFallback(b => b.getEpoch(epochNumber));
   }
@@ -181,13 +172,12 @@ private async initBackends(): Promise<void> {
   }
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.withFallback(b => b.getAccount(stakeAddress));
-
   } 
 }
 
 const backends: CardanoBackend[] = [];
 
-// Build backends from configuration
+// build backends from configuration
 for (const backendName of CONFIG.backends) {
   if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
     backends.push(new BlockfrostBackend());
@@ -209,7 +199,7 @@ export const cardanoClient = new CardanoClient(backends);
 export default cardanoClient;
 
 // ---------------------------------------------------------------------------
-// Factory for creating client with specific backends (for testing)
+// Factory for creating client with specific backends (useful for tests to init single backends)
 // ---------------------------------------------------------------------------
 export function createCardanoClientForBackends(backendNames: string[]): CardanoClient {
   const testBackends: CardanoBackend[] = [];

@@ -21,28 +21,22 @@ export async function handleBackendRequest<T>(
   }
 }
 /** * General request handler for CardanoService
- * 
  * @param req - The incoming request 
  * @param handler - The async function containing business logic
  * @returns The result of the handler or a mapped error response
  */ 
 export async function handleRequest(
     req: Request,
-    handler: (db: any) => Promise<any>
-  ): Promise<any> {
-    const context = req.target?.name || req.event;
-    const db = cds.tx(req);
-    try {
-      return await handler(db);
-    } catch (e: any) {
-      // 404 errors are expected - log as debug, not error
-      if (e?.statusCode === 404) {
-        logger.debug({ err: e }, `[CardanoService] ${context} - resource not found`);
-      } else {
+    handler: (db: any) => Promise<any>): 
+    Promise<any> {
+      const context = req.target?.name || req.event;
+      const db = cds.tx(req);
+      try {
+        return await handler(db);
+      } catch (e: any) {
         logger.error({ err: e }, `[CardanoService] ${context} error`);
+        return mapError(req, e, context);
       }
-      return mapError(req, e, context);
     }
-  }
 
 

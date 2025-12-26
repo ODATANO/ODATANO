@@ -25,7 +25,6 @@ export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   
-
   constructor() {
     this.api = axios.create({
       baseURL: CONFIG.koiosApiUrl,
@@ -37,17 +36,39 @@ export class KoiosBackend implements CardanoBackend {
     return;
   }
 
-
-  async getTransaction(txHash: string): Promise<Transaction> {
+  async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/tx_info', { _tx_hashes: [txHash] , _inputs: true, _metadata: true, _assets: true});
+        const body = {
+        _tx_hashes: [hash],
+        _inputs: true,
+        _metadata: true,
+        _assets: true,
+        _withdrawals: false,
+        _certs: false,
+        _scripts: false,
+        _bytecode: false,
+     };
+        
+        const { data } = await this.api.post('/tx_info', body);
 
         if (!data || !Array.isArray(data) || data.length === 0) {
           throw new NotFoundError('Transaction', this.name);
         }
 
         const tx = data[0];
+        console.log('Koios transaction data:', tx);
+        let labels: MetadataLabelTx[] = [];
+
+        if (tx.metadata) {
+          labels = Object.entries(tx.metadata).map(
+            ([label, json]) => ({
+              txHash: hash,
+              label: +label,
+              json: json as JSONValue,
+          }));
+        }
+
         return {
           hash: tx.tx_hash,
           blockHash: tx.block_hash,
@@ -66,7 +87,7 @@ export class KoiosBackend implements CardanoBackend {
             address: output.address,
             amount: output.amount,
           })),
-          metadata: tx.metadata,
+          metadata: labels
         };
       },
       this.name
@@ -131,8 +152,9 @@ export class KoiosBackend implements CardanoBackend {
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
+        
         const { data } = await this.api.post('/address_info', { _addresses: [address] });
-
+        
         if (!data || !Array.isArray(data) || data.length === 0) {
           throw new NotFoundError('Address', this.name);
         }
@@ -141,15 +163,15 @@ export class KoiosBackend implements CardanoBackend {
         const addressUtxos = await this.getAddressUtxos(address)
         const totals = new Map<string, bigint>();
 
-        for (const u of addressData.utxo_set ?? []) {
-          // ADA
+        for (const u of addressData.utxo_set) {
+          // add lovelace
           totals.set(
             'lovelace',
             (totals.get('lovelace') ?? 0n) + BigInt(u.value)
           );
 
-          // Native assets
-          for (const a of u.asset_list ?? []) {
+          // add native assets
+          for (const a of u.asset_list) {
             const unit = `${a.policy_id}${a.asset_name}`;
             totals.set(
               unit,
@@ -181,10 +203,6 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.post('/address_utxos', { _addresses: [address] });
-
-        if (!data || !Array.isArray(data) || data.length === 0) {
-          return [];
-        }
                 
         return data.map((utxo: any) => ({
           txHash: utxo.tx_hash,
@@ -200,21 +218,13 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // NETWORKINFO
-  // ---------------------------------------------------------------------------
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
-
-        if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new NotFoundError('Network information', this.name);
-        }
-        
+        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');        
         const latest = data[0];
         
-        // Koios /totals doesn't have all the fields, so we provide reasonable defaults
+        // @TODO: Check koios docs for missing fields
         return {
           supply: {
             max: '45000000000000000',
@@ -225,8 +235,8 @@ export class KoiosBackend implements CardanoBackend {
             reserves: latest.reserves || '0',
           },
           stake: {
-            live: '0', // Not available in /totals
-            active: '0', // Not available in /totals
+            live: '0',
+            active: '0',
           },
         };
       },
@@ -234,57 +244,50 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
-  return handleBackendRequest(
-    async () => {
-      const body = {
-        _tx_hashes: [tx_hash],
-        _inputs: false,
-        _metadata: true,
-        _assets: false,
-        _withdrawals: false,
-        _certs: false,
-        _scripts: false,
-        _bytecode: false,
-     };
+  async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
+    return handleBackendRequest(
+      async () => {
+        const body = {
+          _tx_hashes: [tx_hash],
+          _inputs: false,
+          _metadata: true,
+          _assets: false,
+          _withdrawals: false,
+          _certs: false,
+          _scripts: false,
+          _bytecode: false,
+        };
 
-      const { data } = await this.api.post('/tx_info', body);
+        const { data } = await this.api.post('/tx_info', body);
       
-      if (data.length === 0 || data[0].metadata === null) {
-        throw new NotFoundError('Transaction metadata', this.name);
-      }
-
-      const labels: MetadataLabelTx[] = Object.entries(data[0].metadata).map(
-        ([label, json]) => ({
-          txHash: tx_hash,
-          label: +label,
-          json: json as JSONValue,
-      }));
+        if (data.length === 0 || data[0].metadata === null) {
+          throw new NotFoundError('Transaction metadata', this.name);
+        }
+        const labels: MetadataLabelTx[] = Object.entries(data[0].metadata).map(
+          ([label, json]) => ({
+            txHash: tx_hash,
+            label: +label,
+            json: json as JSONValue,
+        }));
       return labels;
-    },
-    this.name
-  );
-}
+      },this.name
+    );
+  }
 
-async getPool(poolId: string): Promise<PoolData> {
+  async getPool(poolId: string): Promise<PoolData> {
   return handleBackendRequest(
     async () => {
-      
-    const isBech32PoolId = poolId.startsWith('pool');
-    
-    if (!isBech32PoolId) {
-      throw new NotFoundError('Pool (invalid format)', this.name);
-    }
+  try {
+    console.log('Fetching Koios pool info for poolId:', poolId);  
+    const { data } = await this.api.post('/pool_info',  { _pool_bech32_ids: [poolId] });
 
-    const requestBody = { _pool_bech32_ids: [poolId] };
-  
-    const response = await this.api.post('/pool_info', requestBody);
+    console.log('Koios pool info response:', data);
     
-      if (!Array.isArray(response.data) || response.data.length === 0) {
+      if (!Array.isArray(data) || data.length === 0) {
         throw new NotFoundError('Pool', this.name);
-      }
+        }
 
-      const poolData = response.data[0];
+      const poolData = data[0];
       return {
         poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
         vrfKeyHash: poolData.vrf_key_hash,
@@ -301,12 +304,18 @@ async getPool(poolId: string): Promise<PoolData> {
         fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
         rewardAccount: poolData.reward_addr,
       };
+    }catch (error) {
+    console.log('Error fetching pool info from Koios:', error);
+    throw error;
+    }
     },
     this.name
   );
 }
+
+
   async getDrep(drepId: string): Promise<DrepData> {
-    return handleBackendRequest(
+  return handleBackendRequest(
     async () => {
       const body = {
        _drep_ids: [drepId],
@@ -331,11 +340,12 @@ async getPool(poolId: string): Promise<PoolData> {
     },
     this.name
   );
-}  
+  }  
   
-async getAccount(accountId: string): Promise<AccountData> {
+  async getAccount(accountId: string): Promise<AccountData> {
   return handleBackendRequest(
     async () => {
+      
       const body = {
        _stake_addresses: [accountId],
       };
@@ -344,14 +354,11 @@ async getAccount(accountId: string): Promise<AccountData> {
        if (!Array.isArray(data) || data.length === 0) {
         throw new NotFoundError('Account', this.name);
       }
-
-      const addressBody = {
-        _stake_addresses: [accountId],
-      };
-      const addressDataResponse = await this.api.post('/account_addresses', addressBody); 
+      // Fetch associated addresses
+      const addressDataResponse = await this.api.post('/account_addresses', body); 
       
       // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-      const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses || []);
+      const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses);
       const addresses = await Promise.all(
           addressesFlat.map((addr: string) => this.getAddress(addr))
         );
@@ -374,4 +381,5 @@ async getAccount(accountId: string): Promise<AccountData> {
     },
     this.name
   );
-}}
+  }
+}

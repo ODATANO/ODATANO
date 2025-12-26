@@ -67,7 +67,6 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
 // -----------------------------------------------------------------------------
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
-    
     // Determine input index, defaulting to array index if not provided
     const inputIndex = input.outputIndex ?? idx;
     // Check presence of address and amount arrays
@@ -119,7 +118,6 @@ export function mapTransactionInputAssets(
 // -----------------------------------------------------------------------------
 // Transaction Outputs
 // -----------------------------------------------------------------------------
-
 export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
   return txOutputs.map((output, idx: number) => {
 
@@ -141,19 +139,16 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
 }
 
 export function mapTransactionOutputAssets(
-  txHash: string,
+  txHash: string, 
   outputs: TxOutputProviderData[]
 ): TransactionOutputAssetRow[] {
-
   return outputs.flatMap((output, idx) => {
 
     const outputIndex = output.outputIndex ?? idx;
-
     if (!Array.isArray(output.amount)) return [];
-
+    
     return output.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
-
       return {
         output_tx_hash: txHash,
         output_outputIndex: outputIndex,
@@ -173,14 +168,12 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
-
   const totalLovelace = Array.isArray(addressData.amount) 
     ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
     : 0;
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
-
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
@@ -209,11 +202,6 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
 }
 
 export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
-
-  if (!Array.isArray(AssetAssets)) {
-    return [];
-  }
-
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
     .map((asset: AmountProviderData) => {
@@ -234,7 +222,6 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
 // Network Information
 // -----------------------------------------------------------------------------
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
-
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
@@ -276,7 +263,6 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochR
 // Epochs
 // -----------------------------------------------------------------------------
 export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
-
   return {
     epoch: providerEpochData.epoch,
     startTime: providerEpochData.start_time,
@@ -294,20 +280,17 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
 // -----------------------------------------------------------------------------
 // Transaction Metadata
 // -----------------------------------------------------------------------------
-export function mapTransactionMetadata(
-  providerLabels: MetadataLabelTxProviderData[],
-): TransactionMetadataRow[] {
-
+export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[]): TransactionMetadataRow[] {
   const rows: TransactionMetadataRow[] = [];
 
   for (const [idx, lbl] of providerLabels.entries()) {
-  rows.push({
-    id: idx,
-    tx_hash: lbl.txHash,
-    label: lbl.label.toString(),
-    payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
-  });
- }
+    rows.push({
+      id: idx,
+      tx_hash: lbl.txHash,
+      label: lbl.label.toString(),
+      payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
+    });
+  }
   return rows;
 }
 
@@ -338,7 +321,6 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
 // -----------------------------------------------------------------------------
 export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   return {
-
     drepId  : providerDrepData.drepId,
     hex: providerDrepData.hex,
     amount: Number(providerDrepData.amount),

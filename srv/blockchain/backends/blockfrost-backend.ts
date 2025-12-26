@@ -26,14 +26,13 @@ export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
 
-constructor() {
+  constructor() {
   const projectId = CONFIG.blockfrostApiKey;
   if (!projectId) {
       throw new BackendInitError('blockfrost', new Error('CONFIG.blockfrostApiKey is not set'));
   }
-
   this.api = new BlockFrostAPI({ projectId });
-}
+  }
   
   async init(): Promise<void> { }
 
@@ -52,8 +51,9 @@ constructor() {
       this.name
     );
   }
-
-
+  // ---------------------------------------------------------------------------
+  // Block Data
+  // ---------------------------------------------------------------------------
   async getBlock(blockHash: string): Promise<BlockData> {
      return handleBackendRequest(
       async () => {
@@ -74,7 +74,9 @@ constructor() {
       this.name
     );
   }
-
+  // ---------------------------------------------------------------------------
+  // Epoch Data
+  // ---------------------------------------------------------------------------
    async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -148,7 +150,6 @@ constructor() {
       this.name
     );
   }
-
   // ---------------------------------------------------------------------------
   //  Transaction Metadata
   // ---------------------------------------------------------------------------
@@ -160,7 +161,6 @@ constructor() {
         if (txMetadata.length === 0 || txMetadata === null) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
-
         return txMetadata.map(md => ({
           txHash: tx_hash,
           label: md.label,
@@ -178,7 +178,6 @@ constructor() {
     return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
-
         const address_utxos = await this.api.addressesUtxos(address);
 
         return {
@@ -223,9 +222,7 @@ constructor() {
   async getPool(poolId: string): Promise<PoolData> {
    return handleBackendRequest(
       async () => {
-        
         const poolData = await this.api.poolsById(poolId);
-
         return {
           poolId: poolData.pool_id,
           vrfKeyHash: poolData.vrf_key,
@@ -248,7 +245,6 @@ constructor() {
   }
 
   async getDrep(drepId: string): Promise<DrepData> {
-    
     return handleBackendRequest(
       async () => {
         const drepData = await this.api.governance.drepsById(drepId);
@@ -271,10 +267,7 @@ constructor() {
     return handleBackendRequest(
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
-        
         const addressData = await this.api.accountsAddresses(stakeAddress);
-        
-        
         const addresses = await Promise.all(
           addressData.map(address => this.getAddress(address.address))
         );

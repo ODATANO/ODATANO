@@ -355,6 +355,14 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         expect(data).to.have.property('blockHeight');
         expect(status).to.equal(200);
       });
+      it ('POST /GetTransactionByHash – transaction with metadata', async () => {
+        const { status, data } = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: FIXTURE.txWithMetadata });
+        expect(data).to.have.property('hash');
+        expect(data.hash).to.equal(FIXTURE.txWithMetadata);
+        expect(data).to.have.property('blockHeight');
+        expect(status).to.equal(200);
+      });
+
     });
 
     describe('Transactions Entity Cold Indexing', () => {

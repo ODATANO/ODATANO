@@ -193,7 +193,13 @@ describe('Service-Level Invalid Input & OData Errors', () => {
 			expect(response.status).to.equal(400);
 			expect(response.data.error.message).to.match(/Invalid poolId format|Pools/i);
 		});
-
+		it('Ivallid bech32 pool id: GetPoolById returns 400', async () => {
+				const nonexistentStakeAddr = 'pool1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+				const { status, data } = await POST('/odata/v4/cardano-odata/GetPoolById', { poolId: nonexistentStakeAddr }).catch(err => err.response);
+				expect(data.error).to.exist;
+				expect(data.error.message).to.match(/Invalid poolId format/i);
+				expect(status).to.equal(400);
+			} )
 		it('GetPoolById with invalid bech32-like poolId (wrong prefix)', async () => {
 			const response = await POST('/odata/v4/cardano-odata/GetPoolById', { poolId: 'poolx' + 'a'.repeat(10) }).catch(err => err.response);
 			expect(response.status).to.equal(400);

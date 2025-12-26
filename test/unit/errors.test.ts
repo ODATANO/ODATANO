@@ -238,7 +238,6 @@ describe('Error Classes', () => {
       ];
       
       const error = new AllBackendsInitFailedError(errors);
-      
       expect(error.message).toContain('blockfrost');
     });
   });
