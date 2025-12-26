@@ -129,11 +129,12 @@ export class CardanoIndexer {
       addrData.amount
     );
 
+    logger.debug({ assetEntities }, 'indexAddress: asset entities');
+
     if (assetEntities.length > 0) {
       tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
     }
 
-    console.log('Indexing UTxOs for address:', addr);
     const utxoData = await cardano.getAddressUtxos(addr);
 
     const utxoEntities = mapAddressUtxos(

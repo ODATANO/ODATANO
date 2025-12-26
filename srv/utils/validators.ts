@@ -4,16 +4,15 @@ import { bech32 } from "bech32";
 // ---------------------------------------------------------------------------
 // Regular Expressions (cheap prefilters; not sufficient for checksum validity)
 // ---------------------------------------------------------------------------
-const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
-const POLICY_ID_REGEX = /^[a-f0-9]{56}$/;
-
+const TX_HASH_REGEX = /^[a-f0-9]{64}$/; // 64-character hexadecimal string
+const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
 // keep as cheap prefilter if you want, but do not rely on it alone
-const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/;
-const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/;
+const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/; // bech32 format
+const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/; // bech32 format
 
 // Your config-driven regexes (cheap prefilter)
-const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr;
-const BECH32_STAKE_REGEX = CONFIG.hrp.stake;
+const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr; // e.g., addr1, addr_test1
+const BECH32_STAKE_REGEX = CONFIG.hrp.stake; // e.g., stake1, stake_test1
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,13 +56,26 @@ export function isTxHash(s: unknown): s is string {
   return typeof s === "string" && TX_HASH_REGEX.test(s);
 }
 
+
 /**
- * Policy ID: 56-character hexadecimal string
- * @param s 
- * @returns true if s is a valid policy ID false otherwise
+ * 
+ * @param v 
+ * @returns true if is a vaild unit
  */
-export function isPolicyId(s: unknown): s is string {
-  return typeof s === "string" && POLICY_ID_REGEX.test(s);
+export function isAssetUnit(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+
+  if (!ASSET_UNIT_REGEX.test(s)) return false;
+  if (s.length < 56) return false;
+  if (s.length % 2 !== 0) return false;
+
+  const policy = s.slice(0, 56);
+  const asset = s.slice(56);
+
+  if (policy.length !== 56) return false;
+  if (asset.length > 128) return false; // max 64 bytes
+  return true;
 }
 
 /**
@@ -156,7 +168,6 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
  * @param s 
  * @returns true if s is a valid epoch number false otherwise
  */
-
 export function isEpochNumber(s: unknown): s is number {
   return typeof s === "number" && s >= 0 && s <= 100000 && Number.isInteger(s);
 }

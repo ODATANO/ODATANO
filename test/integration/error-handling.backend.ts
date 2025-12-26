@@ -13,15 +13,8 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 
 		// Error 404 resource not found with valid-looking inputs
 		describe('Resource Not Found (valid inputs)', () => {
-			it('GetTransactionByHash with nonexistent transaction', async () => {
-				const nonexistentHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-				const { status, data } = await POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: nonexistentHash }).catch(err => err.response);
-				expect(data.error).to.exist;
-				expect(data.error.message).to.match(/not found/i);
-				expect(status).to.equal(404);
-			});
 
-			it('GET single Transaction with nonexistent hash', async () => {
+			it('GET / single Transaction with nonexistent hash', async () => {
 				const nonexistentHash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 				const { status, data } = await GET(`/odata/v4/cardano-odata/Transactions(hash='${nonexistentHash}')`).catch(err => err.response);
 				expect(data.error).to.exist;
@@ -29,56 +22,69 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 				expect(status).to.equal(404);
 			});
 
-			it('GET single Address with nonexistent data', async () => {
+			it('GET / single Address with nonexistent data', async () => {
 				const nonexistentAddr = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
 				const { status, data } = await GET(`/odata/v4/cardano-odata/Addresses('${nonexistentAddr}')`).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			});
+
+			it('POST / GetTransactionByHash with nonexistent transaction', async () => {
+				const nonexistentHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+				const { status, data } = await POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: nonexistentHash }).catch(err => err.response);
+				expect(data.error).to.exist;
+				expect(data.error.message).to.match(/not found/i);
+				expect(status).to.equal(404);
+			});
 	
-			it('Get Transaction with no metadata: GetMetadataByTxHash returns 404', async () => {
+			it('POST / Transaction with no metadata: GetMetadataByTxHash returns 404', async () => {
 				const txHashWithNoMetadata = '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: txHashWithNoMetadata }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			} );
-			it('Get Address with no assets: GetAssetsByAddress returns 40004 if no assets exist on address', async () => {
+
+			it('POST / Address with no assets: GetAssetsByAddress returns 404', async () => {
 				const addressWithNoAssets = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetAssetsByAddress', { address: addressWithNoAssets }).catch(err => err.response);
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			} );
 
-			it('Get Address with no UTxOs: GetUTxOsByAddress returns 404 if no utxos exist on address', async () => {	
+			it('POST / Address with no UTxOs: GetUTxOsByAddress returns 404 if no utxos exist on address', async () => {	
 				const addressWithNoUtxos = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: addressWithNoUtxos }).catch(err => err.response);
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			});
-			it('Valid but non -existet poolId with no pool data: GetPoolById returns 404', async () => {
+			
+			it('POST / Valid but non-existent poolId with no pool data: GetPoolById returns 404', async () => {
 				const nonexistentPoolId = 'pool1t48fj09ft70czzd5sfqyz4zwvpc5m84w2pdv07jl443luentvxq';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetPoolById', { poolId: nonexistentPoolId }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			});
-			it('Valid but non -existet account: GetAccountByAddress returns 404', async () => {
+
+			it('POST / Valid but non-existent account: GetAccountByAddress returns 404', async () => {
 				const nonexistentAccountAddr = 'stake_test1upf33faucwv50x3c9cqw7uesdqqufkqxfhmvcgxj5h98rzg3ermj8';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: nonexistentAccountAddr }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			} );
-			it('Valid but non-existent Drep Id: GetDrepById returns 404', async () => {
+
+			it('POST / Valid but non-existent Drep Id: GetDrepById returns 404', async () => {
 				const nonexistentDrepId = 'drep1ywqwac5q5d5vspmsvp2jjcy3vv9zwfc78yzpyfx25gd6r5cvfcf8h';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetDrepById', { drepId: nonexistentDrepId }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			});
-			it('Valid but non-existent epoch number: GetEpochByNumber returns 404', async () => {
+
+			it('POST / Valid but non-existent epoch number: GetEpochByNumber returns 404', async () => {
 				const nonexistentEpochNumber = 9999;
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: nonexistentEpochNumber }).catch(err => err.response);
 				expect(data.error).to.exist;

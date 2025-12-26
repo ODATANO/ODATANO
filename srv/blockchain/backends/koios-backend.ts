@@ -57,7 +57,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const tx = data[0];
-        console.log('Koios transaction data:', tx);
+        
         let labels: MetadataLabelTx[] = [];
 
         if (tx.metadata) {
@@ -275,13 +275,10 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   async getPool(poolId: string): Promise<PoolData> {
-  return handleBackendRequest(
-    async () => {
-  try {
-    console.log('Fetching Koios pool info for poolId:', poolId);  
-    const { data } = await this.api.post('/pool_info',  { _pool_bech32_ids: [poolId] });
+    return handleBackendRequest(
+      async () => {
 
-    console.log('Koios pool info response:', data);
+      const { data } = await this.api.post('/pool_info',  { _pool_bech32_ids: [poolId] });
     
       if (!Array.isArray(data) || data.length === 0) {
         throw new NotFoundError('Pool', this.name);
@@ -304,10 +301,6 @@ export class KoiosBackend implements CardanoBackend {
         fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
         rewardAccount: poolData.reward_addr,
       };
-    }catch (error) {
-    console.log('Error fetching pool info from Koios:', error);
-    throw error;
-    }
     },
     this.name
   );

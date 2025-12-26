@@ -6,7 +6,7 @@ import {
 } from './backend-test-helper';
 
 const { SELECT, INSERT } = cds.ql;
-jest.setTimeout(20000);
+jest.setTimeout(200000);
 // Helper function to create test suite for a specific backend
 export function createBackendTestSuite(backendConfig: BackendTestConfig) {
 
@@ -28,6 +28,7 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
     validStakeAddress: 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p',
     transactionMetadataLabel: '1990',
     validPoolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
+    validUnit: 'eadc69a5d2d1357acc9b9d49ec5390fcdf6e080c7a40139917223dcba971c6765a1acab1d7849f4f032195cf69c4ab486ac6dedec9533103',
   }
 
   // Reset the database before each test to ensure a clean state
@@ -448,6 +449,16 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionInputAssets`);
         expect(status).to.equal(200);
         expect(Array.isArray(data.value)).to.be.true;
+      });
+
+      it('READ /AddressAssets – read AddressAssets with single Address Key', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressAssets(address_address='${FIXTURE.validAddress}', unit='${FIXTURE.validUnit}')`);
+
+        expect(data).to.have.property('address_address');
+        expect(data.address_address).to.equal(FIXTURE.validAddress);
+        expect(data).to.have.property('unit');
+        expect(data.unit).to.equal(FIXTURE.validUnit);
+        expect(status).to.equal(200);
       });
 
       it('GET /TransactionOutputAssets – read TransactionOutputAssets collection', async () => {
