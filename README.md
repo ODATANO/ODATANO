@@ -80,6 +80,7 @@ fallback strategy.
 - Consumers always interact with stable OData entities, independent of the
   underlying provider.
 
+
 ### Data Freshness Model
 
 ODATANO uses a lazy, on-demand freshness model based on SAP CAP temporal
@@ -225,12 +226,6 @@ npm run test:integration
 ```bash
 npm run test:unit
 ```
-
-### Highlighted Tests
-
-- [test/unit/blockfrost-backend.test.ts](test/unit/blockfrost-backend.test.ts):
-  covers `BlockfrostBackend` constructor behavior (throws on missing
-  `BLOCKFROST_KEY`, initializes `BlockFrostAPI` when provided).
 
 ## Documentation
 
