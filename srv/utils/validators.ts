@@ -10,7 +10,6 @@ const { BECH32_MAX_LENGTH, MAX_EPOCH, POOL_ID_BYTES } = CONFIG.VALIDITY_VARIANTS
 // Regular Expressions (cheap prefilters; not sufficient for checksum validity)
 // ---------------------------------------------------------------------------
 const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
-const POLICY_ID_REGEX = /^[a-f0-9]{56}$/;
 const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
 // keep as cheap prefilter if you want, but do not rely on it alone
 const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/;
