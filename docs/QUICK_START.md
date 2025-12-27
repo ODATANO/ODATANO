@@ -137,6 +137,32 @@ curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('<64-hex-hash>')
 curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')"
 ```
 
+## Testing All Endpoints
+
+For comprehensive API testing, ODATANO provides two convenient options:
+
+### Automated Test Script
+
+```bash
+npx tsx scripts/request_examples.ts
+```
+
+The [request_examples.ts](../scripts/request_examples.ts) script automatically tests all 21 endpoints (10 GET entity sets and 11 POST actions) with real test data from the preview network. It provides:
+
+- Automatic testing of all service endpoints
+- Real test data (block hashes, addresses, transaction hashes, etc.)
+- Summary statistics (successful/failed requests)
+- Detailed logging output
+
+### Postman Collection
+
+Import the [ODATANO M1 - Full Service Catalog](../scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json) collection into Postman to:
+
+- Manually test and explore all available endpoints
+- View pre-configured requests with example data
+- See detailed descriptions for each endpoint
+- Modify parameters and experiment with the API
+
 ## Testing
 
 ```bash

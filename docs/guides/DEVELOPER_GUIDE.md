@@ -230,7 +230,38 @@ npm test -- --watch
 
 # Terminal 3: Manual testing
 curl http://localhost:4004/odata/v4/cardano-odata/$metadata
+
+# Terminal 4: Test all endpoints with automated script
+npx tsx scripts/request_examples.ts
 ```
+
+### API Testing Tools
+
+**Automated Test Script:**
+
+The [request_examples.ts](../../scripts/request_examples.ts) script provides automated testing of all 21 service endpoints:
+
+```bash
+npx tsx scripts/request_examples.ts
+```
+
+This script tests:
+- 10 GET requests (entity sets: NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, Accounts, Addresses, TransactionMetadata)
+- 11 POST requests (actions: GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress)
+
+Features:
+- Real test data from preview network
+- Automatic success/failure tracking
+- Detailed logging output
+- Summary statistics
+
+**Postman Collection:**
+
+Import the [ODATANO M1 - Full Service Catalog](../../scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json) into Postman for:
+- Manual endpoint exploration
+- Pre-configured requests with example data
+- Detailed endpoint descriptions
+- Parameter experimentation
 
 ### NPM Scripts
 

@@ -1,0 +1,661 @@
+{
+	"info": {
+		"_postman_id": "664d150c-9a1a-4a9c-a922-b3c1c8c4b4e6",
+		"name": "ODATANO M1 - Full Service Catalog",
+		"description": "This Postman collection provides a set of example requests for testing and validating the **ODATANO Cardano OData Service (Milestone 1)**.\n\nThe collection is intended as a **supplementary technical tool** to:\n\n- verify correct service behavior,\n    \n- inspect raw OData responses,\n    \n- test entity sets and actions independently,\n    \n- and support development, debugging, and demonstrations",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "44579347",
+		"_collection_link": "https://max-3814640.postman.co/workspace/0f6186c0-6753-4ca3-8c5f-b7845d0e29a2/collection/44579347-664d150c-9a1a-4a9c-a922-b3c1c8c4b4e6?action=share&source=collection_link&creator=44579347"
+	},
+	"item": [
+		{
+			"name": "$metadata",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/$metadata",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"$metadata"
+					]
+				},
+				"description": "**Description**  \n  \nReturns the OData V4 service metadata document for the Cardano OData Service.  \n  \nIt describes all available entity sets, data types, relationships, and custom actions exposed by the service.\n\n**Typical Use Case**  \n  \nUsed to discover the API surface, validate the service contract, and enable tooling such as OData clients or UI generators."
+			},
+			"response": []
+		},
+		{
+			"name": "GET NetworkInformation",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/NetworkInformation",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"NetworkInformation"
+					]
+				},
+				"description": "**Description**  \n  \nReturns general information about the current Cardano network state, such as network parameters, epoch context, and chain-level metadata.\n\n**Typical Use Case**  \n  \nUsed to obtain a high-level snapshot of the blockchain network and verify that the service is connected to the correct network."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Blocks",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "text"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Blocks('2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Blocks('2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008')"
+					]
+				},
+				"description": "**Description**  \nReturns detailed information for a specific Cardano block identified by its block hash.  \nThe response includes block-level metadata such as height, slot, timestamp, and transaction count.\n\n**Typical Use Case**  \nUsed to retrieve and inspect a single block when the block hash is already known, for example when drilling down from a block list or transaction reference."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Epochs",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Epochs(500)",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Epochs(500)"
+					]
+				},
+				"description": "**Description**  \nReturns detailed information for a specific Cardano epoch identified by its epoch number.  \nThe response includes epoch-level metrics such as slot range, block count, and reward-related data.\n\n**Typical Use Case**  \nUsed to retrieve historical or current epoch information when the epoch number is known, for example for analytics or network status inspection."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Pools",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Pools('pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Pools('pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r')"
+					]
+				},
+				"description": "**Description**  \nReturns detailed information for a specific Cardano stake pool identified by its pool ID.  \nThe response includes pool metadata such as pledge, margin, cost parameters, and operational status.\n\n**Typical Use Case**  \nUsed to inspect a stake pool when the pool ID is known, for example for staking analysis or pool validation."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Dreps",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Dreps('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Dreps('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0')"
+					]
+				},
+				"description": "**Description**  \nReturns detailed information for a specific Cardano Delegated Representative (DRep) identified by its DRep ID.  \nThe response includes governance-related metadata such as voting power, registration status, and activity indicators.\n\n**Typical Use Case**  \nUsed to inspect governance participation and status of a specific DRep when the DRep ID is known."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Transactions",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Transactions",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Transactions"
+					]
+				},
+				"description": "**Description**  \nReturns a list of Cardano transactions exposed by the service.  \nEach entry represents a single on-chain transaction with core metadata such as hash, block reference, fees, size, and timestamps.\n\n**Typical Use Case**  \nUsed to browse or query recent and historical transactions, often in combination with OData query options for filtering, sorting, or limiting results."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Accounts",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Accounts('stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Accounts('stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p')"
+					]
+				},
+				"description": "**Description**  \nReturns account-level information for a specific Cardano staking account identified by its stake address.  \nThe response includes staking-related data such as delegated pool, rewards, withdrawals, and account status.\n\n**Typical Use Case**  \nUsed to inspect the staking state and rewards of an account when the stake address is known."
+			},
+			"response": []
+		},
+		{
+			"name": "GET Addresses",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')"
+					]
+				},
+				"description": "**Description**  \nReturns detailed information for a specific Cardano address identified by its Bech32-encoded address.  \nThe response includes address-level metadata such as balance information, associated stake address, and usage indicators.\n\n**Typical Use Case**  \nUsed to inspect an address when the exact Bech32 address is known, for example to verify balances or link the address to staking and transaction activity."
+			},
+			"response": []
+		},
+		{
+			"name": "GET TransactionMetadata",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/TransactionMetadata( id ='1', tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"TransactionMetadata( id ='1', tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')"
+					]
+				},
+				"description": "**Description**  \nReturns a specific transaction metadata entry identified by its id and the associated transaction hash.  \nThe response contains the on-chain metadata payload attached to the transaction for the given label.\n\n**Typical Use Case**  \nUsed to inspect structured or application-specific metadata embedded in a Cardano transaction, such as protocol data, messages, or custom annotations."
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetNetworkInformation",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{}"
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetNetworkInformation",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetNetworkInformation"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns current high-level information about the Cardano network.  \nThis action provides a convenient, explicit way to retrieve network status data without querying the entity set directly.\n\n**Typical Use Case**  \nUsed when a client prefers an action-based call to fetch the current network snapshot, for example in scripted checks or demo scenarios."
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetBlockByHash",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"hash\": \"2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetBlockByHash",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetBlockByHash"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns detailed information for a specific Cardano block identified by its block hash.  \nThe action provides a direct lookup mechanism without requiring a prior entity set query.\n\n**Typical Use Case**  \nUsed to retrieve block details when the block hash is already known, for example from an external reference or a previous transaction lookup.  \n**Body**\n\nhash: hash of the specific block"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetEpochByNumber",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"epochNumber\": 500\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetEpochByNumber",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetEpochByNumber"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns detailed information for a specific Cardano epoch identified by its epoch number.  \nThis action enables direct retrieval of epoch data without querying the epoch entity set.\n\n**Typical Use Case**  \nUsed to fetch epoch information when the epoch number is already known, for example for historical analysis or network inspection\n\n**Parameter:**\n\nepochNumber: epoch number"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetPoolById",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"poolId\": \"pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetPoolById",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetPoolById"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns detailed information for a specific Cardano stake pool identified by its pool ID.  \nThe action provides a direct lookup mechanism without requiring a prior query on the pool entity set.\n\n**Typical Use Case**  \nUsed to retrieve stake pool details when the pool ID is already known, for example from staking configuration, delegation data, or external references.\n\n**Parameter:**\n\npoolId: bech32 pool id"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetDrepById",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"drepId\": \"drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetDrepById",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetDrepById"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns detailed information for a specific Cardano Delegated Representative (DRep) identified by its DRep ID.  \nThe response provides governance-related data such as registration status, voting power, and activity indicators.\n\n**Typical Use Case**  \nUsed to retrieve governance information for a DRep when the DRep ID is already known, for example for governance analysis or validation purposes.\n\n**Parameter:**\n\ndrepId: bech32 drep id"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetAccountByStakeAddress",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"stakeAddress\": \"stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAccountByStakeAddress",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetAccountByStakeAddress"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetTransactionByHash",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"hash\": \"95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetTransactionByHash"
+					]
+				},
+				"description": "**Description**\n\nExecutes a service action that returns detailed information for a specific Cardano transaction identified by its transaction hash.\n\nThe response includes transaction-level metadata such as inputs, outputs, fees, size, and block references.\n\n**Typical Use Case**\n\nUsed to retrieve full transaction details when the transaction hash is already known, for example when drilling down from a block or external reference.\n\n**Parameter:**\n\nhash: hash of the transaction"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetMetadataByTxHash",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"tx_hash\": \"95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetMetadataByTxHash"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns all metadata entries associated with a specific Cardano transaction identified by its transaction hash.  \nThe response includes on-chain metadata labels and their corresponding payloads attached to the transaction.\n\n**Typical Use Case**  \nUsed to retrieve and inspect application-specific or protocol-level metadata embedded in a transaction when the transaction hash is known.\n\n**Parameter:**\n\ntx_hash: hash of the transaction contraining the metadata"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetAddressByBech32",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"address\": \"addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetAddressByBech32"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns detailed information for a specific Cardano address identified by its Bech32-encoded address.  \nThe action provides direct access to address metadata without querying the address entity set.\n\n**Typical Use Case**  \nUsed to retrieve address details when the Bech32 address is already known, for example for balance checks, address validation, or downstream lookups.\n\n**Parameter:**\n\naddress: address in bech32 format"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetUTxOsByAddress",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"address\": \"addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetUTxOsByAddress",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetUTxOsByAddress"
+					]
+				},
+				"description": "**Description**\n\nExecutes a service action that returns all unspent transaction outputs (UTxOs) associated with a specific Cardano address.\n\nThe response includes UTxO references, values, and contained assets for the given address.\n\n**Typical Use Case**\n\nUsed to inspect the UTxO set of an address when the Bech32 address is known, for example for balance verification or to get spendable utxos for transaction building\n\n**Parameter:**\n\naddress: address in bech32 format"
+			},
+			"response": []
+		},
+		{
+			"name": "POST GetAssetsByAddress",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"address\": \"addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "4004",
+					"path": [
+						"odata",
+						"v4",
+						"cardano-odata",
+						"GetAssetsByAddress"
+					]
+				},
+				"description": "**Description**  \nExecutes a service action that returns all native assets associated with a specific Cardano address.  \nThe response includes asset identifiers and quantities held at the given address.\n\n**Typical Use Case**  \nUsed to retrieve the asset portfolio of an address when the Bech32 address is known, for example to inspect token holdings or validate balances.  \n\n**Parameter:**\n\naddress: address in bech32 format"
+			},
+			"response": []
+		}
+	]
+}
