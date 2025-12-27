@@ -5,40 +5,95 @@ errors are normalized and propagated to the client.
 
 ## Error Classes Overview
 
-ODATANO uses a four-tier error system for backend communication:
+ODATANO uses **8 specialized error classes** for comprehensive error handling:
 
-### 1. `NotFoundError` (404)
+### Backend Communication Errors
 
-A valid 404 indicating the requested resource does not exist. This is not a
-provider outage; do not retry.
+#### 1. `BackendError` (Base Class)
 
-### 2. `RateLimitError` (429)
+Base class for all backend-related errors with:
+- `statusCode`: HTTP status code (400-599)
+- `code`: Error code from ERROR_CODES
+- `backendName`: Which backend failed (e.g., "Blockfrost", "Koios")
+- `originalError`: Original error object for debugging
+- `target`: Affected resource/field
 
-The provider has throttled the request due to usage limits. Back off and retry
-later; responses may include a `retry-after` hint.
+#### 2. `NotFoundError` (404)
 
-### 3. `ProviderUnavailableError` (503)
+Resource does not exist on the blockchain. This is **not** a provider error.
+- **Not retry-able**: The resource genuinely doesn't exist
+- **Example**: Transaction hash not found, address never used
 
-Transient provider, network, or timeout issues. The resource may exist; retry is
-appropriate.
+#### 3. `RateLimitError` (429)
 
-### 4. `AllBackendsFailedError`
+Provider has throttled the request due to usage limits.
+- **Retry-able**: After waiting (check `retry-after` hint)
+- **Example**: Blockfrost 10 req/sec exceeded
+- **Response**: May include `retry-after` seconds
 
-All configured backends failed for the operation. The service surfaces the
-status/code of the last failure; indicates a systemic issue beyond a single
-resource.
+#### 4. `ProviderUnavailableError` (503)
+
+Transient provider, network, or timeout issues.
+- **Retry-able**: Temporary issue, may succeed on retry
+- **Example**: Network timeout (8s), provider 5xx errors, service down
+
+#### 5. `AllBackendsFailedError` (502/503)
+
+All configured backends failed for the operation.
+- **Contains**: Array of individual backend errors
+- **Status**: Inherits status of last failed backend
+- **Indicates**: Systemic issue beyond single resource
+
+### Configuration & Initialization Errors
+
+#### 6. `ConfigError` (500)
+
+Configuration error (missing API keys, invalid settings).
+- **Example**: BLOCKFROST_KEY not set, invalid network
+- **Fix**: Check environment variables and config.ts
+
+#### 7. `BackendInitError` (500)
+
+Single backend failed to initialize.
+- **Contains**: Backend name and original error
+- **Example**: Invalid Blockfrost API key, network mismatch
+
+#### 8. `AllBackendsInitFailedError` (500)
+
+All backends failed during initialization.
+- **Contains**: Array of BackendInitError instances
+- **Result**: Service startup fails (no backends available)
 
 ## Normalization Rules
 
-1. Message hints → 404
-   - Hints: "not found", "has not been found", "does not exist", "no
-     data/records", "empty result", "not available", "no metadata", "invalid
-     address", "malformed address".
-2. Status 429 or rate-limit messages → 429 (+ optional `retry-after`).
-3. Status 404 → 404.
-4. Status 5xx → 503.
-5. Status 4xx → 404 if hints present; otherwise 503.
-6. Unknown/network errors → 503.
+The `normalizeBackendError()` function converts any error into a typed `BackendError` using this priority:
+
+### Priority Order
+
+1. **Message hints → 404 (NotFoundError)**
+   - Hints: "not found", "has not been found", "does not exist", "no data", "no records", "empty result", "not available", "no metadata", "invalid address", "malformed address"
+   - **Why**: Some providers return 5xx for missing resources (Koios)
+   
+2. **Status 429 or rate-limit messages → 429 (RateLimitError)**
+   - Patterns: "rate limit", "too many requests", "quota exceeded"
+   - Extracts `retry-after` header if present
+   
+3. **Status 404 → 404 (NotFoundError)**
+   - Direct mapping for well-behaved providers (Blockfrost)
+   
+4. **Status 5xx → 503 (ProviderUnavailableError)**
+   - Provider server errors are retry-able
+   
+5. **Status 4xx → Check message**
+   - If "not found" in message → 404 (NotFoundError)
+   - Otherwise → 503 (ProviderUnavailableError)
+   
+6. **Unknown/network errors → 503 (ProviderUnavailableError)**
+   - Timeouts, connection refused, etc.
+
+### Why This Approach?
+
+**Message-first detection** ensures consistent 404 responses even when providers return incorrect status codes. This is critical for Koios compatibility, which may return 5xx for missing resources.
 
 ## Backend Notes
 
@@ -48,13 +103,46 @@ resource.
 
 ## Best Practices
 
-- Backend code: throw NotFoundError for empty/missing results; avoid generic
-  errors.
-- Service mapping:
-  - 404: reject without logging noise.
-  - 429: warn; include retry guidance; reject.
-  - 503: warn; reject; callers may retry.
-  - Unknown: error; reject 500.
+### In Backend Code
+
+- Throw `NotFoundError` for empty/missing blockchain resources
+- Throw `ProviderUnavailableError` for timeouts or network errors
+- Avoid generic errors - use typed error classes
+
+### In Service Handlers
+
+**Input Validation:**
+```typescript
+import { rejectInvalid, rejectMissing } from './utils/errors';
+
+// Missing required parameter
+if (!hash) {
+    return rejectMissing(req, 'Transactions', 'hash');
+}
+
+// Invalid format
+if (!isTxHash(hash)) {
+    return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
+}
+```
+
+**Error Handling with handleRequest:**
+```typescript
+import { handleRequest } from './utils/backend-request-handler';
+
+return handleRequest(req, async (db) => {
+    // All BackendErrors are automatically caught and normalized
+    const tx = await indexer.indexTransaction(db, hash);
+    return tx;
+});
+```
+
+**Response Mapping:**
+- **404 (NotFoundError)**: Reject without logging noise
+- **429 (RateLimitError)**: Warn; include retry guidance; reject
+- **503 (ProviderUnavailableError)**: Warn; reject; callers may retry
+- **500 (ConfigError)**: Error; fix configuration before retry
+- **Unknown**: Error; reject 500
 
 ## Testing References
 
@@ -63,12 +151,30 @@ resource.
 
 ## Summary
 
-1. **404 = NotFoundError** – Resource not there, not a provider issue
-2. **429 = RateLimitError** – Too many requests, backoff & retry
-3. **503 = ProviderUnavailableError** – Temporary error, retry makes sense
-4. **Normalization checks message AND status** – Koios 5xx→404 if "not found"
-5. **Backends throw typed errors** – `NotFoundError` for missing resources
-6. **Tests expect consistent 404** – Both backends normalized
+### Runtime Errors (Client-Facing)
+
+1. **404 = NotFoundError** – Resource doesn't exist (not retry-able)
+2. **429 = RateLimitError** – Too many requests (retry after backoff)
+3. **503 = ProviderUnavailableError** – Temporary issue (retry-able)
+4. **502/503 = AllBackendsFailedError** – All backends down (retry later)
+
+### Configuration Errors (Startup)
+
+5. **500 = ConfigError** – Invalid configuration (fix config)
+6. **500 = BackendInitError** – Single backend init failed
+7. **500 = AllBackendsInitFailedError** – All backends init failed (service won't start)
+
+### Input Validation (Service Layer)
+
+8. **400 = rejectInvalid/rejectMissing** – Invalid or missing parameters
+
+### Key Principles
+
+✅ **Normalization checks message AND status** – Koios 5xx→404 if "not found"\
+✅ **Backends throw typed errors** – `NotFoundError` for missing resources\
+✅ **Tests expect consistent 404** – Both backends normalized\
+✅ **handleRequest wrapper** – Automatically catches and normalizes errors\
+✅ **Input validation helpers** – `rejectInvalid` and `rejectMissing` for 400 errors
 
 This enables clear client semantics and consistent behavior across all backends.
 

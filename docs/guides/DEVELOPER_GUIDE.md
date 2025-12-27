@@ -1,7 +1,8 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 1.0.0\
+**Version:** 0.1.0 (Milestone 1 Complete)\
+**Status:** Production-Ready - 249 tests, ~99% coverage\
 **Last Updated:** December 2025
 
 ---
@@ -29,11 +30,9 @@
   TransactionMetadata, Addresses, AddressAssets, AddressUTxOs, UTxOAssets,
   Pools, Accounts, Dreps.
 - Actions: GetNetworkInformation, GetBlockByHash, GetEpochByNumber,
-  GetTransactionByHash, GetMetadataByTxHash, GetMetadataLabelTransactions,
-  GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetPoolById,
-  GetAccountByStakeAddress, GetDrepById, GetInputsByTransaction,
-  GetOutputsByTransaction, GetAssetsByTransactionInput,
-  GetAssetsByTransactionOutput.
+  GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32,
+  GetUTxOsByAddress, GetAssetsByAddress, GetPoolById,
+  GetAccountByStakeAddress, GetDrepById.
 
 ### Layered Architecture
 
@@ -89,15 +88,15 @@ Service handler receives request
         ↓
 Validators.isTxHash(hash) - Input validation
         ↓ (if valid)
-Cache.get(hash) - Check cache
+Check On DataView (SQL, HANA) if allready indexed
         ↓ (if miss)
 CardanoClient.getTransaction(hash) - Fetch from blockchain
         ↓
 BlockfrostAPI or KoiosAPI - Try primary, fallback if timeout/error
         ↓
-Cache.set(hash, result) - Store for 5 minutes
-        ↓
 mapTransaction(rawData) - Format for OData response
+        ↓
+Store Result in DataView
         ↓
 HTTP 200 + formatted transaction JSON
 ```
@@ -108,38 +107,85 @@ HTTP 200 + formatted transaction JSON
 
 ```
 ODATANO/
+├── @cds-models/                    # Generated TypeScript types from CDS models
+│   ├── index.ts
+│   ├── _/                          # CAP internal types
+│   ├── CardanoODataService/        # Service type definitions
+│   ├── cds/outbox/                 # CAP outbox types
+│   ├── odatano/cardano/            # Domain types
+│   └── sap/common/                 # SAP common types
+├── config/
+│   └── config.ts                   # Application configuration (timeouts, TTL, network)
+├── coverage/                       # Test coverage reports (generated)
+│   ├── lcov.info
+│   ├── coverage-final.json
+│   └── lcov-report/                # HTML coverage report
 ├── db/
-│   ├── schema.cds              # Database/entity definitions
-│   └── data/                   # Sample data files
-├── srv/
-│   ├── cardano-service.cds     # OData service definition
-│   ├── cardano-service.ts      # Service implementation (TypeScript)
-│   ├── blockchain/
-│   │   ├── blockfrost-backend.ts # Blockfrost API adapter
-│   │   ├── koios-backend.ts    # Koios API adapter
-│   │   ├── cardano-backend.ts  # Backend interface
-│   │   ├── cardano-client.ts   # Failover orchestrator
-│   │   └── cardano-indexer.ts  # Caching/indexing layer
-│   └── utils/
-│       ├── validators.ts       # Input validation functions
-│       ├── errors.ts           # Error mapping to HTTP codes
-│       ├── mappers.ts          # Data transformation
-│       ├── logger.ts           # Structured logging
-│       └── types.ts            # TypeScript type definitions
-├── test/
-│   ├── integration/            # End-to-end OData and error-path tests
-│   └── unit/                   # Service, backend, and utility tests
+│   └── schema.cds                  # Database entity definitions (temporal tables)
 ├── docs/
-│   ├── DEVELOPER_GUIDE.md      # This file
-│   ├── USER_GUIDE.md
-│   ├── QUICK_START.md
-│   └── MILESTONES_FINAL.md
-├── app/                         # UI layer (future)
-├── package.json                 # Dependencies & scripts
-├── .env.example                 # Configuration template
-├── .eslintrc.json               # Code style rules
-└── README.md                    # Project overview
+│   ├── QUICK_START.md              # 5-minute setup guide
+│   ├── concepts & architecture/
+│   │   ├── ERROR_HANDLING.md       # Error normalization architecture
+│   │   ├── INDEXING.md             # Lazy indexing & caching strategy
+│   │   └── MM_DATAMODEL.md         # Milestone data model documentation
+│   ├── guides/
+│   │   ├── DEVELOPER_GUIDE.md      # This file - developer reference
+│   │   └── USER_GUIDE.md           # End-user API documentation
+│   └── requirments & milestones/
+│       └── MILESTONES_FINAL.md     # Milestone 1 completion report
+├── scripts/
+│   └── request_examples.ts         # Example API requests for testing
+├── srv/
+│   ├── cardano-service.cds         # OData service definition (entities & actions)
+│   ├── cardano-service.ts          # Service implementation (TypeScript handlers)
+│   ├── cardano-ui.cds              # UI annotations (future)
+│   ├── blockchain/
+│   │   ├── backends/
+│   │   │   ├── cardano-backend.ts      # Backend interface definition
+│   │   │   ├── blockfrost-backend.ts   # Blockfrost API adapter
+│   │   │   └── koios-backend.ts        # Koios API adapter (fallback)
+│   │   ├── cardano-client.ts       # Multi-backend failover orchestrator
+│   │   └── cardano-indexer.ts      # Temporal caching layer (SQLite)
+│   └── utils/
+│       ├── backend-request-handler.ts  # HTTP request wrapper with error handling
+│       ├── error-codes.ts          # HTTP status code constants
+│       ├── errors.ts               # Error class hierarchy (8 classes)
+│       ├── logger.ts               # Pino structured logging
+│       ├── mappers.ts              # Raw API → OData transformations (14 mappers)
+│       ├── types.ts                # TypeScript type definitions
+│       └── validators.ts           # Input validation functions (8 validators)
+├── test/
+│   ├── README.md                   # Complete test documentation (249 tests)
+│   ├── integration/                # 135 integration tests (live backend testing)
+│   │   ├── backend-test-helper.ts      # Backend configuration helper
+│   │   ├── core-test-suite.ts          # Shared test suite (71 tests)
+│   │   ├── core.blockfrost.test.ts     # Blockfrost backend execution
+│   │   ├── core.koios.test.ts          # Koios backend execution
+│   │   ├── error-handling-service.test.ts  # Service error validation (34 tests)
+│   │   ├── error-handling.backend.ts   # Backend error handling tests
+│   │   └── odata_features.test.ts      # OData V4 features (28 tests)
+│   └── unit/                       # 116 unit tests (isolated component testing)
+│       ├── validators.test.ts          # Validator functions (48 tests)
+│       ├── errors.test.ts              # Error classes & utilities (52 tests)
+│       ├── cardano-client.test.ts      # CardanoClient config (15 tests)
+│       └── blockfrost-backend.test.ts  # Blockfrost init (1 test)
+├── .env.example                    # Environment configuration template
+├── codecov.yml                     # Codecov configuration
+├── eslint.config.mjs               # ESLint 9.x flat config
+├── jest.config.cjs                 # Jest test configuration
+├── LICENSE                         # MIT License
+├── package.json                    # Dependencies & npm scripts
+├── README.md                       # Project overview & quick start
+└── tsconfig.json                   # TypeScript compiler configuration
 ```
+
+**Key Directories:**
+
+- **@cds-models/**: Auto-generated from CDS schemas (run `npm run cds:types`) 
+- **srv/blockchain/**: Multi-backend architecture with failover (Blockfrost → Koios)
+- **srv/utils/**: Reusable components (validators, errors, mappers, logger)
+- **test/**: 249 tests with ~99% coverage (integration prioritized over unit)
+- **docs/**: Complete documentation suite (7 documents)
 
 ---
 
@@ -164,7 +210,7 @@ npm install
 
 # 3. Configure environment
 cp .env.example .env   # PowerShell: Copy-Item .env.example .env
-# Edit .env and add BLOCKFROST_KEY (optional for mock testing)
+# Edit .env and add BLOCKFROST_KEY
 
 # 4. Verify setup
 npm test
@@ -177,7 +223,7 @@ npm run cds:watch
 
 ```bash
 # Terminal 1: Watch for changes & auto-restart
-npm run dev     # or: cds watch
+npm run cds:watch     # or: cds watch
 
 # Terminal 2: Run tests in watch mode
 npm test -- --watch
@@ -213,7 +259,7 @@ curl http://localhost:4004/odata/v4/cardano-odata/$metadata
 - `pretest`: Automatically generates TypeScript types and deploys database
   schema before tests
 - Integration tests run against both Blockfrost and Koios backends (see
-  [Integration Test Guide](../../test/integration/README.md))
+  [Test Documentation](../../test/README.md))
 - Koios tests run always; Blockfrost tests run only when `BLOCKFROST_KEY` is set
 
 ---
@@ -227,31 +273,27 @@ The main service file contains entity handlers and OData actions.
 #### Structure (TypeScript)
 
 ```typescript
-import cds from "@sap/cds";
-import { CardanoClient } from "./blockchain/cardano-client";
-import { isBech32Address, isTxHash } from "./utils/validators";
-import { CardanoError } from "./utils/errors";
-import { logger } from "./utils/logger";
+import cds, { Request } from '@sap/cds';
+import indexer from './blockchain/cardano-indexer';
+import { isTxHash, isValidBech32Address } from './utils/validators';
+import { rejectInvalid, rejectMissing } from './utils/errors';
+import { handleRequest } from './utils/backend-request-handler';
+import logger from './utils/logger';
 
-class CardanoService extends cds.ApplicationService {
-    private cardanoClient: CardanoClient;
+const { SELECT } = cds.ql;
 
-    async init() {
-        this.cardanoClient = new CardanoClient();
+export default class CardanoService extends cds.ApplicationService {
+    public init() {
+        const { Transactions, Addresses } = require('#cds-models/CardanoODataService');
 
-        this.on("READ", "Transactions", this.onReadTransactions);
-        this.on("GetTransactionByHash", this.onGetTransactionByHash);
-        // ... more handlers
+        // Register entity READ handlers
+        this.on('READ', Transactions, async (req: Request) => {
+            // Handler logic
+        });
 
-        await super.init();
-    }
-
-    private async onReadTransactions(req: any) {
-        // Handler logic here
-    }
-
-    private async onGetTransactionByHash(req: any) {
-        // Action logic here
+        // Register action handlers
+        this.on('GetTransactionByHash', async (req: Request) => {
+            // Action logic
     }
 }
 
@@ -261,61 +303,54 @@ export default CardanoService;
 #### Entity Handler Pattern (TypeScript)
 
 ```typescript
-this.on("READ", "Transactions", async (req) => {
-    try {
-        // 1. Parse request parameters
-        const txId = req.data?.ID || req.data?.hash;
-
-        // 2. Validate input
-        if (txId && !isTxHash(txId)) {
-            throw new CardanoError("Invalid transaction hash format", 400);
-        }
-
-        // 3. Fetch from indexer (handles caching internally)
-        if (txId) {
-            const tx = await this.cardanoIndexer.getTransaction(txId);
-            return mapTransaction(tx);
-        }
-
-        // 4. Return empty collection
-        return [];
-    } catch (error) {
-        if (error instanceof CardanoError) {
-            req.reject(error.status, error.message);
-        } else {
-            logger.error("Unexpected error in onReadTransactions", error);
-            req.reject(500, "Internal server error");
-        }
+this.on('READ', Transactions, async (req: Request) => {
+    const hash = (req.data as { hash?: string })?.hash;
+    
+    // 1. Validate input
+    if (hash && !isTxHash(hash)) {
+        return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
     }
+    
+    // 2. Use handleRequest wrapper for database transaction
+    return handleRequest(req, async (db) => {
+        if (hash) {
+            // Check if already in database
+            const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
+            if (existing) {
+                return existing;
+            }
+            // Index from blockchain if not found
+            logger.debug({ hash }, '[CardanoService] Indexing transaction via indexer');
+            return await indexer.indexTransaction(db, hash);
+        }
+        // Return query results if no specific hash
+        return db.run(req.query);
+    });
 });
 ```
 
 #### Action Handler Pattern (TypeScript)
 
 ```typescript
-this.on("GetTransactionByHash", async (req) => {
-    const { txHash } = req.data || {};
-
+this.on('GetTransactionByHash', async (req: Request) => {
+    const hash = (req.data?.hash as string | undefined) ?? undefined;
+    
     // Validate parameters
-    if (!txHash) {
-        throw new CardanoError("txHash is required", 400);
+    if (!hash) {
+        return rejectMissing(req, 'Transactions', 'hash');
     }
-    if (!isTxHash(txHash)) {
-        throw new CardanoError("Invalid transaction hash", 400);
+    if (!isTxHash(hash)) {
+        return rejectInvalid(req, 'Transactions', 'hash has invalid format', 'hash');
     }
-
-    // Execute action
-    try {
-        const tx = await this.cardanoIndexer.getTransaction(txHash);
-        return mapTransaction(tx);
-    } catch (error) {
-        if (error instanceof CardanoError) {
-            req.reject(error.status, error.message);
-        } else {
-            logger.error("[CardanoService] GetTransactionByHash error", error);
-            req.reject(500, "Internal server error");
+    
+    // Execute action with database transaction
+    return handleRequest(req, async (db) => {
+        let row = await db.run(SELECT.one.from(Transactions).where({ hash }));
+        if (!row) {
+            row = await indexer.indexTransaction(db, hash);
         }
-    }
+        return row;
+    });
 });
 ```
 
@@ -341,113 +376,124 @@ export const isAssetName = (s: string): boolean => /^[a-fA-F0-9]*$/.test(s);
 **When to validate:**
 
 - Always validate user input BEFORE calling blockchain adapters
-- Throw CardanoError with 400 status for invalid formats
+- Use `rejectInvalid(req, entity, message, field)` for invalid input
+- Use `rejectMissing(req, entity, field)` for missing required fields
 - Prevents unnecessary API calls to providers
 
 ### 3. Error Handling (srv/utils/errors.ts)
 
-Custom error class for blockchain-related errors.
+Comprehensive error class hierarchy for blockchain-related errors.
 
 ```typescript
-export class CardanoError extends Error {
+export class BackendError extends Error {
     constructor(
         message: string,
         public status: number = 500,
         public code?: string,
+        public original?: unknown
     ) {
         super(message);
-        this.name = "CardanoError";
+        this.name = "BackendError";
     }
 }
 
-// Common error factories
-export const NotFoundError = (resource: string) =>
-    new CardanoError(`${resource} not found`, 404);
+// Specific error classes
+export class NotFoundError extends BackendError { /* 404 */ }
+export class ProviderUnavailableError extends BackendError { /* 503 */ }
+export class RateLimitError extends BackendError { /* 429 */ }
+export class AllBackendsFailedError extends BackendError { /* 503 with multiple failures */ }
+export class ConfigError extends BackendError { /* 500 - configuration errors */ }
+export class BackendInitError extends BackendError { /* 500 - init failures */ }
+export class AllBackendsInitFailedError extends BackendError { /* 500 - all backends failed to init */ }
 
-export const ValidationError = (message: string) =>
-    new CardanoError(message, 400);
-
-export const BackendError = (message: string) =>
-    new CardanoError(`Backend error: ${message}`, 503);
+// Utility functions
+export function getErrorStatus(err: unknown): number { /* ... */ }
+export function getErrorMessage(err: unknown): string { /* ... */ }
+export function normalizeBackendError(err: unknown, backendName: string): BackendError { /* ... */ }
 ```
 
 **Usage:**
 
 ```typescript
-if (!txHash) {
-    throw new CardanoError("txHash is required", 400);
+import { rejectInvalid, rejectMissing, normalizeBackendError } from './utils/errors';
+import { handleRequest } from './utils/backend-request-handler';
+
+// In action handler:
+if (!hash) {
+    return rejectMissing(req, 'Transactions', 'hash');
 }
 
-if (!isTxHash(txHash)) {
-    throw ValidationError("Invalid transaction hash");
+if (!isTxHash(hash)) {
+    return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
 }
+
+// All backend errors are automatically normalized via handleRequest wrapper
+return handleRequest(req, async (db) => {
+    // Database operations here
+    // Errors are caught and normalized automatically
+});
 ```
 
 ### 4. Indexing & Caching Layer (srv/blockchain/cardano-indexer.ts)
 
-Provides intelligent caching using database temporal entities with automatic TTL
-management.
+ODATANO uses a **Lazy On-Demand Indexing** strategy for blockchain data persistence.
+
+**Key Concepts:**
+
+- **Lazy indexing**: Data is fetched from blockchain only when first requested
+- **Temporal entities**: Addresses, Accounts with TTL-based refresh (configurable via `INDEX_TTL_MS`)
+- **Non-temporal entities**: Transactions, Blocks, Epochs remain permanently after indexing
+- **UPSERT operations**: Automatically inserts new data or updates existing records
+- **Nested indexing**: Related entities (inputs, outputs, assets) indexed atomically
+
+**Example Implementation:**
 
 ```typescript
-export class CardanoIndexer {
-    async indexTransaction(db: any, txHash: string): Promise<Transaction> {
-        // Check if transaction already exists in database
-        const existing = await db.run(
-            SELECT.one.from(Transactions).where({ hash: txHash }),
-        );
-
-        if (existing && !this.isExpired(existing)) {
-            return existing;
+// In service handler - transparent indexing
+this.on('READ', Transactions, async (req: Request) => {
+    return handleRequest(req, async (db) => {
+        const hash = req.data?.hash;
+        if (hash) {
+            // Check database first
+            const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
+            if (existing) {
+                return existing; // Cached - instant response
+            }
+            // Not found - index from blockchain
+            return await indexer.indexTransaction(db, hash);
         }
-
-        // Fetch from blockchain via client
-        const txData = await cardanoClient.getTransaction(txHash);
-
-        // Map and persist to database with temporal fields
-        const txRow = await this.mapAndPersist(db, txData);
-
-        return txRow;
-    }
-
-    private isExpired(entity: any): boolean {
-        if (!entity.validFrom) return true;
-        const ttl = CONFIG.indexTtlMs; // from config.ts
-        const age = Date.now() - new Date(entity.validFrom).getTime();
-        return age > ttl;
-    }
-}
+        return db.run(req.query);
+    });
+});
 ```
 
-**Caching strategy:**
-
-- Persisted cache using database temporal entities (validFrom/validTo)
-- Time-based refresh via `INDEX_TTL_MS` environment variable (milliseconds)
-- Default TTL: 1ms in config.ts (configure via environment for production, e.g.,
-  60000 = 1 minute)
-- Lazy on-demand indexing: Data fetched only when accessed
-- Automatic expiration check on read operations
-- Database-agnostic: Works with SQLite (dev) and HANA (production)
+📚 **For detailed architecture and data flow diagrams, see:** [Lazy On-Demand Indexing Concept](../concepts%20&%20architecture/INDEXING.md)
 
 ### 5. Blockchain Adapters
 
 #### Blockfrost Backend (srv/blockchain/blockfrost-backend.ts)
 
 ```typescript
-import { BlockFrostAPI } from "@blockfrost/blockfrost-js";
-import { CardanoBackend } from "./cardano-backend";
+import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
+import { CardanoBackend } from './cardano-backend';
+import { CONFIG } from '../../../config/config';
+import { BackendInitError } from '../../utils/errors';
 
 export class BlockfrostBackend implements CardanoBackend {
-    private api: BlockFrostAPI;
+    private api?: BlockFrostAPI;
 
-    constructor() {
-        const apiKey = process.env.BLOCKFROST_KEY;
-        if (!apiKey) {
-            throw new Error("BLOCKFROST_KEY environment variable not set");
+    async init(): Promise<void> {
+        const apiKey = CONFIG.blockfrostKey;
+        if (!apiKey || apiKey === 'your_blockfrost_key_here') {
+            throw new BackendInitError(
+                'Blockfrost',
+                'BLOCKFROST_KEY not configured'
+            );
         }
 
         this.api = new BlockFrostAPI({
             projectId: apiKey,
-            network: "preview",
+            network: CONFIG.network as 'preview' | 'mainnet' | 'preprod',
         });
     }
 
@@ -471,37 +517,55 @@ Orchestrates failover between primary and fallback providers.
 
 ```typescript
 export class CardanoClient {
-    private backends: CardanoBackend[] = [];
+    private backends: CardanoBackend[];
+    private initialized = false;
 
-    constructor() {
-        // Lazy initialization - only create backends if env vars are set
-        if (process.env.BLOCKFROST_KEY) {
-            this.backends.push(new BlockfrostBackend());
+    constructor(backends: CardanoBackend[]) {
+        if (!backends || backends.length === 0) {
+            throw new ConfigError(
+                'CardanoClient misconfigured: no backend available.'
+            );
         }
-        this.backends.push(new KoiosBackend()); // Fallback
+        this.backends = backends;
     }
 
-    async getTransaction(hash: string): Promise<any> {
-        const timeout = parseInt(process.env.PRIMARY_TIMEOUT_MS || "8000");
+    // Lazy initialization of backends
+    private async ensureInitialized(): Promise<void> {
+        if (this.initialized) return;
+        await this.initBackends();
+    }
 
-        for (const backend of this.backends) {
+    async getTransaction(hash: string): Promise<Transaction> {
+        await this.ensureInitialized();
+        const errors: BackendError[] = [];
+
+        for (let i = 0; i < this.backends.length; i++) {
+            const backend = this.backends[i];
+            const isPrimary = i === 0;
+            const timeout = isPrimary ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS;
+
             try {
-                // Try each backend with timeout
                 const result = await Promise.race([
                     backend.getTransaction(hash),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error("Timeout")), timeout)
+                    new Promise<Transaction>((_, reject) =>
+                        setTimeout(() => reject(
+                            new ProviderUnavailableError(
+                                `Timeout after ${timeout}ms`,
+                                backend.constructor.name,
+                                timeout
+                            )
+                        ), timeout)
                     ),
                 ]);
                 return result;
-            } catch (error) {
-                logger.warn(`Backend failed, trying next: ${error.message}`);
-                // Continue to next backend
+            } catch (err) {
+                const normalized = normalizeBackendError(err, backend.constructor.name);
+                errors.push(normalized);
+                logger.warn({ error: normalized }, `Backend ${backend.constructor.name} failed`);
             }
         }
 
-        // All backends failed
-        throw new CardanoError("All backends failed", 503);
+        throw new AllBackendsFailedError('getTransaction', errors);
     }
 }
 ```
@@ -551,16 +615,11 @@ this.on("GetAddressTransactions", async (req) => {
         return req.error(400, "Invalid address format");
     }
 
-    try {
-        // Step 2: Check cache
-        const cacheKey = `addr_txs_${bech32}`;
-        const cached = cache.get(cacheKey);
-        if (cached) return cached;
+    return handleRequest(req, async (db) => {
+        // Database operations - fetch or index transaction
+        const txs = await indexer.getAddressTransactions(db, bech32);
 
-        // Step 3: Fetch from blockchain
-        const txs = await cardano.getAddressTransactions(bech32);
-
-        // Step 4: Format response
+        // Format response
         const result = {
             address: bech32,
             transactions: txs.map((tx) => ({
@@ -569,9 +628,6 @@ this.on("GetAddressTransactions", async (req) => {
                 timestamp: new Date(tx.block_time * 1000).toISOString(),
             })),
         };
-
-        // Step 5: Cache result
-        cache.set(cacheKey, result, 300);
 
         return result;
     } catch (error) {
@@ -650,43 +706,43 @@ describe("New Endpoints", () => {
 | ----------- | ------------------- | ----------------------------------------------- |
 | **200**     | Success             | Transaction found, returned with data           |
 | **400**     | Bad Request         | Invalid hash format, missing required parameter |
-| **401**     | Unauthorized        | Invalid Blockfrost API key                      |
-| **404**     | Not Found           | Transaction doesn't exist on blockchain         |
-| **500**     | Internal Error      | Unknown provider error                          |
-| **503**     | Service Unavailable | Provider timeout or network error               |
+| **404**     | Not Found           | Transaction/address doesn't exist               |
+| **429**     | Rate Limit          | Too many requests to provider                   |
+| **500**     | Internal Error      | Configuration error, unknown provider error     |
+| **503**     | Service Unavailable | Provider timeout, all backends failed           |
 
 ### Implementing Custom Error Handling
 
 ```typescript
-// Custom error class (srv/utils/errors.ts)
-export class CardanoError extends Error {
-    constructor(
-        message: string,
-        public status: number = 500,
-        public code?: string,
-    ) {
-        super(message);
-        this.name = "CardanoError";
-    }
-}
+// Error classes (srv/utils/errors.ts)
+// BackendError - Base class for all backend errors
+// NotFoundError - Resource not found (404)
+// ProviderUnavailableError - Provider timeout/unavailable (503)
+// RateLimitError - Rate limit exceeded (429)
+// ConfigError - Configuration errors (500)
+// BackendInitError - Backend initialization failed (500)
+// AllBackendsFailedError - All backends failed (503)
+// AllBackendsInitFailedError - All backends init failed (500)
+
+// Helper functions for validation errors
+// rejectMissing(req, entity, field) - Missing required field (400)
+// rejectInvalid(req, entity, message, field) - Invalid input (400)
 
 // Usage in handler
-if (!isTxHash(hash)) {
-    throw new CardanoError("Invalid transaction hash", 400);
+if (!hash) {
+    return rejectMissing(req, 'Transactions', 'hash');
 }
 
-// Catching in error handler
-try {
-    const tx = await this.cardanoIndexer.getTransaction(txHash);
-    return mapTransaction(tx);
-} catch (error) {
-    if (error instanceof CardanoError) {
-        req.reject(error.status, error.message);
-    } else {
-        logger.error("Unexpected error", error);
-        req.reject(500, "Internal server error");
-    }
+if (!isTxHash(hash)) {
+    return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
 }
+
+// Error handling with handleRequest wrapper
+return handleRequest(req, async (db) => {
+    // All BackendErrors are automatically caught and normalized
+    const tx = await indexer.indexTransaction(db, hash);
+    return tx;
+});
 ```
 
 ---
@@ -697,27 +753,29 @@ try {
 
 ```
 test/
-├── integration/                 # In-process tests using @cap-js/cds-test
-│   └── m1_core.test.ts          # m1 core tests
-│   └── error_handling.test.ts   # integration error tests
-│   └── odata_features.ts        # odata features tests
-
-└── unit/                  # Tests for utility functions
-    ├── backend-error-handlder.test.ts # Input validation tests
-    ├── blockfrost-backend.test.ts # Input validation tests
-    ├── cardano-client.test.ts # Input validation tests
-    ├── cardano-indexer.test.ts # Input validation tests
-    ├── errors.test.ts     # Error handling tests  
-    ├── koios-backend.test.ts     # Error handling tests  
-    ├── mappers.test.ts     # Error handling tests  
-    └── validators.test.ts    # Data transformation tests
+├── integration/                    # 135 integration tests (live backend testing)
+│   ├── core-test-suite.ts          # Shared test suite (71 tests)
+│   ├── core.blockfrost.test.ts     # Blockfrost backend tests
+│   ├── core.koios.test.ts          # Koios backend tests
+│   ├── error-handling-service.test.ts # Service-level error validation (34 tests)
+│   ├── error-handling.backend.ts   # Backend-level error handling
+│   ├── odata_features.test.ts      # OData query feature tests (28 tests)
+│   └── backend-test-helper.ts      # Backend configuration helper
+└── unit/                           # 116 unit tests (isolated component testing)
+    ├── validators.test.ts          # Validator type guards (48 tests)
+    ├── errors.test.ts              # Error classes and utilities (52 tests)
+    ├── cardano-client.test.ts      # CardanoClient configuration (15 tests)
+    └── blockfrost-backend.test.ts  # Blockfrost backend initialization (1 test)
 ```
 
 ### Current Test Status
 
 - Framework: Jest 29 + @cap-js/cds-test v0.4.x
+- Total Tests: 249 (135 integration + 116 unit)
+- Coverage: ~99% statements, ~97% branches (service layer)
 - Scripts: `test`, `test:coverage`, `test:integration`, `test:unit`
-- Coverage report generated under `coverage/`
+- Coverage report: `coverage/lcov-report/index.html`
+- See detailed test documentation: [test/README.md](../../test/README.md)
 
 ### Running Tests
 
@@ -752,7 +810,7 @@ describe("CardanoODataService", () => {
         const { data } = await POST(
             "/odata/v4/cardano-odata/GetTransactionByHash",
             {
-                txHash:
+                hash:
                     "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83",
             },
         );
@@ -766,7 +824,7 @@ describe("CardanoODataService", () => {
     test("GetTransactionByHash - invalid hash", async () => {
         try {
             await POST("/odata/v4/cardano-odata/GetTransactionByHash", {
-                txHash: "invalid",
+                hash: "invalid",
             });
             fail("Should have thrown error");
         } catch (error) {
@@ -840,20 +898,20 @@ describe("validators.isTxHash", () => {
 ### Running Tests
 
 ```bash
-# All tests (52 total)
+# All tests (249 total)
 npm test
 
 # With coverage report
 npm test -- --coverage
 
-# Only integration tests (40 tests)
+# Only integration tests (135 tests)
 npm run test:integration
 
-# Only unit tests (12 tests)
+# Only unit tests (116 tests)
 npm run test:unit
 
 # Specific file
-npm test -- m1_core.test.ts
+npm test -- core.koios.test.ts
 
 # Watch mode (re-run on file changes)
 npm test -- --watch
@@ -910,8 +968,7 @@ PORT=4004
 
 **Configuration Notes:**
 
-- `INDEX_TTL_MS`: Cache time-to-live in milliseconds (default: 1ms in config.ts,
-  recommended: 60000 for 1 minute)
+- `INDEX_TTL_MS`: Not used - data persists in database without TTL expiration
 - `NETWORK`: `mainnet`, `preview`, or `preprod` (determines API endpoints and
   address validation)
 - `BLOCKFROST_KEY`: Required for Blockfrost provider (get from
@@ -969,7 +1026,7 @@ kill -9 <PID>
 
 ```bash
 # Terminal 1
-npm run dev
+npm run cds:watch
 
 # Terminal 2 (wait 3 seconds)
 npm test
@@ -999,11 +1056,14 @@ npm test
 
 **Solutions:**
 
-```javascript
-// Increase cache TTL
-cache.set(key, value, 600); // 10 minutes instead of 5
+```typescript
+// Adjust timeouts in config/config.ts
+export const CONFIG = {
+    primaryTimeoutMs: 5000,   // 5 seconds instead of default 8000
+    fallbackTimeoutMs: 5000,  // 5 seconds instead of default 8000
+};
 
-// Add request logging
+// Add request logging in service handler
 console.time("blockfrost_call");
 const result = await cardano.getTransaction(hash);
 console.timeEnd("blockfrost_call");
@@ -1042,4 +1102,4 @@ PRIMARY_TIMEOUT_MS = 5000; // 5 seconds instead of 8
 ---
 
 **Need Help?** Check the [User Guide](USER_GUIDE.md) or review
-[Test Coverage Report](M1_TEST_COVERAGE_REPORT.md) for examples.
+[Test Documentation](../../test/README.md) for examples.

@@ -38,6 +38,9 @@ BLOCKFROST_KEY=your_api_key_here
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 
+# Enabled Backends (comma-separated)
+BACKENDS=blockfrost,koios
+
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
 INDEX_TTL_MS=60000
 ```
@@ -80,7 +83,7 @@ curl "http://localhost:4004/odata/v4/cardano-odata/Epochs?$orderby=epoch desc&$t
 ```bash
 curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
   -H "Content-Type: application/json" \
-  -d '{"txHash":"<64-hex-hash>"}'
+  -d '{"hash":"<64-hex-hash>"}'
 ```
 
 - Address details
@@ -124,11 +127,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress \
 ```bash
 curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash \
   -H "Content-Type: application/json" \
-  -d '{"txHash":"<64-hex-hash>"}'
-
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataLabelTransactions \
-  -H "Content-Type: application/json" \
-  -d '{"label":"721"}'
+  -d '{"tx_hash":"<64-hex-hash>"}'
 ```
 
 Tip: You can also read by keys where applicable, e.g.:

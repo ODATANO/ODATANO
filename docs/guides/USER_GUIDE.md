@@ -1,7 +1,7 @@
 # ODATANO User Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 1.0.0\
+**Version:** 0.1.0 (Milestone 1 Complete)\
 **Last Updated:** December 2025
 
 ---
@@ -29,12 +29,13 @@ through a standard OData interface.
 
 **Key Features:**
 
-- ✅ Query Cardano transactions by hash
-- ✅ Fetch address balances and token holdings
-- ✅ Access transaction metadata
+- ✅ Query Cardano transactions, blocks, epochs by hash/number
+- ✅ Fetch address balances, UTxOs, and native assets
+- ✅ Access transaction metadata (by tx hash)
+- ✅ Query pools, accounts (stake addresses), and DReps
 - ✅ Automatic failover between multiple providers (Blockfrost → Koios)
 - ✅ Intelligent caching with configurable TTL (via `INDEX_TTL_MS`)
-- ✅ RESTful OData V4 API
+- ✅ RESTful OData V4 API with full query support ($filter, $select, $expand, $top, $skip, $count, $orderby)
 - ✅ Support for multiple networks (mainnet, preview, preprod)
 
 ### Supported Networks
@@ -102,7 +103,7 @@ POST /GetTransactionByHash
 Content-Type: application/json
 
 {
-  "txHash": "0000000000000000000000000000000000000000000000000000000000000000"
+  "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"
 }
 ```
 
@@ -110,22 +111,14 @@ Content-Type: application/json
 
 ```json
 {
-  "hash": "0000000000000000000000000000000000000000000000000000000000000000",
-  "blockHeight": 12345,
+  "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83",
+  "block_hash": "cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39",
+  "slot": 12345678,
+  "size": 450,
   "fee": "200000",
-  "timestamp": "2025-11-18T10:30:00Z",
-  "inputs": [
-    {
-      "address": "addr_test1...",
-      "amount": "5000000"
-    }
-  ],
-  "outputs": [
-    {
-      "address": "addr_test1...",
-      "amount": "5000000"
-    }
-  ]
+  "deposit": "0",
+  "invalidBefore": null,
+  "invalidHereafter": "12345700"
 }
 ```
 
@@ -279,32 +272,7 @@ POST /GetMetadataByTxHash
 Content-Type: application/json
 
 {
-  "txHash": "0000000000000000000000000000000000000000000000000000000000000000"
-}
-```
-
-**Response:**
-
-```json
-{
-    "tx_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-  "metadata": [
-    {
-      "label": "721",
-      "json": { ... }
-    }
-  ]
-}
-```
-
-#### Get Transactions by Metadata Label (Action)
-
-```http
-POST /GetMetadataLabelTransactions
-Content-Type: application/json
-
-{
-    "label": "721"
+  "tx_hash": "95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1"
 }
 ```
 
@@ -320,7 +288,7 @@ Content-Type: application/json
 curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
   -H "Content-Type: application/json" \
   -d '{
-    "txHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"
   }'
 ```
 
@@ -328,7 +296,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
 
 ```powershell
 $body = @{
-  txHash = "0000000000000000000000000000000000000000000000000000000000000000"
+  hash = "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"
 } | ConvertTo-Json
 
 Invoke-WebRequest -Uri "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash" `
@@ -345,7 +313,7 @@ import json
 
 url = "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash"
 payload = {
-    "txHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"
 }
 
 response = requests.post(url, json=payload)
@@ -389,20 +357,6 @@ console.log(data);
 
 ---
 
-### Example 3: Query Transaction Metadata
-
-**Request:**
-
-```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash \
-  -H "Content-Type: application/json" \
-  -d '{
-    "txHash": "f8d9c5d1e3f7a9b4c2e8d0f1a3b5c7e9f1d3b5c7e9f1d3b5c7e9f1d3b5c7e9"
-  }'
-```
-
----
-
 ### Example 4: Check Service Metadata
 
 Discover all available endpoints and entity structure:
@@ -420,14 +374,14 @@ properties, and actions.
 
 ### Status Code Reference
 
-| Code    | Meaning             | Example                                  |
-| ------- | ------------------- | ---------------------------------------- |
-| **200** | Success             | Transaction found and returned           |
-| **400** | Bad Request         | Invalid hash format or missing parameter |
-| **401** | Unauthorized        | Invalid API credentials                  |
-| **404** | Not Found           | Transaction doesn't exist                |
-| **500** | Server Error        | Internal service error                   |
-| **503** | Service Unavailable | Provider API down/timeout                |
+| Code    | Meaning             | Example                                           |
+| ------- | ------------------- | ------------------------------------------------- |
+| **200** | Success             | Transaction found and returned                    |
+| **400** | Bad Request         | Invalid hash format or missing parameter          |
+| **404** | Not Found           | Transaction/address/resource doesn't exist        |
+| **429** | Too Many Requests   | Rate limit exceeded (retry after X seconds)       |
+| **500** | Server Error        | Internal service error                            |
+| **503** | Service Unavailable | All provider backends down/timeout (Blockfrost + Koios) |
 
 ### Common Error Messages
 
@@ -553,26 +507,25 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 ## Rate Limiting & Performance
 
-### Caching
+### Caching & Data Persistence
 
-The service uses database-backed temporal caching with automatic expiration:
+ODATANO uses **Lazy On-Demand Indexing** for optimal performance:
 
-- **First request:** Data fetched from blockchain providers and persisted to
-  database
-- **Subsequent requests (within TTL):** Served from database (instant response)
-- **Cache TTL:** Configure via `INDEX_TTL_MS` environment variable
-  (milliseconds)
-  - Default: 1ms (configure for production, recommended: 60000 = 1 minute)
-  - Example: `INDEX_TTL_MS=300000` for 5-minute cache
+**Temporal Entities** (configurable via `INDEX_TTL_MS`):
+- Addresses, Accounts, NetworkInformation
+- TTL-based refresh (default: 60000ms = 1 minute)
+- Example: `INDEX_TTL_MS=300000` for 5-minute cache
 
-**Temporal Caching Behavior:**
+**Non-Temporal Entities** (permanent storage):
+- Transactions, Blocks, Epochs
+- Indexed once, served instantly forever
+- No re-fetching needed
 
-- **Addresses / Assets / UTxOs:** Cached with configurable TTL via
-  `INDEX_TTL_MS`
-- **Transactions:** Immutable after first indexing (permanent cache)
-- **Network info / Latest Block / Epoch:** Refreshed lazily based on TTL
-- **Automatic expiration:** Data older than TTL is re-fetched on next access
-- **Database-agnostic:** Works with SQLite (development) and HANA (production)
+**Performance:**
+- First request: 1-5 seconds (fetched from blockchain)
+- Subsequent requests: Instant (served from database)
+
+📚 **For complete indexing architecture and data flow:** See [Lazy On-Demand Indexing Concept](../concepts%20&%20architecture/INDEXING.md)
 
 ### Rate Limits (Provider Level)
 
@@ -612,13 +565,17 @@ GET /Transactions?$filter=blockHeight gt 1000 and blockHeight lt 2000
 
 **Data Completeness**
 
-- ✅ Transaction details (hash, height, fee, timestamp, inputs/outputs)
-- ✅ Address balance, assets, and UTxOs
-- ✅ Transaction metadata with label filtering
-- ✅ Native assets information
-- ⚠️ Smart contract execution details (limited to redeemer count, validity)
-- ❌ Stake pool detailed data (not yet implemented)
-- ❌ Governance/voting data (not yet implemented)
+- ✅ Transaction details (hash, block, slot, fee, size, validity intervals)
+- ✅ Transaction inputs/outputs with assets
+- ✅ Address balance, UTxOs, and native assets
+- ✅ Transaction metadata (by tx hash)
+- ✅ Network information (supply, stake)
+- ✅ Blocks and epochs data
+- ✅ Stake pools (pool ID, metadata, status)
+- ✅ Accounts (stake address, rewards, withdrawals)
+- ✅ DReps (governance representatives)
+- ⚠️ Smart contract execution details (limited to redeemer data)
+- ⚠️ Historical data (depends on provider retention)
 
 **Performance**
 
@@ -654,12 +611,13 @@ GET /Transactions?$filter=blockHeight gt 1000 and blockHeight lt 2000
 
 ### Q: How long are results cached?
 
-**A:** Results are cached based on the `INDEX_TTL_MS` environment variable:
+**A:** Caching behavior depends on data type:
 
-- Default: 1ms (very short, suitable for testing)
-- Recommended production: 60000ms (1 minute) or higher
+- **Temporal entities** (Addresses, Accounts): Configurable via `INDEX_TTL_MS` (default: 60000ms = 1 minute)
+- **Non-temporal entities** (Transactions, Blocks): Permanent storage, no expiration
 - Configure via: `INDEX_TTL_MS=60000` in your .env file
-- Transactions are cached permanently after first fetch (immutable data)
+
+📚 For details, see [Lazy On-Demand Indexing Concept](../concepts%20&%20architecture/INDEXING.md)
 
 ### Q: What's the difference between Blockfrost and Koios?
 
@@ -688,13 +646,13 @@ corresponding Blockfrost API key for that network.
 
 **A:**
 
-1. **First time querying this data?** Wait 1-5 seconds (depends on provider
-   latency)
-2. **Same query within TTL?** Should be instant (served from database cache)
-3. **Cache expired?** Will re-fetch from provider (check `INDEX_TTL_MS` setting)
-4. **Provider timeout?** Failover to Koios takes up to 8 seconds total
-5. **Increase cache TTL** for better performance: `INDEX_TTL_MS=300000` (5
-   minutes)
+1. **First time querying this data?** Wait 1-5 seconds (blockchain fetch)
+2. **Already cached?** Should be instant (database lookup)
+3. **Temporal data expired?** Will re-fetch (check `INDEX_TTL_MS` setting)
+4. **Provider timeout?** Failover to Koios takes up to 16 seconds (8s per backend)
+5. **Increase TTL for temporal entities:** `INDEX_TTL_MS=300000` (5 minutes)
+
+**Note:** Transactions are never slow after first fetch (permanent storage)
 
 ### Q: What if the provider is down?
 
@@ -789,7 +747,8 @@ in:
 ## Support & Resources
 
 - **Documentation:** See [Developer Guide](DEVELOPER_GUIDE.md)
-- **Test Coverage:** See [M1 Test Report](M1_TEST_COVERAGE_REPORT.md)
+- **Test Documentation:** See [Test README](../../test/README.md) (249 tests, ~99% coverage)
+- **Architecture Concepts:** See [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** Check [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost Docs:** https://docs.blockfrost.io/
 - **Koios Docs:** https://koios.rest/
@@ -798,6 +757,5 @@ in:
 ---
 
 **Last Updated:** December 2025\
-**Version:** 1.0.0\
-**Status:** Stable — OData V4 service with lazy indexing and multi-provider
-fallback
+**Version:** 0.1.0 (Milestone 1 Complete)\
+**Status:** Production-Ready — OData V4 service with lazy indexing and multi-provider failover

@@ -59,13 +59,7 @@ annotate srv.Blocks with @(
 
         {
             $Type : 'UI.DataFieldForAction',
-            Action: 'CardanoODataService.EntityContainer/GetLatestBlock',
-            Label : 'Refresh Latest Block'
-        },
-
-        {
-            $Type : 'UI.DataFieldForAction',
-            action: 'CardanoODataService.EntityContainer/GetBlockByHash',
+            Action: 'CardanoODataService.EntityContainer/GetBlockByHash',
             Label : 'Get Block by Hash'
         }
     ]
@@ -92,15 +86,9 @@ annotate srv.Epochs with @(
 
         {
             $Type : 'UI.DataFieldForAction',
-            Action: 'CardanoODataService.EntityContainer/GetLatestEpoch',
-            Label : 'Refresh Latest Epoch'
-        },
-        {
-            $Type : 'UI.DataFieldForAction',
             Action: 'CardanoODataService.EntityContainer/GetEpochByNumber',
             Label : 'Get Epoch by Number'
-        },
-
+        }
     ]
 );
 
@@ -210,6 +198,15 @@ annotate srv.AddressUTxOs with @UI.LineItem: [
     {Value: utxodata.dataHash}
 ];
 
+annotate srv.AddressUTxOs with @UI.Facets: [
+    {
+        $Type        : 'UI.ReferenceFacet',
+        Label        : 'Assets',
+        Target       : 'assets/@UI.LineItem',
+        ![@UI.Hidden]: (not hasAssets)
+    }
+];
+
 annotate srv.UTxOAssets with @UI.LineItem: [
     {Value: unit},
     {Value: asset.quantity},
@@ -231,6 +228,15 @@ annotate srv.TransactionInputs with @UI.LineItem: [
     {Value: isReference}
 ];
 
+annotate srv.TransactionInputs with @UI.Facets: [
+    {
+        $Type        : 'UI.ReferenceFacet',
+        Label        : 'Assets',
+        Target       : 'assets/@UI.LineItem',
+        ![@UI.Hidden]: (not hasAssets)
+    }
+];
+
 annotate srv.TransactionInputAssets with @UI.LineItem: [
     {Value: unit},
     {Value: asset.quantity},
@@ -242,6 +248,15 @@ annotate srv.TransactionOutputs with @UI.LineItem: [
     {Value: outputIndex},
     {Value: address.address},
     {Value: dataHash}
+];
+
+annotate srv.TransactionOutputs with @UI.Facets: [
+    {
+        $Type        : 'UI.ReferenceFacet',
+        Label        : 'Assets',
+        Target       : 'assets/@UI.LineItem',
+        ![@UI.Hidden]: (not hasAssets)
+    }
 ];
 
 annotate srv.TransactionOutputAssets with @UI.LineItem: [
@@ -275,7 +290,13 @@ annotate srv.Pools with @(
         {Value: pledge},
         {Value: margin},
         {Value: fixedCost},
-        {Value: rewardAccount}
+        {Value: rewardAccount},
+
+        {
+            $Type : 'UI.DataFieldForAction',
+            Action: 'CardanoODataService.EntityContainer/GetPoolById',
+            Label : 'Get Pool by ID'
+        }
     ]
 );
 
@@ -297,7 +318,13 @@ annotate srv.Dreps with @(
         {Value: hasScript},
         {Value: lastActiveEpoch},
         {Value: retired},
-        {Value: expired}
+        {Value: expired},
+
+        {
+            $Type : 'UI.DataFieldForAction',
+            Action: 'CardanoODataService.EntityContainer/GetDrepById',
+            Label : 'Get DRep by ID'
+        }
     ]
 );
 
@@ -308,9 +335,9 @@ annotate srv.Accounts with @(
     UI.HeaderInfo     : {
         TypeName      : 'Account',
         TypeNamePlural: 'Accounts',
-        Title         : {Value: account_id}
+        Title         : {Value: stakeAddress}
     },
-    UI.SelectionFields: [account_id],
+    UI.SelectionFields: [stakeAddress],
     UI.LineItem       : [
         {Value: stakeAddress},
         {Value: active},
@@ -321,8 +348,22 @@ annotate srv.Accounts with @(
         {Value: reservesSum},
         {Value: treasurySum},
         {Value: withdrawableAmount},
-        {Value: poolId},
-        {Value: drepId},
-        {Value: hasAddresses}
+        {Value: poolId_poolId},
+        {Value: drepId_drepId},
+        {Value: hasAddresses},
+
+        {
+            $Type : 'UI.DataFieldForAction',
+            Action: 'CardanoODataService.EntityContainer/GetAccountByStakeAddress',
+            Label : 'Get Account by Stake Address'
+        }
+    ],
+    UI.Facets         : [
+        {
+            $Type        : 'UI.ReferenceFacet',
+            Label        : 'Addresses',
+            Target       : 'Address/@UI.LineItem',
+            ![@UI.Hidden]: (not hasAddresses)
+        }
     ]
 );

@@ -2,17 +2,23 @@ import { CONFIG } from "../../config/config";
 import { bech32 } from "bech32";
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const { BECH32_MAX_LENGTH, MAX_EPOCH, POOL_ID_BYTES } = CONFIG.VALIDITY_VARIANTS;
+
+// ---------------------------------------------------------------------------
 // Regular Expressions (cheap prefilters; not sufficient for checksum validity)
 // ---------------------------------------------------------------------------
-const TX_HASH_REGEX = /^[a-f0-9]{64}$/; // 64-character hexadecimal string
+const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
+const POLICY_ID_REGEX = /^[a-f0-9]{56}$/;
 const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
 // keep as cheap prefilter if you want, but do not rely on it alone
-const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/; // bech32 format
-const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/; // bech32 format
+const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/;
+const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/;
 
 // Your config-driven regexes (cheap prefilter)
-const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr; // e.g., addr1, addr_test1
-const BECH32_STAKE_REGEX = CONFIG.hrp.stake; // e.g., stake1, stake_test1
+const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr;
+const BECH32_STAKE_REGEX = CONFIG.hrp.stake;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,7 +36,7 @@ function safeTrimString(s: unknown): string | null {
  */
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
   try {
-    const decoded = bech32.decode(value, 2000); // checksum+structure validated here
+    const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
     if (!allowedHrp.includes(decoded.prefix)) return null;
     return { prefix: decoded.prefix, words: decoded.words };
   } catch {
@@ -49,7 +55,7 @@ function wordsToBytesLen(words: number[]): number {
 
 /**
  * Transaction hash: 64-character hexadecimal string
- * @param s
+ * @param s - The value to validate
  * @returns true if s is a valid transaction hash false otherwise
  */
 export function isTxHash(s: unknown): s is string {
@@ -58,29 +64,21 @@ export function isTxHash(s: unknown): s is string {
 
 
 /**
- * 
- * @param v 
- * @returns true if is a vaild unit
+ * Asset unit: concatenation of policy ID (56 hex chars) + asset name (0-128 hex chars)
+ * @param v - The value to validate
+ * @returns true if v is a valid asset unit false otherwise
  */
 export function isAssetUnit(v: unknown): v is string {
   if (typeof v !== "string") return false;
   const s = v.trim();
 
-  if (!ASSET_UNIT_REGEX.test(s)) return false;
-  if (s.length < 56) return false;
-  if (s.length % 2 !== 0) return false;
-
-  const policy = s.slice(0, 56);
-  const asset = s.slice(56);
-
-  if (policy.length !== 56) return false;
-  if (asset.length > 128) return false; // max 64 bytes
-  return true;
+  // Regex ensures: 56-192 hex chars, even length, valid hex
+  return ASSET_UNIT_REGEX.test(s);
 }
 
 /**
  * Block hash: 64-character hexadecimal string
- * @param s
+ * @param s - The value to validate
  * @returns true if s is a valid block hash false otherwise
  */
 export function isBlockHash(s: unknown): s is string {
@@ -89,7 +87,7 @@ export function isBlockHash(s: unknown): s is string {
 
 /**
  * Pool ID: must be bech32-decodable, HRP=pool, payload length 28 bytes.
- * @param poolIdRaw 
+ * @param poolIdRaw - The value to validate
  * @returns true if valid pool ID false otherwise
  */
 export function isValidPoolId(poolIdRaw: unknown): poolIdRaw is string {
@@ -102,13 +100,13 @@ export function isValidPoolId(poolIdRaw: unknown): poolIdRaw is string {
   const decoded = tryDecodeBech32WithHrp(poolId, ["pool"]);
   if (!decoded) return false;
 
-  return wordsToBytesLen(decoded.words) === 28;
+  return wordsToBytesLen(decoded.words) === POOL_ID_BYTES;
 }
 
 /**
- * Drep ID: must be bech32-decodable, HRP=drep, payload length 36 bytes.
- * @param drepRaw 
- * @returns true if valid drep ID false otherwise 
+ * DRep ID: must be bech32-decodable, HRP=drep.
+ * @param drepRaw - The value to validate
+ * @returns true if valid drep ID false otherwise
  */
 export function isValidDrepId(drepRaw: unknown): drepRaw is string {
   const drepId = safeTrimString(drepRaw);
@@ -123,7 +121,7 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
 
 /**
  * Bech32 address: must be bech32-decodable, HRP based on network config.
- * @param addrRaw 
+ * @param addrRaw - The value to validate
  * @returns true if valid bech32 address false otherwise
  */
 export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
@@ -144,8 +142,8 @@ export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
 
 /**
  * Stake address (bech32):
- * Accept HRPs based on network config (mainnet/testnet). 
- * @param stakeRaw 
+ * Accept HRPs based on network config (mainnet/testnet).
+ * @param stakeRaw - The value to validate
  * @returns true if valid bech32 stake address false otherwise
  */
 export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string {
@@ -165,9 +163,9 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
 
 /**
  * Epoch number: non-negative integer within reasonable bounds
- * @param s 
+ * @param s - The value to validate
  * @returns true if s is a valid epoch number false otherwise
  */
 export function isEpochNumber(s: unknown): s is number {
-  return typeof s === "number" && s >= 0 && s <= 100000 && Number.isInteger(s);
+  return typeof s === "number" && s >= 0 && s <= MAX_EPOCH && Number.isInteger(s);
 }

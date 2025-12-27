@@ -2,11 +2,11 @@
 
 ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
 
-This means two things:
+This means:
 
-1. Data is indexed _only when it is first requested_, not pre-synchronized.
-2. Temporal entities remain valid for the duration defined by the `INDEX_TTL_MS`
-   environment variable (default: 60000ms = 1 minute).
+1. **Data is indexed only when first requested**, not pre-synchronized.
+2. **Temporal entities** (Addresses, Accounts, NetworkInformation) and their sub-entities (AddressAssets, AddressUTxOs) remain valid for the duration defined by the `INDEX_TTL_MS` environment variable (default: 60000ms = 1 minute).
+3. **Non-temporal/immutable data** (Transactions, Blocks, Epochs) are stored without temporal fields and remain accessible directly from the database after being indexed once.      
 
 When a client (e.g., SAP system, UI5 app, ABAP logic, or any OData consumer)
 queries an address, transaction, or UTxO data for the first time, ODATANO:
@@ -16,9 +16,10 @@ queries an address, transaction, or UTxO data for the first time, ODATANO:
 3. Normalizes and persists it into the ODATANO schema
 4. Returns the enriched OData response
 
-All subsequent reads within the TTL period are **instant** because the data is
-locally indexed in the database. After TTL expiry, the data is re-fetched and
-re-indexed on the next access.
+All subsequent reads are **instant** because the data is locally indexed in the database:
+
+- **Temporal entities**: Valid for TTL period (default: 1 minute), then re-indexed on next access
+- **Non-temporal entities**: Remain in database permanently without expiration
 
 ---
 
@@ -63,7 +64,17 @@ Once indexed, the data supports the full OData query set:
 
 ---
 
-## Handling Temporal Data
+## Temporal vs. Non-Temporal Data
+
+### Temporal Entities (Time-Limited Cache)
+
+Temporal entities represent **mutable blockchain state** that can change over time:
+
+- **NetworkInformation**: Supply, stake amounts change
+- **Addresses**: Balance, UTxOs change
+- **Accounts**: Stake delegation, rewards change
+- **AddressAssets**: Asset holdings change
+- **AddressUTxOs**: Available UTxOs change
 
 For example, the `NetworkInformation` entity is marked as **temporal**:
 
@@ -115,16 +126,43 @@ entity HistoricNetworkInformation as projection on NetworkInformation {
 This projection exposes all temporal versions of the data, allowing you to query
 historical network information states.
 
+### Non-Temporal Entities (Permanent Storage)
+
+Non-temporal entities represent **immutable blockchain facts** that never change:
+
+- **Transactions**: Once confirmed, transaction data is final
+- **Blocks**: Block content is immutable
+- **Epochs**: Epoch statistics are finalized after epoch ends
+- **Pools**: Pool registration data (though delegation changes)
+- **Dreps**: DRep registration data
+
+These entities are stored **without** `validFrom`/`validTo` fields and remain in the database permanently once indexed. They do not respect the `INDEX_TTL_MS` setting.
+
+**Example in schema.cds:**
+
+```cds
+entity Transactions {
+    key hash: Blake2b256;  // No temporal aspect
+    blockHash: Blake2b256;
+    fee: Lovelace;
+    // ... other fields
+}
+```
+
+Once a transaction is indexed, it can be queried instantly without re-fetching from the blockchain.
+
 ---
 
 ## Configuration
 
 The indexing behavior is controlled by environment variables:
 
-| Variable       | Default   | Description                                          |
-| -------------- | --------- | ---------------------------------------------------- |
-| `INDEX_TTL_MS` | `60000`   | Time-to-live for cached data in milliseconds (1 min) |
-| `NETWORK`      | `preview` | Cardano network (mainnet, preview, preprod)          |
+| Variable       | Default   | Description                                                     |
+| -------------- | --------- | --------------------------------------------------------------- |
+| `INDEX_TTL_MS` | `60000`   | Time-to-live for temporal entities in milliseconds (1 minute)   |
+| `NETWORK`      | `preview` | Cardano network: `mainnet`, `preview`, or `preprod`             |
+
+**Note:** `INDEX_TTL_MS` only affects **temporal entities** (Addresses, Accounts, NetworkInformation). Non-temporal entities (Transactions, Blocks, Epochs) remain in the database permanently.
 
 **Example:**
 
@@ -140,13 +178,15 @@ NETWORK=mainnet
 
 ## Implementation Flow
 
-### 1. Initial Request
+### Flow A: Temporal Entity (e.g., Address)
+
+#### 1. Initial Request
 
 ```
 Client → GET /Addresses('addr1...')
   ↓
 Service checks database for valid entry
-  ↓ (not found or expired)
+  ↓ (not found)
 Indexer fetches from Blockfrost/Koios
   ↓
 Data mapped and persisted with validFrom/validTo
@@ -154,17 +194,17 @@ Data mapped and persisted with validFrom/validTo
 Response returned to client
 ```
 
-### 2. Subsequent Requests (within TTL)
+#### 2. Subsequent Requests (within TTL)
 
 ```
 Client → GET /Addresses('addr1...')
   ↓
 Service checks database for valid entry
-  ↓ (found and valid)
-Instant response from local DB
+  ↓ (found and still valid)
+Instant response from local DB (no blockchain call)
 ```
 
-### 3. After TTL Expiry
+#### 3. After TTL Expiry
 
 ```
 Client → GET /Addresses('addr1...')
@@ -173,10 +213,47 @@ Service checks database for valid entry
   ↓ (found but expired)
 Indexer re-fetches from Blockfrost/Koios
   ↓
-New temporal version created
+New temporal version created (old version kept for history)
   ↓
 Response returned to client
 ```
 
-This architecture ensures data freshness while minimizing blockchain API calls
-and maintaining optimal query performance.
+### Flow B: Non-Temporal Entity (e.g., Transaction)
+
+#### 1. Initial Request
+
+```
+Client → GET /Transactions('hash123...')
+  ↓
+Service checks database for entry
+  ↓ (not found)
+Indexer fetches from Blockfrost/Koios
+  ↓
+Data mapped and persisted (no temporal fields)
+  ↓
+Response returned to client
+```
+
+#### 2. All Subsequent Requests
+
+```
+Client → GET /Transactions('hash123...')
+  ↓
+Service checks database for entry
+  ↓ (found - never expires)
+Instant response from local DB (no blockchain call)
+```
+
+---
+
+## Summary
+
+This lazy indexing architecture provides:
+
+✅ **Data Freshness**: Temporal entities respect TTL and auto-refresh\
+✅ **Efficiency**: Immutable data (transactions, blocks) indexed once\
+✅ **Performance**: All indexed data served from local database\
+✅ **Flexibility**: No full blockchain sync required\
+✅ **SAP Integration**: Full OData V4 compliance with $filter, $expand, etc.
+
+The combination of temporal and non-temporal entities ensures optimal balance between data freshness and query performance, while minimizing blockchain API calls.

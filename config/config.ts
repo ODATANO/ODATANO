@@ -23,6 +23,11 @@ const HRP = {
   preprod: { addr: /^addr1[0-9a-z]{50,100}$/, stake: /^stake1[0-9a-z]{53,}$/ },
 };
 
+const VALIDITY_VARIANTS = {
+  BECH32_MAX_LENGTH: 2000, // Maximum bech32 string length to prevent DoS
+  MAX_EPOCH: 100_000, // Maximum reasonable epoch number
+  POOL_ID_BYTES: 28, // Standard pool ID payload length
+}
 /**
  * Parse available backends from BACKENDS environment variable
  * Format: "blockfrost,koios" or "koios" or single backend
@@ -40,6 +45,7 @@ function parseAvailableBackends(): BackendName[] {
 export const CONFIG = {
   network: NETWORK,
   hrp: HRP[NETWORK],
+  VALIDITY_VARIANTS: VALIDITY_VARIANTS,
   blockfrostApiKey: process.env.BLOCKFROST_KEY ?? '',
   blockfrostApiUrl: BLOCKFROST_URLS[NETWORK],
   koiosApiUrl: KOIOS_URLS[NETWORK],
