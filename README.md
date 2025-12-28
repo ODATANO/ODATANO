@@ -2,13 +2,10 @@
 
 **OData Service for Cardano Blockchain Data**
 
-ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData
-V4 access to Cardano blockchain data. It features intelligent caching,
-multi-provider fallback, and comprehensive blockchain data exposure through a
-standardized REST API.
+ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData V4 access to Cardano blockchain data. It features intelligent caching, multi-provider fallback, and comprehensive blockchain data exposure through a standardized REST API.
 
-The project is funded by Cardano Catalyst Fund14.
-([Offical Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
+**Funded by Cardano Catalyst Fund 14** ([Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
+**Milestone Module Status Tracker:** [Milestone 1: Final Release](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862543)
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
@@ -18,87 +15,42 @@ The project is funded by Cardano Catalyst Fund14.
 
 ## Status
 
-**M1 Production-ready**: Multi-provider failover (Blockfrost primary, Koios fallback),
-comprehensive input validation, 249 passing tests with ~99% coverage, full OData V4
-query support ($filter, $select, $expand, $top, $skip, $count, $orderby), and
-enterprise-grade error handling.
+**v0.1-milestone1**: Multi-provider failover (Blockfrost → Koios), comprehensive input validation, 340 tests (96.28% coverage), full OData V4 query support
 
-## Features
+## Key Features
 
-- **OData V4 Protocol**: Full OData query capabilities ($filter, $select,
-  $expand, $top, $skip, $count)
-- **Multi-Network Support**: Mainnet, Preview, and Preprod network
-  configurations
-- **Multi-Provider Architecture**: Blockfrost (primary) + Koios (fallback) with
-  automatic failover (future: direct node access)
-- **Lazy On-Demand Indexing**: Data fetched from Cardano on first access,
-  persisted to database with TTL-based refresh (see
-  [Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md))
+- **OData V4 Protocol**: Full query support ($filter, $select, $expand, $top, $skip, $count, $orderby)
+- **Multi-Network Support**: Mainnet, Preview, and Preprod configurations
+- **Multi-Provider Architecture**: Blockfrost (primary, 8s timeout) + Koios (fallback, 10s timeout) with automatic failover
+- **Lazy On-Demand Indexing**: Data fetched from Cardano on first access, persisted with TTL-based refresh ([Details](docs/concepts%20&%20architecture/INDEXING.md))
 - **Type Safety**: Full TypeScript implementation with CAP type generation
-- **Comprehensive Testing**: 249 test cases (135 integration, 114 unit) with
-  near-complete coverage (service ~99/97 statements/branches; Blockfrost backend 100%)
+- **Comprehensive Testing**: 340 tests (135 integration, 205 unit), 96.28% statement coverage, 81.97% branch coverage
 - **CI/CD**: Automated testing on Node.js 20.x and 22.x with Codecov integration
-- **Enterprise Features**: Error handling, structured logging (Pino), input
-  validation, and monitoring
+- **Enterprise Features**: Structured logging (Pino), input validation, error normalization
 
-## Architecture & Provider Semantics
+## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                        OData V4 API                            │
-│      http://localhost:4004/odata/v4/cardano-odata              │
-└────────────────────────────────┬───────────────────────────────┘
-                                 │
-┌────────────────────────────────▼───────────────────────────────┐
-│                    CAP Service Layer                           │
-│      - cardano-service.ts (Entities + Actions)                 │         
-│      - validators.ts (Input validation)                        │
-│      - mappers.ts (Data transformation)                        │
-└────────────────────────────────┬───────────────────────────────┘
-                                 │
-┌────────────────────────────────▼───────────────────────────────┐
-│                Cardano Indexer & Client                        │
-│      - cardano-indexer.ts (Caching logic with TTL)             │
-│      - cardano-client.ts (Multi-provider orchestration)        │      
-└────────────────────────────────┬───────────────────────────────┘
-                                 │
-          ┌──────────────────────┬─────────────────────┐
-          │                      │                     │         
-┌─────────▼─────────┐  ┌─────────▼─────────┐ ┌─────────▼─────────┐
-│ Blockfrost Backend│  │  Koios Backend    │ │  Cardano Node     │
-│  (Primary)        │  │  (Fallback)       │ │    (Future)       │
-└───────────────────┘  └───────────────────┘ └───────────────────┘
+OData V4 API (http://localhost:4004/odata/v4/cardano-odata)
+    ↓
+CAP Service Layer (cardano-service.ts)
+    ↓ validators → mappers → indexer
+Cardano Client (multi-provider orchestration)
+    ↓
+Backends: Blockfrost (primary) → Koios (fallback) → [Future: Cardano Node]
 ```
 
-ODATANO supports multiple Cardano data providers and applies a deterministic
-fallback strategy.
+**Provider Failover:**
+- Primary backend (Blockfrost) queried first with 8s timeout
+- On failure (timeout, network error, backend error), fallback backend (Koios) automatically activated with 10s timeout
+- Provider responses normalized into canonical internal data model
+- Consumers interact with stable OData entities, independent of underlying provider
 
-- A primary backend (e.g. Blockfrost) is queried first.
-- If the primary backend fails (timeout, network error, or backend error), a
-  fallback backend (e.g. Koios) is used.
-- Provider responses are normalized into a canonical internal data model before
-  persistence.
-- Consumers always interact with stable OData entities, independent of the
-  underlying provider.
-
-
-### Data Freshness Model
-
-ODATANO uses a lazy, on-demand freshness model based on SAP CAP temporal
-entities and a configurable indexing TTL.
-
-Entities such as addresses, current network information, and latest block data
-are modeled as _temporal_.\
-For temporal entities, SAP CAP automatically returns only records that are valid
-“as of now” (`validFrom ≤ now < validTo`) during read operations.
-
-In addition, ODATANO applies a configurable indexing TTL (`INDEX_TTL_MS`) to
-control when data may be refreshed. If no currently valid record exists at read
-time, or if the existing record exceeds the configured TTL, ODATANO refreshes
-the data on demand by querying the Cardano backend and re-indexing the result.
-
-No background jobs or periodic crawlers are used.\
-All refresh operations are strictly request-driven.
+**Data Freshness:**
+- **Temporal entities** (Addresses, Accounts, NetworkInformation): TTL-based refresh (configurable via `INDEX_TTL_MS`)
+- **Non-temporal entities** (Transactions, Blocks, Epochs): Permanent storage after first fetch
+- No background jobs; all refresh operations are request-driven
+- See [Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md) for details
 
 ## Installation
 
@@ -125,7 +77,7 @@ See [Docker Deployment Guide](docs/guides/DOCKER_DEPLOYMENT.md) for details.
 - npm 10+
 - Blockfrost API Key ([Get one here](https://blockfrost.io))
 
-### 1. Clone & Install
+#### 1. Clone & Install
 
 ```bash
 git clone https://github.com/ODATANO/ODATANO
@@ -133,7 +85,7 @@ cd ODATANO
 npm ci
 ```
 
-### 2. Configure Environment
+#### 2. Configure Environment
 
 ```bash
 cp .env.example .env
@@ -153,7 +105,7 @@ BLOCKFROST_KEY=your_blockfrost_api_key_here
 
 # Timeout settings (milliseconds) - optional
 PRIMARY_TIMEOUT_MS=8000
-FALLBACK_TIMEOUT_MS=8000
+FALLBACK_TIMEOUT_MS=10000
 
 # Enabled Backends (comma-separated)
 BACKENDS=blockfrost,koios
@@ -168,19 +120,17 @@ INDEX_TTL_MS=60000
 - `preview` - Preview testnet (recommended for development)
 - `preprod` - Pre-production testnet
 
-The service automatically selects the correct Blockfrost and Koios API endpoints
-based on your `NETWORK` setting.
+The service automatically selects the correct Blockfrost and Koios API endpoints based on your `NETWORK` setting.
 
-### 3. Initialize Database
+#### 3. Initialize Database
 
 ```bash
 cds deploy --to sqlite
 ```
 
-This creates the database with temporal caching tables for lazy on-demand
-indexing.
+This creates the database with temporal caching tables for lazy on-demand indexing.
 
-### 4. Start Server
+#### 4. Start Server
 
 **Development mode with live reload:**
 
@@ -218,8 +168,6 @@ curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')"
 
 ### Test All Endpoints
 
-For comprehensive API testing, ODATANO provides two convenient options:
-
 **Automated Test Script:**
 ```bash
 npx tsx scripts/request_examples.ts
@@ -233,64 +181,37 @@ Import the [ODATANO M1 - Full Service Catalog](scripts/ODATANO%20M1%20-%20Full%2
 
 ## Testing
 
-### Run All Tests
-
 ```bash
-npm test
-```
-
-### Run with Coverage
-
-```bash
-npm run test:coverage
-```
-
-### Run Only Integration Tests
-
-```bash
-npm run test:integration
-```
-
-### Run Only Unit Tests
-
-```bash
-npm run test:unit
+npm test                  # Run all tests
+npm run test:coverage     # Run with coverage
+npm run test:integration  # Integration tests only
+npm run test:unit         # Unit tests only
 ```
 
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
 - **[Docker Deployment Guide](docs/guides/DOCKER_DEPLOYMENT.md)** - Run with Docker in 3 commands
-- **[Developer Guide](docs/guides/DEVELOPER_GUIDE.md)** - Architecture and
-  development
+- **[Developer Guide](docs/guides/DEVELOPER_GUIDE.md)** - Architecture and development
 - **[User Guide](docs/guides/USER_GUIDE.md)** - API usage and examples
-- **[Test Documentation](test/README.md)** - Complete test suite overview (249 tests)
-- **[Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md)** - Entity
-  relationships and schema
-- **[Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md)** - Caching
-  strategy
-- **[Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md)** - Error
-  normalization and fallback
+- **[Test Documentation](test/README.md)** - Complete test suite overview (340 tests)
+- **[Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md)** - Entity relationships and schema
+- **[Indexing Concept](docs/concepts%20&%20architecture/INDEXING.md)** - Caching strategy
+- **[Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md)** - Error normalization and fallback
 
 ## SAP Fiori UI Annotations
 
-ODATANO includes comprehensive SAP Fiori Elements UI annotations in [cardano-ui.cds](srv/cardano-ui.cds), providing a ready-to-use UI without writing any frontend code:
+ODATANO includes comprehensive SAP Fiori Elements UI annotations in [cardano-ui.cds](srv/cardano-ui.cds), providing a ready-to-use UI:
 
-- **List Pages**: Configure selection fields, columns, and actions for all entities
-- **Object Pages**: Detail views with header info, facets, and field groups
-- **Navigation**: Automatic drill-down from collections to items (e.g., Transactions → Inputs → Assets)
-- **Smart Rendering**: DataPoints for KPIs, conditional visibility, and reference facets
-- **Actions Integration**: All service actions (GetBlockByHash, GetTransactionByHash, etc.) exposed in the UI
+- List pages with selection fields, columns, and actions
+- Object pages with header info, facets, and field groups
+- Automatic navigation and drill-down (e.g., Transactions → Inputs → Assets)
+- DataPoints for KPIs, conditional visibility, reference facets
+- All service actions exposed in the UI
 
-The UI annotations are automatically rendered by SAP Fiori Elements when accessing the service through SAP Fiori launchpad or preview mode (`http://localhost:4004/$fiori-preview`).
+**Access:** `http://localhost:4004/$fiori-preview`
 
-**Key Features:**
-- ✅ All entities (NetworkInformation, Blocks, Epochs, Transactions, Addresses, Pools, Dreps, Accounts) have complete UI definitions
-- ✅ Nested entities (TransactionInputs/Outputs, AddressAssets/UTxOs, UTxOAssets) with proper navigation
-- ✅ Asset details displayed in structured format (quantity, policyId, assetName, fingerprint)
-- ✅ Temporal data indicators (validFrom, validTo) and state flags (hasAssets, hasInputs, hasOutputs)
-
-See [cardano-ui.cds](srv/cardano-ui.cds) for the complete UI annotation definitions.
+See [cardano-ui.cds](srv/cardano-ui.cds) for complete definitions.
 
 ## API Overview
 
@@ -315,9 +236,6 @@ See [cardano-ui.cds](srv/cardano-ui.cds) for the complete UI annotation definiti
 | `Accounts`                | Stake accounts (by stake address)       | `stakeAddress` (bech32 stake)                       | `/Accounts('stake_test1...')`                                      |
 | `Dreps`                   | Delegated representatives               | `drepId`                                            | `/Dreps('drep1...')`                                               |
 
-> For the most recent block or epoch, query `Blocks?$orderby=height desc&$top=1`
-> and `Epochs?$orderby=epoch desc&$top=1`.
-
 ### Actions (POST)
 
 | Action                     | Parameters     | Description                       |
@@ -334,19 +252,20 @@ See [cardano-ui.cds](srv/cardano-ui.cds) for the complete UI annotation definiti
 | `GetAccountByStakeAddress` | `stakeAddress` | Fetch an account by stake address |
 | `GetDrepById`              | `drepId`       | Fetch a drep by ID                |
 
-## Validation and data freshness
+## Validation and Data Freshness
 
-- **Validation**
-  - Transaction / pool / drep IDs: 64-char hex (`isTxHash`)
-  - Addresses: network-aware bech32 (`isBech32Address` for addr)
-  - Stake addresses: network-aware bech32 stake HRP (`isBech32StakeAddress`)
-  - Empty label strings are rejected for metadata reads
-- **Caching and TTL**
-  - Temporal CDS entities: only currently valid rows are returned
-  - TTL (`INDEX_TTL_MS`): stale or missing rows trigger on-demand reindexing
-  - No background jobs; refresh is request-driven
+**Validation:**
+- Transaction/pool/drep IDs: 64-char hex (`isTxHash`)
+- Addresses: network-aware bech32 (`isBech32Address` for addr)
+- Stake addresses: network-aware bech32 stake HRP (`isBech32StakeAddress`)
+- Empty label strings rejected for metadata reads
 
-## Important parts of the project structure
+**Caching and TTL:**
+- Temporal CDS entities: only currently valid rows are returned
+- TTL (`INDEX_TTL_MS`): stale or missing rows trigger on-demand reindexing
+- No background jobs; refresh is request-driven
+
+## Project Structure
 
 ```
 ODATANO/
@@ -367,18 +286,19 @@ ODATANO/
 │   │   ├── cardano-client.ts          # Provider orchestration + timeouts/failover
 │   │   └── cardano-indexer.ts         # Lazy indexing + TTL + persistence mapping
 │   └── utils/
-│       ├── backend-request-handler.ts # Backend error handling wrapper (maps provider errors)
-│       ├── errors.ts                 # Error hierarchy (8 error classes + normalization)
-│       ├── logger.ts                 # Pino structured logging
-│       ├── mappers.ts                # Data transformation to CDS entities (14 mappers)
-│       ├── types.ts                  # Shared TypeScript types
-│       └── validators.ts             # Input validators (8 validators, fully tested)
+│       ├── backend-request-handler.ts # Backend error handling wrapper
+│       ├── errors.ts                  # Error hierarchy (8 error classes)
+│       ├── logger.ts                  # Pino structured logging
+│       ├── mappers.ts                 # Data transformation to CDS entities
+│       ├── types.ts                   # Shared TypeScript types
+│       └── validators.ts              # Input validators (8 validators)
 │
 ├── test/
-│   ├── integration/                  # 135 integration tests (71 core + 34 error + 28 OData + 2 backend)
-│   ├── unit/                         # 116 unit tests (validators, errors, client, backend)
-│   └── README.md                     # Complete test documentation
-└── docs/                             # Documentation (Quick Start, User, Developer, concepts)
+│   ├── integration/           # 135 integration tests
+│   ├── unit/                  # 205 unit tests
+│   └── README.md              # Complete test documentation
+│
+└── docs/                      # Documentation (guides, concepts)
 ```
 
 ## Technology Stack
@@ -387,7 +307,7 @@ ODATANO/
 - **TypeScript** (v5.9) - Type-safe development
 - **SQLite** - Persistent caching
 - **Jest** - Testing framework
-- **Pino** - Structured logging with optional pino-pretty for development
+- **Pino** - Structured logging
 - **Blockfrost/Koios** - Cardano data providers
 
 ## Environment Variables
@@ -401,12 +321,10 @@ ODATANO/
 | `FALLBACK_TIMEOUT_MS`     | No       | `10000`            | Fallback backend timeout in milliseconds               |
 | `BACKENDS`                | No       | `blockfrost,koios` | Comma-separated list of backends                       |
 | `INDEX_TTL_MS`            | No       | `60000`            | Cache TTL in milliseconds (1 minute default)           |
-| BACKENDS=blockfrost,koios |          |                    |                                                        |
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the
-[LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Support
 
@@ -414,3 +332,4 @@ This project is licensed under the Apache License 2.0 - see the
 - **Documentation**: [docs/](docs/)
 - **Blockfrost**: https://blockfrost.io
 - **Koios**: https://koios.rest
+- **Project Lead**: Max Weber (max@maxalexweber.de)
