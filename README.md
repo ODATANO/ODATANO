@@ -132,17 +132,25 @@ This creates the database with temporal caching tables for lazy on-demand indexi
 
 #### 4. Start Server
 
-**Development mode with live reload:**
+**Development mode (recommended for local development):**
 
 ```bash
 npm run cds:watch
 ```
+
+- Runs TypeScript directly with live reload
+- No `.js` files generated
+- Auto-restarts on file changes
 
 **Production mode:**
 
 ```bash
 npm start
 ```
+
+- Compiles TypeScript to JavaScript
+- Generates `.js` files (gitignored)
+- Optimized for deployment
 
 **Server runs at:** `http://localhost:4004`
 

@@ -40,5 +40,13 @@ coverage/
 # @cap-js/cds-typer
 @cds-models
 
+# Compiled TypeScript files
+srv/**/*.js
+srv/**/*.js.map
+config/**/*.js
+config/**/*.js.map
+test/**/*.js
+test/**/*.js.map
+
 db.sqlite-shm
 db.sqlite-wal

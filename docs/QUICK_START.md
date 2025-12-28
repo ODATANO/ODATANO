@@ -9,7 +9,7 @@ This guide gets you running the OData V4 service locally in minutes.
 ```bash
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
-npm install
+npm ci
 ```
 
 ### 2) Configure Environment
@@ -53,11 +53,26 @@ cds deploy --to sqlite
 
 This creates the SQLite database used for on-demand indexing and caching.
 
-### 4) Start Server (Dev Mode)
+### 4) Start Server
+
+**Development mode (recommended):**
 
 ```bash
 npm run cds:watch
 ```
+
+- Runs TypeScript directly with live reload
+- No compiled files generated
+- Auto-restarts on changes
+
+**Production mode:**
+
+```bash
+npm start
+```
+
+- Compiles TypeScript → JavaScript
+- Optimized for deployment
 
 Server runs at: http://localhost:4004
 

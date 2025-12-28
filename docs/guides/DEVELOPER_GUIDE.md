@@ -59,17 +59,27 @@ Indexer Cache (SQLite temporal entities)
 # Install
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
-npm install
+npm ci
 
 # Configure
 cp .env.example .env
 # Edit .env: Set BLOCKFROST_KEY, NETWORK=preview
 
-# Run
-npm run cds:watch    # Development server
+# Development (TypeScript, live reload, no .js files)
+npm run cds:watch
+
+# Production (compiles TypeScript → JavaScript)
+npm start
+
+# Testing
 npm test             # Run tests
 npm run test:coverage # Coverage report
 ```
+
+**Development vs Production:**
+
+- **`npm run cds:watch`** - Development mode using `ts-node`, runs TypeScript directly, no `.js` files generated, auto-reloads on changes
+- **`npm start`** - Production mode, compiles TypeScript to JavaScript (`.js` files gitignored), optimized for deployment
 
 ### Key Files
 
