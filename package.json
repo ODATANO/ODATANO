@@ -2,8 +2,12 @@
   "name": "odatano",
   "version": "1.0.0",
   "description": "A SAP CAP service for interacting with Cardano blockchain data.",
+  "imports": {
+    "#cds-models/*": "./@cds-models/*/index.js"
+  },
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
+    "@cap-js/sqlite": "^2",
     "@sap/cds": "^9",
     "axios": "^1.4.0",
     "bech32": "^2.0.0",
@@ -15,7 +19,6 @@
     "@cap-js/cds-test": "^0.4.1",
     "@cap-js/cds-typer": "^0.38.0",
     "@cap-js/cds-types": "^0.15.0",
-    "@cap-js/sqlite": "^2",
     "@sap/cds-dk": "^9.4.3",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.0.0",

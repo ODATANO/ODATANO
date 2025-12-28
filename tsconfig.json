@@ -9,7 +9,8 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "outDir": "dist",
+    "outDir": ".",
+    "rootDir": ".",
     "isolatedModules": false,
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true,
@@ -28,7 +29,14 @@
     "srv/**/*.ts",
     "app/**/*.ts",
     "db/**/*.ts",
+    "@cds-models/**/*.ts",
     "types/**/*.d.ts",
-    "test/**/*.ts"
-, "config/config.ts"  ]
+    "test/**/*.ts",
+    "config/config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts"
+  ]
 }

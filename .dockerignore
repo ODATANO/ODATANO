@@ -1,0 +1,62 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build artifacts
+dist/
+build/
+*.log
+
+# Test files
+test/
+*.test.ts
+*.test.js
+coverage/
+
+# Development files
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.md
+!README.md
+
+# Environment files (should be provided at runtime)
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Documentation (except README)
+docs/
+
+# Scripts that aren't needed in production
+scripts/
+
+# SQLite databases (will be created in container)
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Jest
+jest.config.*
+
+# ESLint config
+eslint.config.*
+.eslintrc*
+
+# Code coverage
+codecov.yml
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

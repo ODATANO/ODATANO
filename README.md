@@ -102,7 +102,24 @@ All refresh operations are strictly request-driven.
 
 ## Installation
 
-### Prerequisites
+### Quick Start with Docker (Recommended)
+
+```bash
+# 1. Set your API key
+echo "BLOCKFROST_API_KEY=your-api-key-here" > .env
+
+# 2. Start
+docker-compose up -d
+
+# 3. Test
+curl http://localhost:4004/health
+```
+
+See [Docker Deployment Guide](docs/guides/DOCKER_DEPLOYMENT.md) for details.
+
+### Local Development Setup
+
+#### Prerequisites
 
 - Node.js 20+ or 22+
 - npm 10+
@@ -243,6 +260,7 @@ npm run test:unit
 ## Documentation
 
 - **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running in 5 minutes
+- **[Docker Deployment Guide](docs/guides/DOCKER_DEPLOYMENT.md)** - Run with Docker in 3 commands
 - **[Developer Guide](docs/guides/DEVELOPER_GUIDE.md)** - Architecture and
   development
 - **[User Guide](docs/guides/USER_GUIDE.md)** - API usage and examples

@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  odatano:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: odatano:latest
+    container_name: odatano-service
+    ports:
+      - "4004:4004"
+    environment:
+      # Cardano network configuration
+      - CARDANO_NETWORK=preview
+      
+      # Backend provider configuration
+      # Primary provider: blockfrost or koios
+      - CARDANO_PROVIDER=blockfrost
+      
+      # Blockfrost API credentials
+      # Get your API key from https://blockfrost.io
+      - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY:-your-blockfrost-api-key-here}
+      
+      # Koios API configuration (fallback)
+      # - KOIOS_API_URL=https://api.koios.rest/api/v1
+      
+      # CDS configuration
+      - CDS_LOG_LEVEL=info
+      
+      # Application settings
+      - NODE_ENV=development
+      - PORT=4004
+      
+    volumes:
+      # Persist SQLite database
+      - odatano-data:/app
+      
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4004/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    networks:
+      - odatano-network
+
+volumes:
+  odatano-data:
+    driver: local
+
+networks:
+  odatano-network:
+    driver: bridge
