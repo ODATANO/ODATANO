@@ -17,15 +17,15 @@ annotate srv.NetworkInformation with @(
   UI.SelectionFields: [ network ],
 
   UI.LineItem: [
-    { Value: network },
-    { Value: maxSupply },
-    { Value: totalSupply },
-    { Value: circulatingSupply },
-    { Value: lockedSupply },
-    { Value: treasurySupply },
-    { Value: reservesSupply },
-    { Value: liveStake },
-    { Value: activeStake },
+    { Value: network,           Label: 'Network' },
+    { Value: maxSupply,         Label: 'Max Supply' },
+    { Value: totalSupply,       Label: 'Total Supply' },
+    { Value: circulatingSupply, Label: 'Circulating Supply' },
+    { Value: lockedSupply,      Label: 'Locked Supply' },
+    { Value: treasurySupply,    Label: 'Treasury Supply' },
+    { Value: reservesSupply,    Label: 'Reserves Supply' },
+    { Value: liveStake,         Label: 'Live Stake' },
+    { Value: activeStake,       Label: 'Active Stake' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetNetworkInformation',
@@ -96,15 +96,15 @@ annotate srv.Blocks with @(
   UI.SelectionFields: [ height, epochNumber ],
 
   UI.LineItem: [
-    { Value: hash },
-    { Value: time },
-    { Value: height },
-    { Value: slotLeader },
-    { Value: epochNumber },
-    { Value: epochSlot },
-    { Value: size },
-    { Value: txCount },
-    { Value: fees },
+    { Value: hash,        Label: 'Hash' },
+    { Value: time,        Label: 'Time' },
+    { Value: height,      Label: 'Height' },
+    { Value: slotLeader,  Label: 'Slot Leader' },
+    { Value: epochNumber, Label: 'Epoch Number' },
+    { Value: epochSlot,   Label: 'Epoch Slot' },
+    { Value: size,        Label: 'Size' },
+    { Value: txCount,     Label: 'Tx Count' },
+    { Value: fees,        Label: 'Fees' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetBlockByHash',
@@ -167,13 +167,13 @@ annotate srv.Epochs with @(
   UI.SelectionFields: [ epoch ],
 
   UI.LineItem: [
-    { Value: epoch },
-    { Value: startTime },
-    { Value: endTime },
-    { Value: blockCount },
-    { Value: txCount },
-    { Value: fees },
-    { Value: activeStake },
+    { Value: epoch,       Label: 'Epoch' },
+    { Value: startTime,   Label: 'Start Time' },
+    { Value: endTime,     Label: 'End Time' },
+    { Value: blockCount,  Label: 'Block Count' },
+    { Value: txCount,     Label: 'Tx Count' },
+    { Value: fees,        Label: 'Fees' },
+    { Value: activeStake, Label: 'Active Stake' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetEpochByNumber',
@@ -235,20 +235,20 @@ annotate srv.Pools with @(
   UI.SelectionFields: [ poolId ],
 
   UI.LineItem: [
-    { Value: poolId },
-    { Value: vrfKeyHash },
-    { Value: blocksMinted },
-    { Value: blocksEpoch },
-    { Value: liveStake },
-    { Value: liveSize },
-    { Value: liveSaturation },
-    { Value: liveDelegators },
-    { Value: activeStake },
-    { Value: activeSize },
-    { Value: pledge },
-    { Value: margin },
-    { Value: fixedCost },
-    { Value: rewardAccount },
+    { Value: poolId,         Label: 'Pool ID' },
+    { Value: vrfKeyHash,     Label: 'VRF Key Hash' },
+    { Value: blocksMinted,   Label: 'Blocks Minted' },
+    { Value: blocksEpoch,    Label: 'Blocks This Epoch' },
+    { Value: liveStake,      Label: 'Live Stake' },
+    { Value: liveSize,       Label: 'Live Size' },
+    { Value: liveSaturation, Label: 'Live Saturation' },
+    { Value: liveDelegators, Label: 'Live Delegators' },
+    { Value: activeStake,    Label: 'Active Stake' },
+    { Value: activeSize,     Label: 'Active Size' },
+    { Value: pledge,         Label: 'Pledge' },
+    { Value: margin,         Label: 'Margin' },
+    { Value: fixedCost,      Label: 'Fixed Cost' },
+    { Value: rewardAccount,  Label: 'Reward Account' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetPoolById',
@@ -331,12 +331,12 @@ annotate srv.Dreps with @(
 
   // List Report table
   UI.LineItem: [
-    { Value: drepId },
-    { Value: amount },
-    { Value: hasScript },
-    { Value: lastActiveEpoch },
-    { Value: retired },
-    { Value: expired },
+    { Value: drepId,          Label: 'DRep ID' },
+    { Value: amount,          Label: 'Voting Power' },
+    { Value: hasScript,       Label: 'Has Script' },
+    { Value: lastActiveEpoch, Label: 'Last Active Epoch' },
+    { Value: retired,         Label: 'Retired' },
+    { Value: expired,         Label: 'Expired' },
 
     {
       $Type : 'UI.DataFieldForAction',
@@ -345,7 +345,6 @@ annotate srv.Dreps with @(
     }
   ],
 
-  // Object Page: put the action in the header actions area
   UI.Identification: [
     {
       $Type : 'UI.DataFieldForAction',
@@ -354,7 +353,6 @@ annotate srv.Dreps with @(
     }
   ],
 
-  // Object Page: header KPI
   UI.HeaderFacets: [
     {
       $Type : 'UI.ReferenceFacet',
@@ -423,11 +421,11 @@ annotate srv.Addresses with @(
   UI.SelectionFields: [ address, type ],
 
   UI.LineItem: [
-    { Value: address },
-    { Value: stakeAddress },
-    { Value: type },
-    { Value: isScript },
-    { Value: totalLovelace },
+    { Value: address,       Label: 'Address' },
+    { Value: stakeAddress,  Label: 'Stake Address' },
+    { Value: type,          Label: 'Type' },
+    { Value: isScript,      Label: 'Is Script' },
+    { Value: totalLovelace, Label: 'Total Lovelace' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetAddressByBech32',
@@ -493,18 +491,18 @@ annotate srv.AddressAssets with @(
   },
 
   UI.LineItem: [
-    { Value: unit },
-    { Value: asset.quantity },
-    { Value: asset.policyId },
-    { Value: asset.assetName },
-    { Value: asset.fingerprint }
+    { Value: unit,               Label: 'Unit' },
+    { Value: asset_quantity,     Label: 'Quantity' },
+    { Value: asset_policyId,     Label: 'Policy ID' },
+    { Value: asset_assetName,    Label: 'Asset Name' },
+    { Value: asset_fingerprint,  Label: 'Fingerprint' }
   ],
 
   UI.HeaderFacets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Quantity', Target: '@UI.DataPoint#Quantity' }
   ],
 
-  UI.DataPoint#Quantity: { Value: asset.quantity, Title: 'Quantity' },
+  UI.DataPoint#Quantity: { Value: asset_quantity, Title: 'Quantity' },
 
   UI.Facets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Asset Details', Target: '@UI.FieldGroup#AssetDetails' }
@@ -512,12 +510,12 @@ annotate srv.AddressAssets with @(
 
   UI.FieldGroup#AssetDetails: {
     Data: [
-      { $Type: 'UI.DataField', Value: unit,              Label: 'Unit' },
-      { $Type: 'UI.DataField', Value: asset.quantity,    Label: 'Quantity' },
-      { $Type: 'UI.DataField', Value: asset.policyId,    Label: 'Policy ID' },
-      { $Type: 'UI.DataField', Value: asset.assetNameHex,Label: 'Asset Name (Hex)' },
-      { $Type: 'UI.DataField', Value: asset.assetName,   Label: 'Asset Name' },
-      { $Type: 'UI.DataField', Value: asset.fingerprint, Label: 'Fingerprint' }
+      { $Type: 'UI.DataField', Value: unit,               Label: 'Unit' },
+      { $Type: 'UI.DataField', Value: asset_quantity,     Label: 'Quantity' },
+      { $Type: 'UI.DataField', Value: asset_policyId,     Label: 'Policy ID' },
+      { $Type: 'UI.DataField', Value: asset_assetNameHex, Label: 'Asset Name (Hex)' },
+      { $Type: 'UI.DataField', Value: asset_assetName,    Label: 'Asset Name' },
+      { $Type: 'UI.DataField', Value: asset_fingerprint,  Label: 'Fingerprint' }
     ]
   }
 );
@@ -531,11 +529,11 @@ annotate srv.AddressUTxOs with @(
   },
 
   UI.LineItem: [
-    { Value: hash },
-    { Value: index },
-    { Value: blockHash },
-    { Value: utxodata.dataHash },
-    { Value: hasAssets }
+    { Value: hash,               Label: 'Transaction Hash' },
+    { Value: index,              Label: 'Output Index' },
+    { Value: blockHash,          Label: 'Block Hash' },
+    { Value: utxodata_dataHash,  Label: 'Data Hash' },
+    { Value: hasAssets,          Label: 'Has Assets' }
   ],
 
   UI.HeaderFacets: [
@@ -558,12 +556,12 @@ annotate srv.AddressUTxOs with @(
 
   UI.FieldGroup#UTxODetails: {
     Data: [
-      { $Type: 'UI.DataField', Value: hash,                           Label: 'Transaction Hash' },
-      { $Type: 'UI.DataField', Value: index,                          Label: 'Output Index' },
-      { $Type: 'UI.DataField', Value: blockHash,                      Label: 'Block Hash' },
-      { $Type: 'UI.DataField', Value: utxodata.dataHash,              Label: 'Data Hash' },
-      { $Type: 'UI.DataField', Value: utxodata.inlineDatum,           Label: 'Inline Datum' },
-      { $Type: 'UI.DataField', Value: utxodata.referenceScriptHash,   Label: 'Reference Script Hash' }
+      { $Type: 'UI.DataField', Value: hash,                            Label: 'Transaction Hash' },
+      { $Type: 'UI.DataField', Value: index,                           Label: 'Output Index' },
+      { $Type: 'UI.DataField', Value: blockHash,                       Label: 'Block Hash' },
+      { $Type: 'UI.DataField', Value: utxodata_dataHash,               Label: 'Data Hash' },
+      { $Type: 'UI.DataField', Value: utxodata_inlineDatum,            Label: 'Inline Datum' },
+      { $Type: 'UI.DataField', Value: utxodata_referenceScriptHash,    Label: 'Reference Script Hash' }
     ]
   }
 );
@@ -576,18 +574,18 @@ annotate srv.UTxOAssets with @(
   },
 
   UI.LineItem: [
-    { Value: unit },
-    { Value: asset.quantity },
-    { Value: asset.policyId },
-    { Value: asset.assetName },
-    { Value: asset.fingerprint }
+    { Value: unit,               Label: 'Unit' },
+    { Value: asset_quantity,     Label: 'Quantity' },
+    { Value: asset_policyId,     Label: 'Policy ID' },
+    { Value: asset_assetName,    Label: 'Asset Name' },
+    { Value: asset_fingerprint,  Label: 'Fingerprint' }
   ],
 
   UI.HeaderFacets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Quantity', Target: '@UI.DataPoint#Quantity' }
   ],
 
-  UI.DataPoint#Quantity: { Value: asset.quantity, Title: 'Quantity' },
+  UI.DataPoint#Quantity: { Value: asset_quantity, Title: 'Quantity' },
 
   UI.Facets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Asset Details', Target: '@UI.FieldGroup#AssetDetails' }
@@ -595,12 +593,12 @@ annotate srv.UTxOAssets with @(
 
   UI.FieldGroup#AssetDetails: {
     Data: [
-      { $Type: 'UI.DataField', Value: unit,              Label: 'Unit' },
-      { $Type: 'UI.DataField', Value: asset.quantity,    Label: 'Quantity' },
-      { $Type: 'UI.DataField', Value: asset.policyId,    Label: 'Policy ID' },
-      { $Type: 'UI.DataField', Value: asset.assetNameHex,Label: 'Asset Name (Hex)' },
-      { $Type: 'UI.DataField', Value: asset.assetName,   Label: 'Asset Name' },
-      { $Type: 'UI.DataField', Value: asset.fingerprint, Label: 'Fingerprint' }
+      { $Type: 'UI.DataField', Value: unit,               Label: 'Unit' },
+      { $Type: 'UI.DataField', Value: asset_quantity,     Label: 'Quantity' },
+      { $Type: 'UI.DataField', Value: asset_policyId,     Label: 'Policy ID' },
+      { $Type: 'UI.DataField', Value: asset_assetNameHex, Label: 'Asset Name (Hex)' },
+      { $Type: 'UI.DataField', Value: asset_assetName,    Label: 'Asset Name' },
+      { $Type: 'UI.DataField', Value: asset_fingerprint,  Label: 'Fingerprint' }
     ]
   }
 );
@@ -620,14 +618,14 @@ annotate srv.Transactions with @(
   UI.SelectionFields: [ hash, blockHeight ],
 
   UI.LineItem: [
-    { Value: hash },
-    { Value: blockHeight },
-    { Value: blockTime },
-    { Value: slot },
-    { Value: txIndex },
-    { Value: fee },
-    { Value: deposit },
-    { Value: size },
+    { Value: hash,        Label: 'Hash' },
+    { Value: blockHeight, Label: 'Block Height' },
+    { Value: blockTime,   Label: 'Block Time' },
+    { Value: slot,        Label: 'Slot' },
+    { Value: txIndex,     Label: 'Tx Index' },
+    { Value: fee,         Label: 'Fee' },
+    { Value: deposit,     Label: 'Deposit' },
+    { Value: size,        Label: 'Size' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetTransactionByHash',
@@ -695,10 +693,12 @@ annotate srv.Transactions with @(
 // ----------------------------------------------------------------------------
 // Transaction Metadata
 // ----------------------------------------------------------------------------
-annotate srv.TransactionMetadata with @UI.LineItem: [
-    {Value: label},
-    {Value: payload}
-];
+annotate srv.TransactionMetadata with @(
+  UI.LineItem: [
+    { Value: label,   Label: 'Label' },
+    { Value: payload, Label: 'Payload' }
+  ]
+);
 // ----------------------------------------------------------------------------
 // Transaction Inputs & Inputs Assets
 // ----------------------------------------------------------------------------
@@ -708,17 +708,21 @@ annotate srv.TransactionInputs with @(
     TypeName      : 'Transaction Input',
     TypeNamePlural: 'Transaction Inputs',
     Title         : { Value: inputIndex },
-    Description   : { Value: address.address }
+    Description   : { Value: address_address }
   },
 
   UI.LineItem: [
-    { Value: inputIndex },
-    { Value: address.address },
-    { Value: utxoData_dataHash },
-    { Value: isCollateral },
-    { Value: isReference },
-    { Value: hasAssets }
+    { Value: inputIndex,        Label: 'Input Index' },
+    { Value: address_address,   Label: 'Address' },
+    { Value: utxoData_dataHash, Label: 'Data Hash' },
+    { Value: isCollateral,      Label: 'Is Collateral' },
+    { Value: isReference,       Label: 'Is Reference' },
+    { Value: hasAssets,         Label: 'Has Assets' }
   ],
+
+  UI.PresentationVariant: {
+    Visualizations: ['@UI.LineItem']
+  },
 
   UI.HeaderFacets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Input Index', Target: '@UI.DataPoint#InputIndex' },
@@ -741,7 +745,7 @@ annotate srv.TransactionInputs with @(
   UI.FieldGroup#Details: {
     Data: [
       { $Type: 'UI.DataField', Value: inputIndex,              Label: 'Input Index' },
-      { $Type: 'UI.DataField', Value: address.address,         Label: 'Address' },
+      { $Type: 'UI.DataField', Value: address_address,         Label: 'Address' },
       { $Type: 'UI.DataField', Value: utxoData_dataHash,       Label: 'Data Hash' },
       { $Type: 'UI.DataField', Value: utxoData_inlineDatum,    Label: 'Inline Datum' },
       { $Type: 'UI.DataField', Value: utxoData_referenceScriptHash, Label: 'Reference Script Hash' },
@@ -759,11 +763,11 @@ annotate srv.TransactionInputAssets with @(
   },
 
   UI.LineItem: [
-    { Value: unit },
-    { Value: asset.quantity },
-    { Value: asset.policyId },
-    { Value: asset.assetName },
-    { Value: asset.fingerprint }
+    { Value: unit,               Label: 'Unit' },
+    { Value: asset_quantity,     Label: 'Quantity' },
+    { Value: asset_policyId,     Label: 'Policy ID' },
+    { Value: asset_assetName,    Label: 'Asset Name' },
+    { Value: asset_fingerprint,  Label: 'Fingerprint' }
   ],
 
   UI.Facets: [
@@ -772,12 +776,12 @@ annotate srv.TransactionInputAssets with @(
 
   UI.FieldGroup#AssetDetails: {
     Data: [
-      { $Type: 'UI.DataField', Value: unit,              Label: 'Unit' },
-      { $Type: 'UI.DataField', Value: asset.quantity,    Label: 'Quantity' },
-      { $Type: 'UI.DataField', Value: asset.policyId,    Label: 'Policy ID' },
-      { $Type: 'UI.DataField', Value: asset.assetNameHex,Label: 'Asset Name (Hex)' },
-      { $Type: 'UI.DataField', Value: asset.assetName,   Label: 'Asset Name' },
-      { $Type: 'UI.DataField', Value: asset.fingerprint, Label: 'Fingerprint' }
+      { $Type: 'UI.DataField', Value: unit,               Label: 'Unit' },
+      { $Type: 'UI.DataField', Value: asset_quantity,     Label: 'Quantity' },
+      { $Type: 'UI.DataField', Value: asset_policyId,     Label: 'Policy ID' },
+      { $Type: 'UI.DataField', Value: asset_assetNameHex, Label: 'Asset Name (Hex)' },
+      { $Type: 'UI.DataField', Value: asset_assetName,    Label: 'Asset Name' },
+      { $Type: 'UI.DataField', Value: asset_fingerprint,  Label: 'Fingerprint' }
     ]
   }
 );
@@ -791,19 +795,22 @@ annotate srv.TransactionOutputs with @(
     TypeName      : 'Transaction Output',
     TypeNamePlural: 'Transaction Outputs',
     Title         : { Value: outputIndex },
-    Description   : { Value: address.address }
+    Description   : { Value: address_address }
+  },
+
+  UI.PresentationVariant: {
+    Visualizations: ['@UI.LineItem']
   },
 
   UI.LineItem: [
-    { Value: outputIndex },
-    { Value: address.address },
-    { Value: utxo.dataHash },
-    { Value: hasAssets }
+    { Value: outputIndex,     Label: 'Output Index' },
+    { Value: address_address, Label: 'Address' },
+    { Value: hasAssets,       Label: 'Has Assets' }
   ],
 
   UI.HeaderFacets: [
     { $Type: 'UI.ReferenceFacet', Label: 'Output Index', Target: '@UI.DataPoint#OutputIndex' },
-    { $Type: 'UI.ReferenceFacet', Label: 'Has Assets', Target: '@UI.DataPoint#HasAssets' }
+    { $Type: 'UI.ReferenceFacet', Label: 'Has Assets',   Target: '@UI.DataPoint#HasAssets' }
   ],
 
   UI.DataPoint#OutputIndex: { Value: outputIndex, Title: 'Output Index' },
@@ -816,16 +823,23 @@ annotate srv.TransactionOutputs with @(
       Target       : 'assets/@UI.LineItem',
       ![@UI.Hidden]: (not hasAssets)
     },
-    { $Type: 'UI.ReferenceFacet', Label: 'Details', Target: '@UI.FieldGroup#Details' }
+    { $Type: 'UI.ReferenceFacet', Label: 'Details',   Target: '@UI.FieldGroup#Details' },
+    { $Type: 'UI.ReferenceFacet', Label: 'UTxO Data', Target: '@UI.FieldGroup#UTxOData' }
   ],
 
   UI.FieldGroup#Details: {
     Data: [
-      { $Type: 'UI.DataField', Value: outputIndex,                Label: 'Output Index' },
-      { $Type: 'UI.DataField', Value: address.address,            Label: 'Address' },
-      { $Type: 'UI.DataField', Value: utxo.dataHash,              Label: 'Data Hash' },
-      { $Type: 'UI.DataField', Value: utxo.inlineDatum,           Label: 'Inline Datum' },
-      { $Type: 'UI.DataField', Value: utxo.referenceScriptHash,   Label: 'Reference Script Hash' }
+      { $Type: 'UI.DataField', Value: outputIndex,     Label: 'Output Index' },
+      { $Type: 'UI.DataField', Value: address_address, Label: 'Address' },
+      { $Type: 'UI.DataField', Value: hasAssets,       Label: 'Has Assets' }
+    ]
+  },
+
+  UI.FieldGroup#UTxOData: {
+    Data: [
+      { $Type: 'UI.DataField', Value: utxo_dataHash,            Label: 'Data Hash' },
+      { $Type: 'UI.DataField', Value: utxo_inlineDatum,         Label: 'Inline Datum' },
+      { $Type: 'UI.DataField', Value: utxo_referenceScriptHash, Label: 'Reference Script Hash' }
     ]
   }
 );
@@ -834,15 +848,16 @@ annotate srv.TransactionOutputAssets with @(
   UI.HeaderInfo: {
     TypeName      : 'Output Asset',
     TypeNamePlural: 'Output Assets',
-    Title         : { Value: unit }
+    Title         : { Value: unit },
+    Description   : { Value: asset_assetName }
   },
 
   UI.LineItem: [
-    { Value: unit },
-    { Value: asset.quantity },
-    { Value: asset.policyId },
-    { Value: asset.assetName },
-    { Value: asset.fingerprint }
+    { Value: unit,               Label: 'Unit' },
+    { Value: asset_quantity,     Label: 'Quantity' },
+    { Value: asset_policyId,     Label: 'Policy ID' },
+    { Value: asset_assetName,    Label: 'Asset Name' },
+    { Value: asset_fingerprint,  Label: 'Fingerprint' }
   ],
 
   UI.Facets: [
@@ -851,12 +866,12 @@ annotate srv.TransactionOutputAssets with @(
 
   UI.FieldGroup#AssetDetails: {
     Data: [
-      { $Type: 'UI.DataField', Value: unit,              Label: 'Unit' },
-      { $Type: 'UI.DataField', Value: asset.quantity,    Label: 'Quantity' },
-      { $Type: 'UI.DataField', Value: asset.policyId,    Label: 'Policy ID' },
-      { $Type: 'UI.DataField', Value: asset.assetNameHex,Label: 'Asset Name (Hex)' },
-      { $Type: 'UI.DataField', Value: asset.assetName,   Label: 'Asset Name' },
-      { $Type: 'UI.DataField', Value: asset.fingerprint, Label: 'Fingerprint' }
+      { $Type: 'UI.DataField', Value: unit,               Label: 'Unit' },
+      { $Type: 'UI.DataField', Value: asset_quantity,     Label: 'Quantity' },
+      { $Type: 'UI.DataField', Value: asset_policyId,     Label: 'Policy ID' },
+      { $Type: 'UI.DataField', Value: asset_assetNameHex, Label: 'Asset Name (Hex)' },
+      { $Type: 'UI.DataField', Value: asset_assetName,    Label: 'Asset Name' },
+      { $Type: 'UI.DataField', Value: asset_fingerprint,  Label: 'Fingerprint' }
     ]
   }
 );
@@ -875,18 +890,18 @@ annotate srv.Accounts with @(
   UI.SelectionFields: [ stakeAddress ],
 
   UI.LineItem: [
-    { Value: stakeAddress },
-    { Value: active },
-    { Value: activeEpoch },
-    { Value: controlledAmount },
-    { Value: rewardsSum },
-    { Value: withdrawalsSum },
-    { Value: reservesSum },
-    { Value: treasurySum },
-    { Value: withdrawableAmount },
-    { Value: poolId_poolId },
-    { Value: drepId_drepId },
-    { Value: hasAddresses },
+    { Value: stakeAddress,       Label: 'Stake Address' },
+    { Value: active,             Label: 'Active' },
+    { Value: activeEpoch,        Label: 'Active Epoch' },
+    { Value: controlledAmount,   Label: 'Controlled Amount' },
+    { Value: rewardsSum,         Label: 'Rewards Sum' },
+    { Value: withdrawalsSum,     Label: 'Withdrawals Sum' },
+    { Value: reservesSum,        Label: 'Reserves Sum' },
+    { Value: treasurySum,        Label: 'Treasury Sum' },
+    { Value: withdrawableAmount, Label: 'Withdrawable Amount' },
+    { Value: poolId_poolId,      Label: 'Pool ID' },
+    { Value: drepId_drepId,      Label: 'DRep ID' },
+    { Value: hasAddresses,       Label: 'Has Addresses' },
     {
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoODataService.EntityContainer/GetAccountByStakeAddress',
@@ -914,7 +929,6 @@ annotate srv.Accounts with @(
     { $Type: 'UI.ReferenceFacet', Label: 'Overview', Target: '@UI.FieldGroup#Overview' },
     { $Type: 'UI.ReferenceFacet', Label: 'Sums',     Target: '@UI.FieldGroup#Sums' },
 
-    // existing navigation preserved (as you have it)
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Addresses',
