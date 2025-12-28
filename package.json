@@ -38,6 +38,9 @@
           "url": "db.sqlite"
         }
       }
+    },
+    "deploy": {
+      "data": false
     }
   },
   "scripts": {

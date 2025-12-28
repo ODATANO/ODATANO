@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import indexer from './blockchain/cardano-indexer';
-import { isTxHash, isBlockHash, isValidBech32Address,isAssetUnit, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber} from './utils/validators';
+import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber} from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
@@ -17,7 +17,6 @@ export default class CardanoService extends cds.ApplicationService {
       Addresses,
       AddressAssets,
       AddressUTxOs,
-      UTxOAssets,
       Transactions,
       TransactionInputs,
       TransactionOutputs,
@@ -311,33 +310,7 @@ export default class CardanoService extends cds.ApplicationService {
     // AddressAssets READ & GetAssetsByAddress Action
     // ------------------------------------------------------------------------
     this.on('READ', AddressAssets, async (req: Request) => {
-      const addr = (req.data as { address_address?: string })?.address_address;
-      const unit = (req.data as { unit?: string })?.unit;
-
-      // Validate address format before business logic
-      if (addr && !isValidBech32Address(addr)) {
-        return rejectInvalid(req, 'AddressAssets', 'Invalid bech32 address format', 'address');
-      }
-      // validate unit format before business logic
-      if (unit && !isAssetUnit(unit)) {
-        return rejectInvalid(req, 'AddressAssets', 'Invalid unit format', 'unit');
-      }
-      return handleRequest(req, async (db) => {
-        let rows;
-        if (addr) {
-          rows = await db.run(
-            SELECT.from(AddressAssets).where({ address_address: addr, unit: unit }),
-          );
-          if (rows && rows.length > 0) {
-            return rows;
-          }
-            logger.debug({ address: addr }, '[CardanoService] Indexing address via indexer');
-            await indexer.indexAddress(db, addr);
-            // retrieve the assets after indexing
-            return await db.run(SELECT.from(AddressAssets).where({ address_address: addr, unit: unit }));
-        }
-        return db.run(req.query);
-      });
+      return handleRequest(req, (db) => db.run(req.query));
     });
 
     this.on('GetAssetsByAddress', async (req: Request) => {
@@ -384,12 +357,6 @@ export default class CardanoService extends cds.ApplicationService {
           logger.debug({ address }, '[CardanoService] Indexing address via indexer');
           return indexer.indexAddress(db, address);
       });
-    });
-    // ------------------------------------------------------------------------
-    // UTxOAssets READ
-    // ------------------------------------------------------------------------
-    this.on('READ', UTxOAssets, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
     });
     
     // ------------------------------------------------------------------------

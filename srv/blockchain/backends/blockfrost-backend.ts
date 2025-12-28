@@ -110,7 +110,7 @@ export class BlockfrostBackend implements CardanoBackend {
         const metadata = txMetadata.length > 0 ? txMetadata.map(md => ({
           txHash: hash,
           label: md.label,
-          json_metadata: md.json_metadata as JSONValue | null,
+          json: md.json_metadata as JSONValue | null,
         })) : undefined;
 
         return {
@@ -161,6 +161,7 @@ export class BlockfrostBackend implements CardanoBackend {
         if (txMetadata.length === 0 || txMetadata === null) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
+
         return txMetadata.map(md => ({
           txHash: tx_hash,
           label: md.label,

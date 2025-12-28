@@ -18,6 +18,7 @@ import {
   Address as AddressRow,
   AddressAsset as AddressAssetRow,
   AddressUTxO as AddressUTxORow,
+  UTxOAsset as UTxOAssetRow,
   Transaction as TransactionRow,
   TransactionInput as TransactionInputRow,
   TransactionInputAsset as TransactionInputAssetRow,
@@ -70,8 +71,8 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
     // Determine input index, defaulting to array index if not provided
     const inputIndex = input.outputIndex ?? idx;
     // Check presence of address and amount arrays
-    const hasAddress = Array.isArray(input.address) && input.address.length > 0;
-    const hasAmount = Array.isArray(input.amount) && input.amount.length > 0;
+    const hasAddress = !!input.address?.length;
+    const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
 
     return {
       tx_hash: txHash,
@@ -82,8 +83,8 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
       isCollateral: Boolean(input.isCollateral),
       isReference: Boolean(input.isReference),
-      hasAddress: hasAddress,
-      hasAmount: hasAmount,
+      hasAddresses: hasAddress,
+      hasAssets: hasAssets,
     };
   });
 }
@@ -122,8 +123,8 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   return txOutputs.map((output, idx: number) => {
 
     const outputIndex = output.outputIndex ?? idx;
-    const hasAddress = Array.isArray(output.address) && output.address.length > 0;
-    const hasAmount = Array.isArray(output.amount) && output.amount.length > 0;
+    const hasAddresses = !!output.address?.length;
+    const hasAssets = Array.isArray(output.amount) && output.amount.length > 0;
 
     return {
       tx_hash: txHash,
@@ -132,8 +133,8 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
       utxo_dataHash: output.dataHash || null,
       utxo_inlineDatum: output.inlineDatum || null,
       utxo_referenceScriptHash: output.referenceScriptHash || null,
-      hasAddresses: hasAddress,
-      hasAmounts: hasAmount,
+      hasAddresses: hasAddresses,
+      hasAssets: hasAssets,
     };
   });
 }
@@ -188,7 +189,17 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 }
 
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
-    return addressUtxosData.map((utxo: UtxosProviderData) => ({
+  
+   const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) => 
+    Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace')
+  );
+  const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
+    if (!Array.isArray(utxo.amount)) return sum;
+    const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity || 0);
+    return sum + lovelaceAmount;
+  }, 0);
+
+  return addressUtxosData.map((utxo: UtxosProviderData) => ({
     address_address: addr,
     hash: utxo.txHash,
     index: utxo.outputIndex,
@@ -196,8 +207,10 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
     utxodata_dataHash: utxo.datumHash,
     utxodata_inlineDatum: null,
     utxodata_referenceScriptHash: utxo.scriptRef,
+    totalLovelace: totalLovelace,
     validFrom: validFrom,
     validTo: validTo,
+    hasAssets: hasAssets,
   }));
 }
 
@@ -216,6 +229,34 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
         asset_assetName: assetName,
       };
     });
+}
+
+export function mapAddressUtxoAssets(
+  addressUtxosData: UtxosProviderData[],
+  validFrom: string, validTo: string,
+  ): UTxOAssetRow[] {
+  const assets: UTxOAssetRow[] = [];
+
+  addressUtxosData.forEach((utxo: UtxosProviderData) => {
+    if (!Array.isArray(utxo.amount)) return;
+    
+    for (const asset of utxo.amount) {
+      if (!asset || !asset.unit || asset.unit === 'lovelace') continue;
+      const { policyId, assetName } = parseAssetUnit(asset.unit);
+      assets.push({
+        utxo_address_address: utxo.address,
+        utxo_hash: utxo.txHash,
+        utxo_index: utxo.outputIndex,
+        unit: asset.unit,
+        validFrom: validFrom,
+        validTo: validTo,
+        asset_quantity: Number(asset.quantity),
+        asset_policyId: policyId,
+        asset_assetName: assetName,
+      });
+    }
+      });
+  return assets;
 }
 
 // -----------------------------------------------------------------------------
@@ -337,6 +378,7 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
 export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
   const validFrom = new Date().toISOString();
   const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+        
   return {
     validFrom: validFrom,
     validTo: validTo,
@@ -349,6 +391,7 @@ export function mapAccount(providerAccountData: AccountProviderData): AccountRow
     reservesSum: Number(providerAccountData.reservesSum),
     treasurySum: Number(providerAccountData.treasurySum),
     withdrawableAmount: Number(providerAccountData.withdrawableAmount),
+    hasAddresses: providerAccountData.addresses.length > 0,
   };
 }
 

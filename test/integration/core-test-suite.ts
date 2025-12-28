@@ -451,16 +451,6 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         expect(Array.isArray(data.value)).to.be.true;
       });
 
-      it('READ /AddressAssets – read AddressAssets with single Address Key', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressAssets(address_address='${FIXTURE.validAddress}', unit='${FIXTURE.validUnit}')`);
-
-        expect(data).to.have.property('address_address');
-        expect(data.address_address).to.equal(FIXTURE.validAddress);
-        expect(data).to.have.property('unit');
-        expect(data.unit).to.equal(FIXTURE.validUnit);
-        expect(status).to.equal(200);
-      });
-
       it('GET /TransactionOutputAssets – read TransactionOutputAssets collection', async () => {
         const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionOutputAssets`);
         expect(status).to.equal(200);

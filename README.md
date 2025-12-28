@@ -254,6 +254,26 @@ npm run test:unit
 - **[Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md)** - Error
   normalization and fallback
 
+## SAP Fiori UI Annotations
+
+ODATANO includes comprehensive SAP Fiori Elements UI annotations in [cardano-ui.cds](srv/cardano-ui.cds), providing a ready-to-use UI without writing any frontend code:
+
+- **List Pages**: Configure selection fields, columns, and actions for all entities
+- **Object Pages**: Detail views with header info, facets, and field groups
+- **Navigation**: Automatic drill-down from collections to items (e.g., Transactions → Inputs → Assets)
+- **Smart Rendering**: DataPoints for KPIs, conditional visibility, and reference facets
+- **Actions Integration**: All service actions (GetBlockByHash, GetTransactionByHash, etc.) exposed in the UI
+
+The UI annotations are automatically rendered by SAP Fiori Elements when accessing the service through SAP Fiori launchpad or preview mode (`http://localhost:4004/$fiori-preview`).
+
+**Key Features:**
+- ✅ All entities (NetworkInformation, Blocks, Epochs, Transactions, Addresses, Pools, Dreps, Accounts) have complete UI definitions
+- ✅ Nested entities (TransactionInputs/Outputs, AddressAssets/UTxOs, UTxOAssets) with proper navigation
+- ✅ Asset details displayed in structured format (quantity, policyId, assetName, fingerprint)
+- ✅ Temporal data indicators (validFrom, validTo) and state flags (hasAssets, hasInputs, hasOutputs)
+
+See [cardano-ui.cds](srv/cardano-ui.cds) for the complete UI annotation definitions.
+
 ## API Overview
 
 ### Entities (GET)

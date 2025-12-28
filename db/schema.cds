@@ -137,6 +137,7 @@ entity AddressUTxOs : temporal {
     key index     : Integer; // output index
         blockHash : Blake2b256; // block hash containing the utxo
         utxodata  : UTxODataSlice; // utxo specific data
+        lovelace  : Lovelace; // lovelace amount in the utxo
         assets    : Composition of many UTxOAssets // assets in this utxo
                         on assets.utxo = $self;
         hasAssets : Boolean; // indicates if utxo has assets

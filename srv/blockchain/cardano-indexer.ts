@@ -15,6 +15,7 @@ import {
   TransactionOutputAssets,
   TransactionMetadata, 
   NetworkInformation,
+  UTxOAssets,
   Block ,
   Epoch,
   Accounts,
@@ -38,6 +39,7 @@ import {
   mapDrep,
   mapPool,
   mapTransactionMetadata,
+  mapAddressUtxoAssets,
   
 } from '../utils/mappers';
 
@@ -150,6 +152,17 @@ export class CardanoIndexer {
         tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
     }
 
+    const utxoAssetEntities = mapAddressUtxoAssets(
+      utxoData,
+      validFrom,
+      validTo
+    );
+    logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
+
+    if (utxoAssetEntities.length) {
+      tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
+    }
+
     return AddrEntity;
   }
 
@@ -166,7 +179,6 @@ export class CardanoIndexer {
   ): Promise<TransactionMetadata[]> {
     const metadata = await cardano.getTransactionMetadata(tx_hash);
     const rows = mapTransactionMetadata(metadata);
-
     if (rows.length) {
       await tx.run(UPSERT.into(TransactionMetadata).entries(rows))
     }
@@ -212,6 +224,12 @@ export class CardanoIndexer {
     const accountEntity = mapAccount(accountInfo);
     
     await tx.run( UPSERT.into(Accounts).entries(accountEntity))
+
+    const addresses = accountInfo.addresses.map(a => a.address);
+    
+     if (accountEntity.hasAddresses) {
+        await this._ensureAddresses(tx, addresses);
+      }
     
     return accountEntity;
   }
