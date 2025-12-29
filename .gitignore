@@ -48,5 +48,9 @@ config/**/*.js.map
 test/**/*.js
 test/**/*.js.map
 
+# Docker build artifacts (for GitHub Releases only, not in git)
+*.tar
+*.tar.gz
+
 db.sqlite-shm
 db.sqlite-wal

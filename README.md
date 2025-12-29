@@ -54,18 +54,15 @@ Backends: Blockfrost (primary) → Koios (fallback) → [Future: Cardano Node]
 
 ## Installation
 
-### Quick Start with Docker (Recommended)
+### Quick Start with Docker
 
 ```bash
-# 1. Set your API key
-echo "BLOCKFROST_API_KEY=your-api-key-here" > .env
-
-# 2. Start
+git clone https://github.com/ODATANO/ODATANO && cd ODATANO
+cp .env.example .env  # Add your BLOCKFROST_KEY
 docker-compose up -d
-
-# 3. Test
-curl http://localhost:4004/health
 ```
+
+Service runs at `http://localhost:4004`
 
 See [Docker Deployment Guide](docs/guides/DOCKER_DEPLOYMENT.md) for details.
 
@@ -87,12 +84,6 @@ npm ci
 
 #### 2. Configure Environment
 
-```bash
-cp .env.example .env
-```
-
-**Configuration (.env):**
-
 ```env
 # Log level: trace, debug, info, warn, error, fatal (default: info)
 LOG_LEVEL=info
@@ -111,7 +102,7 @@ FALLBACK_TIMEOUT_MS=10000
 BACKENDS=blockfrost,koios
 
 # Lazy Indexing Time-To-Live (milliseconds) - optional
-INDEX_TTL_MS=60000
+INDEX_TTL_MS=600000
 ```
 
 **Network Configuration:**
@@ -328,7 +319,7 @@ ODATANO/
 | `PRIMARY_TIMEOUT_MS`      | No       | `8000`             | Primary backend timeout in milliseconds                |
 | `FALLBACK_TIMEOUT_MS`     | No       | `10000`            | Fallback backend timeout in milliseconds               |
 | `BACKENDS`                | No       | `blockfrost,koios` | Comma-separated list of backends                       |
-| `INDEX_TTL_MS`            | No       | `60000`            | Cache TTL in milliseconds (1 minute default)           |
+| `INDEX_TTL_MS`            | No       | `600000`           | Cache TTL in milliseconds (10 minutes default)         |
 
 ## License
 

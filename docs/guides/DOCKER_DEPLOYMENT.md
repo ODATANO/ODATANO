@@ -2,26 +2,69 @@
 
 ## Quick Start
 
-```bash
-# 1. Set your API key
-echo "BLOCKFROST_API_KEY=your-api-key-here" > .env
+### Build from Source
 
-# 2. Start
+```bash
+# 1. Clone repository
+git clone https://github.com/ODATANO/ODATANO
+cd ODATANO
+
+# 2. Create .env from template
+cp .env.example .env
+# Edit .env and add your BLOCKFROST_KEY
+
+# 3. Start (builds automatically)
 docker-compose up -d
 
-# 3. Test
-curl http://localhost:4004/health
+# 4. Test
+curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
 ```
 
-Service at `http://localhost:4004`
+### Use Pre-built Image
+
+```bash
+# 1. Download docker-compose.yml
+curl -O https://raw.githubusercontent.com/ODATANO/ODATANO/main/docker-compose.yml
+
+# 2. Edit docker-compose.yml and change:
+#    image: odatano:0.1.0
+#    to:
+#    image: ghcr.io/odatano/odatano:0.1.0
+#    
+#    Also comment out the build: section
+
+# 3. Create .env file
+cat > .env << EOF
+BLOCKFROST_KEY=your-blockfrost-api-key-here
+NETWORK=preview
+BACKENDS=blockfrost,koios
+EOF
+
+# 4. Start
+docker-compose up -d
+```
+
+Service runs at `http://localhost:4004`
 
 ## Configuration
 
-Edit `.env`:
+The `.env` file configures the service. Copy `.env.example` as a starting point:
 
 ```env
-BLOCKFROST_API_KEY=your-api-key
-CARDANO_NETWORK=preview  # or mainnet, preprod
+# Required: Blockfrost API Key (get from https://blockfrost.io)
+BLOCKFROST_KEY=your-blockfrost-api-key-here
+
+# Optional: Koios API Key (get from https://koios.rest)
+KOIOS_API_KEY=
+
+# Network: mainnet, preview, preprod (default: preview)
+NETWORK=preview
+
+# Backends: blockfrost, koios, or both comma-separated (default: blockfrost,koios)
+BACKENDS=blockfrost,koios
+
+# Cache TTL in milliseconds (default: 600000 = 10 minutes)
+INDEX_TTL_MS=600000
 ```
 
 ## Commands

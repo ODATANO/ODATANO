@@ -1,29 +1,45 @@
 # Simple Docker build for ODATANO - matches CI setup
 FROM node:22-alpine
 
+# Build arguments for versioning
+ARG VERSION=0.1.0
+ARG BUILD_DATE
+ARG VCS_REF
+
 WORKDIR /app
 
-# Copy everything
-COPY . .
+# Copy package files first for better caching
+COPY package*.json ./
 
 # Install dependencies
 RUN npm ci
 
-# Generate CDS types
-RUN npm run cds:types
+# Copy source code
+COPY . .
 
-# Compile TypeScript
-RUN npx tsc
+# Generate CDS types and compile TypeScript
+RUN npm run build
 
 # Deploy database
 RUN npm run db:deploy
+
+# Add metadata labels
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.title="ODATANO" \
+      org.opencontainers.image.description="SAP CAP OData service for Cardano blockchain" \
+      org.opencontainers.image.vendor="ODATANO"
+
+# Set version as environment variable (accessible at runtime)
+ENV APP_VERSION=${VERSION}
 
 # Expose port
 EXPOSE 4004
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:4004/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+  CMD wget --quiet --tries=1 --spider http://localhost:4004/\$metadata || exit 1
 
-# Start service
-CMD ["npm", "start"]
+# Start service - serve all CDS files explicitly
+CMD ["node", "node_modules/@sap/cds/bin/serve.js", "srv"]

@@ -3,7 +3,7 @@ node_modules/
 npm-debug.log
 yarn-error.log
 
-# Build artifacts
+# Build artifacts (but keep generated CDS models)
 dist/
 build/
 *.log
@@ -20,8 +20,6 @@ coverage/
 .github/
 .vscode/
 .idea/
-*.md
-!README.md
 
 # Environment files (should be provided at runtime)
 .env
@@ -35,8 +33,10 @@ Thumbs.db
 *.swo
 *~
 
-# Documentation (except README)
+# Documentation
 docs/
+*.md
+!README.md
 
 # Scripts that aren't needed in production
 scripts/

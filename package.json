@@ -48,7 +48,7 @@
   },
   "scripts": {
     "build": "npm run cds:types && tsc",
-    "start": "npm run build && cds-serve",
+    "start": "cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
     "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
