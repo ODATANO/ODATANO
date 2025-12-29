@@ -165,7 +165,7 @@ const examples: ExampleRequest[] = [
 
     try {
       const config = {
-        timeout: 10_000,
+        timeout: 60_000, // Increased to 60 seconds for backend API calls
         headers: ex.method === 'POST' ? { 'Content-Type': 'application/json' } : {},
       };
 
