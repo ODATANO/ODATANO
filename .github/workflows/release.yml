@@ -34,14 +34,19 @@ jobs:
           echo "git_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
       
+      - name: Set repository owner to lowercase
+        id: repo
+        run: |
+          echo "repository_owner_lowercase=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+      
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/odatano:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/odatano:latest
+            ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
+            ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
@@ -51,8 +56,8 @@ jobs:
       
       - name: Export Docker image
         run: |
-          docker pull ghcr.io/${{ github.repository_owner }}/odatano:${{ steps.version.outputs.version }}
-          docker save ghcr.io/${{ github.repository_owner }}/odatano:${{ steps.version.outputs.version }} -o odatano-${{ steps.version.outputs.version }}.tar
+          docker pull ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
+          docker save ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }} -o odatano-${{ steps.version.outputs.version }}.tar
           gzip odatano-${{ steps.version.outputs.version }}.tar
       
       - name: Create Release
