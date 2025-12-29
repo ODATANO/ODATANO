@@ -11,7 +11,7 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
+# Install ALL dependencies (needed for build)
 RUN npm ci
 
 # Copy source code
@@ -22,6 +22,9 @@ RUN npm run build
 
 # Deploy database
 RUN npm run db:deploy
+
+# Remove devDependencies to reduce image size and avoid plugin conflicts
+RUN npm prune --omit=dev
 
 # Add metadata labels
 LABEL org.opencontainers.image.version="${VERSION}" \

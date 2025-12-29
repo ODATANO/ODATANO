@@ -1,7 +1,18 @@
 import pino from 'pino';
 import { CONFIG } from '../../config/config';
 
-const logger = pino({ 
+// Only use pino-pretty in development (when it's available)
+const isDevelopment = process.env.NODE_ENV !== 'production';
+const hasPinoPretty = isDevelopment && (() => {
+  try {
+    require.resolve('pino-pretty');
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const logger = pino(hasPinoPretty ? {
   level: CONFIG.logLevel,
   transport: {
     target: 'pino-pretty',
@@ -10,6 +21,9 @@ const logger = pino({
       translateTime: 'HH:MM:ss',
       ignore: 'pid,hostname'
     }
-  }});
+  }
+} : {
+  level: CONFIG.logLevel
+});
 
 export default logger;

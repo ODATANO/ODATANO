@@ -7,10 +7,11 @@ import { handleRequest } from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
 
-export default class CardanoService extends cds.ApplicationService {
-
-  public init() {
-    const {
+// Functional service implementation - handlers are registered directly at module load time
+module.exports = (srv: cds.Service) => {
+  logger.info('[CardanoService] Module loaded - registering handlers');
+  
+  const {
       NetworkInformation,
       Blocks,
       Epochs,
@@ -28,11 +29,12 @@ export default class CardanoService extends cds.ApplicationService {
       Dreps,
     } = require('#cds-models/CardanoODataService');
 
-    // ------------------------------------------------------------------------
-    //  NetworkInformation READ & GetNetworkInformation Action
-    // ------------------------------------------------------------------------
-    this.on('READ', NetworkInformation, async (req: Request) => {
-      return handleRequest(req, async (db) => {
+  // ------------------------------------------------------------------------
+  //  NetworkInformation READ & GetNetworkInformation Action
+  // ------------------------------------------------------------------------
+  srv.on('READ', NetworkInformation, async (req: Request) => {
+    logger.info(`[CardanoService] NetworkInformation READ handler called`);
+    return handleRequest(req, async (db) => {
         const existing = await db.run(SELECT.one.from(NetworkInformation));
         if (existing) {
           return existing;
@@ -42,7 +44,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetNetworkInformation', async (req: Request) => {
+  srv.on('GetNetworkInformation', async (req: Request) => {
       return handleRequest(req, async (db) => {
         const row = await db.run(SELECT.one.from(NetworkInformation));
         if (!row) {
@@ -55,7 +57,8 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Blocks READ & GetLatestBlock / GetBlockByHash Actions 
     // ------------------------------------------------------------------------
-    this.on('READ', Blocks, async (req: Request) => {
+  srv.on('READ', Blocks, async (req: Request) => {
+      logger.info(`[CardanoService] Blocks READ handler called, data: ${JSON.stringify(req.data)}`);
       const hash = (req.data as { hash?: string })?.hash;
       // validate input before business logic
       if (hash && !isBlockHash(hash)) {
@@ -76,7 +79,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetBlockByHash', async (req: Request) => {
+  srv.on('GetBlockByHash', async (req: Request) => {
      const hash = (req.data?.hash as string | undefined) ?? undefined;
       // validate input before business logic
       if (!hash) {
@@ -96,7 +99,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Epoch READ & GetEpochByNumber Action
     // ------------------------------------------------------------------------
-    this.on('READ', Epochs, async (req: Request) => {
+  srv.on('READ', Epochs, async (req: Request) => {
       const epochNumber = (req.data as { epoch?: number })?.epoch;
       // validate input before business logic
       if ( epochNumber && !isEpochNumber(epochNumber)) {
@@ -115,7 +118,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetEpochByNumber', async (req: Request) => {
+  srv.on('GetEpochByNumber', async (req: Request) => {
       const epochNumber = req.data?.epochNumber as Number | undefined;
       // validate input before business logic
       if (epochNumber == null) {
@@ -135,7 +138,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Pools READ & GetPoolById Action
     // ------------------------------------------------------------------------
-    this.on('READ', Pools, async (req: Request) => {
+  srv.on('READ', Pools, async (req: Request) => {
       const poolId = (req.data as { poolId?: string })?.poolId;
       // validate pool_id format before business logic
       if (poolId && !isValidPoolId(poolId)) {
@@ -154,7 +157,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetPoolById', async (req: Request) => {
+  srv.on('GetPoolById', async (req: Request) => {
       const { poolId } = req.data as { poolId?: string };
 
       if (!poolId) {
@@ -177,7 +180,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Accounts READ & GetAccountByStakeAddress Action
     // ------------------------------------------------------------------------
-    this.on('READ', Accounts, async (req: Request) => {
+  srv.on('READ', Accounts, async (req: Request) => {
       const stakeAddress = (req.data as { stakeAddress?: string })?.stakeAddress;
 
       // validate stake address format before business logic
@@ -196,7 +199,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
     
-    this.on('GetAccountByStakeAddress', async (req: Request) => {
+  srv.on('GetAccountByStakeAddress', async (req: Request) => {
       const { stakeAddress } = req.data as { stakeAddress?: string };
 
       // validate input before business logic
@@ -221,7 +224,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Dreps READ & GetDrepById Action
     // ------------------------------------------------------------------------
-    this.on('READ', Dreps, async (req: Request) => {
+  srv.on('READ', Dreps, async (req: Request) => {
       const drepId = (req.data as { drepId?: string })?.drepId;
       // validate drepID format before business logic
       if (drepId && !isValidDrepId(drepId)) {
@@ -239,7 +242,7 @@ export default class CardanoService extends cds.ApplicationService {
       return db.run(req.query);}); 
     });
     
-    this.on('GetDrepById', async (req: Request) => {
+  srv.on('GetDrepById', async (req: Request) => {
       const drepId  = (req.data as { drepId?: string }).drepId;
 
       // validate input before business logic
@@ -263,7 +266,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Addresses READ & GetAddressByBech32 Action
     // ------------------------------------------------------------------------
-    this.on('READ', Addresses, async (req: Request) => {
+  srv.on('READ', Addresses, async (req: Request) => {
       const addr = (req.data as { address?: string })?.address;
 
       // Validate address format before business logic
@@ -286,7 +289,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetAddressByBech32', async (req: Request) => {
+  srv.on('GetAddressByBech32', async (req: Request) => {
       const { address } = req.data as { address?: string };
 
       // validate input before business logic
@@ -309,11 +312,11 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // AddressAssets READ & GetAssetsByAddress Action
     // ------------------------------------------------------------------------
-    this.on('READ', AddressAssets, async (req: Request) => {
+  srv.on('READ', AddressAssets, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
-    this.on('GetAssetsByAddress', async (req: Request) => {
+  srv.on('GetAssetsByAddress', async (req: Request) => {
       const { address } = req.data as { address?: string };
 
       // Validate input before business logic
@@ -337,11 +340,11 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // AddressUTxOs READ & GetUTxOsByAddress Action
     // ------------------------------------------------------------------------
-    this.on('READ', AddressUTxOs, async (req: Request) => {
+  srv.on('READ', AddressUTxOs, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
-    this.on('GetUTxOsByAddress', async (req: Request) => {
+  srv.on('GetUTxOsByAddress', async (req: Request) => {
       const { address } = req.data as { address?: string };
 
       if (!address) {
@@ -362,7 +365,7 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // Transactions READ & GetTransactionByHash Action
     // ------------------------------------------------------------------------
-    this.on('READ', Transactions, async (req: Request) => {
+  srv.on('READ', Transactions, async (req: Request) => {
       const txHash = (req.data as { hash?: string })?.hash;
 
       // validate transaction hash format before business logic
@@ -382,7 +385,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetTransactionByHash', async (req: Request) => {
+  srv.on('GetTransactionByHash', async (req: Request) => {
       const { hash } = req.data as { hash?: string };
 
       // Validate input before business logic
@@ -404,35 +407,35 @@ export default class CardanoService extends cds.ApplicationService {
     // ------------------------------------------------------------------------
     // TransactionInputs READ 
     // ------------------------------------------------------------------------
-    this.on('READ', TransactionInputs, async (req: Request) => {
+  srv.on('READ', TransactionInputs, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
     // ------------------------------------------------------------------------
     // TransactionOutputs READ
     // ------------------------------------------------------------------------
-    this.on('READ', TransactionOutputs, async (req: Request) => {
+  srv.on('READ', TransactionOutputs, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
     // ------------------------------------------------------------------------
     // TransactionInputAssets READ
     // ------------------------------------------------------------------------
-    this.on('READ', TransactionInputAssets, async (req: Request) => {
+  srv.on('READ', TransactionInputAssets, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
     // ------------------------------------------------------------------------
     // TransactionOutputAssets READ
     // ------------------------------------------------------------------------
-    this.on('READ', TransactionOutputAssets, async (req: Request) => {
+  srv.on('READ', TransactionOutputAssets, async (req: Request) => {
       return handleRequest(req, (db) => db.run(req.query));
     });
 
     // ------------------------------------------------------------------------
     // Metadata READ & GetMetadataByTxHash / GetMetadataLabelTransactions Actions
     // ------------------------------------------------------------------------
-    this.on('READ', TransactionMetadata, async (req: Request) => {
+  srv.on('READ', TransactionMetadata, async (req: Request) => {
       const { tx_hash } = req.data as { tx_hash?: string };
       
       if (tx_hash && !isTxHash(tx_hash)) {
@@ -450,7 +453,7 @@ export default class CardanoService extends cds.ApplicationService {
       });
     });
 
-    this.on('GetMetadataByTxHash', async (req: Request) => {
+  srv.on('GetMetadataByTxHash', async (req: Request) => {
       const { tx_hash } = req.data as { tx_hash?: string };
 
       // validate input before business logic
@@ -467,10 +470,8 @@ export default class CardanoService extends cds.ApplicationService {
         if (rows && rows.length > 0) return rows;
           logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
           return await indexer.indexTransactionMetadata(db, tx_hash);
-        });
     });
+  });
 
-    return super.init();
-  }
-}
-
+  logger.info('[CardanoService] All handlers registered');
+};
