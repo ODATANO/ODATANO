@@ -57,11 +57,6 @@ const examples: ExampleRequest[] = [
     method: 'GET',
     url: `${BASE_URL}/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')`,
   },
-  {
-    name: 'GET TransactionMetadata',
-    method: 'GET',
-    url: `${BASE_URL}/TransactionMetadata(id='1',tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')`,
-  },
 
   // POST Requests - Actions
   {

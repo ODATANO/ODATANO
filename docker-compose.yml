@@ -45,15 +45,14 @@ services:
       - LOG_LEVEL=info
       
       # Application settings
-      - NODE_ENV=production
+      - NODE_ENV=development
       - PORT=4004
       
       # Disable XSUAA (not needed for this service)
       - CDS_REQUIRES_AUTH=mocked
       
-    volumes:
-      # Persist SQLite database only (not the entire db folder)
-      - odatano-data:/app/data
+    # No volumes needed - SQLite DB is ephemeral in container
+    # Data is fetched fresh from blockchain APIs on each query
       
     restart: unless-stopped
     
@@ -66,10 +65,6 @@ services:
     
     networks:
       - odatano-network
-
-volumes:
-  odatano-data:
-    driver: local
 
 networks:
   odatano-network:

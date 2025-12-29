@@ -39,7 +39,7 @@ docs/
 !README.md
 
 # Scripts that aren't needed in production
-scripts/
+# scripts/
 
 # SQLite databases (will be created in container)
 *.sqlite
