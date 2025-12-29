@@ -47,7 +47,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run cds:types && tsc",
     "start": "npm run build && cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
