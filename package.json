@@ -8,6 +8,7 @@
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
     "@cap-js/sqlite": "^2",
+    "@harmoniclabs/buildooor": "^0.1.21",
     "@sap/cds": "^9",
     "axios": "^1.4.0",
     "bech32": "^2.0.0",
