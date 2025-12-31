@@ -24,6 +24,10 @@ import {
 } from '#cds-models/CardanoODataService';
 
 import {
+  LedgerProtocolParameter
+} from '#cds-models/CardanoTransactionService';
+
+import {
   mapTransaction,
   mapTransactionInputs,
   mapTransactionInputAssets,
@@ -40,10 +44,12 @@ import {
   mapPool,
   mapTransactionMetadata,
   mapAddressUtxoAssets,
-  
+  mapBuildResult,
+  mapProtocolParameters
 } from '../utils/mappers';
 
-import { Transaction as TransactionProviderData } from '../utils/types';
+import { Transaction as TransactionProviderData, TxBuildResult } from '../utils/types';
+
 
 const { UPSERT } = cds.ql;
 
@@ -250,7 +256,34 @@ export class CardanoIndexer {
     return poolEntity;
   } 
 
+  async indexBuildResult(
+    tx: CapTransaction,
+    txbuildResult: TxBuildResult
+  ): Promise<void> {
 
+    //const buildResult = mapBuildResult(txbuildResult);
+
+    //await tx.run(UPSERT.into(TransactionBuilds).entries(buildResult));
+    //return buildResult;
+  }
+
+  async indexProtocolParameters(
+    tx: CapTransaction
+  ): Promise<LedgerProtocolParameter> {
+    // first, check if we have recent protocol parameters
+    const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter).orderBy('validFrom desc').limit(1));
+
+    if (existing) return existing;
+    // otherwise, fetch new protocol parameters from provider
+    const protocolParamsInfo = await cardano.getProtocolParameters();
+    // map to protocol parameter row
+    const protocolParams = mapProtocolParameters(protocolParamsInfo);
+    // store in DB for future use
+    await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
+
+    return protocolParams;
+  }
+      
   /**
    * Helper: collect all involved addresses from a txUtxos set
    */
@@ -281,6 +314,8 @@ export class CardanoIndexer {
       await this.indexAddress(tx, bech32);
     }
   }
+
+
 }
 
 const cardanoIndexer = new CardanoIndexer();

@@ -1,5 +1,6 @@
 // srv/tx/engines/buildooor.tx-builder.ts
-import type { CardanoTxBuilder, TxBuildRequest, TxBuildContext, TxBuildResult } from "./cardano-tx-builder";
+import type { CardanoTxBuilder} from "./cardano-tx";
+import type { TxBuildRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { getLovelace, mapOdatanoUtxoToLedgerUtxo } from "../../utils/tx-build-helper";
@@ -30,14 +31,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     // Buildooor ITxBuildInput shape: { utxo: UTxO }
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
-    const outputs = req.recipients.map(r =>
-      new TxOut({
-        address: Address.fromString(r.address)
-          ? (Address as any).fromString(r.address)
-          : (Address as any).fromBech32(r.address),
-        value: Value.lovelaces(BigInt(r.lovelace))
-      })
-    );
+    const outputs = [
+      new TxOut(
+        Address.fromString(req.recipientAddress)
+          ? (Address as any).fromString(req.recipientAddress)
+          : (Address as any).fromBech32(req.recipientAddress)) 
+    ];;
+    
 
     const changeAddress =
       Address.fromString(req.changeAddress ?? req.senderAddress)
@@ -48,8 +48,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       inputs,
       outputs,
       changeAddress,
-      invalidBefore: req.validity?.invalidBefore,
-      invalidAfter: req.validity?.invalidHereafter,
       memo: 'test tx',
     });
 
@@ -67,6 +65,22 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       })),
       warnings: []
     };
+  }
+  public async calculateMinUtxoAmount(
+    output: any, // Define a proper type for output
+    protocolParameters: any // Define a proper type for protocol parameters
+  ): Promise<number> {
+    // Implement the logic to calculate the minimum UTxO amount
+    // This is a placeholder implementation
+    return 1000000; // Return a dummy value
+  }
+  public async calculateTransactionFee(
+    unsignedTxCbor: string,
+    protocolParameters: any // Define a proper type for protocol parameters
+  ): Promise<number> {
+    // Implement the logic to calculate the transaction fee
+    // This is a placeholder implementation
+    return 200000; // Return a dummy value
   }
 }
 

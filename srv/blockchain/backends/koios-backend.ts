@@ -375,4 +375,30 @@ export class KoiosBackend implements CardanoBackend {
     this.name
   );
   }
+
+  async submitTransaction(signedTxCbor: string): Promise<string> {
+    return handleBackendRequest(
+      async () => {
+        const body = {
+          _txs: [signedTxCbor],
+        };
+        const { data } = await this.api.post('/submit_tx', body);
+
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new Error('Failed to submit transaction');
+        }
+        return data[0].tx_hash;
+      },
+      this.name
+    );
+  }
+  async getProtocolParameters(): Promise<any> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/protocol_params');
+        return data;
+      },
+      this.name
+    );
+  }
 }

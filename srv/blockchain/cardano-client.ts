@@ -15,7 +15,8 @@ import {
   MetadataLabelTx,
   PoolData, 
   DrepData, 
-  AccountData
+  AccountData,
+  LedgerProtocolParameters
 } from '../utils/types';
 
 const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs) || 8000;
@@ -172,7 +173,13 @@ export class CardanoClient {
   }
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.withFallback(b => b.getAccount(stakeAddress));
-  } 
+  }
+  getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    return this.withFallback(b => b.getProtocolParameters());
+  }
+  submitTransaction(signedTxCbor: string): Promise<string> {
+    return this.withFallback(b => b.submitTransaction(signedTxCbor));
+  }
 }
 
 const backends: CardanoBackend[] = [];

@@ -8,7 +8,8 @@ import {
   MetadataLabelTx,
   PoolData, 
   DrepData, 
-  AccountData
+  AccountData,
+  LedgerProtocolParameters
 } from '../../utils/types';
 
 export interface CardanoBackend {
@@ -24,4 +25,6 @@ export interface CardanoBackend {
   getPool(poolId: string): Promise<PoolData>;
   getDrep(drepId: string): Promise<DrepData>;
   getAccount(accountId: string): Promise<AccountData>;
+  submitTransaction(signedTxCbor: string): Promise<string>;
+  getProtocolParameters(): Promise<LedgerProtocolParameters>;
 }

@@ -246,3 +246,154 @@ entity TransactionMetadata {
         label   : String; // metadata label as string
         payload : LargeString; // metadata payload as JSON string
 }
+
+//-----------------------------------------------------
+// M2 - transaction building and submission entities
+//-----------------------------------------------------
+
+// -----------------------------------------------------
+// Epoch Protocol Parameters
+// -----------------------------------------------------
+entity LedgerProtocolParameters {
+  key network : String(16);     // mainnet | preprod | preview (dein ODATANO-Konzept)
+  key epoch   : Integer;
+  // --- Fees / Sizes ---
+  minFeeA            : Integer;       // txFeePerByte Mapping
+  minFeeB            : Integer;       // txFeeFixed Mapping
+  maxBlockSize       : Integer;
+  maxTxSize          : Integer;
+  maxBlockHeaderSize : Integer;
+  // --- Deposits / Pools ---
+  keyDeposit  : String(32);           // Lovelace
+  poolDeposit : String(32);           // Lovelace
+  eMax        : Integer;              // poolRetireMaxEpoch Mapping
+  nOpt        : Integer;              // stakePoolTargetNum Mapping
+  a0          : Decimal(18, 10);      // poolPledgeInfluence Mapping
+  rho         : Decimal(18, 10);      // monetaryExpansion Mapping
+  tau         : Decimal(18, 10);      // treasuryCut Mapping
+  minPoolCost : String(32);
+  // --- Legacy / Misc ---
+  decentralisationParam : Decimal(18, 10); // legacy / pre-conway
+  extraEntropy          : String(128);
+  protocolMajorVer      : Integer;
+  protocolMinorVer      : Integer;
+  minUtxo               : String(32);      // legacy
+  nonce                 : String(128);
+  // --- Plutus / Execution units ---
+  costModels     : LargeString;        // JSON blob (map)
+  priceMem       : Decimal(18, 10);
+  priceStep      : Decimal(18, 10);
+  maxTxExMem     : String(32);
+  maxTxExSteps   : String(32);
+  maxBlockExMem  : String(32);
+  maxBlockExSteps: String(32);
+  // --- Babbage+ UTxO cost / Collateral ---
+  maxValSize          : String(32);
+  collateralPercent   : Integer;
+  maxCollateralInputs : Integer;
+  coinsPerUtxoSize    : String(32);    // babbage+
+  coinsPerUtxoWord    : String(32);    // alonzo legacy
+  // -- Hauskeeping ---
+  fetchedAt : Timestamp;
+  source    : String(32);              // "blockfrost/koios/direct"
+}
+// -----------------------------------------------------
+// Transaction Building Entities
+// -----------------------------------------------------
+entity TransactionBuilds : temporal {
+    key id                 : UUID; // unique build id
+        network            : String(10); // 'mainnet' | 'preprod' | 'preview'
+        builderEngine      : String(20); // transaction builder used ('buildooor' | 'mesh' | 'lucid')
+        senderAddress      : bech32; // sender/source address
+        changeAddress      : bech32; // change address (defaults to sender)
+        unsignedTxCbor     : LargeString; // unsigned transaction CBOR as hex string
+        fee                : Lovelace; // calculated fee in lovelace
+        size               : Integer; // transaction size in bytes
+        createdAt          : Integer64; // build time as unix timestamp
+        inputs             : Composition of many TransactionBuildInputs
+                                 on inputs.build = $self; // selected inputs for the build
+        outputs            : Composition of many TransactionBuildOutputs
+                                 on outputs.build = $self; // outputs for the build
+        submission         : Association to one TransactionSubmissions
+                                 on submission.build = $self; // link to submission if submitted
+        hasInputs          : Boolean; // indicates if build has inputs
+        hasOutputs         : Boolean; // indicates if build has outputs
+        wasSubmitted       : Boolean; // indicates if this build was submitted
+}
+// -----------------------------------------------------
+// Transaction Build Inputs (Selected UTxOs)
+// -----------------------------------------------------
+entity TransactionBuildInputs {
+    key build       : Association to TransactionBuilds; // parent build
+    key inputIndex  : Integer; // index in inputs array
+        txHash      : Blake2b256; // utxo transaction hash
+        outputIndex : Integer; // utxo output index
+        address     : bech32; // utxo address
+        lovelace    : Lovelace; // lovelace amount in utxo
+        assets      : Composition of many TransactionBuildInputAssets
+                          on assets.input = $self;
+        hasAssets   : Boolean; // indicates if input has native assets
+}
+
+entity TransactionBuildInputAssets {
+    key input : Association to TransactionBuildInputs; // parent input
+    key unit  : AssetUnit; // asset unit (policyId + assetNameHex)
+        asset : AssetSlice; // asset details
+}
+// -----------------------------------------------------
+// Transaction Build Outputs (Recipients + Change)
+// -----------------------------------------------------
+entity TransactionBuildOutputs {
+    key build        : Association to TransactionBuilds; // parent build
+    key outputIndex  : Integer; // index in outputs array
+        address      : bech32; // recipient address
+        lovelace     : Lovelace; // lovelace amount to send
+        isChange     : Boolean; // true if this is the change output
+        assets       : Composition of many TransactionBuildOutputAssets
+                           on assets.output = $self;
+        hasAssets    : Boolean; // indicates if output has native assets
+}
+
+entity TransactionBuildOutputAssets {
+    key output : Association to TransactionBuildOutputs; // parent output
+    key unit   : AssetUnit; // asset unit
+        asset  : AssetSlice; // asset details
+}
+
+// -----------------------------------------------------
+// Transaction Submissions Entities
+// -----------------------------------------------------
+entity TransactionSubmissions : temporal {
+    key id                   : UUID; // unique submission id
+        build                : Association to TransactionBuilds; // link to original build
+        signedTxCbor         : LargeString; // signed transaction CBOR as hex string
+        txHash               : Blake2b256; // actual transaction hash after signing
+        submittedAt          : Integer64; // submission time as unix timestamp
+        submittedToBackend   : String(20); // backend used for submission ('blockfrost' | 'koios')
+        status               : String(20); // 'pending' | 'submitted' | 'confirmed' | 'failed' | 'rejected'
+        confirmations        : Integer; // number of confirmations (0 when pending)
+        firstSeenBlock       : Blake2b256; // block hash where tx first appeared
+        firstSeenSlot        : Integer64; // slot number where tx first appeared
+        backendResponse      : LargeString; // raw response from submission backend
+        lastCheckedAt        : Integer64; // last status check time
+        errorCode            : String(50); // error code if failed
+        errorMessage         : LargeString; // detailed error message if failed
+        retryCount           : Integer; // number of retry attempts
+        errors               : Composition of many TransactionSubmissionErrors
+                                   on errors.submission = $self;
+        hasErrors            : Boolean; // indicates if submission has errors
+}
+
+// -----------------------------------------------------
+// Transaction Submission Error Log
+// -----------------------------------------------------
+entity TransactionSubmissionErrors {
+    key id                     : UUID; // unique error id
+        submission             : Association to TransactionSubmissions; // parent submission
+        occurredAt             : Integer64; // error occurrence time as unix timestamp
+        errorType              : String(50); // 'validation' | 'network' | 'rejection' | 'timeout'
+        errorCode              : String(50); // specific error code
+        errorMessage           : LargeString; // detailed error message
+        errorDetails           : LargeString; // additional error context as JSON
+        isRecoverable          : Boolean; // true if error is recoverable via retry
+}

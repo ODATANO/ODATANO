@@ -12,6 +12,8 @@ import {
   PoolData as PoolProviderData,
   DrepData as DrepProviderData,
   AccountData as AccountProviderData,
+  TxBuildResult as TransactionBuildResult,
+  LedgerProtocolParameters as ProtocolParameters,
 } from './types';
 
 import {
@@ -31,11 +33,17 @@ import {
   Pool as PoolRow,
   Drep as DrepRow,
   Account as AccountRow,
-} from '#cds-models/CardanoODataService';
+}  from '#cds-models/CardanoODataService';
+
+import type { TransactionBuild as  TransactionBuildRow, 
+              LedgerProtocolParameter as ProtocolParameterRow
+} from '#cds-models/CardanoTransactionService';
+
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
 import { CONFIG } from '../../config/config';
+import cds, { tx } from '@sap/cds';
 
 const MAX_AGE_MS = CONFIG.indexTtlMs;
 // -----------------------------------------------------------------------------
@@ -406,6 +414,78 @@ export function mapError(req: Request, err: unknown, ctx: string) {
       err.target
     );
   }
+}
+
+export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow{
+  const buildId = cds.utils.uuid();
+  const now = Math.floor(Date.now() / 1000);
+
+  txbuildResult.inputs
+  {}
+
+  const hasInputs = Array.isArray(txbuildResult.inputs) && txbuildResult.inputs.length > 0;
+  const hasOutputs = Array.isArray(txbuildResult.outputs) && txbuildResult.outputs.length > 0;
+
+  return {
+    id: buildId,
+    builderEngine: txbuildResult.builderEngine,
+    network: txbuildResult.network,
+    senderAddress: txbuildResult.senderAddress,
+    changeAddress: txbuildResult.senderAddress,
+    unsignedTxCbor: txbuildResult.unsignedTxCbor,
+    fee: Number(txbuildResult.feeLovelace),
+    size               : txbuildResult.sizeBytes, // size in bytes
+    createdAt          : now, // epoch seconds
+   // inputs             : txbuildResult.inputs,
+   // outputs            : txbuildResult.outputs ? JSON.stringify(txbuildResult.outputs) : null,
+    submission         : null,
+    hasInputs          : hasInputs, // indicates if build has inputs
+    hasOutputs         : hasOutputs, // indicates if build has outputs
+    wasSubmitted       : false, // indicates if this build was submitted
+  }
+  
+}
+
+export function mapProtocolParameters(providerParams: ProtocolParameters): ProtocolParameterRow {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+  return {
+    network: providerParams.network,
+    epoch: providerParams.epoch,
+    minFeeA: providerParams.minFeeA,
+    minFeeB: providerParams.minFeeB,
+    maxBlockSize: providerParams.maxBlockSize,
+    maxTxSize: providerParams.maxTxSize,
+    maxBlockHeaderSize: providerParams.maxBlockHeaderSize,
+    keyDeposit: providerParams.keyDeposit,
+    poolDeposit: providerParams.poolDeposit,
+    eMax: providerParams.eMax,
+    nOpt: providerParams.nOpt,
+    a0: providerParams.a0,
+    rho: providerParams.rho,
+    tau: providerParams.tau,
+    minPoolCost: providerParams.minPoolCost,
+    decentralisationParam: providerParams.decentralisationParam,
+    extraEntropy: providerParams.extraEntropy,
+    protocolMajorVer: providerParams.protocolMajorVer,
+    protocolMinorVer: providerParams.protocolMinorVer,
+    minUtxo: providerParams.minUtxo,
+    nonce: providerParams.nonce,
+    costModels: providerParams.costModels,
+    priceMem: providerParams.priceMem,
+    priceStep: providerParams.priceStep,
+    maxTxExMem: providerParams.maxTxExMem,
+    maxTxExSteps: providerParams.maxTxExSteps,
+    maxBlockExMem: providerParams.maxBlockExMem,
+    maxBlockExSteps: providerParams.maxBlockExSteps,
+    maxValSize: providerParams.maxValSize,
+    collateralPercent: providerParams.collateralPercent,
+    maxCollateralInputs: providerParams.maxCollateralInputs,
+    coinsPerUtxoSize: providerParams.coinsPerUtxoSize,
+    fetchedAt: providerParams.fetchedAt,
+    source: providerParams.source,
+  };
 }
 
 // -----------------------------------------------------------------------------

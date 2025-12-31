@@ -15,7 +15,8 @@ import {
   MetadataLabelTx,
   PoolData,
   AccountData,
-  DrepData, 
+  DrepData,
+  LedgerProtocolParameters 
 } from '../../utils/types';
 
 
@@ -285,6 +286,61 @@ export class BlockfrostBackend implements CardanoBackend {
           poolId: accountData.pool_id,
           drepId : accountData.drep_id ?? null,
           addresses: addresses,
+        };
+      },
+      this.name
+    );
+  }
+
+  async submitTransaction(signedTxCbor: string): Promise<string> {
+    return handleBackendRequest(
+      async () => {
+        const txHash = await this.api.txSubmit(signedTxCbor);
+        return txHash;
+      },
+      this.name
+    );
+  }
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    return handleBackendRequest(
+      async () => {
+        const protocolParams = await this.api.epochsLatestParameters();
+        return {
+          network: CONFIG.network,
+          epoch: protocolParams.epoch,
+          minUtxo: protocolParams.min_utxo,
+          nonce: protocolParams.nonce,
+          costModels: JSON.stringify(protocolParams.cost_models),
+          minFeeA: protocolParams.min_fee_a,
+          minFeeB: protocolParams.min_fee_b,
+          maxBlockSize: protocolParams.max_block_size,
+          priceMem: protocolParams.price_mem,
+          priceStep: protocolParams.price_step,
+          maxTxExMem: protocolParams.max_tx_ex_mem,
+          maxTxExSteps: protocolParams.max_tx_ex_steps,
+          maxBlockExMem: protocolParams.max_block_ex_mem,
+          maxBlockExSteps: protocolParams.max_block_ex_steps,
+          maxValSize: protocolParams.max_val_size,
+          collateralPercent: protocolParams.collateral_percent,
+          maxCollateralInputs: protocolParams.max_collateral_inputs,
+          coinsPerUtxoSize: protocolParams.coins_per_utxo_size,
+          maxBlockHeaderSize: protocolParams.max_block_header_size,
+          maxTxSize: protocolParams.max_tx_size,
+          keyDeposit: protocolParams.key_deposit,
+          minPoolCost: protocolParams.min_pool_cost,
+          poolDeposit: protocolParams.pool_deposit,
+          eMax: protocolParams.e_max,
+          nOpt: protocolParams.n_opt,
+          a0: protocolParams.a0,
+          rho: protocolParams.rho,
+          tau: protocolParams.tau,
+          decentralisationParam: protocolParams.decentralisation_param,
+          extraEntropy: protocolParams.extra_entropy,
+          protocolMajorVer: protocolParams.protocol_major_ver,
+          protocolMinorVer: protocolParams.protocol_minor_ver,
+          fetchedAt: new Date().toISOString(),
+          source: this.name,
+
         };
       },
       this.name

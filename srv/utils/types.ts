@@ -1,5 +1,7 @@
 export type Hex = string;
 export type Lovelace = number;
+import { defaultProtocolParameters } from "@harmoniclabs/cardano-ledger-ts";
+
 
 // ---------------------------------------------------------------------------------------
 // JSON Value Type
@@ -204,11 +206,83 @@ export interface PoolData {
 // DREP Data Structure Type
 // ---------------------------------------------------------------------------
 export interface DrepData {
-    drepId: string; 
-        hex: string; 
-        amount: string;
-        hasScript: boolean; 
-        lastActiveEpoch: number; 
-        retired: boolean; 
-        expired: boolean; 
+  drepId: string; 
+  hex: string; 
+  amount: string;
+  hasScript: boolean; 
+  lastActiveEpoch: number; 
+  retired: boolean; 
+  expired: boolean; 
 }
+
+export type LedgerProtocolParameters = {
+  network : string;     // mainnet | preprod | preview (dein ODATANO-Konzept)
+  epoch   : number;
+  // --- Fees / Sizes ---
+  minFeeA            : number;       // txFeePerByte Mapping
+  minFeeB            : number;       // txFeeFixed Mapping
+  maxBlockSize       : number;
+  maxTxSize          : number;
+  maxBlockHeaderSize : number;
+  // --- Deposits / Pools ---
+  keyDeposit  : string;           // Lovelace
+  poolDeposit : string;           // Lovelace
+  eMax        : number;              // poolRetireMaxEpoch Mapping
+  nOpt        : number;              // stakePoolTargetNum Mapping
+  a0          : number;      // poolPledgeInfluence Mapping
+  rho         : number;      // monetaryExpansion Mapping
+  tau         : number;      // treasuryCut Mapping
+    minPoolCost : string;
+  // --- Legacy / Misc ---
+  decentralisationParam : number; // legacy / pre-conway
+  extraEntropy          : string | null;
+  protocolMajorVer      : number;
+  protocolMinorVer      : number;
+  minUtxo               : string;      // legacy
+  nonce                 : string;
+  // --- Plutus / Execution units ---
+  costModels     : string;        // JSON blob (map)
+  priceMem       : number | null;
+  priceStep      : number | null;
+  maxTxExMem     : string | null;
+  maxTxExSteps   : string | null;
+  maxBlockExMem  : string | null;
+  maxBlockExSteps: string | null;
+  // --- Babbage+ UTxO cost / Collateral ---
+  maxValSize          : string | null;
+  collateralPercent   : number | null;
+  maxCollateralInputs : number | null;
+  coinsPerUtxoSize    : string | null;  // babbage+
+  // -- Hauskeeping ---
+  fetchedAt : string;
+  source    : string;              // "blockfrost/koios/direct"
+}
+
+export type TxBuildRequest = {
+  network: 'mainnet' | 'preprod' | 'preview';
+  senderAddress: string;
+  recipientAddress: string;
+  lovelaceAmount: number;
+  changeAddress?: string;
+  feeLovelace?: string;
+};
+
+
+export type TxBuildContext = {
+  utxos: UTxO[];
+  protocolParameters: LedgerProtocolParameters;
+};
+
+export type TxBuildResult = {
+  senderAddress?: string;
+  network?: 'mainnet' | 'preprod' | 'preview';
+  builderEngine?: string;
+  unsignedTxCbor: string;
+  feeLovelace: string;
+  sizeBytes?: number;
+  inputs: Array<{ txHash: string; index: number; lovelace: string }>;
+  outputs: Array<{ address: string; lovelace: string }>;
+  metaDataCborHex?: string;
+  changeOutput?: { address: string; lovelace: string };
+  warnings: string[];
+};
