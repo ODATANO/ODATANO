@@ -2,6 +2,9 @@ import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
 import cardano from './cardano-client';
 import logger from '../utils/logger';
+import cardanoTransactionBuilder from './cardano-tx-builder';
+
+
 
 import {
   Addresses,
@@ -48,7 +51,8 @@ import {
   mapProtocolParameters
 } from '../utils/mappers';
 
-import { Transaction as TransactionProviderData, TxBuildResult } from '../utils/types';
+import { Transaction as TransactionProviderData, TxBuildRequest, TxBuildResult } from '../utils/types';
+import { CONFIG } from '../../config/config';
 
 
 const { UPSERT } = cds.ql;
@@ -258,8 +262,20 @@ export class CardanoIndexer {
 
   async indexBuildResult(
     tx: CapTransaction,
-    txbuildResult: TxBuildResult
-  ): Promise<void> {
+    buildreq: TxBuildRequest
+  ): Promise<TxBuildResult> {
+     
+    // make sure we have protocol parameters indexed
+    const protocolParams = await this.indexProtocolParameters(tx);
+
+   const txbuildResult = await  cardanoTransactionBuilder.buildSimpleAdaTransaction(
+      buildreq,
+      protocolParams);
+    
+    return txbuildResult;
+
+
+
 
     //const buildResult = mapBuildResult(txbuildResult);
 

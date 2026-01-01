@@ -1,6 +1,7 @@
+import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
+
 export type Hex = string;
 export type Lovelace = number;
-import { defaultProtocolParameters } from "@harmoniclabs/cardano-ledger-ts";
 
 
 // ---------------------------------------------------------------------------------------
@@ -270,7 +271,7 @@ export type TxBuildRequest = {
 
 export type TxBuildContext = {
   utxos: UTxO[];
-  protocolParameters: LedgerProtocolParameters;
+  protocolParameters: LedgerProtocolParameter;
 };
 
 export type TxBuildResult = {

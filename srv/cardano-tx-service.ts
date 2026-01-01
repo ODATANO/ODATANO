@@ -76,24 +76,9 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
         logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
 
-        const txbuildResult = await txBuilder.buildSimpleAdaTransaction({
-            network: network,
-            senderAddress: senderAddress,
-            recipientAddress: recipientAddress,
-            lovelaceAmount: lovelaceAmount
-         });
-
-        const buildResult = await indexer.indexBuildResult(db, txbuildResult);
+        const txbuildResult = await indexer.indexBuildResult(db, req.data);
         
-
-      // TODO: Implement transaction building logic
-      // 1. Fetch UTxOs for senderAddress
-      // 2. Build transaction using txBuilder
-      // 3. Store build in database
-      // 4. Return build record
-
-
-      await db.run(INSERT.into(TransactionBuilds).entries(txbuildResult));
+        await db.run(INSERT.into(TransactionBuilds).entries(txbuildResult));
       
       return txbuildResult;
     });

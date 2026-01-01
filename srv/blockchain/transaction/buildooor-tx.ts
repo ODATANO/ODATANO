@@ -1,32 +1,32 @@
 // srv/tx/engines/buildooor.tx-builder.ts
 import type { CardanoTxBuilder} from "./cardano-tx";
-import type { TxBuildRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
+import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
-import { getLovelace, mapOdatanoUtxoToLedgerUtxo } from "../../utils/tx-build-helper";
+import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 
 import {
   defaultProtocolParameters,
   Address,
   UTxO as LedgerUTxO,
   Value,
-  TxOut
+  TxOut,
+  TxOutRef
 } from "@harmoniclabs/cardano-ledger-ts";
+import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
 
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = "buildooor";
   public async init(): Promise<void> {}
 
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    const protocolParameters = {
-      ...defaultProtocolParameters,
-      ...(ctx.protocolParameters as any)
-    };
 
-    const txb = new TxBuilder(protocolParameters);
+    const txbParameters = this._mapLedgerParametersToBuildooorParams(ctx.protocolParameters);
+    
+    const txb = new TxBuilder(txbParameters);
 
     // Map ODATANO UTxOs -> ledger-ts UTxO objects
-    const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(mapOdatanoUtxoToLedgerUtxo);
+    const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
 
     // Buildooor ITxBuildInput shape: { utxo: UTxO }
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
@@ -38,7 +38,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           : (Address as any).fromBech32(req.recipientAddress)) 
     ];;
     
-
     const changeAddress =
       Address.fromString(req.changeAddress ?? req.senderAddress)
         ? (Address as any).fromString(req.changeAddress ?? req.senderAddress)
@@ -82,5 +81,36 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     // This is a placeholder implementation
     return 200000; // Return a dummy value
   }
+
+  private _mapLedgerParametersToBuildooorParams(
+    protocolParameters: LedgerProtocolParameter
+  ): any {
+    // Map LedgerProtocolParameter to Buildooor's ProtocolParameters
+    // This is a placeholder implementation
+    return defaultProtocolParameters;
+  }
+
+  private _mapOdatanoUtxoToLedgerUtxo(utxos: OdatanoUtxo): any {
+    assertAdaOnly(utxos);
+    const txId = utxos.txHash; 
+
+    const outRef = new TxOutRef({
+      id: txId as any,
+      index: utxos.outputIndex
+    });
+
+  const addr = Address.fromString(utxos.address)
+  const value = Value.lovelaces(getLovelace(utxos));
+
+  return new (LedgerUTxO as any)({
+    utxoRef: outRef,
+    resolved: {
+      address: addr,
+      value,
+      datum: undefined,
+      refScript: undefined
+    }
+  });
+}
 }
 
