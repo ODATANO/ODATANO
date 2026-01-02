@@ -36,7 +36,8 @@ import {
 }  from '#cds-models/CardanoODataService';
 
 import type { TransactionBuild as  TransactionBuildRow, 
-              LedgerProtocolParameter as ProtocolParameterRow
+              LedgerProtocolParameter as ProtocolParameterRow,
+              TransactionSubmission as TransactionSubmissionRow
 } from '#cds-models/CardanoTransactionService';
 
 
@@ -419,20 +420,22 @@ export function mapError(req: Request, err: unknown, ctx: string) {
 export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow{
   const buildId = cds.utils.uuid();
   const now = Math.floor(Date.now() / 1000);
-
-  txbuildResult.inputs
-  {}
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
 
   const hasInputs = Array.isArray(txbuildResult.inputs) && txbuildResult.inputs.length > 0;
   const hasOutputs = Array.isArray(txbuildResult.outputs) && txbuildResult.outputs.length > 0;
 
   return {
     id: buildId,
+    validFrom: validFrom,
+    validTo: validTo,
     builderEngine: txbuildResult.builderEngine,
     network: txbuildResult.network,
     senderAddress: txbuildResult.senderAddress,
     changeAddress: txbuildResult.senderAddress,
     unsignedTxCbor: txbuildResult.unsignedTxCbor,
+    txBodyHash: txbuildResult.txBodyHash,
     fee: Number(txbuildResult.feeLovelace),
     size               : txbuildResult.sizeBytes, // size in bytes
     createdAt          : now, // epoch seconds
@@ -447,9 +450,6 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult): Transacti
 }
 
 export function mapProtocolParameters(providerParams: ProtocolParameters): ProtocolParameterRow {
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
-  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
   return {
     network: providerParams.network,
     epoch: providerParams.epoch,
@@ -487,6 +487,20 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
     source: providerParams.source,
   };
 }
+
+export function mapTransactionSubmission(signedTxCbor: string, txHash: string): TransactionSubmissionRow {
+  const now = Math.floor(Date.now() / 1000);
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  return {
+    signedTxCbor: signedTxCbor,
+    txHash: txHash,
+    validFrom: validFrom,
+    validTo: validTo,
+    submittedAt: now,
+  };
+}
+
 
 // -----------------------------------------------------------------------------
 // Helper Functions

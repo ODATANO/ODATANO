@@ -1,6 +1,8 @@
 import { CardanoBackend } from './backends/cardano-backend';
 import { BlockfrostBackend } from './backends/blockfrost-backend';
 import { KoiosBackend } from './backends/koios-backend';
+import { OgmiosBackend } from './backends/ogmios-backend';
+import { HybridBackend } from './backends/hybrid-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import logger from '../utils/logger';
 import { CONFIG } from '../../config/config';
@@ -178,6 +180,7 @@ export class CardanoClient {
     return this.withFallback(b => b.getProtocolParameters());
   }
   submitTransaction(signedTxCbor: string): Promise<string> {
+    console.log("CardanoClient: submitting transaction...");
     return this.withFallback(b => b.submitTransaction(signedTxCbor));
   }
 }
@@ -186,19 +189,31 @@ const backends: CardanoBackend[] = [];
 
 // build backends from configuration
 for (const backendName of CONFIG.backends) {
-  if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
+  if (backendName === 'hybrid') {
+    // Hybrid mode: Ogmios for live + Blockfrost/Koios for historical
+    logger.info('[CardanoClient] Building Hybrid backend (Ogmios + Blockfrost/Koios)');
+    const ogmios = new OgmiosBackend();
+    const historical = CONFIG.blockfrostApiKey 
+      ? new BlockfrostBackend() 
+      : new KoiosBackend();
+    backends.push(new HybridBackend(ogmios, historical));
+  } else if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
     backends.push(new BlockfrostBackend());
   } else if (backendName === 'koios') {
     backends.push(new KoiosBackend());
+  } else if (backendName === 'ogmios') {
+    backends.push(new OgmiosBackend());
   }
 }
 
 // Fallback if no backends configured
 if (backends.length === 0) {
-  if (CONFIG.blockfrostApiKey) {
-    backends.push(new BlockfrostBackend());
-  }
-  backends.push(new KoiosBackend());
+  logger.warn('[CardanoClient] No backends configured, using fallback (Hybrid mode)');
+  const ogmios = new OgmiosBackend();
+  const historical = CONFIG.blockfrostApiKey 
+    ? new BlockfrostBackend() 
+    : new KoiosBackend();
+  backends.push(new HybridBackend(ogmios, historical));
 }
 
 export const cardanoClient = new CardanoClient(backends);
@@ -212,10 +227,18 @@ export function createCardanoClientForBackends(backendNames: string[]): CardanoC
   const testBackends: CardanoBackend[] = [];
 
   for (const backendName of backendNames) {
-    if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
+    if (backendName === 'hybrid') {
+      const ogmios = new OgmiosBackend();
+      const historical = CONFIG.blockfrostApiKey 
+        ? new BlockfrostBackend() 
+        : new KoiosBackend();
+      testBackends.push(new HybridBackend(ogmios, historical));
+    } else if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
       testBackends.push(new BlockfrostBackend());
     } else if (backendName === 'koios') {
       testBackends.push(new KoiosBackend());
+    } else if (backendName === 'ogmios') {
+      testBackends.push(new OgmiosBackend());
     }
   }
 

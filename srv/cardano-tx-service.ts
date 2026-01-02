@@ -5,6 +5,7 @@ import { rejectInvalid, rejectMissing } from './utils/errors';
 import { isValidBech32Address } from './utils/validators';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import indexer from './blockchain/cardano-indexer';
+import cardanoClient from './blockchain/cardano-client';
 const { SELECT, UPSERT } = cds.ql;
 
 /**
@@ -43,10 +44,6 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, (db) => db.run(req.query));
   });
 
-  srv.on('READ', TransactionBuildMetadata, async (req: Request) => {
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
   srv.on('READ', TransactionSubmissions, async (req: Request) => {
     return handleRequest(req, (db) => db.run(req.query));
   });
@@ -78,8 +75,6 @@ module.exports = (srv: cds.Service) => {
 
         const txbuildResult = await indexer.indexBuildResult(db, req.data);
         
-        await db.run(INSERT.into(TransactionBuilds).entries(txbuildResult));
-      
       return txbuildResult;
     });
   });
@@ -126,29 +121,19 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
       }
 
-      // TODO: Implement submission logic
-      // 1. Validate signed CBOR
-      // 2. Extract txHash from signed tx
-      // 3. Submit to backend (Blockfrost/Koios)
-      // 4. Store submission record
-      // 5. Update build.wasSubmitted flag
+      // 1. Index submission (extracts txHash from signed CBOR)
+      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor);
+      logger.debug({ txHash: indexSubmission.txHash }, '[TxService] Transaction indexed');
 
-      const submissionId = cds.utils.uuid();
-      const now = Math.floor(Date.now() / 1000);
+      // 2. Submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
+      const txHash = await cardanoClient.submitTransaction(signedTxCbor);
+      logger.info({ txHash }, '[TxService] Transaction submitted to blockchain');
 
+      // 3. Store submission record with txHash
       const submissionRecord = {
-        id: submissionId,
+        ...indexSubmission,
         build_id: buildId,
-        signedTxCbor,
-        txHash: '', // TODO: Extract from signed tx
-        submittedAt: now,
-        submittedToBackend: 'blockfrost', // TODO: Dynamic backend selection
-        status: 'pending',
-        confirmations: 0,
-        backendResponse: '',
-        lastCheckedAt: now,
-        retryCount: 0,
-        hasErrors: false,
+        backendResponse: `Submitted successfully`,
       };
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
@@ -170,8 +155,24 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       logger.info({ network }, '[TxService] Submitting external signed transaction');
 
-      // TODO: Implement external submission
-      throw new Error('SubmitSignedTransaction not yet implemented');
+      // 1. Index submission (extracts txHash)
+      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor);
+      logger.debug({ txHash: indexSubmission.txHash }, '[TxService] External transaction indexed');
+
+      // 2. Submit to blockchain
+      const txHash = await cardanoClient.submitTransaction(signedTxCbor);
+      logger.info({ txHash }, '[TxService] External transaction submitted');
+
+      // 3. Store submission record (without buildId)
+      const submissionRecord = {
+        ...indexSubmission,
+        build_id: null,
+        backendResponse: `Submitted successfully`,
+      };
+
+      await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
+
+      return submissionRecord;
     });
   });
 

@@ -4,8 +4,6 @@ import cardano from './cardano-client';
 import logger from '../utils/logger';
 import cardanoTransactionBuilder from './cardano-tx-builder';
 
-
-
 import {
   Addresses,
   Transaction as CardanoTransaction,
@@ -27,7 +25,10 @@ import {
 } from '#cds-models/CardanoODataService';
 
 import {
-  LedgerProtocolParameter
+  LedgerProtocolParameter,
+  TransactionBuild,
+  TransactionSubmission as TransactionSubmissionRow,
+  TransactionSubmissions
 } from '#cds-models/CardanoTransactionService';
 
 import {
@@ -48,7 +49,8 @@ import {
   mapTransactionMetadata,
   mapAddressUtxoAssets,
   mapBuildResult,
-  mapProtocolParameters
+  mapProtocolParameters,
+  mapTransactionSubmission
 } from '../utils/mappers';
 
 import { Transaction as TransactionProviderData, TxBuildRequest, TxBuildResult } from '../utils/types';
@@ -263,7 +265,7 @@ export class CardanoIndexer {
   async indexBuildResult(
     tx: CapTransaction,
     buildreq: TxBuildRequest
-  ): Promise<TxBuildResult> {
+  ): Promise<TransactionBuild> {
      
     // make sure we have protocol parameters indexed
     const protocolParams = await this.indexProtocolParameters(tx);
@@ -272,22 +274,20 @@ export class CardanoIndexer {
       buildreq,
       protocolParams);
     
-    return txbuildResult;
+    const buildResult = mapBuildResult(txbuildResult);
 
+    console.log("Build result to be stored:", buildResult);
 
+    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
-
-    //const buildResult = mapBuildResult(txbuildResult);
-
-    //await tx.run(UPSERT.into(TransactionBuilds).entries(buildResult));
-    //return buildResult;
+    return buildResult;
   }
 
   async indexProtocolParameters(
     tx: CapTransaction
   ): Promise<LedgerProtocolParameter> {
     // first, check if we have recent protocol parameters
-    const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter).orderBy('validFrom desc').limit(1));
+    const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter));
 
     if (existing) return existing;
     // otherwise, fetch new protocol parameters from provider
@@ -298,6 +298,22 @@ export class CardanoIndexer {
     await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
 
     return protocolParams;
+  }
+
+  async indexTransactionSubmission(
+    signedTxCbor: string
+  ): Promise<TransactionSubmissionRow> {
+    // submit transaction to Cardano network via cardano client
+    console.log("Submitting transaction via cardano client...");
+    
+    const txHash = await cardano.submitTransaction(signedTxCbor);
+    
+    const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
+
+    // index submission record
+    await cds.transaction().run(UPSERT.into(TransactionSubmissions).entries(transactionSubmission));
+    // retrun submission record
+    return transactionSubmission;
   }
       
   /**

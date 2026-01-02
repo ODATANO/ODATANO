@@ -293,9 +293,11 @@ export class BlockfrostBackend implements CardanoBackend {
   }
 
   async submitTransaction(signedTxCbor: string): Promise<string> {
+    console.log("BlockfrostBackend: submitting transaction...");
+    const txBytes = Buffer.from(signedTxCbor, "hex");
     return handleBackendRequest(
       async () => {
-        const txHash = await this.api.txSubmit(signedTxCbor);
+        const txHash = await this.api.txSubmit(txBytes);
         return txHash;
       },
       this.name

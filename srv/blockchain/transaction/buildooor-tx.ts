@@ -23,6 +23,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     const txbParameters = this._mapLedgerParametersToBuildooorParams(ctx.protocolParameters);
     
+    console.log("Using Buildooor TxBuilder with parameters:", txbParameters);
     const txb = new TxBuilder(txbParameters);
 
     // Map ODATANO UTxOs -> ledger-ts UTxO objects
@@ -30,28 +31,38 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     // Buildooor ITxBuildInput shape: { utxo: UTxO }
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
+    const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
+    const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
 
+    const amount = BigInt(String(req.lovelaceAmount));
+
+    // Buildooor TxOut objects for outputs
     const outputs = [
-      new TxOut(
-        Address.fromString(req.recipientAddress)
-          ? (Address as any).fromString(req.recipientAddress)
-          : (Address as any).fromBech32(req.recipientAddress)) 
-    ];;
+      new TxOut({
+        address: recipientAddress,
+        value: Value.lovelaces(amount)
+      })
+    ];
     
-    const changeAddress =
-      Address.fromString(req.changeAddress ?? req.senderAddress)
-        ? (Address as any).fromString(req.changeAddress ?? req.senderAddress)
-        : (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
-
     const tx = await txb.build({
       inputs,
       outputs,
       changeAddress,
-      memo: 'test tx',
     });
 
+      // Full unsigned tx cbor (4-tuple, witness empty)
+    const unsignedTxBytes = tx.toCbor().toBuffer();
+    const unsignedTxCbor = toHex(unsignedTxBytes);
+
+    const txBodyHash = tx.hash.toString();
+    
+
     return {
-      unsignedTxCbor: toHex(tx.toCbor().toBuffer()),
+      unsignedTxCbor: unsignedTxCbor,
+      txBodyHash: txBodyHash,
+      senderAddress: req.senderAddress,
+      network: req.network,
+      builderEngine: this.name,
       feeLovelace: tx.body.fee.toString(),
       inputs: ctx.utxos.map(u => ({
         txHash: u.txHash,

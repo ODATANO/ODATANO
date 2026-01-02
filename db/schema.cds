@@ -307,6 +307,7 @@ entity TransactionBuilds : temporal {
         senderAddress      : bech32; // sender/source address
         changeAddress      : bech32; // change address (defaults to sender)
         unsignedTxCbor     : LargeString; // unsigned transaction CBOR as hex string
+        txBodyHash         : Blake2b256; // transaction body hash as hex string
         fee                : Lovelace; // calculated fee in lovelace
         size               : Integer; // transaction size in bytes
         createdAt          : Integer64; // build time as unix timestamp

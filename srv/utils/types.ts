@@ -279,6 +279,7 @@ export type TxBuildResult = {
   network?: 'mainnet' | 'preprod' | 'preview';
   builderEngine?: string;
   unsignedTxCbor: string;
+  txBodyHash: string;
   feeLovelace: string;
   sizeBytes?: number;
   inputs: Array<{ txHash: string; index: number; lovelace: string }>;
