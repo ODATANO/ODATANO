@@ -281,9 +281,13 @@ module.exports = (srv: cds.Service) => {
           );
           if (!row) {
             logger.debug({ address: addr }, '[CardanoService] Indexing address');
-            return await indexer.indexAddress(db, addr);
+            const indexed = await indexer.indexAddress(db, addr);
+            // After indexing, the data is in the transaction but not yet visible to queries
+            // Return the indexed data directly
+            return indexed;
           }
-          return row;
+          // Re-run the original query to include $expand and other OData parameters
+          return db.run(req.query);
         }
         return db.run(req.query);
       });

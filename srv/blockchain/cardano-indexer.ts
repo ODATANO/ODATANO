@@ -150,6 +150,10 @@ export class CardanoIndexer {
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
+    console.log('[Indexer] getAddressUtxos returned:', utxoData.length, 'UTxOs');
+    if (utxoData.length > 0) {
+      console.log('[Indexer] First UTxO:', JSON.stringify(utxoData[0], null, 2));
+    }
 
     const utxoEntities = mapAddressUtxos(
       addr,

@@ -47,6 +47,7 @@ import { CONFIG } from '../../config/config';
 import cds, { tx } from '@sap/cds';
 
 const MAX_AGE_MS = CONFIG.indexTtlMs;
+console.log('[Mappers] MAX_AGE_MS:', MAX_AGE_MS, '(', MAX_AGE_MS / 60000, 'minutes)');
 // -----------------------------------------------------------------------------
 // Transactions
 // -----------------------------------------------------------------------------

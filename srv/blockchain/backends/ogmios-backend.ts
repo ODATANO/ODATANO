@@ -54,6 +54,37 @@ export class OgmiosBackend implements CardanoBackend {
     this.txSubmissionClient = await createTransactionSubmissionClient(this.context);
   }
 
+  /**
+   * Convert Ogmios value format to standard amount array
+   * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
+   * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
+   */
+  private convertOgmiosValue(value: any): Array<{ unit: string; quantity: string }> {
+    const amounts: Array<{ unit: string; quantity: string }> = [];
+    
+    // Handle ADA (lovelace)
+    if (value.ada?.lovelace) {
+      amounts.push({
+        unit: 'lovelace',
+        quantity: value.ada.lovelace.toString()
+      });
+    }
+    
+    // Handle native assets (policy.assetName)
+    for (const [policyId, assets] of Object.entries(value)) {
+      if (policyId === 'ada') continue;
+      
+      for (const [assetName, quantity] of Object.entries(assets as Record<string, any>)) {
+        amounts.push({
+          unit: `${policyId}${assetName}`,
+          quantity: quantity.toString()
+        });
+      }
+    }
+    
+    return amounts;
+  }
+
   // ---------------------------------------------------------------------------
   // Network Information @TODO check how to get real supply data
   // ---------------------------------------------------------------------------
@@ -184,9 +215,14 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
-      await this.stateQueryClient.acquireLedgerState('origin');
+      
+      // Query UTxOs without acquiring specific ledger state
       const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      await this.stateQueryClient.releaseLedgerState();
+      
+      console.log('[OgmiosBackend] Raw UTxO count:', utxos.length);
+      if (utxos.length > 0) {
+        console.log('[OgmiosBackend] First UTxO:', utxos[0]);
+      }
       
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
         const lovelace = u.value?.ada?.lovelace || u.value?.lovelace || '0';
@@ -202,15 +238,18 @@ export class OgmiosBackend implements CardanoBackend {
           unit: 'lovelace',
           quantity: totalLovelace.toString()
         }],
-        utxos: utxos.map((u: any) => ({
-          txHash: u.transaction?.id || '',
-          outputIndex: u.index || 0,
-          address: u.address || address,
-          amount: u.value,
-          blockHash: '',
-          datumHash: u.datumHash,
-          scriptRef: u.script?.hash
-        }))
+        utxos: utxos.map((u: any) => {
+          const amount = this.convertOgmiosValue(u.value);
+          return {
+            txHash: u.transaction?.id || '',
+            outputIndex: u.index || 0,
+            address: u.address || address,
+            amount: amount,
+            blockHash: '',
+            datumHash: u.datumHash,
+            scriptRef: u.script?.hash
+          };
+        })
       };
     }, this.name);
   }
@@ -220,19 +259,25 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
-      await this.stateQueryClient.acquireLedgerState('origin');
-      const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      await this.stateQueryClient.releaseLedgerState();
       
-      return utxos.map((u: any) => ({
-        txHash: u.transaction?.id || '',
-        outputIndex: u.index || 0,
-        address: u.address || address,
-        amount: u.value,
-        blockHash: '',
-        datumHash: u.datumHash,
-        scriptRef: u.script?.hash
-      }));
+      const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
+      console.log('[OgmiosBackend] getAddressUtxos called for:', address.substring(0, 20) + '...');
+      console.log('[OgmiosBackend] getAddressUtxos UTxO count:', utxos.length);
+      
+      return utxos.map((u: any) => {
+        // Convert Ogmios value format to standard amount array
+        const amount = this.convertOgmiosValue(u.value);
+        
+        return {
+          txHash: u.transaction?.id || '',
+          outputIndex: u.index || 0,
+          address: u.address || address,
+          amount: amount,
+          blockHash: '',
+          datumHash: u.datumHash,
+          scriptRef: u.script?.hash
+        };
+      });
     }, this.name);
   }
 

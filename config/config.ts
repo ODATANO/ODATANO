@@ -53,7 +53,7 @@ export const CONFIG = {
   ogmiosUrl: process.env.OGMIOS_URL || 'ws://localhost:1337',
   primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 118000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
-  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 600000),
+  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 300000), // 5 minutes
   logLevel: process.env.LOG_LEVEL || 'info',
   // Backend configuration
   backends: parseAvailableBackends(),

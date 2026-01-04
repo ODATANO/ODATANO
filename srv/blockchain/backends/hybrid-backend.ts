@@ -66,8 +66,15 @@ export class HybridBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
 
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    logger.debug('[HybridBackend] Protocol params → Ogmios (live)');
-    return this.liveBackend.getProtocolParameters();
+    // Try Ogmios first (live state)
+    try {
+      logger.debug('[HybridBackend] Protocol params → Ogmios (trying live first)');
+      return await this.liveBackend.getProtocolParameters();
+    } catch (error: any) {
+      // Fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for protocol params, falling back to historical backend');
+      return this.historicalBackend.getProtocolParameters();
+    }
   }
 
   async getEpoch(epochNumber: number): Promise<EpochData> {
