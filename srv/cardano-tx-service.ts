@@ -143,14 +143,11 @@ module.exports = (srv: cds.Service) => {
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
       await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
-
-      // wait 3 seconds before returning
-      logger.info({ txHash }, '[TxService] Starting 3-second delay before returning response...');
-      
+      logger.info({ buildId, txHash }, '[TxService] Submission record stored');      
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // return only txHash (HTTP 200 is implicit on success)
-      return { txHash };
+      // return only txHash
+      return { submissionRecord };
     });
   });
 
@@ -164,21 +161,21 @@ module.exports = (srv: cds.Service) => {
     if (!network) return rejectMissing(req, 'SubmitSignedTransaction', 'network');
 
     return handleRequest(req, async (db) => {
-      logger.info({ network }, '[TxService] Submitting external signed transaction');
+      logger.info({ network }, '[TxService] Submitting external build & signed transaction');
 
-      // 1. Extract txHash from signed CBOR (before submission)
+      // extract txHash from signed CBOR (before submission)
       const txHash = getTxHashFromCbor(signedTxCbor);
       logger.debug({ txHash }, '[TxService] Transaction hash extracted from CBOR');
 
-      // 2. Submit to blockchain
+      // submit to blockchain
       await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, '[TxService] External transaction submitted');
 
-      // 3. Index submission record
+      // index submission record
       const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
       logger.debug('[TxService] External transaction indexed');
 
-      // 4. Store submission record (without buildId)
+      // store submission record (without buildId)
       const submissionRecord = {
         ...indexSubmission,
         build_id: null,

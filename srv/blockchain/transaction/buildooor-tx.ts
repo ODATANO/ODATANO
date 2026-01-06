@@ -14,6 +14,7 @@ import {
   TxOutRef
 } from "@harmoniclabs/cardano-ledger-ts";
 import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
+import logger from "../../utils/logger";
 
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = "buildooor";
@@ -49,12 +50,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       changeAddress,
     });
 
-      // Full unsigned tx cbor (4-tuple, witness empty)
+      // full unsigned tx cbor (4-tuple, witness empty)
     const unsignedTxBytes = tx.toCbor().toBuffer();
     const unsignedTxCbor = toHex(unsignedTxBytes);
-
     const txBodyHash = tx.hash.toString();
     
+    logger.info(`[BuildooorTxBuilder] Built unsigned transaction successfully.`);
 
     return {
       unsignedTxCbor: unsignedTxCbor,
@@ -75,6 +76,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       warnings: []
     };
   }
+
   public async calculateMinUtxoAmount(
     output: any, // @TODO Define a proper type for output
     protocolParameters: any // TODO Define a proper type for protocol parameters

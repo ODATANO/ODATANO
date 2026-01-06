@@ -4,6 +4,7 @@ import type {TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/type
 import { BuildooorTxBuilder } from './transaction/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoTransactionService';
+import logger from '../utils/logger';
 
 
 export class CardanoTransactionBuilder {
@@ -21,6 +22,7 @@ export class CardanoTransactionBuilder {
 
         const txBuildResult = await txBuilder.buildUnsignedAdaTransfer(req, txContext);
 
+        logger.info(`[CardanoTransactionBuilder] Built simple ADA transaction successfully.`);
         return txBuildResult;
     }
 
