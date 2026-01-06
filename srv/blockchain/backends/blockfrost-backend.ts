@@ -348,4 +348,45 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
+
+  async getlatestEpoch(): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+        const epochData = await this.api.epochsLatest();
+        return {
+          epoch: epochData.epoch,
+          start_time: epochData.start_time,
+          end_time: epochData.end_time,
+          first_block_time: epochData.first_block_time,
+          last_block_time: epochData.last_block_time,
+          block_count: epochData.block_count,
+          tx_count: epochData.tx_count,
+          output: epochData.output,
+          fees: epochData.fees,
+          active_stake: epochData.active_stake,
+        };
+      },
+      this.name
+    );
+  }
+  async getlatestBlock(): Promise<BlockData> {
+     return handleBackendRequest(
+      async () => {
+        const blockdata = await this.api.blocksLatest();
+        return {
+          time: blockdata.time,
+          height: blockdata.height,
+          hash: blockdata.hash,
+          slot: blockdata.slot,
+          slotLeader: blockdata.slot_leader,
+          epoch: blockdata.epoch,
+          epochSlot: blockdata.epoch_slot,
+          size: blockdata.size,
+          txCount: blockdata.tx_count,
+          fees: blockdata.fees,
+        };
+      },
+      this.name
+    );
+  }
 }

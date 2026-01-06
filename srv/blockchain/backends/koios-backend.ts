@@ -401,4 +401,32 @@ export class KoiosBackend implements CardanoBackend {
       this.name
     );
   }
+  async getlatestBlock(): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/tip');
+        
+          if (!data) {
+            throw new NotFoundError('Latest Block', this.name);
+          }
+          return await this.getBlock(data.hash);
+        },
+      this.name
+    );  
+  }
+
+  async getlatestEpoch(): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/tip');
+        if (!data) {
+          throw new NotFoundError('Latest Epoch', this.name);
+        }
+        return this.getEpoch(data.epoch_no);
+      },
+      this.name
+    );  
+          }
+
+
 }

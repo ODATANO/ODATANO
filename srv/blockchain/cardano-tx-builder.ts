@@ -10,7 +10,7 @@ export class CardanoTransactionBuilder {
     
     async buildSimpleAdaTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         
-        const txBuilder: CardanoTxBuilder = new BuildooorTxBuilder(); // add or change other builders as needed (maybe with fallback?)
+        const txBuilder: CardanoTxBuilder = new BuildooorTxBuilder(); // add or change other builders as needed (ToDo maybe with fallback?)
         
         await txBuilder.init();
 
@@ -25,7 +25,7 @@ export class CardanoTransactionBuilder {
     }
 
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
-        // Fetch UTxOs from Cardano indexer or node for the given address
+        // fetch UTxOs from Cardano indexer or node for the given address
         const utxos = await cardano.getAddressUtxos(address);
         return utxos;
     }

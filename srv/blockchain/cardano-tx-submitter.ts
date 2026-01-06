@@ -6,7 +6,7 @@ export class CardanoTransactionSubmitter {
  * Submit a signed transaction to the Cardano network
  */
   async submitTransaction(txCborHex: string): Promise<string> {
-    // Submit the transaction to the Cardano network
+    // submit the transaction to the Cardano network
     const txHash = await cardano.submitTransaction(txCborHex);
     return txHash;
   }

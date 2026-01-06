@@ -22,6 +22,8 @@ export interface CardanoBackend {
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
   getBlock(blockHash: string): Promise<BlockData>;
   getEpoch(epochNumber: Number): Promise<EpochData>;
+  getlatestEpoch(): Promise<EpochData>;
+  getlatestBlock(): Promise<BlockData>;
   getPool(poolId: string): Promise<PoolData>;
   getDrep(drepId: string): Promise<DrepData>;
   getAccount(accountId: string): Promise<AccountData>;

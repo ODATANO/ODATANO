@@ -10,7 +10,6 @@ import { CardanoBackend } from './cardano-backend';
 import { OgmiosBackend } from './ogmios-backend';
 import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
-import { NotFoundError, AllBackendsFailedError } from '../../utils/errors';
 import logger from '../../utils/logger';
 
 import {
@@ -51,83 +50,120 @@ export class HybridBackend implements CardanoBackend {
     logger.info('[HybridBackend] Both backends initialized successfully');
   }
 
-  async shutdown(): Promise<void> {
-    // Ogmios backend has shutdown method, others may not
-    if ('shutdown' in this.liveBackend && typeof this.liveBackend.shutdown === 'function') {
-      await this.liveBackend.shutdown();
-    }
-    if ('shutdown' in this.historicalBackend && typeof this.historicalBackend.shutdown === 'function') {
-      await this.historicalBackend.shutdown();
-    }
-  }
-
   // ---------------------------------------------------------------------------
-  // LIVE DATA → Ogmios (self-hosted, real-time state)
+  // Live Data → Ogmios  (live, stateful queries)
   // ---------------------------------------------------------------------------
-
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    // Try Ogmios first (live state)
+    logger.debug('[HybridBackend] get Protocol Parameters');
     try {
-      logger.debug('[HybridBackend] Protocol params → Ogmios (trying live first)');
       return await this.liveBackend.getProtocolParameters();
     } catch (error: any) {
-      // Fallback to historical backend if Ogmios fails
+      // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for protocol params, falling back to historical backend');
       return this.historicalBackend.getProtocolParameters();
     }
   }
 
-  async getEpoch(epochNumber: number): Promise<EpochData> {
-    // Try Ogmios first (current/recent epochs)
+  async getlatestEpoch(): Promise<EpochData> {
+    logger.debug('[HybridBackend] get Latest Epoch');
     try {
-      logger.debug('[HybridBackend] Epoch data → Ogmios (trying live first)');
-      return await this.liveBackend.getEpoch(epochNumber);
+      return await this.liveBackend.getlatestEpoch();
     } catch (error: any) {
-      // Fallback to historical backend if:
-      // - Node not synced enough
-      // - Epoch not found in current state
-      logger.debug(`[HybridBackend] Ogmios failed: ${error.message}, falling back to ${this.historicalBackend.name}`);
-      return this.historicalBackend.getEpoch(epochNumber);
+      // fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for latest epoch, falling back to historical backend');
+      return this.historicalBackend.getlatestEpoch();
+    }
+  }
+
+  async getlatestBlock(): Promise<BlockData> {
+    logger.debug('[HybridBackend] get Latest Block');
+    try {
+      return await this.liveBackend.getlatestBlock();
+    } catch (error: any) {
+      // fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for latest block, falling back to historical backend');
+      return this.historicalBackend.getlatestBlock();
     }
   }
 
   async getAddress(address: string): Promise<Address> {
-    logger.debug('[HybridBackend] Address → Ogmios (live UTxOs)');
-    return this.liveBackend.getAddress(address);
+    logger.debug('[HybridBackend] get Address details');
+    try {
+      return await this.liveBackend.getAddress(address);
+    } catch (error: any) {
+      // fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for address, falling back to historical backend');
+      return this.historicalBackend.getAddress(address);
+    }
   }
 
   async getAddressUtxos(address: string): Promise<UTxO[]> {
-    logger.debug('[HybridBackend] UTxOs → Ogmios (live state)');
-    return this.liveBackend.getAddressUtxos(address);
+    logger.debug('[HybridBackend] get Address UTxOs');
+    try {
+      return await this.liveBackend.getAddressUtxos(address);
+    } catch (error: any) {
+      // fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for UTxOs, falling back to historical backend');
+      return this.historicalBackend.getAddressUtxos(address);
+    }
   }
 
   async submitTransaction(signedTxCbor: string): Promise<string> {
-    logger.debug('[HybridBackend] TX submit → Ogmios (self-hosted node)');
-    return this.liveBackend.submitTransaction(signedTxCbor);
+    logger.debug('[HybridBackend] TX submit with Ogmios');
+    try {
+      return await this.liveBackend.submitTransaction(signedTxCbor);
+    } catch (error: any) {
+      // Fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for TX submit, falling back to historical backend');
+      return this.historicalBackend.submitTransaction(signedTxCbor);
+    }
   }
 
   async getNetworkInformation(): Promise<Network> {
     logger.debug('[HybridBackend] Network info → Ogmios (live)');
-    return this.liveBackend.getNetworkInformation();
+    try {
+      return await this.liveBackend.getNetworkInformation();
+    } catch (error: any) {
+      // Fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for network info, falling back to historical backend');
+      return this.historicalBackend.getNetworkInformation();
+    }
   }
 
   async getPool(poolId: string): Promise<PoolData> {
     logger.debug('[HybridBackend] Pool → Ogmios (live state)');
-    return this.liveBackend.getPool(poolId);
+    try {
+      return await this.liveBackend.getPool(poolId);
+    } catch (error: any) {
+      // Fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for pool, falling back to historical backend');
+      return this.historicalBackend.getPool(poolId);
+    }
   }
 
   async getAccount(stakeAddress: string): Promise<AccountData> {
+    try {
     logger.debug('[HybridBackend] Account → Ogmios (live state)');
     return this.liveBackend.getAccount(stakeAddress);
+    } catch (error: any) {
+      // Fallback to historical backend if Ogmios fails
+      logger.warn('[HybridBackend] Ogmios failed for account, falling back to historical backend');
+      return this.historicalBackend.getAccount(stakeAddress);
+    }
   }
 
   // ---------------------------------------------------------------------------
-  // HISTORICAL DATA → Blockfrost/Koios (indexed, queryable history)
+  // Historical Data → Blockfrost/Koios (indexed, queryable history) just fallback between blockfrost and koios
   // ---------------------------------------------------------------------------
 
   async getBlock(hash: string): Promise<BlockData> {
     logger.debug(`[HybridBackend] Block → ${this.historicalBackend.name} (historical)`);
     return this.historicalBackend.getBlock(hash);
+  }
+
+  async getEpoch(epochNumber: Number): Promise<EpochData> {
+    logger.debug(`[HybridBackend] Epoch → ${this.historicalBackend.name} (historical)`);
+    return this.historicalBackend.getEpoch(epochNumber);
   }
 
   async getTransaction(hash: string): Promise<Transaction> {

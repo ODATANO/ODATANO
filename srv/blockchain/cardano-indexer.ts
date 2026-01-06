@@ -150,11 +150,7 @@ export class CardanoIndexer {
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
-    console.log('[Indexer] getAddressUtxos returned:', utxoData.length, 'UTxOs');
-    if (utxoData.length > 0) {
-      console.log('[Indexer] First UTxO:', JSON.stringify(utxoData[0], null, 2));
-    }
-
+    
     const utxoEntities = mapAddressUtxos(
       addr,
       validFrom,
@@ -280,7 +276,7 @@ export class CardanoIndexer {
     
     const buildResult = mapBuildResult(txbuildResult);
 
-    console.log("Build result to be stored:", buildResult);
+    console.log("Build result stored on DB:");
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
@@ -305,18 +301,11 @@ export class CardanoIndexer {
   }
 
   async indexTransactionSubmission(
-    signedTxCbor: string
+    signedTxCbor: string,
+    txHash: string
   ): Promise<TransactionSubmissionRow> {
-    // submit transaction to Cardano network via cardano client
-    console.log("Submitting transaction via cardano client...");
-    
-    const txHash = await cardano.submitTransaction(signedTxCbor);
-    
     const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
-
-    // index submission record
-    await cds.transaction().run(UPSERT.into(TransactionSubmissions).entries(transactionSubmission));
-    // retrun submission record
+    // return submission record without persisting (caller will persist it)
     return transactionSubmission;
   }
       

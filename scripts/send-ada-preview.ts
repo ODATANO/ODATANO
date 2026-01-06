@@ -3,7 +3,6 @@ import { execSync } from 'child_process';
 import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { createHash } from 'crypto';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 
@@ -24,7 +23,7 @@ async function main() {
   try {
     console.log('Starting ADA transfer (10 ADA) on Preview...');
 
-    // 1. Build Transaction
+    // build Transaction
     console.log('Building Transaction...');
     const buildResponse = await axios.post(`${ODATA_URL}/BuildSimpleAdaTransaction`, BUILD_BODY);
     const buildData = buildResponse.data;
@@ -33,9 +32,9 @@ async function main() {
     const unsignedTxCbor = buildData.unsignedTxCbor;
 
     console.log(`Build successful – ID: ${buildId}`);
-    console.log(`   Fee: ${(buildData.fee / 1_000_000).toFixed(6)} ADA`);
+    console.log(`Fee: ${(buildData.fee / 1_000_000).toFixed(6)} ADA`);
 
-    // 2. unsignedTxCbor → TextEnvelope JSON
+    // unsignedTxCbor → tx.body.json (TextEnvelope)
     const textEnvelope = {
       type: "Tx ConwayEra",
       description: "Ledger Cddl Format",
@@ -43,9 +42,9 @@ async function main() {
     };
 
     writeFileSync(txBodyJsonPath, JSON.stringify(textEnvelope, null, 2));
-    console.log('unsignedTxCbor as tx.body.json (TextEnvelope) saved');
+    console.log('unsignedTxCbor as tx.body.json saved');
 
-    // 3. Sign Transaction with cardano-cli
+    // sign transaction with cardano-cli
     console.log('Sign with cardano-cli...');
     execSync(
       `docker run --rm -v ${tempDir}:/work -v ${process.cwd()}:/keys -w /work ` +
@@ -53,12 +52,13 @@ async function main() {
       `--tx-body-file tx.body.json ` +
       `--signing-key-file /keys/payment.skey ` +
       `--testnet-magic 2 ` +
-      `--out-file tx.signed.json`,  // ← jetzt .json als Ausgabe!
+      `--out-file tx.signed.json`,
       { stdio: 'inherit' }
     );
-    console.log('Signed → tx.signed.json created');
 
-    // 4. Extract signedTxCbor from tx.signed.json
+    console.log('Signed: tx.signed.json created');
+
+    // extract signedTxCbor from tx.signed.json
     const signedJsonContent = readFileSync(join(tempDir, 'tx.signed.json'), 'utf8');
     const signedJson = JSON.parse(signedJsonContent);
     const signedTxCbor = signedJson.cborHex;
@@ -67,8 +67,8 @@ async function main() {
       throw new Error('Warning: signedTxCbor does not start with 84a – invalid format!');
     }
 
-    console.log('signedTxCbor correctly extracted (starts with', signedTxCbor.slice(0, 6), ')');
-    // 5. Submit
+    console.log('signedTxCbor extracted (starts with', signedTxCbor.slice(0, 6), ')');
+    // submit
     console.log('Submitting Transaction...');
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
@@ -86,7 +86,7 @@ async function main() {
       console.error(error.message);
     }
   } finally {
-    // Cleanup
+    // cleanup
     try { unlinkSync(txBodyJsonPath); } catch {}
     try { unlinkSync(txSignedPath); } catch {}
   }

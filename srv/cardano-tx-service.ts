@@ -4,9 +4,10 @@ import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { isValidBech32Address } from './utils/validators';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
+import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
-const { SELECT, UPSERT } = cds.ql;
+const { SELECT, UPSERT, UPDATE, INSERT } = cds.ql;
 
 /**
  * Cardano Transaction Service Implementation
@@ -121,15 +122,19 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
       }
 
-      // 1. Index submission (extracts txHash from signed CBOR)
-      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor);
-      logger.debug({ txHash: indexSubmission.txHash }, '[TxService] Transaction indexed');
+      // extract txHash from signed CBOR
+      const txHash = getTxHashFromCbor(signedTxCbor);
+      logger.debug({ txHash }, '[TxService] Transaction hash extracted from CBOR');
 
-      // 2. Submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
-      const txHash = await cardanoClient.submitTransaction(signedTxCbor);
+      // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
+      await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, '[TxService] Transaction submitted to blockchain');
 
-      // 3. Store submission record with txHash
+      // index submission record
+      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
+      logger.debug('[TxService] Transaction indexed');
+
+      // store submission record with txHash
       const submissionRecord = {
         ...indexSubmission,
         build_id: buildId,
@@ -137,9 +142,15 @@ module.exports = (srv: cds.Service) => {
       };
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
-      await db.run(UPSERT.into(TransactionBuilds).entries({ id: buildId, wasSubmitted: true }));
+      await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
 
-      return submissionRecord;
+      // wait 3 seconds before returning
+      logger.info({ txHash }, '[TxService] Starting 3-second delay before returning response...');
+      
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // return only txHash (HTTP 200 is implicit on success)
+      return { txHash };
     });
   });
 
@@ -155,15 +166,19 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       logger.info({ network }, '[TxService] Submitting external signed transaction');
 
-      // 1. Index submission (extracts txHash)
-      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor);
-      logger.debug({ txHash: indexSubmission.txHash }, '[TxService] External transaction indexed');
+      // 1. Extract txHash from signed CBOR (before submission)
+      const txHash = getTxHashFromCbor(signedTxCbor);
+      logger.debug({ txHash }, '[TxService] Transaction hash extracted from CBOR');
 
       // 2. Submit to blockchain
-      const txHash = await cardanoClient.submitTransaction(signedTxCbor);
+      await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, '[TxService] External transaction submitted');
 
-      // 3. Store submission record (without buildId)
+      // 3. Index submission record
+      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
+      logger.debug('[TxService] External transaction indexed');
+
+      // 4. Store submission record (without buildId)
       const submissionRecord = {
         ...indexSubmission,
         build_id: null,
@@ -171,6 +186,9 @@ module.exports = (srv: cds.Service) => {
       };
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
+
+      // wait 3 seconds before returning
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       return submissionRecord;
     });

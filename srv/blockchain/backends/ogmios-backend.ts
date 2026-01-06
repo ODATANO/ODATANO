@@ -55,7 +55,7 @@ export class OgmiosBackend implements CardanoBackend {
   }
 
   /**
-   * Convert Ogmios value format to standard amount array
+   * Convert Ogmios value format to odatano amount array
    * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
    * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
    */
@@ -70,7 +70,7 @@ export class OgmiosBackend implements CardanoBackend {
       });
     }
     
-    // Handle native assets (policy.assetName)
+    // handle native assets (policy.assetName)
     for (const [policyId, assets] of Object.entries(value)) {
       if (policyId === 'ada') continue;
       
@@ -93,8 +93,6 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
-      
-      // Note: Ogmios v6 has limited genesis query support
       // Using hardcoded max supply for Cardano mainnet
       const maxSupply = '45000000000000000';
 
@@ -129,66 +127,7 @@ export class OgmiosBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
-      
-      try {
-        await this.stateQueryClient.acquireLedgerState('origin');
-      } catch (error: any) {
-        throw new Error(`Cannot acquire ledger state for epoch ${epochNumber}`);
-      }
-      
-      // Get current epoch
-      const currentEpoch = await this.stateQueryClient.epoch();
-      
-      // Check if requested epoch is beyond current epoch
-      if (epochNumber > currentEpoch) {
-        await this.stateQueryClient.releaseLedgerState();
-        throw new NotFoundError(`Epoch ${epochNumber} not available (current epoch: ${currentEpoch})`, this.name);
-      }
-      
-      // Get era summaries to calculate epoch bounds
-      const summaries = await this.stateQueryClient.eraSummaries();
-      
-      await this.stateQueryClient.releaseLedgerState();
-      
-      // Find the era containing this epoch
-      let epochStartTime = 0;
-      let epochEndTime = 0;
-      
-      for (const era of summaries) {
-        const eraStartEpoch = era.start.epoch;
-        const eraEndEpoch = era.end ? era.end.epoch : currentEpoch;
-        
-        if (epochNumber >= eraStartEpoch && epochNumber <= eraEndEpoch) {
-          // Calculate epoch boundaries within this era
-          const epochsIntoEra = epochNumber - eraStartEpoch;
-          const epochLength = Number(era.parameters.epochLength); // in slots
-          const slotLength = Number(era.parameters.slotLength); // in seconds
-          
-          epochStartTime = Number(era.start.time.seconds) + (epochsIntoEra * epochLength * slotLength / 1000);
-          epochEndTime = epochStartTime + (epochLength * slotLength / 1000);
-          break;
-        }
-      }
-      
-      if (epochStartTime === 0) {
-        throw new NotFoundError(`Epoch ${epochNumber}`, this.name);
-      }
-
-      return {
-        epoch: epochNumber,
-        start_time: epochStartTime,
-        end_time: epochEndTime,
-        first_block_time: epochStartTime,
-        last_block_time: epochEndTime,
-        block_count: 0, // Not available via Ogmios
-        tx_count: 0, // Not available via Ogmios
-        output: '0',
-        fees: '0',
-        active_stake: '0'
-      };
+      throw new NotFoundError(' Historic Epoch queries not supported', this.name);
     }, this.name);
   }
 
@@ -197,13 +136,13 @@ export class OgmiosBackend implements CardanoBackend {
   // ---------------------------------------------------------------------------
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(async () => {
-      throw new NotFoundError('Transaction queries not supported', this.name);
+      throw new NotFoundError('Historic Transaction queries not supported', this.name);
     }, this.name);
   }
 
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(async () => {
-      throw new NotFoundError('Transaction metadata not supported', this.name);
+      throw new NotFoundError('Historic Transaction metadata not supported', this.name);
     }, this.name);
   }
 
@@ -218,11 +157,6 @@ export class OgmiosBackend implements CardanoBackend {
       
       // Query UTxOs without acquiring specific ledger state
       const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      
-      console.log('[OgmiosBackend] Raw UTxO count:', utxos.length);
-      if (utxos.length > 0) {
-        console.log('[OgmiosBackend] First UTxO:', utxos[0]);
-      }
       
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
         const lovelace = u.value?.ada?.lovelace || u.value?.lovelace || '0';
@@ -256,16 +190,15 @@ export class OgmiosBackend implements CardanoBackend {
 
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
+      
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
       
       const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      console.log('[OgmiosBackend] getAddressUtxos called for:', address.substring(0, 20) + '...');
-      console.log('[OgmiosBackend] getAddressUtxos UTxO count:', utxos.length);
       
       return utxos.map((u: any) => {
-        // Convert Ogmios value format to standard amount array
+        // convert Ogmios value format to standard amount array
         const amount = this.convertOgmiosValue(u.value);
         
         return {
@@ -356,8 +289,7 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.txSubmissionClient) {
         throw new Error('Ogmios transaction submission client not initialized');
       }
-      
-      // Ogmios v6 submitTransaction expects just the CBOR string
+
       const txHash = await this.txSubmissionClient.submitTransaction(signedTxCbor);
       return txHash;
     }, this.name);
@@ -374,7 +306,7 @@ export class OgmiosBackend implements CardanoBackend {
 
       return {
         network: CONFIG.network,
-        epoch: 0, // Not available in params
+        epoch: 0, // not available in params
         minUtxo: params.minUtxoDepositCoefficient?.toString(),
         nonce: '',
         costModels: JSON.stringify(params.plutusCostModels || {}),
@@ -401,7 +333,7 @@ export class OgmiosBackend implements CardanoBackend {
         a0: Number(params.stakePoolPledgeInfluence || 0),
         rho: Number(params.treasuryExpansion || 0),
         tau: Number(params.monetaryExpansion || 0),
-        decentralisationParam: 0, // Deprecated in newer eras
+        decentralisationParam: 0, // deprecated?! check
         extraEntropy: null,
         protocolMajorVer: params.version?.major || 0,
         protocolMinorVer: params.version?.minor || 0,
@@ -409,5 +341,12 @@ export class OgmiosBackend implements CardanoBackend {
         source: this.name
       };
     }, this.name);
+  }
+
+  getlatestEpoch(): Promise<EpochData> {
+    throw new Error('Method not implemented.');
+  }
+  getlatestBlock(): Promise<BlockData> {
+    throw new Error('Method not implemented.');
   }
 }

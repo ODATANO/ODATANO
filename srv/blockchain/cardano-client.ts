@@ -190,7 +190,7 @@ const backends: CardanoBackend[] = [];
 // build backends from configuration
 for (const backendName of CONFIG.backends) {
   if (backendName === 'hybrid') {
-    // Hybrid mode: Ogmios for live + Blockfrost/Koios for historical
+    // Hybrid mode: Ogmios for live data and sumbmit Blockfrost/Koios for historical data
     logger.info('[CardanoClient] Building Hybrid backend (Ogmios + Blockfrost/Koios)');
     const ogmios = new OgmiosBackend();
     const historical = CONFIG.blockfrostApiKey 

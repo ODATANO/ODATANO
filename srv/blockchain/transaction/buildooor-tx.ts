@@ -23,7 +23,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     const txbParameters = this._mapLedgerParametersToBuildooorParams(ctx.protocolParameters);
     
-    console.log("Using Buildooor TxBuilder with parameters:", txbParameters);
     const txb = new TxBuilder(txbParameters);
 
     // Map ODATANO UTxOs -> ledger-ts UTxO objects
@@ -77,27 +76,24 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
   public async calculateMinUtxoAmount(
-    output: any, // Define a proper type for output
-    protocolParameters: any // Define a proper type for protocol parameters
+    output: any, // @TODO Define a proper type for output
+    protocolParameters: any // TODO Define a proper type for protocol parameters
   ): Promise<number> {
-    // Implement the logic to calculate the minimum UTxO amount
-    // This is a placeholder implementation
-    return 1000000; // Return a dummy value
+    // TODO Implement the logic to calculate the minimum UTxO amount
+    return 1000000; // TODO Return a dummy value
   }
   public async calculateTransactionFee(
     unsignedTxCbor: string,
-    protocolParameters: any // Define a proper type for protocol parameters
+    protocolParameters: any // TODO Define a proper type for protocol parameters
   ): Promise<number> {
-    // Implement the logic to calculate the transaction fee
-    // This is a placeholder implementation
-    return 200000; // Return a dummy value
+    // TODO Implement the logic to calculate the transaction fee
+    return 200000; // TODO Return a dummy value
   }
 
   private _mapLedgerParametersToBuildooorParams(
     protocolParameters: LedgerProtocolParameter
   ): any {
-    // Map LedgerProtocolParameter to Buildooor's ProtocolParameters
-    // This is a placeholder implementation
+    // Map LedgerProtocolParameter to Buildooor's ProtocolParameters shape
     return defaultProtocolParameters;
   }
 

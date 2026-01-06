@@ -9,11 +9,11 @@ export interface CardanoTxBuilder {
     ctx: TxBuildContext
   ): Promise<TxBuildResult>;
   calculateMinUtxoAmount(
-    output: any, // Define a proper type for output
-    protocolParameters: any // Define a proper type for protocol parameters
+    output: any, // TODO Define a proper type for output
+    protocolParameters: any // TODO Define a proper type for protocol parameters
   ): Promise<number>;
   calculateTransactionFee(
     unsignedTxCbor: string,
-    protocolParameters: any // Define a proper type for protocol parameters
+    protocolParameters: any // TODO Define a proper type for protocol parameters
   ): Promise<number>;
 }
