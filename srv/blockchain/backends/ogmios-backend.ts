@@ -24,18 +24,28 @@ import {
 
 import { CardanoBackend } from './cardano-backend';
 
+/**
+ * Ogmios Backend Implementation for Cardano Backend Interface
+ * Implements the CardanoBackend interface using Ogmios WebSocket client for local node interaction
+ */
 export class OgmiosBackend implements CardanoBackend {
   public readonly name = 'ogmios';
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
   private context: any = null;
-
+  
+  /** 
+   * Constructor 
+   */
   constructor() {
     if (!CONFIG.ogmiosUrl) {
       throw new BackendInitError('ogmios', new Error('CONFIG.ogmiosUrl is not set'));
     }
   }
 
+  /** 
+   * Initialize the Ogmios backend connection
+   */
   async init(): Promise<void> {
     const url = new URL(CONFIG.ogmiosUrl || 'ws://localhost:1337');
     const connection = {
@@ -54,40 +64,65 @@ export class OgmiosBackend implements CardanoBackend {
     this.txSubmissionClient = await createTransactionSubmissionClient(this.context);
   }
 
-  /**
-   * Convert Ogmios value format to odatano amount array
-   * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
-   * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
+  /** 
+   * Get specific Block Data (not supported)
+   * @param _hash block hash (hex)
+   * @returns {Promise<BlockData>} block data
    */
-  private convertOgmiosValue(value: any): Array<{ unit: string; quantity: string }> {
-    const amounts: Array<{ unit: string; quantity: string }> = [];
-    
-    // Handle ADA (lovelace)
-    if (value.ada?.lovelace) {
-      amounts.push({
-        unit: 'lovelace',
-        quantity: value.ada.lovelace.toString()
-      });
-    }
-    
-    // handle native assets (policy.assetName)
-    for (const [policyId, assets] of Object.entries(value)) {
-      if (policyId === 'ada') continue;
-      
-      for (const [assetName, quantity] of Object.entries(assets as Record<string, any>)) {
-        amounts.push({
-          unit: `${policyId}${assetName}`,
-          quantity: quantity.toString()
-        });
-      }
-    }
-    
-    return amounts;
+  async getBlock(_hash: string): Promise<BlockData> {
+    return handleBackendRequest(async () => {
+      throw new NotFoundError('Historic Block queries not supported', this.name);
+    }, this.name);
   }
 
-  // ---------------------------------------------------------------------------
-  // Network Information @TODO check how to get real supply data
-  // ---------------------------------------------------------------------------
+  /** 
+   * Get specific Epoch Data (not supported)
+   * @param _epochNumber epoch number
+   * @returns {Promise<EpochData>} epoch data
+   */
+  async getEpoch(_epochNumber: number): Promise<EpochData> {
+    return handleBackendRequest(async () => {
+      throw new NotFoundError('Historic Epoch queries not supported', this.name);
+    }, this.name);
+  }
+
+  /** 
+   * Get specific Transaction Data (not supported)
+   * @param _hash transaction hash (hex)
+   * @returns {Promise<Transaction>} transaction data
+   */
+  async getTransaction(_hash: string): Promise<Transaction> {
+    return handleBackendRequest(async () => {
+      throw new NotFoundError('Historic Transaction queries not supported', this.name);
+    }, this.name);
+  }
+
+  /** 
+   * Get specific Transaction Metadata (not supported)
+   * @param _tx_hash transaction hash (hex)
+   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
+   */
+  async getTransactionMetadata(_tx_hash: string): Promise<MetadataLabelTx[]> {
+    return handleBackendRequest(async () => {
+      throw new NotFoundError('Historic Transaction metadata not supported', this.name);
+    }, this.name);
+  }
+
+ /** 
+  * Get specific Pool Data (not supported for Ogmios)
+  * @param _poolId pool id
+  * @returns {Promise<PoolData>} pool data
+  */
+  async getDrep(_drepId: string): Promise<DrepData> {
+    return handleBackendRequest(async () => {
+      throw new Error('DRep queries not supported');
+    }, this.name);
+  }
+
+ /** 
+  * Get specific Account Data (not supported for Ogmios)
+  * @returns {Promise<Network>} network information
+  */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -113,42 +148,11 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  // ---------------------------------------------------------------------------
-  // Block Data
-  // ---------------------------------------------------------------------------
-  async getBlock(hash: string): Promise<BlockData> {
-    return handleBackendRequest(async () => {
-      throw new NotFoundError('Block queries not supported', this.name);
-    }, this.name);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Epoch Data
-  // ---------------------------------------------------------------------------
-  async getEpoch(epochNumber: number): Promise<EpochData> {
-    return handleBackendRequest(async () => {
-      throw new NotFoundError(' Historic Epoch queries not supported', this.name);
-    }, this.name);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Transaction
-  // ---------------------------------------------------------------------------
-  async getTransaction(hash: string): Promise<Transaction> {
-    return handleBackendRequest(async () => {
-      throw new NotFoundError('Historic Transaction queries not supported', this.name);
-    }, this.name);
-  }
-
-  async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
-    return handleBackendRequest(async () => {
-      throw new NotFoundError('Historic Transaction metadata not supported', this.name);
-    }, this.name);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Address
-  // ---------------------------------------------------------------------------
+  /**
+   * Get current specific Address Data
+   * @param address bech32 address
+   * @returns {Promise<Address>} address data
+   */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -188,6 +192,10 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
+  /** get current specific Address UTxOs
+   * @param address bech32 address
+   * @returns {Promise<UTxO[]>} address UTxOs
+   */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
       
@@ -214,7 +222,11 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  // Pool
+  /** 
+   * Get current specific Pool Data (not supported for Ogmios)
+   * @param poolId pool id
+   * @returns {Promise<PoolData>} pool data
+   */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -246,14 +258,11 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  // DRep
-  async getDrep(drepId: string): Promise<DrepData> {
-    return handleBackendRequest(async () => {
-      throw new Error('DRep queries not supported');
-    }, this.name);
-  }
-
-  // Account
+  /** 
+   * Get Account Data for specified stake address
+   * @param stakeAddress stake address
+   * @returns {Promise<AccountData>} account data
+   */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -283,6 +292,11 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
+  /** 
+   * Submit Transaction to the network
+   * @param signedTxCbor signed transaction in CBOR hex format
+   * @returns {Promise<string>} transaction hash
+   */
   async submitTransaction(signedTxCbor: string): Promise<string> {
     console.log("OgmiosBackend: submitting transaction...");
     return handleBackendRequest(async () => {
@@ -295,6 +309,10 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
+  /** 
+   * Get current Protocol Parameters
+   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
+   */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -343,10 +361,53 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  getlatestEpoch(): Promise<EpochData> {
+  /** 
+   * Get current Latest Epoch Data
+   * @returns {Promise<BlockData>} latest block data
+   */
+  async getLatestEpoch(): Promise<EpochData> {
     throw new Error('Method not implemented.');
   }
-  getlatestBlock(): Promise<BlockData> {
+
+  /** 
+   * Get current Latest Block Data
+   * @returns {Promise<BlockData>} latest block data
+   */
+  async getLatestBlock(): Promise<BlockData> {
     throw new Error('Method not implemented.');
+  }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+  /**
+   * Convert Ogmios value format to odatano amount array
+   * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
+   * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
+   */
+  private convertOgmiosValue(value: any): Array<{ unit: string; quantity: string }> {
+    const amounts: Array<{ unit: string; quantity: string }> = [];
+    
+    // Handle ADA (lovelace)
+    if (value.ada?.lovelace) {
+      amounts.push({
+        unit: 'lovelace',
+        quantity: value.ada.lovelace.toString()
+      });
+    }
+    
+    // handle native assets (policy.assetName)
+    for (const [policyId, assets] of Object.entries(value)) {
+      if (policyId === 'ada') continue;
+      
+      for (const [assetName, quantity] of Object.entries(assets as Record<string, any>)) {
+        amounts.push({
+          unit: `${policyId}${assetName}`,
+          quantity: quantity.toString()
+        });
+      }
+    }
+    return amounts;
   }
 }

@@ -3,7 +3,6 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
-
 import {
   Transaction,
   BlockData,
@@ -19,14 +18,17 @@ import {
   LedgerProtocolParameters 
 } from '../../utils/types';
 
-
-// ---------------------------------------------------------------------------
-// Blockfrost Backend Implementation
-// ---------------------------------------------------------------------------
+/**
+ * BlockfrostBackend Implementation for CardanoBackend Interface
+ * Implements the CardanoBackend interface using Blockfrost API SDK
+ */
 export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
-
+  
+  /** 
+   * Constructor
+   */
   constructor() {
   const projectId = CONFIG.blockfrostApiKey;
   if (!projectId) {
@@ -35,11 +37,15 @@ export class BlockfrostBackend implements CardanoBackend {
   this.api = new BlockFrostAPI({ projectId });
   }
   
+   /** 
+    * Initialize the backend 
+    */
   async init(): Promise<void> { }
 
-  // ---------------------------------------------------------------------------
-  // Network Information
-  // ---------------------------------------------------------------------------
+  /** 
+   * Get Network Information
+   * @returns {Promise<Network>} network information
+   */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
@@ -52,9 +58,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Block Data
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Block Data
+   * @param blockHash block hash (hex)
+   * @returns {Promise<BlockData>} block data
+   */
   async getBlock(blockHash: string): Promise<BlockData> {
      return handleBackendRequest(
       async () => {
@@ -75,9 +84,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Epoch Data
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Epoch Data
+   * @param epochNumber epoch number
+   * @returns {Promise<EpochData>} epoch data
+   */
    async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -98,9 +110,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Transaction
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Transaction Data
+   * @param hash transaction hash (hex)
+   * @returns {Promise<Transaction>} transaction data
+   */
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
@@ -151,9 +166,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  //  Transaction Metadata
-  // ---------------------------------------------------------------------------
+  
+  /**
+   * Get Transaction Metadata
+   * @param tx_hash transaction hash (hex)
+   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
+   */
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(
       async () => {
@@ -173,9 +191,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Address
-  // ---------------------------------------------------------------------------
+/** 
+ * Get Address Data
+ * @param address bech32 address string
+ * @returns {Promise<Address>} address data
+ */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
@@ -203,6 +223,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Address UTxOs
+   * @param address bech32 address string
+   * @returns {Promise<UTxO[]>} list of UTxOs
+   */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
@@ -221,6 +246,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Pool Data
+   * @param poolId stake pool id (hex)
+   * @return {Promise<PoolData>} pool data
+   */
   async getPool(poolId: string): Promise<PoolData> {
    return handleBackendRequest(
       async () => {
@@ -246,6 +276,11 @@ export class BlockfrostBackend implements CardanoBackend {
     ); 
   }
 
+  /**
+   * Get Drep Data
+   * @param drepId drep id (bech32)
+   * @return {Promise<DrepData>} drep data
+   */
   async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(
       async () => {
@@ -265,6 +300,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Account Data
+   * @param stakeAddress bech32 stake address
+   * @return {Promise<AccountData>} account data
+   */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(
       async () => {
@@ -292,6 +332,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Submit Transaction
+   * @param signedTxCbor hex-encoded signed transaction CBOR
+   * @returns {Promise<string>} transaction hash
+   */
   async submitTransaction(signedTxCbor: string): Promise<string> {
     console.log("BlockfrostBackend: submitting transaction...");
     const txBytes = Buffer.from(signedTxCbor, "hex");
@@ -303,6 +348,11 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
+
+  /** 
+   * Get Protocol Parameters
+   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
+   */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(
       async () => {
@@ -349,7 +399,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
-  async getlatestEpoch(): Promise<EpochData> {
+  /** 
+   * Get Latest Epoch Data
+   * @returns {Promise<EpochData>} latest epoch data
+   */
+  async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
         const epochData = await this.api.epochsLatest();
@@ -369,7 +423,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  async getlatestBlock(): Promise<BlockData> {
+
+  /** 
+   * Get Latest Block Data
+   * @returns {Promise<BlockData>} latest block data
+   */
+  async getLatestBlock(): Promise<BlockData> {
      return handleBackendRequest(
       async () => {
         const blockdata = await this.api.blocksLatest();

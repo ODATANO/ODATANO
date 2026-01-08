@@ -2,13 +2,17 @@ import { normalizeBackendError } from './errors';
 import cds, { Request } from '@sap/cds';
 import logger from './logger';
 import { mapError } from './mappers';
-/**
- * Wraps a backend method call with standardized error handling
- * 
+
+/** 
+ * BackendRequestHandler - Provides standardized handling for backend requests 
+ */
+
+/** 
+ * BackendRequestHandler - Wraps a backend method call with standardized error handling
  * @param fn - The async function to execute
  * @param backendName - Name of the backend (for error context)
  * @param resourceName - Name of the resource being accessed (e.g., "Transaction", "Address")
- * @returns The result of the function or throws a normalized BackendError
+ * @returns {Promise<T>} The result of the backend call or a normalized error
  */
 export async function handleBackendRequest<T>(
   fn: () => Promise<T>,
@@ -20,10 +24,12 @@ export async function handleBackendRequest<T>(
     throw normalizeBackendError(err, backendName);
   }
 }
-/** * General request handler for CardanoService
+
+/**
+ * General request handler for CardanoService
  * @param req - The incoming request 
  * @param handler - The async function containing business logic
- * @returns The result of the handler or a mapped error response
+ * @returns {Promise<any>} The result of the handler or a mapped error response
  */ 
 export async function handleRequest(
     req: Request,

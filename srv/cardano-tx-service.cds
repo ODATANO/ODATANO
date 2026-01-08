@@ -5,109 +5,128 @@ using {odatano.cardano as db} from '../db/schema';
  * 
  * Handles transaction building and submission operations.
  * Separate from the read-only CardanoODataService to provide
- * clear separation between query and command operations.
+ * clear separation between general query and command operations.
  */
 service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections - Transaction Building & Submission
     // ---------------------------------------------------------------------------
     
-    @readonly
+    @title : 'Transaction Builds'
+    @description : 'Projection for Transaction Builds'
     entity TransactionBuilds            as projection on db.TransactionBuilds;
 
-    @readonly
+    @title : 'Ledger Protocol Parameters'
+    @description : 'Projection for Ledger Protocol Parameters'
     entity LedgerProtocolParameters     as projection on db.LedgerProtocolParameters;
     
-    @readonly
+    @title : 'Transaction Build Inputs'
+    @description : 'Projection for Transaction Build Inputs'
     entity TransactionBuildInputs       as projection on db.TransactionBuildInputs;
     
-    @readonly
+    @title : 'Transaction Build Outputs'
+    @description : 'Projection for Transaction Build Outputs'
     entity TransactionBuildOutputs      as projection on db.TransactionBuildOutputs;
     
-    @readonly
+    @title : 'Transaction Build Input Assets'
+    @description : 'Projection for Transaction Build Input Assets'
     entity TransactionBuildInputAssets  as projection on db.TransactionBuildInputAssets;
     
-    @readonly
+    @title : 'Transaction Build Output Assets'
+    @description : 'Projection for Transaction Build Output Assets'
     entity TransactionBuildOutputAssets as projection on db.TransactionBuildOutputAssets;
     
-    @readonly
+    @title : 'Transaction Submissions'
+    @description : 'Projection for Transaction Submissions'
     entity TransactionSubmissions       as projection on db.TransactionSubmissions;
     
-    @readonly
+    @title : 'Transaction Submission Errors'
+    @description : 'Projection for Transaction Submission Errors'
     entity TransactionSubmissionErrors  as projection on db.TransactionSubmissionErrors;
+
+    @title : 'Latest Block'
+    @description : 'Projection for Latest Block'
+    entity LatestBlock                  as projection on db.Blocks;
+
+    @title : 'Latest Epoch'
+    @description : 'Projection for Latest Epoch'
+    entity LatestEpoch                  as projection on db.Epochs;
+
+    // ---------------------------------------------------------------------------
+    // Query Actions
+    // ---------------------------------------------------------------------------
+
+    @title : 'Get Latest Block'
+    @description : 'Retrieve the latest block information'
+    action GetLatestBlock() returns LatestBlock;
+
+    @title : 'Get Latest Epoch'
+    @description : 'Retrieve the latest epoch information'
+    action GetLatestEpoch() returns LatestEpoch;
+
+    @title : 'Get Ledger Protocol Parameters'
+    @description : 'Retrieve the current ledger protocol parameters'
+    action GetProtocolParameters() returns LedgerProtocolParameters;
 
     // ---------------------------------------------------------------------------
     // Transaction Building Actions
     // ---------------------------------------------------------------------------
     
-    /**
-     * Build a simple ADA-only transaction
-     * 
-        * @param network - Target network ('mainnet', 'preprod', 'preview')
-        * @param senderAddress - Source address (must have UTxOs)
-        * @param recipientAddress - Recipient address
-        * @param lovelaceAmount - Amount of lovelace to send
-        * @param changeAddress - Optional change address (defaults to sender)
-        * @returns Complete transaction build with unsigned CBOR
-     */
+    @title : 'Build Simple ADA Transaction'
+    @description : 'Build a simple ADA transfer transaction from sender to recipient with specified amount and change address'
     action BuildSimpleAdaTransaction(
+        @title : 'Network'
+        @description : 'The Cardano network to build the transaction for (e.g., mainnet, testnet)'
         network        : String(10),
+        @title : 'Sender Address'
+        @description : 'The Bech32 encoded address of the sender'
         senderAddress  : db.bech32,
+        @title : 'Recipient Address'
+        @description : 'The Bech32 encoded address of the recipient'
         recipientAddress: db.bech32,
+        @title : 'Lovelace Amount'
+        @description : 'The amount of ADA to send in lovelace'
         lovelaceAmount : db.Lovelace,
+        @title : 'Change Address'
+        @description : 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
         changeAddress  : db.bech32
     ) returns TransactionBuilds;
     
-    /**
-     * Get details of a transaction build
-     * 
-     * @param buildId - UUID of the build
-     * @returns Complete build details with all relationships expanded
-     */
+    @title : 'Get Build Details'
+    @description : 'Retrieve transaction build details using the Build Id'
     action GetBuildDetails(
+        @title : 'Build Id'
+        @description : 'The unique identifier of the transaction build'
         buildId : UUID
     ) returns TransactionBuilds;
 
-    // ---------------------------------------------------------------------------
-    // Transaction Submission Actions
-    // ---------------------------------------------------------------------------
-    
-    /**
-     * Submit a signed transaction to the Cardano network
-     * 
-     * @param buildId - UUID of the original build
-     * @param signedTxCbor - Signed transaction CBOR hex string
-     * @returns Submission record with initial status
-     */
+    @title : 'Submit Transaction'
+    @description : 'Submit a transaction to the Cardano network using a build ID and signed CBOR'
     action SubmitTransaction(
+        @title : 'Build Id'
+        @description : 'The unique identifier of the transaction build'
         buildId      : UUID,
+        @title : 'Signed Transaction CBOR'
+        @description : 'The CBOR of the signed transaction'
         signedTxCbor : String
     ) returns TransactionSubmissions;
     
-    /**
-     * Submit a signed transaction without prior build
-     * 
-     * For transactions built externally or when build record was not created.
-     * 
-     * @param signedTxCbor - Signed transaction CBOR hex string
-     * @param network - Target network
-     * @returns Submission record
-     */
+    @title : 'Submit Signed Transaction'
+    @description : 'Submit a signed transaction to the Cardano network'
     action SubmitSignedTransaction(
+        @title : 'Signed Transaction CBOR'
+        @description : 'The CBOR of the signed transaction'
         signedTxCbor : String,
+        @title : 'Network'
+        @description : 'The Cardano network to submit the transaction to (e.g., mainnet, testnet)'
         network      : String(10)
     ) returns TransactionSubmissions;
 
-    /**
-     * Check the status of a transaction submission
-     * 
-     * Queries the blockchain to update confirmation status.
-     * 
-     * @param submissionId - UUID of the submission
-     * @returns Updated submission record with current status
-     */
+    @title : 'Check Submission Status'
+    @description : 'Check the status of a submitted transaction using the Submission Id'
     action CheckSubmissionStatus(
+        @title : 'Submission Id'
+        @description : 'The unique identifier of the transaction submission'
         submissionId : UUID
     ) returns TransactionSubmissions;
-
 }

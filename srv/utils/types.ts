@@ -1,33 +1,31 @@
 import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
 
+/**
+ *  Hex-encoded string (lower/upper-case depending on source) 
+ */
 export type Hex = string;
+
+/** 
+ * Lovelace amount (integer) - usually represented as number of lovelace (1 ADA = 1,000,000 lovelace) 
+ */
 export type Lovelace = number;
 
+/** 
+ * JSON Value Type - Represents any valid JSON value 
+ */
+export type JSONValue = | string| number| boolean | { [key: string]: JSONValue } | JSONValue[] | null;
 
-// ---------------------------------------------------------------------------------------
-// JSON Value Type
-// ---------------------------------------------------------------------------------------
-export type JSONValue =
-  | string
-  | number
-  | boolean
-  | { [key: string]: JSONValue }
-  | JSONValue[]
-  | null;
-
-// ---------------------------------------------------------------------------------------
-// Amount Data Structure Type
-// -----------------------------------------------------------------------------
-
+/** 
+ * Amount Data Structure Type - Multi-asset amount line as returned by common Cardano APIs 
+ */
 export interface Amount {
   unit: string;
   quantity: string;
 }
 
-// ---------------------------------------------------------------------------------------
-// Transaction Input Data Structure Type
-// -----------------------------------------------------------------------------
-
+/** 
+ * Transaction Input Data Structure Type 
+ */
 export interface TxInputLine {
   address: string;
   amount: Amount[];
@@ -40,10 +38,9 @@ export interface TxInputLine {
   isReference?: boolean;
 }
 
-// ---------------------------------------------------------------------------------------
-// Transaction Output Data Structure Type
-// -----------------------------------------------------------------------------
-
+/** 
+ * Transaction Output Data Structure Type 
+ */
 export interface TxOutputLine {
   address: string;
   amount: Amount[];
@@ -55,10 +52,9 @@ export interface TxOutputLine {
   referenceScriptHash?: Hex | null;
 }
 
-// ---------------------------------------------------------------------------------------
-// Transaction Data Structure Type
-// -----------------------------------------------------------------------------
-
+/** 
+ * Transaction Data Structure Type - Normalized transaction structure 
+ */
 export interface Transaction {
   hash: Hex;
   blockHash: Hex;
@@ -74,9 +70,10 @@ export interface Transaction {
   outputs: TxOutputLine[];
   metadata?: MetadataLabelTx[];
 }
-// -----------------------------------------------------------------------------
-// Address Data Structure Type
-// -----------------------------------------------------------------------------
+
+/**
+ *  Address Data Structure Type - Address view, including current value and known UTxOs
+ */
 export interface Address {
   address: string;
   stakeAddress: string | null;
@@ -85,9 +82,10 @@ export interface Address {
   amount: Amount[];
   utxos: UTxO[];
 }
-// -----------------------------------------------------------------------------
-// UTxO Data Structure Type
-// -----------------------------------------------------------------------------
+
+/** 
+ * UTxO Data Structure Type - Unspent transaction outputs (UTxOs) 
+ */
 export interface UTxO {
     txHash: Hex;
     outputIndex: number;
@@ -97,9 +95,10 @@ export interface UTxO {
     datumHash?: Hex | null;
     scriptRef?: Hex | null;
 }
-// -----------------------------------------------------------------------------
-// Block Data Structure Type
-// ---------------------------------------------------------------------------
+
+/** 
+ * Block Data Structure Type - Basic block information structure
+ */
 export interface BlockData {
     time: number;
     height: number | null;
@@ -113,9 +112,9 @@ export interface BlockData {
     fees?: string | null;
 }
 
-// -----------------------------------------------------------------------------
-// Supply Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Supply Data Structure Type - Network supply information
+ */
 export interface Supply{
     max: string;
     total: string;
@@ -125,25 +124,25 @@ export interface Supply{
     reserves: string;
 }
 
-// -----------------------------------------------------------------------------
-// Stake Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Stake Data Structure Type - Network stake information
+ */
 export interface Stake{
     live: string;
     active: string;
 }
 
-// -----------------------------------------------------------------------------
-// Network Information Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Network Information Data Structure Type - Network supply and stake information
+ */
 export interface Network{
     supply: Supply;
     stake: Stake;
 }
 
-// -----------------------------------------------------------------------------
-// Epoch Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Epoch Data Structure Type - Epoch information
+ */
 export interface EpochData{
     epoch: number;
     start_time: number;
@@ -156,18 +155,19 @@ export interface EpochData{
     fees: string;
     active_stake: string | null;
 }
-// ----------------------------------------------------------------------------
-// Transaction MetadataLabelTxData Structure Type
-// ---------------------------------------------------------------------------
+
+/** 
+ * Metadata Label Transaction Data Structure Type - Transaction metadata under a specific label 
+ */
 export interface MetadataLabelTx {
   txHash: Hex;
   label: number | string;
   json?: JSONValue;
 }
 
-// ---------------------------------------------------------------------------
-// Account Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Account Data Structure Type - Stake account information 
+ */
 export interface AccountData {
   stakeaddress: string;
   active: boolean;
@@ -183,9 +183,9 @@ export interface AccountData {
   addresses: Address[];
 }
 
-// ---------------------------------------------------------------------------
-// Pool Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Pool Data Structure Type - Pool information 
+ */
 export interface PoolData {
   poolId: string; 
   vrfKeyHash: string;
@@ -203,9 +203,9 @@ export interface PoolData {
   rewardAccount  : string;
 }
 
-// ---------------------------------------------------------------------------
-// DREP Data Structure Type
-// ---------------------------------------------------------------------------
+/** 
+ * Drep Data Structure Type - Drep information 
+ */
 export interface DrepData {
   drepId: string; 
   hex: string; 
@@ -216,6 +216,9 @@ export interface DrepData {
   expired: boolean; 
 }
 
+/** 
+ * Ledger Protocol Parameters Data Structure Type - Current protocol parameters 
+ */
 export type LedgerProtocolParameters = {
   network : string;     // mainnet | preprod | preview (dein ODATANO-Konzept)
   epoch   : number;
@@ -259,6 +262,9 @@ export type LedgerProtocolParameters = {
   source    : string;              // "blockfrost/koios/direct"
 }
 
+/** 
+ * Transaction Build Request Type - Parameters for building a simple ADA-only transaction 
+ */
 export type TxBuildRequest = {
   network: 'mainnet' | 'preprod' | 'preview';
   senderAddress: string;
@@ -268,12 +274,17 @@ export type TxBuildRequest = {
   feeLovelace?: string;
 };
 
-
+/** 
+ * Transaction Build Context Type - Context for building a transaction
+ */
 export type TxBuildContext = {
   utxos: UTxO[];
   protocolParameters: LedgerProtocolParameter;
 };
 
+/**
+ *  Transaction Build Result Type 
+ */
 export type TxBuildResult = {
   senderAddress?: string;
   network?: 'mainnet' | 'preprod' | 'preview';

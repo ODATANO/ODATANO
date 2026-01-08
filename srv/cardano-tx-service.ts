@@ -7,7 +7,7 @@ import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
-const { SELECT, UPSERT, UPDATE, INSERT } = cds.ql;
+const { SELECT } = cds.ql;
 
 /**
  * Cardano Transaction Service Implementation
@@ -21,9 +21,11 @@ module.exports = (srv: cds.Service) => {
     TransactionBuilds,
     TransactionBuildInputs,
     TransactionBuildOutputs,
-    TransactionBuildMetadata,
     TransactionSubmissions,
     TransactionSubmissionErrors,
+    LatestBlock,
+    LatestEpoch,
+    LedgerProtocolParameters,
   } = require('#cds-models/CardanoTransactionService');
 
   // Initialize transaction builder
@@ -53,12 +55,50 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, (db) => db.run(req.query));
   });
 
+  srv.on('READ', LatestBlock, async (req: Request) => {
+    // TODO: implement caching for latest block
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  srv.on('READ', LatestEpoch, async (req: Request) => {
+    // TODO: implement caching for latest epoch
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  srv.on('READ', LedgerProtocolParameters, async (req: Request) => {
+    // TODO: implement caching for protocol parameters
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Query Actions
+  // ---------------------------------------------------------------------------
+
+  srv.on('GetLatestBlock', async (req: Request) => {
+    return handleRequest(req, async (db) => {
+      return await indexer.indexLatestBlock(db);
+    });
+  });
+
+  srv.on('GetLatestEpoch', async (req: Request) => {
+    return handleRequest(req, async (db) => {
+      return await indexer.indexLatestEpoch(db);
+    });
+  });
+
+  srv.on('GetProtocolParameters', async (req: Request) => {
+    return handleRequest(req, async (db) => {
+      return indexer.indexProtocolParameters(db);
+    });
+  });
   // ---------------------------------------------------------------------------
   // Transaction Building Actions
   // ---------------------------------------------------------------------------
 
   /**
    * Build a simple ADA-only transaction
+   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, changeAddress)
+   * @returns Transaction build details 
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
     const { network, senderAddress, recipientAddress, lovelaceAmount } = req.data;
@@ -71,6 +111,7 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid sender address format', 'senderAddress');
     }
 
+    // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
         logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
 
@@ -96,7 +137,6 @@ module.exports = (srv: cds.Service) => {
       if (!build) {
         return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
       }
-
       return build;
     });
   });

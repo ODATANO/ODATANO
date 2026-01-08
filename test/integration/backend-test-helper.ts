@@ -2,7 +2,7 @@
  * Backend Test Helper
  * Utility to run the same integration tests against multiple backends (Blockfrost, Koios)
  */
-export type BackendType = 'blockfrost' | 'koios';
+export type BackendType = 'blockfrost' | 'koios' | 'ogmios';
 
 export interface BackendTestConfig {
   name: BackendType;

@@ -1,7 +1,9 @@
 import pino from 'pino';
 import { CONFIG } from '../../config/config';
 
-// Only use pino-pretty in development (when it's available)
+/**
+ * Configure Pino logger 
+ */
 const isDevelopment = process.env.NODE_ENV !== 'production';
 const hasPinoPretty = isDevelopment && (() => {
   try {
@@ -12,6 +14,9 @@ const hasPinoPretty = isDevelopment && (() => {
   }
 })();
 
+/**
+ * Create Pino logger instance 
+ */
 const logger = pino(hasPinoPretty ? {
   level: CONFIG.logLevel,
   transport: {
@@ -23,7 +28,11 @@ const logger = pino(hasPinoPretty ? {
     }
   }
 } : {
+  // use log level from config
   level: CONFIG.logLevel
 });
 
+/**
+ * Export the logger instance
+ */
 export default logger;

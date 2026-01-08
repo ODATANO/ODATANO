@@ -22,13 +22,16 @@ import {
   Accounts,
   Pools,
   Dreps,
+  Account,
+  Drep,
+  Pool,
+  Address
 } from '#cds-models/CardanoODataService';
 
 import {
   LedgerProtocolParameter,
   TransactionBuild,
-  TransactionSubmission as TransactionSubmissionRow,
-  TransactionSubmissions
+  TransactionSubmission
 } from '#cds-models/CardanoTransactionService';
 
 import {
@@ -53,27 +56,36 @@ import {
   mapTransactionSubmission
 } from '../utils/mappers';
 
-import { Transaction as TransactionProviderData, TxBuildRequest, TxBuildResult } from '../utils/types';
-import { CONFIG } from '../../config/config';
-
+import {Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
 
 const { UPSERT } = cds.ql;
 
+/** 
+ * CardanoIndexer - Indexer for Cardano blockchain data into OData entities
+ * 
+ * Provides methods to index & manage db consistency for various Cardano blockchain data (transactions, addresses, blocks, epochs, accounts, pools, dreps)
+ * 1. Fetches data from the configured Cardano data provider via the CardanoClient
+ * 2. Maps the provider data into corresponding OData entity rows
+ * 3. Upserts the data rows into the database via CAP transactions
+ * 4. Ensures referential integrity and consistency across related entities (e.g., addresses in transactions, UTxOs in addresses)
+ * 5. Returns the indexed entity data for further processing
+ * 
+ * Each method corresponds to a specific Cardano Entity type and handles the necessary mapping and persistence
+ * into the corresponding OData entities defined in the CardanoODataService(M1) and CardanoTransactionService(M2) models.
+ */
 export class CardanoIndexer {
-  /**
-   * Index a single transaction with inputs/outputs/assets/UTxOs/addresses
-   *
+
+  /** 
+   * Index & return a single transaction with inputs/outputs/assets/UTxOs/addresses
    * @param tx      CAP transaction (cds.tx(req))
    * @param txHash  Cardano transaction hash (hex)
+   * @returns {Promise<CardanoTransaction>} transaction entity data
    */
-  async indexTransaction(
-    tx: CapTransaction,
-    txHash: string,
-  ): Promise<CardanoTransaction> {
+  async indexTransaction(tx: CapTransaction,txHash: string,): Promise<CardanoTransaction> {
     // getting data from cardano data provider
     const providerTx = await cardano.getTransaction(txHash);
-
     const txRow = mapTransaction(providerTx);
+
     tx.run( UPSERT.into(Transactions).entries(txRow))
 
     if (providerTx.inputs || providerTx.outputs) {
@@ -111,20 +123,21 @@ export class CardanoIndexer {
         tx.run( UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
       }
     }
-
     const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
 
     if (metadataRows.length) {
         tx.run( UPSERT.into(TransactionMetadata).entries(metadataRows))
     }
-
     return txRow;
   }
 
-  /**
-   * Index a single address (Addresses + AddressAssets + AddressUTxOs)
+  /** 
+   * Index & return address data with assets and UTxOs
+   * @param tx       CAP transaction
+   * @param addr     bech32 address
+   * @return {Promise<Address>} address entity data
    */
-  async indexAddress(tx: CapTransaction, addr: string): Promise<any> {
+  async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
     const addrData = await cardano.getAddress(addr);
 
     logger.debug({ addrData }, 'indexAddress: provider response');
@@ -178,17 +191,14 @@ export class CardanoIndexer {
     return AddrEntity;
   }
 
-   /**
-   * Index metadata for a single transaction (Metadata)
-   *
+  /** 
+   * Index & return metadata for a single transaction (Metadata)
    * @param tx       CAP transaction
    * @param txHash   transaction hash
    * @param metadata raw metadata object (label -> JSONValue)
+   * @return {Promise<TransactionMetadata[]>} array of transaction metadata rows  
    */
-  async indexTransactionMetadata(
-    tx: CapTransaction,
-    tx_hash: string,
-  ): Promise<TransactionMetadata[]> {
+  async indexTransactionMetadata(tx: CapTransaction, tx_hash: string): Promise<TransactionMetadata[]> {
     const metadata = await cardano.getTransactionMetadata(tx_hash);
     const rows = mapTransactionMetadata(metadata);
     if (rows.length) {
@@ -197,8 +207,10 @@ export class CardanoIndexer {
     return rows;
   }
 
-  /**
-   * Index network information
+  /** 
+   * Index & return the network information data
+   * @param tx CAP transaction object
+   * @returns {Promise<NetworkInformation>} network information entity data
    */
   async indexNetworkInformation(tx: CapTransaction): Promise<NetworkInformation> {
     const netInfo = await cardano.getNetworkInformation();
@@ -208,9 +220,12 @@ export class CardanoIndexer {
     return netEntity;
   }
   
-   /**
-   * Index spec. block information
-   */
+   /** 
+    * Index & return the block information data
+    * @param tx CAP transaction object
+    * @param blockHash block hash (hex)
+    * @returns {Promise<Block>} block entity data
+    */
   async indexBlock(tx: CapTransaction, blockHash: string): Promise<Block> {
     const blockInfo = await cardano.getBlock(blockHash);    
     const epoch = await this.indexEpoch(tx , blockInfo.epoch!);
@@ -219,10 +234,12 @@ export class CardanoIndexer {
     return blockEntity;
   }
 
-
-   /**
-   * Index spec. epoch information
-   */
+   /** 
+    * Index & return the epoch information data
+    * @param tx CAP transaction object
+    * @param epochNumber epoch number
+    * @returns {Promise<Epoch>} epoch entity data
+    */
   async indexEpoch(tx: CapTransaction,epochNumber: Number): Promise<Epoch> {
     const epochInfo = await cardano.getEpoch(epochNumber);
     const epochEntity = mapEpoch(epochInfo);
@@ -231,7 +248,13 @@ export class CardanoIndexer {
     return epochEntity;
   }
 
-  async indexAccount(tx: CapTransaction, stakeAddress: string) {
+  /** 
+   * Index & return the account information data
+   * @param tx CAP transaction object
+   * @param stakeAddress stake address (bech32)
+   * @returns {Promise<Account>} account entity data
+  */
+  async indexAccount(tx: CapTransaction, stakeAddress: string): Promise<Account> {
     const accountInfo = await cardano.getAccount(stakeAddress);
     const accountEntity = mapAccount(accountInfo);
     
@@ -245,15 +268,27 @@ export class CardanoIndexer {
     
     return accountEntity;
   }
-  
-  async indexDrep(tx: CapTransaction, drepId: string)  {
+
+  /** 
+   * Index & return the drep information data
+   * @param tx CAP transaction object
+   * @param drepId drep id (bech32)
+   * @returns {Promise<Drep>} drep entity data
+   */
+  async indexDrep(tx: CapTransaction, drepId: string): Promise<Drep> {
     const drepInfo = await cardano.getDrep(drepId);
     const drepEntity = mapDrep(drepInfo);
     await tx.run( UPSERT.into(Dreps).entries(drepEntity));
     return drepEntity;
   }
-  
-  async indexPool(tx: CapTransaction, poolId: string)  {
+
+  /** 
+   * Index & return the pool information data
+   * @param tx CAP transaction object
+   * @param poolId pool id (hex)
+   * @returns {Promise<Pool>} pool entity data
+   */
+  async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
     const poolInfo = await cardano.getPool(poolId);
     const poolEntity = mapPool(poolInfo);
    
@@ -262,10 +297,13 @@ export class CardanoIndexer {
     return poolEntity;
   } 
 
-  async indexBuildResult(
-    tx: CapTransaction,
-    buildreq: TxBuildRequest
-  ): Promise<TransactionBuild> {
+  /** 
+   * Index & return the transaction build result data
+   * @param tx CAP transaction object
+   * @param buildreq transaction build request data
+   * @returns {Promise<TransactionBuild>} transaction build entity data
+   */
+  async indexBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
      
     // make sure we have protocol parameters indexed
     const protocolParams = await this.indexProtocolParameters(tx);
@@ -283,9 +321,12 @@ export class CardanoIndexer {
     return buildResult;
   }
 
-  async indexProtocolParameters(
-    tx: CapTransaction
-  ): Promise<LedgerProtocolParameter> {
+  /** 
+   * Index & return the protocol parameters data
+   * @param tx CAP transaction object
+   * @returns {Promise<LedgerProtocolParameter>} protocol parameters entity data
+   */
+  async indexProtocolParameters(tx: CapTransaction): Promise<LedgerProtocolParameter> {
     // first, check if we have recent protocol parameters
     const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter));
 
@@ -300,17 +341,51 @@ export class CardanoIndexer {
     return protocolParams;
   }
 
-  async indexTransactionSubmission(
-    signedTxCbor: string,
-    txHash: string
-  ): Promise<TransactionSubmissionRow> {
+  /** 
+   * Index & return the transaction submission record
+   * @param signedTxCbor signed transaction in CBOR format (hex)
+   * @param txHash transaction hash (hex)
+   * @returns {Promise<TransactionSubmissionRow>} transaction submission entity data
+   */
+  async indexTransactionSubmission( signedTxCbor: string, txHash: string): Promise<TransactionSubmission> {
     const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
     // return submission record without persisting (caller will persist it)
     return transactionSubmission;
   }
-      
-  /**
-   * Helper: collect all involved addresses from a txUtxos set
+
+  /** 
+   * Index & return the latest epoch information data
+   * @param tx CAP transaction object
+   * @returns {Promise<Epoch>} epoch entity data
+   */
+  async indexLatestEpoch( tx: CapTransaction): Promise<Epoch> {
+    const epochInfo = await cardano.getLatestEpoch();
+    const epochEntity = mapEpoch(epochInfo);
+    await tx.run(UPSERT.into(Epoch).entries([epochEntity]))
+    return epochEntity;
+  }
+
+  /** 
+   * Index & return the latest block information data
+   * @param tx CAP transaction object
+   * @returns {Promise<Block>} block entity data
+   */
+  async indexLatestBlock(tx: CapTransaction): Promise<Block> {
+    const blockInfo = await cardano.getLatestBlock();    
+    const epoch = await this.indexEpoch(tx , blockInfo.epoch!);
+    const blockEntity = mapBlock(blockInfo, epoch); 
+    await tx.run(UPSERT.into(Block).entries(blockEntity));
+    return blockEntity;
+  }
+
+//-----------------------------------------------------------------------------
+// Private Helpers
+//-----------------------------------------------------------------------------
+
+  /** 
+   * Collect all unique addresses from UTxOs in transaction data
+   * @param txUtxos transaction data with UTxOs
+   * @returns {string[]} array of unique bech32 addresses
    */
   private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
     const set = new Set<string>();
@@ -328,8 +403,10 @@ export class CardanoIndexer {
     return Array.from(set);
   }
 
-  /**
-   * Helper: index multiple addresses with assets
+  /** 
+   * Index multiple addresses with assets
+   * @param tx CAP transaction object
+   * @param bech32List array of bech32 addresses
    */
   private async _ensureAddresses(
     tx: CapTransaction,
@@ -339,10 +416,10 @@ export class CardanoIndexer {
       await this.indexAddress(tx, bech32);
     }
   }
-
-
 }
 
+/**
+ * Singleton Cardano Indexer instance 
+ */
 const cardanoIndexer = new CardanoIndexer();
-
 export default cardanoIndexer;

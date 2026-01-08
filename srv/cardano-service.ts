@@ -7,7 +7,6 @@ import { handleRequest } from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
 
-// Functional service implementation - handlers are registered directly at module load time
 module.exports = (srv: cds.Service) => {
   logger.info('[CardanoService] Module loaded - registering handlers');
   

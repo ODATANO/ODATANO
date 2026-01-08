@@ -23,7 +23,7 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 			});
 
 			it('GET / single Address with nonexistent data', async () => {
-				const nonexistentAddr = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
+				const nonexistentAddr = 'addr_test1qrvzl5l0aq56ha2vqjmj04562jckr9ruqqtckvalcugprq79ypxttd5pkvqnvs33dvs6jrtrcr3cqf654gvze2nj35ksu2dtx5';
 				const { status, data } = await GET(`/odata/v4/cardano-odata/Addresses('${nonexistentAddr}')`).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
@@ -47,14 +47,14 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 			} );
 
 			it('POST / Address with no assets: GetAssetsByAddress returns 404', async () => {
-				const addressWithNoAssets = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
+				const addressWithNoAssets = 'addr_test1qrvzl5l0aq56ha2vqjmj04562jckr9ruqqtckvalcugprq79ypxttd5pkvqnvs33dvs6jrtrcr3cqf654gvze2nj35ksu2dtx5';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetAssetsByAddress', { address: addressWithNoAssets }).catch(err => err.response);
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
 			} );
 
 			it('POST / Address with no UTxOs: GetUTxOsByAddress returns 404 if no utxos exist on address', async () => {	
-				const addressWithNoUtxos = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622';
+				const addressWithNoUtxos = 'addr_test1qrvzl5l0aq56ha2vqjmj04562jckr9ruqqtckvalcugprq79ypxttd5pkvqnvs33dvs6jrtrcr3cqf654gvze2nj35ksu2dtx5';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: addressWithNoUtxos }).catch(err => err.response);
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
@@ -69,7 +69,7 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 			});
 
 			it('POST / Valid but non-existent account: GetAccountByAddress returns 404', async () => {
-				const nonexistentAccountAddr = 'stake_test1upf33faucwv50x3c9cqw7uesdqqufkqxfhmvcgxj5h98rzg3ermj8';
+				const nonexistentAccountAddr = 'stake_test1urzjqn94k6qmxqfkggckkgdfp43upcuqya225xpv4feg6tgedh6cg';
 				const { status, data } = await POST('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: nonexistentAccountAddr }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
