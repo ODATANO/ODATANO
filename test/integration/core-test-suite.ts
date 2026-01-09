@@ -474,7 +474,7 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('POST /GetMetadataByTxHash – read TransactionMetadata (transaction with metadata)', async () => {
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.txWithMetadata });
       
-        expect(data).to.have.property('label');
+        expect(data.value[0]).to.have.property('label');
         expect(status).to.equal(200);
       });
 
@@ -488,8 +488,8 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('GET /TransactionMetadata(key) – read TransactionMetadata by composite key', async () => {
         const { status, data } = await test.get(
           `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${FIXTURE.txWithMetadata}',id=0)`
-      );
-      
+        );
+
         expect(data).to.have.property('label');
         expect(data).to.have.property('payload');
         expect(status).to.equal(200);
@@ -498,8 +498,9 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('POST /GetMetadataByTxHash – read TransactionMetadata via indexing path', async () => {
      
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.txWithMetadata });
-        expect(data).to.have.property('label');
-        expect(data).to.have.property('payload');
+        
+        expect(data.value[0]).to.have.property('label');
+        expect(data.value[0]).to.have.property('payload');
         expect(status).to.equal(200);
       }); 
     });
@@ -541,11 +542,16 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         );
 
         const {status, data} = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.validTxHash });
+
+        console.log(data);
+        // get first row 
+        const firstrow = data.value[0];
+
         expect(status).to.equal(200);
-        expect(data).to.have.property('tx_hash');
-        expect(data.tx_hash).to.equal(FIXTURE.validTxHash);
-        expect(data).to.have.property('label');
-        expect(data.label).to.equal('721');
+        expect(firstrow).to.have.property('tx_hash');
+        expect(firstrow.tx_hash).to.equal(FIXTURE.validTxHash);
+        expect(firstrow).to.have.property('label');
+        expect(firstrow.label).to.equal('721');
       });
 
     });  

@@ -90,7 +90,7 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
     action GetEpochByNumber(
         @title : 'Epoch Number'
         @description : 'The sequential number of the epoch'
-        number: Integer) returns Epochs;
+        epochNumber: Integer) returns Epochs;
     
     @title : 'Get Pools by Pool Id'
     @description : 'Retrieve pool information using the Pool Id'
@@ -125,7 +125,7 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
     action GetMetadataByTxHash(
         @title : 'Transaction Hash'
         @description : 'The unique identifier of the transaction'
-        hash: db.Blake2b256) returns many TransactionMetadata;
+        tx_hash: db.Blake2b256) returns many TransactionMetadata;
 
     @title : 'Get Addresses by Bech32 Address'
     @description : 'Retrieve address information using the Bech32 Address'

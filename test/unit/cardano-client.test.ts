@@ -54,6 +54,12 @@ class MockBackend implements CardanoBackend {
   async getEpoch(_epochNumber: number): Promise<EpochData> {
     throw new Error('Not implemented in mock');
   }
+  async getLatestBlock(): Promise<BlockData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getLatestEpoch(): Promise<EpochData> {
+    throw new Error('Not implemented in mock');
+  }
   async getPool(_poolId: string): Promise<PoolData> {
     throw new Error('Not implemented in mock');
   }

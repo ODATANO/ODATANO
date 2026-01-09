@@ -628,10 +628,12 @@ module.exports = (srv: cds.Service) => {
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }));
-      if (existing || existing.length == 0) {
-        logger.debug({ tx_hash },'[CardanoService] Returning existing transaction metadata');
-        return existing;
+      if (!existing || existing.length == 0) {
+        logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+        return await indexer.indexTransactionMetadata(db, tx_hash);
       }
+      console.log(existing);
+      return existing;
     });
   });
 

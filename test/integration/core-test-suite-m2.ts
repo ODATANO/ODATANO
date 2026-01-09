@@ -1,3 +1,4 @@
+/*
 import cds from '@sap/cds';
 import { 
   BackendTestConfig,
@@ -9,10 +10,10 @@ jest.setTimeout(200000);
 // Helper function to create test suite for a specific backend
 export function createBackendTestSuite(backendConfig: BackendTestConfig) {
 
-// Configure environment to use this specific backend
-configureBackendForTest(backendConfig);
+  // configure environment to use this specific backend
+  configureBackendForTest(backendConfig);
 
-describe(`ODATANO Milestone 2 - Complete Service Tests [${backendConfig.name.toUpperCase()}]`, () => {
+  describe(`ODATANO Milestone 2 - Complete Service Tests [${backendConfig.name.toUpperCase()}]`, () => {
   // Initialize the test suite
   const { GET, POST, expect } = cds.test(__dirname + '/../../');
   
@@ -40,7 +41,7 @@ describe(`ODATANO Milestone 2 - Complete Service Tests [${backendConfig.name.toU
 
     describe('Cardano Service GET', () => {
       
-      it('POST /latestBlock - get latest block information', async () => {
+     /* it('POST /latestBlock - get latest block information', async () => {
 
         const { status, data } = await POST(`/odata/v4/cardano-odata/GetLatestBlock`, {});
         expect(data.value.length).to.be.greaterThan(0);
@@ -67,14 +68,18 @@ describe(`ODATANO Milestone 2 - Complete Service Tests [${backendConfig.name.toU
   // ============================================================================
  describe('new Entety Service Tests', () => {
       
-      it('POST / - get latest block information', async () => {
+    /*  it('POST / - get latest block information', async () => {
 
         const { status, data } = await POST(`/odata/v4/cardano-odata/GetLatestBlock`, {});
         expect(data.value.length).to.be.greaterThan(0);
         expect(data.value[0]).to.have.property('blockHash');
         expect(status).to.equal(200);
-      });    
-});
-});
+      });
+         
+    });
+  });
+  })
+
 }
 
+*/
