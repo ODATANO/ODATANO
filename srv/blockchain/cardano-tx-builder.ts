@@ -3,7 +3,7 @@ import type { UTxO } from '../utils/types';
 import type {TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
 import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
-import { LedgerProtocolParameter } from '#cds-models/CardanoTransactionService';
+import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 import logger from '../utils/logger';
 
 /** 

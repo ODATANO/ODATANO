@@ -25,11 +25,11 @@ import {
   Account,
   Drep,
   Pool,
-  Address
+  Address,
+  LedgerProtocolParameter,
 } from '#cds-models/CardanoODataService';
 
 import {
-  LedgerProtocolParameter,
   TransactionBuild,
   TransactionSubmission
 } from '#cds-models/CardanoTransactionService';

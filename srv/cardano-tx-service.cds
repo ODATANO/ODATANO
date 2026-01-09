@@ -15,10 +15,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @title : 'Transaction Builds'
     @description : 'Projection for Transaction Builds'
     entity TransactionBuilds            as projection on db.TransactionBuilds;
-
-    @title : 'Ledger Protocol Parameters'
-    @description : 'Projection for Ledger Protocol Parameters'
-    entity LedgerProtocolParameters     as projection on db.LedgerProtocolParameters;
     
     @title : 'Transaction Build Inputs'
     @description : 'Projection for Transaction Build Inputs'
@@ -44,30 +40,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @description : 'Projection for Transaction Submission Errors'
     entity TransactionSubmissionErrors  as projection on db.TransactionSubmissionErrors;
 
-    @title : 'Latest Block'
-    @description : 'Projection for Latest Block'
-    entity LatestBlock                  as projection on db.Blocks;
-
-    @title : 'Latest Epoch'
-    @description : 'Projection for Latest Epoch'
-    entity LatestEpoch                  as projection on db.Epochs;
-
-    // ---------------------------------------------------------------------------
-    // Query Actions
-    // ---------------------------------------------------------------------------
-
-    @title : 'Get Latest Block'
-    @description : 'Retrieve the latest block information'
-    action GetLatestBlock() returns LatestBlock;
-
-    @title : 'Get Latest Epoch'
-    @description : 'Retrieve the latest epoch information'
-    action GetLatestEpoch() returns LatestEpoch;
-
-    @title : 'Get Ledger Protocol Parameters'
-    @description : 'Retrieve the current ledger protocol parameters'
-    action GetProtocolParameters() returns LedgerProtocolParameters;
-
     // ---------------------------------------------------------------------------
     // Transaction Building Actions
     // ---------------------------------------------------------------------------
@@ -80,16 +52,16 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
         network        : String(10),
         @title : 'Sender Address'
         @description : 'The Bech32 encoded address of the sender'
-        senderAddress  : db.bech32,
+        senderAddress  : db.Bech32,
         @title : 'Recipient Address'
         @description : 'The Bech32 encoded address of the recipient'
-        recipientAddress: db.bech32,
+        recipientAddress: db.Bech32,
         @title : 'Lovelace Amount'
         @description : 'The amount of ADA to send in lovelace'
         lovelaceAmount : db.Lovelace,
         @title : 'Change Address'
         @description : 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-        changeAddress  : db.bech32
+        changeAddress  : db.Bech32
     ) returns TransactionBuilds;
     
     @title : 'Get Build Details'

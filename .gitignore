@@ -72,3 +72,5 @@ stop-stack.ps1
 payment.addr
 payment.skey
 payment.vkey
+
+general_dev_notes.txt

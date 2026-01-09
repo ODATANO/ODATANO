@@ -33,10 +33,10 @@ import {
   Pool as PoolRow,
   Drep as DrepRow,
   Account as AccountRow,
+  LedgerProtocolParameter as ProtocolParameterRow,
 }  from '#cds-models/CardanoODataService';
 
 import type { TransactionBuild as  TransactionBuildRow, 
-              LedgerProtocolParameter as ProtocolParameterRow,
               TransactionSubmission as TransactionSubmissionRow
 } from '#cds-models/CardanoTransactionService';
 

@@ -7,8 +7,12 @@ import { handleRequest } from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
 
+/**
+ * Cardano Service Implementation
+ * Handles various Cardano blockchain data queries with index-on-miss behavior.
+ */
 module.exports = (srv: cds.Service) => {
-  logger.info('[CardanoService] Module loaded - registering handlers');
+  logger.debug('[CardanoService] Module loaded - registering handlers');
   
   const {
       NetworkInformation,
@@ -26,455 +30,633 @@ module.exports = (srv: cds.Service) => {
       Pools,
       Accounts,
       Dreps,
+      LedgerProtocolParameters
     } = require('#cds-models/CardanoODataService');
 
-  // ------------------------------------------------------------------------
-  //  NetworkInformation READ & GetNetworkInformation Action
-  // ------------------------------------------------------------------------
+  /**
+   * READ handler for `NetworkInformation`.
+   * Cache-first read; indexes network information on first access.
+   * @param req - The incoming request data
+   * @returns {NetworkInformation} The current valid general network information
+   */  
   srv.on('READ', NetworkInformation, async (req: Request) => {
-    logger.info(`[CardanoService] NetworkInformation READ handler called`);
+    logger.debug(`[CardanoService] NetworkInformation READ handler called`);
+    // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
         const existing = await db.run(SELECT.one.from(NetworkInformation));
-        if (existing) {
-          return existing;
-        }
+        if (!existing) {
         logger.debug('[CardanoService] Indexing network information via indexer');
         return await indexer.indexNetworkInformation(db);
+        }
+        return existing;
       });
     });
-
+  
+  /**
+   * Action handler for `GetNetworkInformation`.
+   * Returns network information; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {NetworkInformation} The current valid general network information
+   */
   srv.on('GetNetworkInformation', async (req: Request) => {
+      logger.debug(`[CardanoService] GetNetworkInformation Action handler called`);
+      // handle the action request / indexing result if needed
       return handleRequest(req, async (db) => {
-        const row = await db.run(SELECT.one.from(NetworkInformation));
-        if (!row) {
+        const existing = await db.run(SELECT.one.from(NetworkInformation));
+        if (!existing) {
+          logger.debug('[CardanoService] Indexing network information via indexer');
           return await indexer.indexNetworkInformation(db);
         }
-        return row;
+        return existing;
       });
     });
 
-    // ------------------------------------------------------------------------
-    // Blocks READ & GetLatestBlock / GetBlockByHash Actions 
-    // ------------------------------------------------------------------------
+  /**
+   * READ handler for `Blocks`.
+   * Supports lookup by block hash with index-on-miss behavior.
+   * @param req - The incoming request data
+   * @returns {Blocks} The block data for the requested block or all fitting blocks for general read
+   */
   srv.on('READ', Blocks, async (req: Request) => {
-      logger.info(`[CardanoService] Blocks READ handler called, data: ${JSON.stringify(req.data)}`);
-      const hash = (req.data as { hash?: string })?.hash;
-      // validate input before business logic
-      if (hash && !isBlockHash(hash)) {
-        return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
-      }
+    logger.debug(`[CardanoService] Blocks READ handler called`);
+    // get possible hash for single block lookup
+    const hash = (req.data as { hash?: string })?.hash;
       
-      return handleRequest(req, async (db) => { 
-        if (hash) {
-          const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
-          
-          if (existing) {
-            return existing;
-          }
+    // validate input before business logic
+    if (hash && !isBlockHash(hash)) return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
+      
+    // handle the request / indexing if needed
+    return handleRequest(req, async (db) => { 
+      if (hash) {
+        const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
+        if (!existing) {
           logger.debug({ hash: hash },'[CardanoService] Indexing block via indexer');
           return await indexer.indexBlock(db, hash);
         }
-        return db.run(req.query);
-      });
+        return existing;
+      }
+      return db.run(req.query);
     });
-
+  });
+  
+  /**
+   * Action handler for `GetBlockByHash`.
+   * Returns a block by hash; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Blocks} The block data for the requested block
+   */  
   srv.on('GetBlockByHash', async (req: Request) => {
-     const hash = (req.data?.hash as string | undefined) ?? undefined;
-      // validate input before business logic
-      if (!hash) {
-        return rejectMissing(req, 'Blocks', 'hash');
-      }
-      if (!isTxHash(hash)) {
-        return rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
-      }
-      return handleRequest(req, async (db) => {
-        let row = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
-        if (!row) {
+    logger.debug(`[CardanoService] GetBlockByHash Action handler called`);
+    const hash = (req.data?.hash as string | undefined) ?? undefined;
+      
+    // validate input before business logic
+    if (!hash) return rejectMissing(req, 'Blocks', 'hash');
+    if (!isTxHash(hash)) return rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
+      
+    // handle the action request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
+        if (!existing) {
+          logger.debug({ hash: hash },'[CardanoService] Indexing block via indexer');
           return await indexer.indexBlock(db, hash);
         }
-        return row;});
-    });
-
-    // ------------------------------------------------------------------------
-    // Epoch READ & GetEpochByNumber Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Epochs, async (req: Request) => {
-      const epochNumber = (req.data as { epoch?: number })?.epoch;
-      // validate input before business logic
-      if ( epochNumber && !isEpochNumber(epochNumber)) {
-        return rejectInvalid(req, 'Epochs', 'epochNumber has invalid format', 'epochNumber');
-      }
-      return handleRequest(req, async (db) => {
-        if (epochNumber) {
-        const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
-        if (existing) {
-          return existing;
-        }
-        logger.debug({ epochNumber },'[CardanoService] Indexing epoch via indexer');
-        return await indexer.indexEpoch(db, epochNumber);
-        }
-        return db.run(req.query);
-      });
-    });
-
-  srv.on('GetEpochByNumber', async (req: Request) => {
-      const epochNumber = req.data?.epochNumber as Number | undefined;
-      // validate input before business logic
-      if (epochNumber == null) {
-        return rejectMissing(req, 'Epochs', 'epochNumber');
-      }
-      if (!isEpochNumber(epochNumber)) {
-        return rejectInvalid(req, 'Epochs', 'epochNumber has invalid format', 'epochNumber');
-      }
-      return handleRequest(req, async (db) => {
-        let row = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
-        if (!row) {
-          return await indexer.indexEpoch(db, epochNumber);
-        }
-        return row;
-      });
-    });
-    // ------------------------------------------------------------------------
-    // Pools READ & GetPoolById Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Pools, async (req: Request) => {
-      const poolId = (req.data as { poolId?: string })?.poolId;
-      // validate pool_id format before business logic
-      if (poolId && !isValidPoolId(poolId)) {
-        return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
-      }
-      return handleRequest(req, async (db) => {
-        if (poolId) {
-          const existing =  await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
-          if (existing) {
-            return existing;
-          }
-          logger.debug({ poolId },'[CardanoService] Indexing pool via indexer');
-          return await indexer.indexPool(db, poolId);
-        }
-        return db.run(req.query); 
-      });
-    });
-
-  srv.on('GetPoolById', async (req: Request) => {
-      const { poolId } = req.data as { poolId?: string };
-
-      if (!poolId) {
-        return rejectMissing(req, 'Pools', 'poolId');
-      }
-      // validate input before business logic
-      if (poolId && !isValidPoolId(poolId)) {
-        return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
-      }
-      return handleRequest(req, async (db) => {
-        let row = await db.run(SELECT.one.from(Pools).where({ poolId }));
-          if (!row) {
-            logger.debug({ poolId },'[CardanoService] Indexing pool via indexer');
-            return await indexer.indexPool(db, poolId);
-          }
-        return row;
-      });
-    });
-
-    // ------------------------------------------------------------------------
-    // Accounts READ & GetAccountByStakeAddress Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Accounts, async (req: Request) => {
-      const stakeAddress = (req.data as { stakeAddress?: string })?.stakeAddress;
-
-      // validate stake address format before business logic
-      if (stakeAddress && !isValidBech32StakeAddress(stakeAddress)) {
-        return rejectInvalid(req, 'Accounts', 'Invalid stakeAddress format', 'stakeAddress');
-      }
-      return handleRequest(req, async (db) => {
-        if (stakeAddress) {
-          let row = await db.run(SELECT.one.from(Accounts).where({ stakeAddress: stakeAddress }));
-          if (!row) {
-            logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
-            return await indexer.indexAccount(db, stakeAddress);
-          }
-        }
-      return db.run(req.query);
-      });
-    });
-    
-  srv.on('GetAccountByStakeAddress', async (req: Request) => {
-      const { stakeAddress } = req.data as { stakeAddress?: string };
-
-      // validate input before business logic
-      if (!stakeAddress) {
-        return rejectMissing(req, 'GetAccountByStakeAddress', 'stakeAddress');
-      }
-      if (!isValidBech32StakeAddress(stakeAddress)) {
-        return rejectInvalid(req, 'GetAccountByStakeAddress', 'Invalid stakeAddress format', 'stakeAddress');
-      }
-
-      return handleRequest(req, async (db) => {
-        let row = await db.run(
-          SELECT.one.from(Accounts).where({ stakeAddress }),
-        );
-        if (row) { 
-          return row;
-        }
-        logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
-        return await indexer.indexAccount(db, stakeAddress);
-      });
-    });
-    // ------------------------------------------------------------------------
-    // Dreps READ & GetDrepById Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Dreps, async (req: Request) => {
-      const drepId = (req.data as { drepId?: string })?.drepId;
-      // validate drepID format before business logic
-      if (drepId && !isValidDrepId(drepId)) {
-        return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
-      }
-      // proceed with handling the request
-      return handleRequest(req, async (db) => {
-        if (drepId) {
-          const low = await db.run(SELECT.one.from(Dreps).where({ drepId: drepId }));
-          if (!low) {
-            logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
-            return await indexer.indexDrep(db, drepId);
-          }
-        }
-      return db.run(req.query);}); 
-    });
-    
-  srv.on('GetDrepById', async (req: Request) => {
-      const drepId  = (req.data as { drepId?: string }).drepId;
-
-      // validate input before business logic
-      if (!drepId) {
-        return rejectMissing(req, 'Dreps', 'drepId');
-      }
-      if (drepId && !isValidDrepId(drepId)) {
-        return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
-      }
-      // proceed with handling the request
-      return handleRequest(req, async (db) => {
-        let row = await db.run( SELECT.one.from(Dreps).where({ drepId }));
-        if (!row) {
-         logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
-         return await indexer.indexDrep(db, drepId);
-        }
-        return row;
-      });
-    });
-
-    // ------------------------------------------------------------------------
-    // Addresses READ & GetAddressByBech32 Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Addresses, async (req: Request) => {
-      const addr = (req.data as { address?: string })?.address;
-
-      // Validate address format before business logic
-      if (addr && !isValidBech32Address(addr)) {
-        return rejectInvalid(req, 'Addresses', 'Invalid bech32 address format', 'address');
-      }
-      // Proceed with handling the request
-      return handleRequest(req, async (db) => {
-        if (addr) {
-          let row = await db.run(
-            SELECT.one.from(Addresses).where({ address: addr }),
-          );
-          if (!row) {
-            logger.debug({ address: addr }, '[CardanoService] Indexing address');
-            const indexed = await indexer.indexAddress(db, addr);
-            // After indexing, the data is in the transaction but not yet visible to queries
-            // Return the indexed data directly
-            return indexed;
-          }
-          // Re-run the original query to include $expand and other OData parameters
-          return db.run(req.query);
-        }
-        return db.run(req.query);
-      });
-    });
-
-  srv.on('GetAddressByBech32', async (req: Request) => {
-      const { address } = req.data as { address?: string };
-
-      // validate input before business logic
-      if (!address) {
-        return rejectMissing(req, 'GetAddressByBech32', 'address');
-      }
-      if (!isValidBech32Address(address)) {
-        return rejectInvalid(req, 'GetAddressByBech32', 'Invalid bech32 address format', 'address');
-      }
-
-      return handleRequest(req, async (db) => {
-        let row = await db.run( SELECT.one.from(Addresses).where({ address }));
-        if (!row){
-          return await indexer.indexAddress(db, address);
-        }
-        return row;
-      });
-    });
-
-    // ------------------------------------------------------------------------
-    // AddressAssets READ & GetAssetsByAddress Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', AddressAssets, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-  srv.on('GetAssetsByAddress', async (req: Request) => {
-      const { address } = req.data as { address?: string };
-
-      // Validate input before business logic
-      if (!address) {
-        return rejectMissing(req, 'GetAssetsByAddress', 'address');
-      }
-      if (!isValidBech32Address(address)) {
-        return rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
-      }
-
-      return handleRequest(req, async (db) => {
-        let rows = await db.run(SELECT.from(AddressAssets).where({ address }));
-        if (!rows || rows.length === 0) {
-          await indexer.indexAddress(db, address);
-          return db.run(SELECT.from(AddressAssets).where({ address }));
-        }
-        return rows;
-      });
-    });
-
-    // ------------------------------------------------------------------------
-    // AddressUTxOs READ & GetUTxOsByAddress Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', AddressUTxOs, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-  srv.on('GetUTxOsByAddress', async (req: Request) => {
-      const { address } = req.data as { address?: string };
-
-      if (!address) {
-        return rejectMissing(req, 'GetUTxOsByAddress', 'address');
-      }
-      if (!isValidBech32Address(address)) {
-        return rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
-      }
-      return handleRequest(req, async (db) => {
-        const row = await db.run(SELECT.from(AddressUTxOs).where({ address }));
-      
-        if (row && row.length > 0) return row;
-          logger.debug({ address }, '[CardanoService] Indexing address via indexer');
-          return indexer.indexAddress(db, address);
-      });
-    });
-    
-    // ------------------------------------------------------------------------
-    // Transactions READ & GetTransactionByHash Action
-    // ------------------------------------------------------------------------
-  srv.on('READ', Transactions, async (req: Request) => {
-      const txHash = (req.data as { hash?: string })?.hash;
-
-      // validate transaction hash format before business logic
-      if (txHash && !isTxHash(txHash)) {
-        return rejectInvalid(req, 'Transactions', 'Invalid transaction hash format', 'hash');
-      }
-      return handleRequest(req, async (db) => {
-        if (txHash) {
-          const row = await db.run(
-            SELECT.one.from(Transactions).where({ hash: txHash }),
-          );
-          if (row) return row;
-          logger.debug({ txHash },'[CardanoService] Indexing transaction via indexer');
-          return await indexer.indexTransaction(db, txHash);
-        }
-        return db.run(req.query);
-      });
-    });
-
-  srv.on('GetTransactionByHash', async (req: Request) => {
-      const { hash } = req.data as { hash?: string };
-
-      // Validate input before business logic
-      if (!hash) {
-        return rejectMissing(req, 'GetTransactionByHash', 'hash');
-      }
-      if (!isTxHash(hash)) {
-        return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
-      }
-      
-      return handleRequest(req, async (db) => {
-        const row = await db.run(
-          SELECT.one.from(Transactions).where({ hash }));
-        if (row) return row;
-          logger.debug({ hash },'[CardanoService] Indexing transaction via indexer');
-          return await indexer.indexTransaction(db, hash);
-      });
-    });
-    // ------------------------------------------------------------------------
-    // TransactionInputs READ 
-    // ------------------------------------------------------------------------
-  srv.on('READ', TransactionInputs, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-    // ------------------------------------------------------------------------
-    // TransactionOutputs READ
-    // ------------------------------------------------------------------------
-  srv.on('READ', TransactionOutputs, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-    // ------------------------------------------------------------------------
-    // TransactionInputAssets READ
-    // ------------------------------------------------------------------------
-  srv.on('READ', TransactionInputAssets, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-    // ------------------------------------------------------------------------
-    // TransactionOutputAssets READ
-    // ------------------------------------------------------------------------
-  srv.on('READ', TransactionOutputAssets, async (req: Request) => {
-      return handleRequest(req, (db) => db.run(req.query));
-    });
-
-    // ------------------------------------------------------------------------
-    // Metadata READ & GetMetadataByTxHash / GetMetadataLabelTransactions Actions
-    // ------------------------------------------------------------------------
-  srv.on('READ', TransactionMetadata, async (req: Request) => {
-      const { tx_hash } = req.data as { tx_hash?: string };
-      
-      if (tx_hash && !isTxHash(tx_hash)) {
-        return rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
-      }
-
-      return handleRequest(req, async (db) => {
-        if (tx_hash) {
-          const rows = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
-          if(rows) return rows;
-          logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
-          return await indexer.indexTransactionMetadata(db, tx_hash);
-        }
-        return await db.run(req.query);
-      });
-    });
-
-  srv.on('GetMetadataByTxHash', async (req: Request) => {
-      const { tx_hash } = req.data as { tx_hash?: string };
-
-      // validate input before business logic
-      if (!tx_hash) {
-        return rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
-      }
-      if (!isTxHash(tx_hash)) {
-        return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
-      }
-      return handleRequest(req, async (db) => {
-        let rows = await db.run(
-          SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }),
-        );
-        if (rows && rows.length > 0) return rows;
-          logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
-          return await indexer.indexTransactionMetadata(db, tx_hash);
+      return existing;
     });
   });
 
-  logger.info('[CardanoService] All handlers registered');
+  /** 
+   * Action handler for `GetLatestBlock`.
+   * Returns the latest block; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Blocks} The latest block data
+   */
+  srv.on('GetLatestBlock', async (req: Request) => {
+    return handleRequest(req, async (db) => {
+      return await indexer.indexLatestBlock(db);
+    });
+  });
+
+  /**
+   * READ handler for `Epochs`.
+   * Supports lookup by epoch number with index-on-miss behavior or all epochs fitting general read.
+   * @param req - The incoming request data
+   * @returns {Epochs} The epoch data for the requested epoch or all fitting epochs for general read
+   */
+  srv.on('READ', Epochs, async (req: Request) => {
+
+    logger.debug('[CardanoService] Epochs READ handler called');
+    const epochNumber = (req.data as { epoch?: number })?.epoch;
+      
+    // validate input before business logic
+    if (epochNumber && !isEpochNumber(epochNumber))
+      return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
+
+    // handle the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (epochNumber) {
+        const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
+        if (!existing) {
+            logger.debug({ epochNumber },'[CardanoService] Indexing epoch via indexer');
+            return await indexer.indexEpoch(db, epochNumber);
+        }
+        return existing;
+      }
+      return db.run(req.query);
+    });
+  });
+
+  /**
+   * Action handler for `GetEpochByNumber`.
+   * Returns an epoch by number; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Epochs} The epoch data for the requested epoch
+   */
+  srv.on('GetEpochByNumber', async (req: Request) => {
+    logger.debug('[CardanoService] GetEpochByNumber Action handler called');
+    const epochNumber = req.data?.epochNumber as Number | undefined;
+      
+    // validate input before business logic
+    if (epochNumber == null) return rejectMissing(req, 'Epochs', 'epochNumber');
+      
+    if (!isEpochNumber(epochNumber)) 
+      return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
+      
+    // handle the action request / indexing if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
+      if (!existing) {
+        logger.debug({ epochNumber },'[CardanoService] Indexing epoch via indexer');
+        return await indexer.indexEpoch(db, epochNumber);
+      }
+      return existing;
+    });
+  });
+
+  /**
+   * Action handler for `GetLatestEpoch`.
+   * Returns the latest epoch; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Epochs} The latest epoch data
+   */
+  srv.on('GetLatestEpoch', async (req: Request) => {
+    return handleRequest(req, async (db) => {
+      return await indexer.indexLatestEpoch(db);
+    });
+  });
+
+  /**
+   * READ handler for `Pools`.
+   * Supports lookup by pool id with index-on-miss behavior or all pools fitting general read.
+   * @param req - The incoming request data
+   * @returns {Pools} The pool data for the requested pool or all fitting pools for general read
+   */
+  srv.on('READ', Pools, async (req: Request) => {
+    logger.debug('[CardanoService] Pools READ handler called'); 
+    const poolId = (req.data as { poolId?: string })?.poolId;
+    // validate pool_id format before business logic
+    if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
+      
+    // handle the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (poolId) {
+        const existing =  await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
+        if (!existing) {   
+          logger.debug({ poolId },'[CardanoService] Indexing Pool data via indexer');
+          return await indexer.indexPool(db, poolId);
+        }
+      }
+      return db.run(req.query); 
+    });
+  });
+
+  /**
+   * Action handler for `GetPoolById`.
+   * Returns a pool by id; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Pools} The pool data for the requested pool
+   */
+  srv.on('GetPoolById', async (req: Request) => {
+    const { poolId } = req.data as { poolId?: string };
+
+    // validate input before business logic
+    if (!poolId) return rejectMissing(req, 'Pools', 'poolId');
+
+    if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
+    
+    // handle the action request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existent = await db.run(SELECT.one.from(Pools).where({ poolId }));
+        if (!existent) {
+          logger.debug({ poolId },'[CardanoService] Indexing pool via indexer');
+          return await indexer.indexPool(db, poolId);
+        }
+      return existent;
+      });
+    });
+
+  /**
+   * READ handler for `Accounts`.
+   * Supports lookup by stake address with index-on-miss behavior or all accounts fitting general read.
+   * @param req - The incoming request data
+   * @returns {Accounts} The account data for the requested account or all fitting accounts for general read
+   */
+  srv.on('READ', Accounts, async (req: Request) => {
+    logger.debug('[CardanoService] Accounts READ handler called');
+    const stakeAddress = (req.data as { stakeAddress?: string })?.stakeAddress;
+
+    // validate stake address format before business logic
+    if (stakeAddress && !isValidBech32StakeAddress(stakeAddress))
+      return rejectInvalid(req, 'Accounts', 'Invalid stakeAddress format', 'stakeAddress');
+    
+    // proceed with handling the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (stakeAddress) {
+        const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress: stakeAddress }));
+        if (!existing) {
+          logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
+          return await indexer.indexAccount(db, stakeAddress);
+        }
+        return existing;
+      }
+      return db.run(req.query);
+    });
+  });
+  
+  /**
+   * Action handler for `GetAccountByStakeAddress`.
+   * Returns an account by stake address; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Accounts} The account data for the requested account
+   */
+  srv.on('GetAccountByStakeAddress', async (req: Request) => {
+    logger.debug('[CardanoService] GetAccountByStakeAddress Action handler called');
+    const { stakeAddress } = req.data as { stakeAddress?: string };
+
+    // validate input before business logic
+    if (!stakeAddress) return rejectMissing(req, 'GetAccountByStakeAddress', 'stakeAddress');
+
+    if (!isValidBech32StakeAddress(stakeAddress))
+      return rejectInvalid(req, 'GetAccountByStakeAddress', 'Invalid stakeAddress format', 'stakeAddress');
+
+      // proceed with handling the request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress }));
+      if (!existing) { 
+        logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
+        return await indexer.indexAccount(db, stakeAddress);
+      }
+      return existing;
+    });
+  });
+   
+  /**
+   * READ handler for `Dreps`.
+   *  Supports lookup by drep id with index-on-miss behavior or all dreps fitting general read.
+   * @param req - The incoming request data
+   * @returns {Dreps} The drep data for the requested drep or all fitting dreps for general read
+   */
+  srv.on('READ', Dreps, async (req: Request) => {
+    logger.debug('[CardanoService] Dreps READ handler called');
+    const drepId = (req.data as { drepId?: string })?.drepId;
+    
+    // validate drepID format before business logic
+    if (drepId && !isValidDrepId(drepId)) return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
+      
+      // proceed with handling the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (drepId) {
+        const existing = await db.run(SELECT.one.from(Dreps).where({ drepId: drepId }));
+          if (!existing) {
+            logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
+            return await indexer.indexDrep(db, drepId);
+          }
+        return existing;
+      }
+      return db.run(req.query);
+    });
+  });
+  
+  /**
+   * Action handler for `GetDrepById`.
+   * Returns a drep by id; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Dreps} The drep data for the requested drep
+   */
+  srv.on('GetDrepById', async (req: Request) => {
+    logger.debug('[CardanoService] GetDrepById Action handler called');
+    const drepId  = (req.data as { drepId?: string }).drepId;
+      
+    // validate input before business logic
+    if (!drepId) return rejectMissing(req, 'Dreps', 'drepId');
+      
+    if (drepId && !isValidDrepId(drepId))
+      return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
+
+    // proceed with handling the request
+    return handleRequest(req, async (db) => {
+      const existing = await db.run( SELECT.one.from(Dreps).where({ drepId }));
+      if (!existing) {
+        logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
+        return await indexer.indexDrep(db, drepId);
+      }
+      return existing;
+    });
+  });
+
+  /**
+   * READ handler for `Addresses`.
+   * Supports lookup by bech32 address with index-on-miss behavior or all addresses fitting general read.
+   * @param req - The incoming request data
+   * @returns {Addresses} The address data for the requested address or all fitting addresses for general read
+   */
+  srv.on('READ', Addresses, async (req: Request) => {
+    const addr = (req.data as { address?: string })?.address;
+
+    // Validate address format before business logic
+    if (addr && !isValidBech32Address(addr)) return rejectInvalid(req, 'Addresses', 'Invalid bech32 address format', 'address');
+      
+    // Proceed with handling the request
+    return handleRequest(req, async (db) => {
+      if (addr) {
+        const existing = await db.run(SELECT.one.from(Addresses).where({ address: addr }));
+        if (!existing) {
+          logger.debug({ address: addr }, '[CardanoService] Indexing address');
+          return await indexer.indexAddress(db, addr);
+        }
+        return existing;
+      }
+      return db.run(req.query);
+    });
+  });
+
+  /**
+   * Action handler for `GetAddressByBech32`.
+   * Returns an address by bech32; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Addresses} The address data for the requested address
+   */
+  srv.on('GetAddressByBech32', async (req: Request) => {
+    logger.debug('[CardanoService] GetAddressByBech32 Action handler called');
+    const { address } = req.data as { address?: string };
+
+    // validate input before business logic
+    if (!address) return rejectMissing(req, 'GetAddressByBech32', 'address');
+    
+    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAddressByBech32', 'Invalid bech32 address format', 'address');
+
+    // proceed with handling the request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run( SELECT.one.from(Addresses).where({ address }));
+      if (!existing){
+        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        return await indexer.indexAddress(db, address);
+      }
+      return existing;
+    });
+  });
+
+  /**
+   * READ handler for `AddressAssets`.
+   * Supports lookup by bech32 address with index-on-miss behavior or all address assets fitting general read.
+   * @param req - The incoming request data
+   * @returns {AddressAssets} The address asset data for the requested address or all fitting address assets for general read
+   */
+  srv.on('READ', AddressAssets, async (req: Request) => {
+    logger.debug('[CardanoService] AddressAssets READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+  
+  /**
+   * Action handler for `GetAssetsByAddress`.
+   * Returns address assets by bech32 address; indexes the address if not yet present.
+   * @param req - The incoming request data
+   * @returns {AddressAssets} The address asset data for the requested address
+   */
+  srv.on('GetAssetsByAddress', async (req: Request) => {
+    logger.debug('[CardanoService] GetAssetsByAddress Action handler called');  
+    const { address } = req.data as { address?: string };
+
+    // Validate input before business logic
+    if (!address) return rejectMissing(req, 'GetAssetsByAddress', 'address');
+    
+    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
+
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.from(AddressAssets).where({ address }));
+      if (!existing || existing.length === 0) {
+        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        await indexer.indexAddress(db, address);
+        return db.run(SELECT.from(AddressAssets).where({ address }));
+      }
+      return existing;
+    });
+  });
+
+  /**
+   * READ handler for `AddressUTxOs`.
+   * Supports lookup by bech32 address with index-on-miss behavior or all address UTxOs fitting general read.
+   * @param req - The incoming request data
+   * @returns {AddressUTxOs} The address UTxO data for the requested address or all fitting address UTxOs for general read
+   */
+  srv.on('READ', AddressUTxOs, async (req: Request) => {
+    logger.debug('[CardanoService] AddressUTxOs READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * Action handler for `GetUTxOsByAddress`.
+   * Returns address UTxOs by bech32 address; indexes the address if not yet present.
+   * @param req - The incoming request data
+   * @returns {AddressUTxOs} The address UTxO data for the requested address
+   */
+  srv.on('GetUTxOsByAddress', async (req: Request) => {
+    const { address } = req.data as { address?: string };
+
+    // validate input before business logic
+    if (!address) return rejectMissing(req, 'GetUTxOsByAddress', 'address');
+
+    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
+      
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
+      if (!existing || existing.length === 0) {
+        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        return indexer.indexAddress(db, address);
+      }
+      return existing;
+    });
+  });
+    
+  /**
+   * READ handler for `Transactions`.
+   * Supports lookup by transaction hash with index-on-miss behavior or all transactions fitting general read.
+   * @param req - The incoming request data
+   * @returns {Transactions} The transaction data for the requested transaction or all fitting transactions for general read
+   */
+  srv.on('READ', Transactions, async (req: Request) => {
+    logger.debug('[CardanoService] Transactions READ handler called');
+    const txHash = (req.data as { hash?: string })?.hash;
+
+    // validate input before business logic
+    if (txHash && !isTxHash(txHash))
+      return rejectInvalid(req, 'Transactions', 'Invalid transaction hash format', 'hash');
+    
+    // handle the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (txHash) {
+        const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
+        if (!existing){
+          logger.debug({ txHash },'[CardanoService] Indexing transaction via indexer');
+          return await indexer.indexTransaction(db, txHash);
+        }
+        return existing;
+      }
+      return db.run(req.query);
+    });
+  });
+
+  /**
+   * Action handler for `GetTransactionByHash`.
+   * Returns a transaction by hash; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {Transactions} The transaction data for the requested transaction
+   */
+  srv.on('GetTransactionByHash', async (req: Request) => {
+    logger.debug('[CardanoService] GetTransactionByHash Action handler called');
+    const { hash } = req.data as { hash?: string };
+
+    // validate input before business logic
+    if (!hash) return rejectMissing(req, 'GetTransactionByHash', 'hash');
+
+    if (!isTxHash(hash))
+      return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
+    
+    // handle the action request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
+      if (!existing) {
+        logger.debug({ hash },'[CardanoService] Indexing transaction via indexer');
+        return await indexer.indexTransaction(db, hash);
+      }
+      return existing;
+    });
+  });
+
+  /**
+   * READ handler for `TransactionInputs`.
+   * @param req - The incoming request data
+   * @returns {TransactionInputs} The transaction input data for the requested inputs or all fitting inputs for general read
+   */
+  srv.on('READ', TransactionInputs, async (req: Request) => {
+    logger.debug('[CardanoService] TransactionInputs READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * READ handler for `TransactionOutputs`.
+   * @param req - The incoming request data
+   * @returns {TransactionOutputs} The transaction output data for the requested outputs or all fitting outputs for general read
+   */
+  srv.on('READ', TransactionOutputs, async (req: Request) => {
+    logger.debug('[CardanoService] TransactionOutputs READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * READ handler for `TransactionInputAssets`.
+   * @param req - The incoming request data
+   * @returns {TransactionInputAssets} The transaction input asset data for the requested input assets or all fitting input assets for general read
+   */
+  srv.on('READ', TransactionInputAssets, async (req: Request) => {
+    logger.debug('[CardanoService] TransactionInputAssets READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * READ handler for `TransactionOutputAssets`.
+   * @param req - The incoming request data
+   * @returns {TransactionOutputAssets} The transaction output asset data for the requested output assets or all fitting output assets for general read
+   */
+  srv.on('READ', TransactionOutputAssets, async (req: Request) => {
+    logger.debug('[CardanoService] TransactionOutputAssets READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * READ handler for `TransactionMetadata`.
+   * Supports lookup by transaction hash with index-on-miss behavior or all transaction metadata fitting general read.
+   * @param req - The incoming request data
+   * @returns {TransactionMetadata} The transaction metadata for the requested transaction or all fitting transaction metadata for general read
+   */
+  srv.on('READ', TransactionMetadata, async (req: Request) => {
+    logger.debug('[CardanoService] TransactionMetadata READ handler called');
+    const { tx_hash } = req.data as { tx_hash?: string };
+    
+    // validate input before business logic
+    if (tx_hash && !isTxHash(tx_hash))
+      return rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
+    
+    // handle the request / indexing if needed
+    return handleRequest(req, async (db) => {
+      if (tx_hash) {
+        const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
+        if (!existing) {
+          logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+          return await indexer.indexTransactionMetadata(db, tx_hash);
+        }
+        return existing;
+      } 
+      return await db.run(req.query);
+    });
+  });
+
+  /**
+   * Action handler for `GetMetadataByTxHash`.
+   * Returns transaction metadata by transaction hash; indexes it if not yet present.
+   * @param req - The incoming request data
+   * @returns {TransactionMetadata} The transaction metadata for the requested transaction
+   */
+  srv.on('GetMetadataByTxHash', async (req: Request) => {
+    logger.debug('[CardanoService] GetMetadataByTxHash Action handler called');
+    const { tx_hash } = req.data as { tx_hash?: string };
+
+    // validate input before business logic
+    if (!tx_hash) return rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
+    
+    if (!isTxHash(tx_hash)) return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
+      
+    // handle the action request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }));
+      if (existing || existing.length == 0) {
+        logger.debug({ tx_hash },'[CardanoService] Returning existing transaction metadata');
+        return existing;
+      }
+    });
+  });
+
+  /**
+   * READ handler for `LedgerProtocolParameters`.
+   * @param req - The incoming request data
+   * @returns {LedgerProtocolParameters} The ledger protocol parameters data
+   */
+  srv.on('READ', LedgerProtocolParameters, async (req: Request) => {
+    logger.debug('[CardanoService] LedgerProtocolParameters READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /** 
+   * Get Protocol Parameters
+   * @param req - CDS request object
+   * @returns Protocol Parameters 
+   */
+  srv.on('GetProtocolParameters', async (req: Request) => {
+    logger.debug('[CardanoService] GetProtocolParameters Action handler called');
+    return handleRequest(req, async (db) => {
+      logger.debug('[CardanoService] Indexing protocol parameters via indexer');
+      return indexer.indexProtocolParameters(db);
+    });
+  });
+
+  logger.debug('[CardanoService] All handlers registered');
 };

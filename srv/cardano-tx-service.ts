@@ -11,8 +11,7 @@ const { SELECT } = cds.ql;
 
 /**
  * Cardano Transaction Service Implementation
- * 
- * Handles transaction building and submission operations.
+ * Handles transaction building and submission operations & some additional data queries.
  */
 module.exports = (srv: cds.Service) => {
   logger.info('[CardanoTxService] Module loaded - registering handlers');
@@ -31,69 +30,75 @@ module.exports = (srv: cds.Service) => {
   // Initialize transaction builder
   const txBuilder: CardanoTransactionBuilder = new CardanoTransactionBuilder();
 
-  // ---------------------------------------------------------------------------
-  // Entity Handlers (READ-only for audit trail)
-  // ---------------------------------------------------------------------------
-
+  /**
+   * READ handler for TransactionBuilds entity
+   * @param req - The incoming request data
+   * @returns {TransactionBuilds} The transaction builds fitting the request query
+   */
   srv.on('READ', TransactionBuilds, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionBuilds READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
+  /** 
+   * READ handler for TransactionBuildInputs entity
+   * @param req - The incoming request data
+   * @returns {TransactionBuildInputs} The transaction build inputs fitting the request query
+   */
   srv.on('READ', TransactionBuildInputs, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionBuildInputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
+  /** 
+   * READ handler for TransactionBuildOutputs entity
+   * @param req - The incoming request data
+   * @returns {TransactionBuildOutputs} The transaction build outputs fitting the request query
+   */
   srv.on('READ', TransactionBuildOutputs, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionBuildOutputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
+  /** 
+   * READ handler for TransactionSubmissions entity
+   * @param req - The incoming request data
+   * @returns {TransactionSubmissions} The transaction submissions fitting the request query
+   */
+  srv.on('READ', TransactionBuildInputs, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionBuildInputs READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /** 
+   * READ handler for TransactionBuildOutputs entity
+   * @param req - The incoming request data
+   * @returns {TransactionBuildOutputs} The transaction build outputs fitting the request query
+   */
+  srv.on('READ', TransactionBuildOutputs, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionBuildOutputs READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /** 
+   * READ handler for TransactionSubmissions entity
+   * @param req - The incoming request data
+   * @returns {TransactionSubmissions} The transaction submissions fitting the request query
+   */
   srv.on('READ', TransactionSubmissions, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionSubmissions READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
+  /** 
+   * READ handler for TransactionSubmissionErrors entity
+   * @param req - The incoming request data
+   * @returns {TransactionSubmissionErrors} The transaction submission errors fitting the request query
+   */
   srv.on('READ', TransactionSubmissionErrors, async (req: Request) => {
+    logger.debug('[CardanoTxService] TransactionSubmissionErrors READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
-
-  srv.on('READ', LatestBlock, async (req: Request) => {
-    // TODO: implement caching for latest block
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  srv.on('READ', LatestEpoch, async (req: Request) => {
-    // TODO: implement caching for latest epoch
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  srv.on('READ', LedgerProtocolParameters, async (req: Request) => {
-    // TODO: implement caching for protocol parameters
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  // ---------------------------------------------------------------------------
-  // Query Actions
-  // ---------------------------------------------------------------------------
-
-  srv.on('GetLatestBlock', async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      return await indexer.indexLatestBlock(db);
-    });
-  });
-
-  srv.on('GetLatestEpoch', async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      return await indexer.indexLatestEpoch(db);
-    });
-  });
-
-  srv.on('GetProtocolParameters', async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      return indexer.indexProtocolParameters(db);
-    });
-  });
-  // ---------------------------------------------------------------------------
-  // Transaction Building Actions
-  // ---------------------------------------------------------------------------
 
   /**
    * Build a simple ADA-only transaction
@@ -103,68 +108,62 @@ module.exports = (srv: cds.Service) => {
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
     const { network, senderAddress, recipientAddress, lovelaceAmount } = req.data;
 
-    // Validate inputs
+    // validate inputs
     if (!network) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'network');
     if (!senderAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'senderAddress');
     if (!recipientAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'recipientAddress');
-    if (!isValidBech32Address(senderAddress)) {
+    if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid sender address format', 'senderAddress');
-    }
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-        logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
-
-        const txbuildResult = await indexer.indexBuildResult(db, req.data);
-        
-      return txbuildResult;
+      logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
+      return await indexer.indexBuildResult(db, req.data);
     });
   });
 
   /**
-   * Get build details
+   * Get build details for previously built transaction
+   * @param req - CDS request object (with buildId)
+   * @returns Transaction build details
    */
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
-
+    // Validate inputs
     if (!buildId) return rejectMissing(req, 'GetBuildDetails', 'buildId');
 
+    // handle the request / fetching the build details
     return handleRequest(req, async (db) => {
-      const build = await db.run(
-        SELECT.one.from(TransactionBuilds).where({ id: buildId })
-      );
+      const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
 
-      if (!build) {
-        return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
-      }
-      return build;
+      if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+      return existing;
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // Transaction Submission Actions
-  // ---------------------------------------------------------------------------
-  /**
-   * Submit a signed transaction
+  /** 
+   * Submit signed transaction built previously
+   * @param req - CDS request object (with buildId, signedTxCbor)
+   * @returns Transaction submission details
    */
   srv.on('SubmitTransaction', async (req: Request) => {
+    logger.debug('[TxService] SubmitTransaction Action handler called');
     const { buildId, signedTxCbor } = req.data;
 
+    // Validate inputs
     if (!buildId) return rejectMissing(req, 'SubmitTransaction', 'buildId');
     if (!signedTxCbor) return rejectMissing(req, 'SubmitTransaction', 'signedTxCbor');
 
+    // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
-      logger.info({ buildId }, '[TxService] Submitting signed transaction');
+      logger.debug({ buildId }, '[TxService] Submitting signed transaction');
 
-      // Verify build exists
+      // Validate build exists
       const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!build) {
-        return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
-      }
+      if (!build) return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
 
       // extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
-      logger.debug({ txHash }, '[TxService] Transaction hash extracted from CBOR');
 
       // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
       await cardanoClient.submitTransaction(signedTxCbor);
@@ -183,39 +182,38 @@ module.exports = (srv: cds.Service) => {
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
       await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
-      logger.info({ buildId, txHash }, '[TxService] Submission record stored');      
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // return only txHash
+      
       return { submissionRecord };
     });
   });
 
   /**
    * Submit signed transaction without prior build
+   * @param req - CDS request object (with signedTxCbor, network)
+   * @returns Transaction submission details
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
+    logger.info('[TxService] SubmitSignedTransaction Action handler called');
     const { signedTxCbor, network } = req.data;
 
+    // validate inputs
     if (!signedTxCbor) return rejectMissing(req, 'SubmitSignedTransaction', 'signedTxCbor');
     if (!network) return rejectMissing(req, 'SubmitSignedTransaction', 'network');
 
+    // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
-      logger.info({ network }, '[TxService] Submitting external build & signed transaction');
-
       // extract txHash from signed CBOR (before submission)
       const txHash = getTxHashFromCbor(signedTxCbor);
-      logger.debug({ txHash }, '[TxService] Transaction hash extracted from CBOR');
 
       // submit to blockchain
       await cardanoClient.submitTransaction(signedTxCbor);
-      logger.info({ txHash }, '[TxService] External transaction submitted');
+      logger.debug({ txHash }, '[TxService] External transaction submitted');
 
       // index submission record
       const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
       logger.debug('[TxService] External transaction indexed');
 
-      // store submission record (without buildId)
+      // store submission record with null buildId
       const submissionRecord = {
         ...indexSubmission,
         build_id: null,
@@ -224,24 +222,23 @@ module.exports = (srv: cds.Service) => {
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
 
-      // wait 3 seconds before returning
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
       return submissionRecord;
     });
   });
 
   /**
    * Check submission status
+   * @param req - The incoming request data
+   * @returns {TransactionSubmission} The transaction submission status
    */
   srv.on('CheckSubmissionStatus', async (req: Request) => {
+    logger.debug('[TxService] CheckSubmissionStatus Action handler called');
     const { submissionId } = req.data;
+
+    // validate inputs
     if (!submissionId) return rejectMissing(req, 'CheckSubmissionStatus', 'submissionId');
 
-    return handleRequest(req, async (db) => {
-      logger.info({ submissionId }, '[TxService] Checking submission status');
-        
-    });
+    // handle the request / checking submission status
+    return handleRequest(req, (db) => db.run(req.query));
   });
-
 };
