@@ -74,3 +74,5 @@ payment.skey
 payment.vkey
 
 general_dev_notes.txt
+
+ogmios-tests.yaml

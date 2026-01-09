@@ -481,7 +481,11 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
       if (!existing || existing.length === 0) {
         logger.debug({ address }, '[CardanoService] Indexing address via indexer');
-        return indexer.indexAddress(db, address);
+        await indexer.indexAddress(db, address);
+        // After indexing, fetch and return the UTxOs
+        const utxos = await db.run(SELECT.from(AddressUTxOs).where({ address }));
+        logger.debug({ utxos, count: utxos?.length }, '[CardanoService] UTxOs after indexing');
+        return utxos || [];
       }
       return existing;
     });
@@ -644,7 +648,14 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('READ', LedgerProtocolParameters, async (req: Request) => {
     logger.debug('[CardanoService] LedgerProtocolParameters READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
+     return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(LedgerProtocolParameters));
+      if (!existing) {
+        logger.debug('[CardanoService] Indexing protocol parameters via indexer');
+        return indexer.indexProtocolParameters(db);
+      }
+      return existing;
+    });
   });
 
   /** 
@@ -652,8 +663,8 @@ module.exports = (srv: cds.Service) => {
    * @param req - CDS request object
    * @returns Protocol Parameters 
    */
-  srv.on('GetProtocolParameters', async (req: Request) => {
-    logger.debug('[CardanoService] GetProtocolParameters Action handler called');
+  srv.on('GetLedgerProtocolParameters', async (req: Request) => {
+    logger.debug('[CardanoService] GetLedgerProtocolParameters Action handler called');
     return handleRequest(req, async (db) => {
       logger.debug('[CardanoService] Indexing protocol parameters via indexer');
       return indexer.indexProtocolParameters(db);

@@ -133,12 +133,11 @@ module.exports = (srv: cds.Service) => {
     if (!buildId) return rejectMissing(req, 'GetBuildDetails', 'buildId');
 
     // handle the request / fetching the build details
-    return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-
-      if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
-      return existing;
-    });
+    const existing = await cds.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+    
+    if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+    
+    return existing;
   });
 
   /** 

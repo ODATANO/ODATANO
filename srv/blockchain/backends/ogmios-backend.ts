@@ -80,9 +80,27 @@ export class OgmiosBackend implements CardanoBackend {
    * @param _epochNumber epoch number
    * @returns {Promise<EpochData>} epoch data
    */
-  async getEpoch(_epochNumber: number): Promise<EpochData> {
+  async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      throw new NotFoundError('Historic Epoch queries not supported', this.name);
+      if (!this.stateQueryClient) {
+        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
+      }
+      
+      // Get current epoch from ledgerTip
+      const tip = await this.stateQueryClient.ledgerTip();
+      if (tip === 'origin') {
+        throw new NotFoundError('Epoch', this.name);
+      }
+      
+      const currentEpoch = Math.floor((tip.slot || 0) / 432000);
+      
+      // Ogmios only supports current epoch queries
+      if (epochNumber !== currentEpoch) {
+        throw new NotFoundError(`Historic Epoch ${epochNumber} not supported (current: ${currentEpoch})`, this.name);
+      }
+      
+      // Return current epoch data
+      return this.getLatestEpoch();
     }, this.name);
   }
 
@@ -316,16 +334,19 @@ export class OgmiosBackend implements CardanoBackend {
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
+        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
       }
-      await this.stateQueryClient.acquireLedgerState('origin');
+      
       const params = await this.stateQueryClient.protocolParameters();
-      await this.stateQueryClient.releaseLedgerState();
+      const tip = await this.stateQueryClient.ledgerTip();
+      
+      // Calculate current epoch from tip
+      const currentEpoch = tip !== 'origin' && tip.slot ? Math.floor(tip.slot / 432000) : 0;
 
       return {
         network: CONFIG.network,
-        epoch: 0, // not available in params
-        minUtxo: params.minUtxoDepositCoefficient?.toString(),
+        epoch: currentEpoch,
+        minUtxo: params.minUtxoDepositCoefficient?.toString() || '0',
         nonce: '',
         costModels: JSON.stringify(params.plutusCostModels || {}),
         minFeeA: params.minFeeCoefficient || 0,
@@ -340,18 +361,18 @@ export class OgmiosBackend implements CardanoBackend {
         maxValSize: (params.maxValueSize?.bytes || 0).toString(),
         collateralPercent: params.collateralPercentage || 0,
         maxCollateralInputs: params.maxCollateralInputs || 0,
-        coinsPerUtxoSize: params.minUtxoDepositCoefficient?.toString(),
+        coinsPerUtxoSize: params.minUtxoDepositCoefficient?.toString() || '0',
         maxBlockHeaderSize: params.maxBlockHeaderSize?.bytes || 0,
         maxTxSize: params.maxTransactionSize?.bytes || 0,
-        keyDeposit: params.stakeCredentialDeposit?.ada?.lovelace?.toString(),
-        minPoolCost: params.minStakePoolCost?.ada?.lovelace?.toString(),
-        poolDeposit: params.stakePoolDeposit?.ada?.lovelace?.toString(),
+        keyDeposit: params.stakeCredentialDeposit?.ada?.lovelace?.toString() || '0',
+        minPoolCost: params.minStakePoolCost?.ada?.lovelace?.toString() || '0',
+        poolDeposit: params.stakePoolDeposit?.ada?.lovelace?.toString() || '0',
         eMax: params.stakePoolRetirementEpochBound || 0,
         nOpt: params.desiredNumberOfStakePools || 0,
         a0: Number(params.stakePoolPledgeInfluence || 0),
         rho: Number(params.treasuryExpansion || 0),
         tau: Number(params.monetaryExpansion || 0),
-        decentralisationParam: 0, // deprecated?! check
+        decentralisationParam: 0,
         extraEntropy: null,
         protocolMajorVer: params.version?.major || 0,
         protocolMinorVer: params.version?.minor || 0,
@@ -365,8 +386,47 @@ export class OgmiosBackend implements CardanoBackend {
    * Get current Latest Epoch Data
    * @returns {Promise<BlockData>} latest block data
    */
+  /** 
+   * Get Latest Epoch Data
+   * @returns {Promise<EpochData>} latest epoch data
+   */
   async getLatestEpoch(): Promise<EpochData> {
-    throw new Error('Method not implemented.');
+    return handleBackendRequest(async () => {
+      if (!this.stateQueryClient) {
+        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
+      }
+
+      const tip = await this.stateQueryClient.ledgerTip();
+      
+      // Handle Point | "origin" type
+      if (tip === 'origin') {
+        throw new NotFoundError('Latest epoch', this.name);
+      }
+      
+      const slot = tip.slot || 0;
+      const epoch = Math.floor(slot / 432000);
+      
+      // Calculate epoch boundaries (approximation)
+      // Each epoch has 432000 slots, each slot is ~1 second
+      const epochStartSlot = epoch * 432000;
+      const epochEndSlot = (epoch + 1) * 432000;
+      const currentTime = Date.now();
+      const epochStartTime = currentTime - ((slot - epochStartSlot) * 1000);
+      const epochEndTime = currentTime + ((epochEndSlot - slot) * 1000);
+      
+      return {
+        epoch,
+        start_time: Math.floor(epochStartTime / 1000),
+        end_time: Math.floor(epochEndTime / 1000),
+        first_block_time: Math.floor(epochStartTime / 1000),
+        last_block_time: Math.floor(currentTime / 1000),
+        block_count: 0, // Not available from Ogmios ledgerTip
+        tx_count: 0, // Not available from Ogmios ledgerTip
+        output: '0',
+        fees: '0',
+        active_stake: null,
+      };
+    }, this.name);
   }
 
   /** 
@@ -374,7 +434,39 @@ export class OgmiosBackend implements CardanoBackend {
    * @returns {Promise<BlockData>} latest block data
    */
   async getLatestBlock(): Promise<BlockData> {
-    throw new Error('Method not implemented.');
+    return handleBackendRequest(async () => {
+      if (!this.stateQueryClient) {
+        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
+      }
+
+      const tip = await this.stateQueryClient.ledgerTip();
+      
+      // Handle Point | "origin" type
+      if (tip === 'origin') {
+        throw new NotFoundError('Latest block', this.name);
+      }
+      
+      const slot = tip.slot || 0;
+      const blockHeight = await this.stateQueryClient.networkBlockHeight();
+      const height = blockHeight === 'origin' ? 0 : (blockHeight || 0);
+      
+      // Calculate epoch from slot (432000 slots per epoch on mainnet)
+      const epoch = Math.floor(slot / 432000);
+      const epochSlot = slot % 432000;
+      
+      return {
+        time: Date.now(), // Use current timestamp as approximation
+        height,
+        hash: tip.id || '',
+        slot,
+        epoch,
+        epochSlot,
+        slotLeader: '', // Ogmios doesn't provide this via ledgerTip
+        size: 0, // Not available from ledgerTip
+        txCount: 0, // Not available from ledgerTip
+        fees: '0',
+      };
+    }, this.name);
   }
 
 // ---------------------------------------------------------------------------

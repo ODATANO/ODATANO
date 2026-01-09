@@ -60,9 +60,12 @@
     "pretest": "npm run cds:types && npm run db:deploy",
     "test": "jest --runInBand",
     "test:coverage": "jest --runInBand --coverage",
+    "test:ci": "jest --runInBand --testPathIgnorePatterns=core-ogmios.test.ts",
+    "test:ci:coverage": "jest --runInBand --coverage --testPathIgnorePatterns=core-ogmios.test.ts",
     "test:integration": "npm test -- --testPathPattern=integration",
     "test:integration:blockfrost": "npm test -- --testPathPattern=core.blockfrost.test.ts",
     "test:integration:koios": "npm test -- --testPathPattern=core.koios.test.ts",
+    "test:integration:ogmios": "npm test -- --testPathPattern=core-ogmios.test.ts",
     "test:integration:both": "npm run test:integration:blockfrost && npm run test:integration:koios",
     "test:unit": "npm test -- --testPathPattern=unit",
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false"

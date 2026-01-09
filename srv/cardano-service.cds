@@ -158,5 +158,5 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
 
     @title : 'Get Ledger Protocol Parameters'
     @description : 'Retrieve the current ledger protocol parameters'
-    action GetProtocolParameters() returns LedgerProtocolParameters;
+    action GetLedgerProtocolParameters() returns LedgerProtocolParameters;
 }

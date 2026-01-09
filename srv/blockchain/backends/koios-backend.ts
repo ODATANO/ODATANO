@@ -15,8 +15,10 @@ import {
   PoolData, 
   DrepData, 
   AccountData,
-  Amount
+  Amount,
+  LedgerProtocolParameters
 } from '../../utils/types';
+import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 
 /**
  * KoiosBackend Implementation for CardanoBackend Interface
@@ -112,10 +114,14 @@ export class KoiosBackend implements CardanoBackend {
    * @returns {Promise<BlockData>} block data
    */
   async getBlock(blockHash: string): Promise<BlockData> {
+
+    console.log("Fetching block data for hash:", blockHash);
     return handleBackendRequest(
       async () => {
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
         const data = blockData.data[0];
+
+        console.log("Block data received:", data);
 
         return {
           time: data.block_time,
@@ -457,11 +463,57 @@ export class KoiosBackend implements CardanoBackend {
    * Get Protocol Parameters
    * @returns {Promise<any>} protocol parameters
    */
-  async getProtocolParameters(): Promise<any> {
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/protocol_params');
-        return data;
+        const { data } = await this.api.get('/cli_protocol_params');
+        console.log("Protocol parameters data received:", data);
+        if (!data) {
+          throw new NotFoundError('Protocol Parameters', this.name);
+        }
+        
+        return {
+          network: CONFIG.network,
+          epoch: 0, // Koios doesn't provide current epoch in this endpoint
+          // --- Fees / Sizes ---
+          minFeeA: data.txFeePerByte,
+          minFeeB: data.txFeeFixed,
+          maxBlockSize: data.maxBlockBodySize,
+          maxTxSize: data.maxTxSize,
+          maxBlockHeaderSize: data.maxBlockHeaderSize,
+          // --- Deposits / Pools ---
+          keyDeposit: data.stakeAddressDeposit.toString(),
+          poolDeposit: data.stakePoolDeposit.toString(),
+          eMax: data.poolRetireMaxEpoch,
+          nOpt: data.stakePoolTargetNum,
+          a0: data.poolPledgeInfluence,
+          rho: data.monetaryExpansion,
+          tau: data.treasuryCut,
+          minPoolCost: data.minPoolCost.toString(),
+          // --- Legacy / Misc ---
+          decentralisationParam: 0, // deprecated in Conway era
+          extraEntropy: null,
+          protocolMajorVer: data.protocolVersion.major,
+          protocolMinorVer: data.protocolVersion.minor,
+          minUtxo: '0', // legacy, replaced by coinsPerUtxoSize
+          nonce: '',
+          // --- Plutus / Execution units ---
+          costModels: JSON.stringify(data.costModels),
+          priceMem: data.executionUnitPrices.priceMemory,
+          priceStep: data.executionUnitPrices.priceSteps,
+          maxTxExMem: data.maxTxExecutionUnits.memory.toString(),
+          maxTxExSteps: data.maxTxExecutionUnits.steps.toString(),
+          maxBlockExMem: data.maxBlockExecutionUnits.memory.toString(),
+          maxBlockExSteps: data.maxBlockExecutionUnits.steps.toString(),
+          // --- Babbage+ UTxO cost / Collateral ---
+          maxValSize: data.maxValueSize.toString(),
+          collateralPercent: data.collateralPercentage,
+          maxCollateralInputs: data.maxCollateralInputs,
+          coinsPerUtxoSize: data.utxoCostPerByte.toString(),
+          // --- Housekeeping ---
+          fetchedAt: new Date().toISOString(),
+          source: this.name
+        };
       },
       this.name
     );
@@ -475,11 +527,11 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
-        
+
           if (!data) {
             throw new NotFoundError('Latest Block', this.name);
           }
-          return await this.getBlock(data.hash);
+          return await this.getBlock(data[0].hash);
         },
       this.name
     );  

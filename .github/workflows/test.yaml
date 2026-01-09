@@ -39,7 +39,7 @@ jobs:
       - name: Deploy database
         run: npm run db:deploy
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage (excluding Ogmios)
         env:
           NODE_ENV: test
           NETWORK: 'preview'
@@ -47,7 +47,7 @@ jobs:
           PRIMARY_TIMEOUT_MS: 8000
           FALLBACK_TIMEOUT_MS: 8000
           INDEX_TTL_MS: 60000
-        run: npm run test:coverage
+        run: npm run test:ci:coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

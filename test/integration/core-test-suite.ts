@@ -4,6 +4,7 @@ import {
   BackendTestConfig,
   configureBackendForTest,
 } from './backend-test-helper';
+import { network } from '@blockfrost/blockfrost-js/lib/endpoints/api/network';
 
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(200000);
@@ -166,6 +167,14 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         expect(data).to.have.property('hash');
         expect(status).to.equal(200);
       });
+
+      it('POST /GetLatestBlock – read latest Block', async () => {
+        const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestBlock', {});
+        expect(data).to.have.property('hash');
+        expect(data).to.have.property('height');
+        expect(data).to.have.property('size');
+        expect(status).to.equal(200);
+      });
     });
     
     describe('Blocks Entity Cold Indexing', () => {
@@ -256,6 +265,12 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
 
       it('POST /GetEpochByNumber – read Epoch by number', async () => {
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', {epochNumber: 300 });
+        expect(data).to.have.property('epoch');
+        expect(status).to.equal(200);
+      });
+
+      it('POST /GetLatestEpoch – read latest Epoch', async () => {
+        const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
         expect(data).to.have.property('epoch');
         expect(status).to.equal(200);
       });
@@ -581,8 +596,9 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
 
       it('POST /GetUTxOsByAddress – read UTxOs by Address', async () => {
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: FIXTURE.validAddress });
-        expect(status).to.be.equal(200);
+          
         expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+        expect(status).to.be.equal(200);
       });
 
       it('POST /GetAddressByBech32 – read Address with indexing', async () => {
@@ -984,7 +1000,7 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
   // Drep Entities
   // ============================================================================
   describe('Dreps Entity Tests', () => {
-    describe('READ Dreps Entity', () => {
+    describe('Dreps Entity', () => {
       it('GET /Dreps – read Dreps collection', async () => {
         const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps`);
         expect(status).to.equal(200);
@@ -1056,6 +1072,80 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         expect(status).to.equal(200);
         expect(data).to.have.property('drepId');
         expect(data.drepId).to.equal(FIXTURE.validDrepId);
+      });
+    });
+  });
+
+  describe('LedgerProtocolParameters Entity Tests', () => {
+
+    describe('LedgerProtocolParameters Entity', () => {
+      it('GET /LedgerProtocolParameters – read ProtocolParameter collection', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        expect(Array.isArray(data.value)).to.be.true;
+      });
+
+      it('POST /LedgerProtocolParameters– read ProtocolParameter', async () => {
+        const { status, data } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+      });
+    });
+
+    describe('ProtocolParameters Entity Cold Indexing', () => {
+      it('GET /LedgerProtocolParameters – cold read triggers indexing and persists', async () => {
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;
+        const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        console.log(before);
+        expect(before).to.be.undefined;
+        const { status } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        console.log(after);
+        expect(after).to.not.be.undefined;
+      });
+
+      it('POST /GetLedgerProtocolParameters – cold action read triggers indexing and persists', async () => {
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;
+        const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(before).to.be.undefined;
+        const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+        const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(after).to.not.be.undefined;
+      });
+    });
+
+    describe('LedgerProtocolParameters Entity Warm Reads', () => {
+      it('GET /LedgerProtocolParameters – warm read from DB without re-index', async () => {  
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;  
+        await cds.run(INSERT.into(LedgerProtocolParameters).entries({
+          network: 'preview',
+          epoch: 200,
+          minFeeA: 44,
+          minFeeB: 155381,
+        }));
+        const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        console.log(data);
+        expect(data.value).to.be.an('array');
+        expect(data.value[0]).to.have.property('epoch');
+      });
+      it('POST /GetLedgerProtocolParameters – warm action read from DB without re-index', async () => {  
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;
+        await cds.run(INSERT.into(LedgerProtocolParameters).entries({
+          network: 'preview',
+          epoch: 200,
+          minFeeA: 44,
+          minFeeB: 155381,
+        }));
+        const { status, data } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+        expect(data).to.have.property('epoch');
+        expect(data.epoch).to.equal(200);
       });
     });
   });

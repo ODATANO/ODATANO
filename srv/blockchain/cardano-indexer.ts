@@ -31,6 +31,8 @@ import {
 
 import {
   TransactionBuild,
+  TransactionBuildInputs,
+  TransactionBuildOutputs,
   TransactionSubmission
 } from '#cds-models/CardanoTransactionService';
 
@@ -52,6 +54,8 @@ import {
   mapTransactionMetadata,
   mapAddressUtxoAssets,
   mapBuildResult,
+  mapBuildInputs,
+  mapBuildOutputs,
   mapProtocolParameters,
   mapTransactionSubmission
 } from '../utils/mappers';
@@ -318,6 +322,18 @@ export class CardanoIndexer {
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
+    // Store inputs if available
+    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
+      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
+      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
+    }
+
+    // Store outputs if available
+    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
+      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
+      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
+    }
+
     return buildResult;
   }
 
@@ -360,7 +376,10 @@ export class CardanoIndexer {
    */
   async indexLatestEpoch( tx: CapTransaction): Promise<Epoch> {
     const epochInfo = await cardano.getLatestEpoch();
+    console.log("Latest epoch info:", epochInfo);
     const epochEntity = mapEpoch(epochInfo);
+
+
     await tx.run(UPSERT.into(Epoch).entries([epochEntity]))
     return epochEntity;
   }
@@ -372,8 +391,12 @@ export class CardanoIndexer {
    */
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
     const blockInfo = await cardano.getLatestBlock();    
-    const epoch = await this.indexEpoch(tx , blockInfo.epoch!);
-    const blockEntity = mapBlock(blockInfo, epoch); 
+
+    console.log("Latest block info:", blockInfo);
+    const epoch= await this.indexEpoch(tx , blockInfo.epoch!);
+    console.log("Latest block epoch info:", epoch);
+    const blockEntity = mapBlock(blockInfo, epoch);
+    console.log("Latest block entity:", blockEntity); 
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
   }

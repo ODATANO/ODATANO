@@ -37,6 +37,8 @@ import {
 }  from '#cds-models/CardanoODataService';
 
 import type { TransactionBuild as  TransactionBuildRow, 
+              TransactionBuildInput as TransactionBuildInputRow,
+              TransactionBuildOutput as TransactionBuildOutputRow,
               TransactionSubmission as TransactionSubmissionRow
 } from '#cds-models/CardanoTransactionService';
 
@@ -536,6 +538,44 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult): Transacti
     wasSubmitted       : false, // indicates if this build was submitted
   }
   
+}
+
+/** 
+ * Map Transaction Build Inputs
+ * Converts transaction build result inputs into TransactionBuildInputRow format
+ * @param buildId the transaction build ID
+ * @param inputs transaction build result inputs
+ * @returns {TransactionBuildInputRow[]} mapped transaction build input rows
+ */
+export function mapBuildInputs(buildId: string, inputs: Array<{ txHash: string; index: number; lovelace: string; address?: string }>): TransactionBuildInputRow[] {
+  return inputs.map((input, idx) => ({
+    build_id: buildId,
+    inputIndex: idx,
+    txHash: input.txHash,
+    outputIndex: input.index,
+    address: input.address || null,
+    lovelace: Number(input.lovelace),
+    hasAssets: false, // simple ADA transfers don't have assets
+  }));
+}
+
+/** 
+ * Map Transaction Build Outputs
+ * Converts transaction build result outputs into TransactionBuildOutputRow format
+ * @param buildId the transaction build ID
+ * @param outputs transaction build result outputs
+ * @param changeAddress the change address to identify change outputs
+ * @returns {TransactionBuildOutputRow[]} mapped transaction build output rows
+ */
+export function mapBuildOutputs(buildId: string, outputs: Array<{ address: string; lovelace: string }>, changeAddress?: string): TransactionBuildOutputRow[] {
+  return outputs.map((output, idx) => ({
+    build_id: buildId,
+    outputIndex: idx,
+    address: output.address,
+    lovelace: Number(output.lovelace),
+    isChange: changeAddress ? output.address === changeAddress : false,
+    hasAssets: false, // simple ADA transfers don't have assets
+  }));
 }
 
 /** 
