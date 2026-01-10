@@ -58,12 +58,44 @@ jobs:
       # ==========================================
       # Start Cardano Node + Ogmios (nur wenn Cache vorhanden)
       # ==========================================
-      - name: Start Cardano Node and Ogmios
+      - name: Setup Docker volumes and network
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
-          docker compose -f docker-compose.preview.yml up -d cardano-node ogmios
-          echo "Waiting for Cardano Node to initialize..."
+          docker volume create cardano-preview-ipc || true
+          docker network create odatano-network || true
+          
+      - name: Start Cardano Node
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          docker run -d \
+            --name cardano-node-preview \
+            --network odatano-network \
+            -v ${{ github.workspace }}/config/preview/cardano-node:/config:ro \
+            -v ${{ github.workspace }}/cardano-preview-db:/data \
+            -v cardano-preview-ipc:/ipc \
+            ghcr.io/intersectmbo/cardano-node:10.1.3 \
+            run \
+            --config /config/config.json \
+            --topology /config/topology.json \
+            --database-path /data/db \
+            --socket-path /ipc/node.socket
+          echo "Waiting for node socket..."
           sleep 30
+          
+      - name: Start Ogmios
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          docker run -d \
+            --name ogmios-preview \
+            --network odatano-network \
+            -p 1337:1337 \
+            -v cardano-preview-ipc:/ipc:ro \
+            -v ${{ github.workspace }}/config/preview/cardano-node:/config:ro \
+            cardanosolutions/ogmios:v6.14.0 \
+            --node-socket /ipc/node.socket \
+            --node-config /config/config.json \
+            --host 0.0.0.0 \
+            --port 1337
 
       - name: Wait for Ogmios to be ready
         id: ogmios-ready
@@ -113,7 +145,9 @@ jobs:
       # ==========================================
       - name: Stop Cardano Node gracefully
         if: always()
-        run: docker compose -f docker-compose.preview.yml stop cardano-node
+        run: |
+          docker stop ogmios-preview || true
+          docker stop cardano-node-preview || true
         continue-on-error: true
 
       - name: Save Cardano Node DB Cache
@@ -128,7 +162,7 @@ jobs:
       # ==========================================
       - name: Cleanup Docker containers
         if: always()
-        run: docker compose -f docker-compose.preview.yml down -v
+        run: docker rm -f ogmios-preview cardano-node-preview || true
         continue-on-error: true
 
       - name: Upload coverage to Codecov
