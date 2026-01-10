@@ -24,6 +24,22 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
+      # ==========================================
+      # Cardano Node DB Cache (Sync-Workflow)
+      # ==========================================
+      - name: Get current date for cache key
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Restore Cardano Node DB Cache
+        id: cache-cardano
+        uses: actions/cache/restore@v4
+        with:
+          path: cardano-preview-db
+          key: cardano-node-preview-${{ steps.date.outputs.date }}
+          restore-keys: |
+            cardano-node-preview-
+
       - name: Install dependencies
         run: npm ci
 
@@ -39,6 +55,39 @@ jobs:
       - name: Deploy database
         run: npm run db:deploy
 
+      # ==========================================
+      # Start Cardano Node + Ogmios (nur wenn Cache vorhanden)
+      # ==========================================
+      - name: Start Cardano Node and Ogmios
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          docker compose -f docker-compose.preview.yml up -d cardano-node ogmios
+          echo "Waiting for Cardano Node to initialize..."
+          sleep 30
+
+      - name: Wait for Ogmios to be ready
+        id: ogmios-ready
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: |
+          timeout 180 bash -c 'until curl -f http://localhost:1337/health > /dev/null 2>&1; do echo "Waiting for Ogmios..."; sleep 5; done'
+          echo "Ogmios is ready!"
+          echo "ready=true" >> $GITHUB_OUTPUT
+
+      - name: Cache Status Info
+        run: |
+          if [ "${{ steps.cache-cardano.outputs.cache-hit }}" != "true" ]; then
+            echo "⚠️ No Cardano Node cache found - Ogmios tests will be skipped"
+            echo "💡 Run the 'Network Synchronization' workflow first to create a cache"
+          elif [ "${{ steps.ogmios-ready.outputs.ready }}" != "true" ]; then
+            echo "⚠️ Ogmios not ready - Ogmios tests will be skipped"
+          else
+            echo "✅ Ogmios is ready - all tests will run"
+          fi
+
+      # ==========================================
+      # Run Tests
+      # ==========================================
       - name: Run tests with coverage (Koios + Blockfrost)
         env:
           NODE_ENV: test
@@ -49,6 +98,38 @@ jobs:
           FALLBACK_TIMEOUT_MS: 8000
           INDEX_TTL_MS: 60000
         run: npm run test:ci:coverage
+
+      - name: Run Ogmios integration tests
+        if: steps.ogmios-ready.outputs.ready == 'true'
+        env:
+          NODE_ENV: test
+          NETWORK: 'preview'
+          BACKENDS: 'ogmios'
+          OGMIOS_WS_URL: 'ws://localhost:1337'
+        run: npm test -- test/integration/core-ogmios.test.ts
+
+      # ==========================================
+      # Save Cardano Node DB Cache
+      # ==========================================
+      - name: Stop Cardano Node gracefully
+        if: always()
+        run: docker compose -f docker-compose.preview.yml stop cardano-node
+        continue-on-error: true
+
+      - name: Save Cardano Node DB Cache
+        if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: cardano-preview-db
+          key: cardano-node-preview-${{ steps.date.outputs.date }}
+
+      # ==========================================
+      # Cleanup & Upload Coverage
+      # ==========================================
+      - name: Cleanup Docker containers
+        if: always()
+        run: docker compose -f docker-compose.preview.yml down -v
+        continue-on-error: true
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

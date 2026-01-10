@@ -1,0 +1,137 @@
+name: Network Synchronization
+
+on:
+  schedule:
+    # Run twice daily at 6:00 and 18:00 UTC to keep cache fresh
+    - cron: '00 06,18 * * *'
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Cardano network to sync'
+        required: false
+        default: 'preview'
+        type: choice
+        options:
+          - preview
+      sync-hours:
+        description: 'How many hours to sync (0 = full sync)'
+        required: false
+        default: '6'
+        type: string
+
+jobs:
+  sync_and_cache:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        network: [preview]
+        node-version: ['10.1.3']
+        ogmios-version: ['v6.14.0']
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Get Date/Time
+        id: date-time
+        run: |
+          echo "timestamp=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "hour=$(date -u +'%H')" >> $GITHUB_OUTPUT
+
+      - name: Restore Cardano Node DB Cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: cardano-preview-db
+          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}
+          restore-keys: |
+            cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-
+            cardano-node-preview-
+
+      - name: Cache Status
+        run: |
+          if [ "${{ steps.cache-restore.outputs.cache-hit }}" == "true" ]; then
+            echo "Cache found: ${{ steps.cache-restore.outputs.cache-matched-key }}"
+          else
+            echo "No exact cache match, starting sync..."
+          fi
+
+      - name: Start Cardano Node + Ogmios
+        run: |
+          docker compose -f docker-compose.preview.yml up -d cardano-node ogmios
+          echo "Starting Cardano Node synchronization..."
+
+      - name: Wait for initial sync
+        run: |
+          echo "Waiting 60 seconds for initial node startup..."
+          sleep 60
+
+      - name: Sync Cardano Node
+        run: |
+          SYNC_HOURS=${{ inputs.sync-hours || '6' }}
+          if [ "$SYNC_HOURS" -eq "0" ]; then
+            echo "Full synchronization requested - no timeout"
+            TIMEOUT=""
+          else
+            TIMEOUT="timeout ${SYNC_HOURS}h"
+            echo "Syncing for $SYNC_HOURS hours..."
+          fi
+          
+          # Monitor sync progress
+          START_TIME=$(date +%s)
+          while true; do
+            if ! docker ps | grep -q cardano-node-preview; then
+              echo "Cardano Node container stopped"
+              exit 1
+            fi
+            
+            # Check Ogmios health to verify node is running
+            if curl -s http://localhost:1337/health > /dev/null 2>&1; then
+              CURRENT_TIME=$(date +%s)
+              ELAPSED=$((CURRENT_TIME - START_TIME))
+              ELAPSED_HOURS=$((ELAPSED / 3600))
+              ELAPSED_MINS=$(((ELAPSED % 3600) / 60))
+              echo "Sync running: ${ELAPSED_HOURS}h ${ELAPSED_MINS}m"
+            fi
+            
+            sleep 300  # Check every 5 minutes
+            
+            # Exit if timeout reached
+            if [ "$SYNC_HOURS" -ne "0" ]; then
+              CURRENT_TIME=$(date +%s)
+              if [ $((CURRENT_TIME - START_TIME)) -ge $((SYNC_HOURS * 3600)) ]; then
+                echo "Sync time limit reached"
+                break
+              fi
+            fi
+          done
+
+      - name: Stop Cardano Node gracefully
+        if: always()
+        run: |
+          echo "Stopping Cardano Node to ensure clean DB state..."
+          docker compose -f docker-compose.preview.yml stop cardano-node
+          sleep 10
+
+      - name: Save Cardano Node DB Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cardano-preview-db
+          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.preview.yml down -v
+          echo "Cleanup completed"
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Network**: ${{ matrix.network }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Node Version**: ${{ matrix.node-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ogmios Version**: ${{ matrix.ogmios-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cache Key**: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
