@@ -213,6 +213,12 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isValidBech32Address(invalidAddr)).toBe(false);
     });
 
+    it('should return false for valid bech32 with disallowed HRP prefix', () => {
+      // Valid bech32 encoding but with 'pool' HRP instead of allowed addr/stake prefixes
+      const validBech32WrongHrp = 'pool1pu5jlj4q9w9jlxeu370a3c9myx47md5j5m2str0naunn2q3lkdy';
+      expect(isValidBech32Address(validBech32WrongHrp)).toBe(false);
+    });
+
     it('should return false for invalid bech32 encoding', () => {
       const invalidAddr = 'addr1invalid!!!';
       expect(isValidBech32Address(invalidAddr)).toBe(false);

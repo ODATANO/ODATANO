@@ -13,7 +13,7 @@ export function createBackendTestSuite(backendConfig: BackendTestConfig) {
 // Configure environment to use this specific backend
 configureBackendForTest(backendConfig);
 
-describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toUpperCase()}]`, () => {
+describe(`Complete Service Tests Cardano Service [${backendConfig.name.toUpperCase()}]`, () => {
   // Initialize the test suite
   const test = cds.test(__dirname + '/../../');
   const expect = test.expect;
@@ -35,6 +35,8 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
   beforeEach (async()=>{
       await test.data.reset()   
   });
+
+  describe('ODATANO Milestone 1 - CardanoService Tests', () => { 
   // ============================================================================
   // NetworkInformation
   // ============================================================================
@@ -474,7 +476,7 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('POST /GetMetadataByTxHash – read TransactionMetadata (transaction with metadata)', async () => {
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.txWithMetadata });
       
-        expect(data).to.have.property('label');
+        expect(data.value[0]).to.have.property('label');
         expect(status).to.equal(200);
       });
 
@@ -488,8 +490,8 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('GET /TransactionMetadata(key) – read TransactionMetadata by composite key', async () => {
         const { status, data } = await test.get(
           `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${FIXTURE.txWithMetadata}',id=0)`
-      );
-      
+        );
+
         expect(data).to.have.property('label');
         expect(data).to.have.property('payload');
         expect(status).to.equal(200);
@@ -498,8 +500,9 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       it('POST /GetMetadataByTxHash – read TransactionMetadata via indexing path', async () => {
      
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.txWithMetadata });
-        expect(data).to.have.property('label');
-        expect(data).to.have.property('payload');
+        
+        expect(data.value[0]).to.have.property('label');
+        expect(data.value[0]).to.have.property('payload');
         expect(status).to.equal(200);
       }); 
     });
@@ -541,11 +544,14 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
         );
 
         const {status, data} = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.validTxHash });
+        // get first row 
+        const firstrow = data.value[0];
+
         expect(status).to.equal(200);
-        expect(data).to.have.property('tx_hash');
-        expect(data.tx_hash).to.equal(FIXTURE.validTxHash);
-        expect(data).to.have.property('label');
-        expect(data.label).to.equal('721');
+        expect(firstrow).to.have.property('tx_hash');
+        expect(firstrow.tx_hash).to.equal(FIXTURE.validTxHash);
+        expect(firstrow).to.have.property('label');
+        expect(firstrow.label).to.equal('721');
       });
 
     });  
@@ -575,8 +581,9 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
 
       it('POST /GetUTxOsByAddress – read UTxOs by Address', async () => {
         const { status, data } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: FIXTURE.validAddress });
-        expect(status).to.be.equal(200);
+          
         expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+        expect(status).to.be.equal(200);
       });
 
       it('POST /GetAddressByBech32 – read Address with indexing', async () => {
@@ -978,7 +985,7 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
   // Drep Entities
   // ============================================================================
   describe('Dreps Entity Tests', () => {
-    describe('READ Dreps Entity', () => {
+    describe('Dreps Entity', () => {
       it('GET /Dreps – read Dreps collection', async () => {
         const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps`);
         expect(status).to.equal(200);
@@ -1053,5 +1060,101 @@ describe(`ODATANO Milestone 1 - Complete Service Tests [${backendConfig.name.toU
       });
     });
   });
+  });
+
+  describe('ODATANO Milestone 2 - CardanoService Tests', () => {
+
+    describe('LedgerProtocolParameters Entity Tests', () => {
+
+      describe('LedgerProtocolParameters Entity', () => {
+        it('GET /LedgerProtocolParameters – read ProtocolParameter collection', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        expect(Array.isArray(data.value)).to.be.true;
+         });
+
+        it('POST /LedgerProtocolParameters– read ProtocolParameter', async () => {
+        const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+        });
+      });
+
+      describe('ProtocolParameters Entity Cold Indexing', () => {
+        it('GET /LedgerProtocolParameters – cold read triggers indexing and persists', async () => {
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;
+        const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(before).to.be.undefined;
+        const { status } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(after).to.not.be.undefined;
+        });
+
+        it('POST /GetLedgerProtocolParameters – cold action read triggers indexing and persists', async () => {
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;
+        const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(before).to.be.undefined;
+        const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+        const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
+        expect(after).to.not.be.undefined;
+        });
+      });
+
+      describe('LedgerProtocolParameters Entity Warm Reads', () => {
+        it('GET /LedgerProtocolParameters – warm read from DB without re-index', async () => {  
+        const CardanoService = await cds.connect.to('CardanoODataService');
+        const { LedgerProtocolParameters } = CardanoService.entities as any;  
+        await cds.run(INSERT.into(LedgerProtocolParameters).entries({
+          network: 'preview',
+          epoch: 200,
+          minFeeA: 44,
+          minFeeB: 155381,
+        }));
+        const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+        expect(status).to.equal(200);
+        expect(data.value).to.be.an('array');
+        expect(data.value[0]).to.have.property('epoch');
+        });
+        it('POST /GetLedgerProtocolParameters – warm action read from DB without re-index', async () => {  
+          const CardanoService = await cds.connect.to('CardanoODataService');
+         const { LedgerProtocolParameters } = CardanoService.entities as any;
+        await cds.run(INSERT.into(LedgerProtocolParameters).entries({
+          network: 'preview',
+          epoch: 200,
+          minFeeA: 44,
+          minFeeB: 155381,
+        }));
+        const { status, data } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        expect(status).to.equal(200);
+        expect(data).to.have.property('epoch');
+        expect(data.epoch).to.equal(200);
+        });
+      });
+
+    });
+
+    describe('LatestBlock and LatestEpoch Actions Tests', () => { 
+
+     it('POST /GetLatestBlock – read latest Block', async () => {
+        const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestBlock', {});
+        expect(data).to.have.property('hash');
+        expect(data).to.have.property('height');
+        expect(data).to.have.property('size');
+        expect(status).to.equal(200);
+      });
+
+      it('POST /GetLatestEpoch – read latest Epoch', async () => {
+        const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
+        expect(data).to.have.property('epoch');
+        expect(status).to.equal(200);
+      });
+    });
+  });
 });
+
 }
+
+

@@ -509,4 +509,56 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
   });
+
+  // ============================================================================
+  // rejectInvalid & rejectMissing
+  // ============================================================================
+  describe('rejectInvalid', () => {
+    it('should reject request with invalid input error', () => {
+      const mockReq = {
+        reject: jest.fn()
+      } as any;
+
+      const { rejectInvalid } = require('../../srv/utils/errors');
+      rejectInvalid(mockReq, 'TestContext', 'Invalid value', 'fieldName');
+
+      expect(mockReq.reject).toHaveBeenCalledWith(
+        400,
+        `[${ERROR_CODES.INVALID_INPUT}] TestContext: Invalid value`,
+        'fieldName'
+      );
+    });
+
+    it('should reject request without target', () => {
+      const mockReq = {
+        reject: jest.fn()
+      } as any;
+
+      const { rejectInvalid } = require('../../srv/utils/errors');
+      rejectInvalid(mockReq, 'TestContext', 'Invalid value');
+
+      expect(mockReq.reject).toHaveBeenCalledWith(
+        400,
+        `[${ERROR_CODES.INVALID_INPUT}] TestContext: Invalid value`,
+        undefined
+      );
+    });
+  });
+
+  describe('rejectMissing', () => {
+    it('should reject request for missing field', () => {
+      const mockReq = {
+        reject: jest.fn()
+      } as any;
+
+      const { rejectMissing } = require('../../srv/utils/errors');
+      rejectMissing(mockReq, 'TestContext', 'requiredField');
+
+      expect(mockReq.reject).toHaveBeenCalledWith(
+        400,
+        `[${ERROR_CODES.INVALID_INPUT}] TestContext: requiredField is required`,
+        'requiredField'
+      );
+    });
+  });
 });

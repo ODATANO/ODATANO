@@ -15,16 +15,21 @@ import {
   PoolData, 
   DrepData, 
   AccountData,
-  Amount
+  Amount,
+  LedgerProtocolParameters
 } from '../../utils/types';
 
-// ---------------------------------------------------------------------------
-// Koios Backend Implementation
-// ---------------------------------------------------------------------------
+/**
+ * KoiosBackend Implementation for CardanoBackend Interface
+ * Implements the CardanoBackend interface using Koios API with Axios
+ */
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   
+  /**
+   * Constructor 
+   */
   constructor() {
     this.api = axios.create({
       baseURL: CONFIG.koiosApiUrl,
@@ -32,10 +37,18 @@ export class KoiosBackend implements CardanoBackend {
     });
   }
 
+  /** 
+   * Initialize the backend 
+   */
   async init(): Promise<void> {
     return;
   }
 
+  /** 
+   * Get Transaction Data for specified transaction hash
+   * @param hash transaction hash (hex)
+   * @returns {Promise<Transaction>} transaction data
+   */
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
@@ -94,7 +107,13 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Block Data for specified block hash
+   * @param blockHash block hash (hex)
+   * @returns {Promise<BlockData>} block data
+   */
   async getBlock(blockHash: string): Promise<BlockData> {
+
     return handleBackendRequest(
       async () => {
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
@@ -117,6 +136,11 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Epoch Data for specified epoch number
+   * @param epochNumber epoch number
+   * @returns {Promise<EpochData>} epoch data
+   */
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -149,6 +173,11 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Address Data for specified address
+   * @param address bech32 address
+   * @returns {Promise<Address>} address data
+   */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
@@ -199,6 +228,11 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Address UTxOs for specified address
+   * @param address bech32 address
+   * @returns {Promise<UTxO[]>} list of UTxOs
+   */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
@@ -218,6 +252,10 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Network Information
+   * @returns {Promise<Network>} network information
+   */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
@@ -244,6 +282,11 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Transaction Metadata for specified transaction hash
+   * @param tx_hash transaction hash (hex)
+   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
+   */
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(
       async () => {
@@ -274,6 +317,11 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Pool Data for specified pool id
+   * @param poolId pool id
+   * @returns {Promise<PoolData>} pool data
+   */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(
       async () => {
@@ -304,9 +352,13 @@ export class KoiosBackend implements CardanoBackend {
     },
     this.name
   );
-}
+  }
 
-
+  /** 
+   * Get Drep Data for specified drep id
+   * @param drepId drep id
+   * @returns {Promise<DrepData>} drep data
+   */
   async getDrep(drepId: string): Promise<DrepData> {
   return handleBackendRequest(
     async () => {
@@ -333,8 +385,13 @@ export class KoiosBackend implements CardanoBackend {
     },
     this.name
   );
-  }  
-  
+  }
+
+  /** 
+   * Get Account Data for specified stake address
+   * @param accountId account id
+   * @returns {Promise<AccountData>} account data
+   */
   async getAccount(accountId: string): Promise<AccountData> {
   return handleBackendRequest(
     async () => {
@@ -374,5 +431,112 @@ export class KoiosBackend implements CardanoBackend {
     },
     this.name
   );
+  }
+
+  /** 
+   * Submit Transaction
+   * @param signedTxCbor signed transaction in CBOR hex format
+   * @returns {Promise<string>} transaction hash
+   */
+  async submitTransaction(signedTxCbor: string): Promise<string> {
+    return handleBackendRequest(
+      async () => {
+        const body = {
+          _txs: [signedTxCbor],
+        };
+        const { data } = await this.api.post('/submit_tx', body);
+
+        return data[0].tx_hash;
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Get Protocol Parameters
+   * @returns {Promise<any>} protocol parameters
+   */
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/cli_protocol_params');
+        
+        return {
+          network: CONFIG.network,
+          epoch: 0, // Koios doesn't provide current epoch in this endpoint
+          // --- Fees / Sizes ---
+          minFeeA: data.txFeePerByte,
+          minFeeB: data.txFeeFixed,
+          maxBlockSize: data.maxBlockBodySize,
+          maxTxSize: data.maxTxSize,
+          maxBlockHeaderSize: data.maxBlockHeaderSize,
+          // --- Deposits / Pools ---
+          keyDeposit: data.stakeAddressDeposit.toString(),
+          poolDeposit: data.stakePoolDeposit.toString(),
+          eMax: data.poolRetireMaxEpoch,
+          nOpt: data.stakePoolTargetNum,
+          a0: data.poolPledgeInfluence,
+          rho: data.monetaryExpansion,
+          tau: data.treasuryCut,
+          minPoolCost: data.minPoolCost.toString(),
+          // --- Legacy / Misc ---
+          decentralisationParam: 0, // deprecated in Conway era
+          extraEntropy: null,
+          protocolMajorVer: data.protocolVersion.major,
+          protocolMinorVer: data.protocolVersion.minor,
+          minUtxo: '0', // legacy, replaced by coinsPerUtxoSize
+          nonce: '',
+          // --- Plutus / Execution units ---
+          costModels: JSON.stringify(data.costModels),
+          priceMem: data.executionUnitPrices.priceMemory,
+          priceStep: data.executionUnitPrices.priceSteps,
+          maxTxExMem: data.maxTxExecutionUnits.memory.toString(),
+          maxTxExSteps: data.maxTxExecutionUnits.steps.toString(),
+          maxBlockExMem: data.maxBlockExecutionUnits.memory.toString(),
+          maxBlockExSteps: data.maxBlockExecutionUnits.steps.toString(),
+          // --- Babbage+ UTxO cost / Collateral ---
+          maxValSize: data.maxValueSize.toString(),
+          collateralPercent: data.collateralPercentage,
+          maxCollateralInputs: data.maxCollateralInputs,
+          coinsPerUtxoSize: data.utxoCostPerByte.toString(),
+          // --- Housekeeping ---
+          fetchedAt: new Date().toISOString(),
+          source: this.name
+        };
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Get Latest Block Data
+   * @returns {Promise<BlockData>} latest block data
+   */
+  async getLatestBlock(): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/tip');
+
+          if (!data) {
+            throw new NotFoundError('Latest Block', this.name);
+          }
+          return await this.getBlock(data[0].hash);
+        },
+      this.name
+    );  
+  }
+
+  /** 
+   * Get Latest Epoch Data
+   * @returns {Promise<EpochData>} latest epoch data
+   */
+  async getLatestEpoch(): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.get('/tip');
+        return this.getEpoch(data.epoch_no);
+      },
+      this.name
+    );  
   }
 }

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
-export type BackendName = 'blockfrost' | 'koios';
+export type BackendName = 'blockfrost' | 'koios' | 'ogmios' | 'hybrid';
 
 const NETWORK: Network = (process.env.NETWORK ?? 'preview') as Network;
 
@@ -24,22 +24,23 @@ const HRP = {
 };
 
 const VALIDITY_VARIANTS = {
-  BECH32_MAX_LENGTH: 2000, // Maximum bech32 string length to prevent DoS
-  MAX_EPOCH: 100_000, // Maximum reasonable epoch number
-  POOL_ID_BYTES: 28, // Standard pool ID payload length
+  BECH32_MAX_LENGTH: 2000, // maximum bech32 string length to prevent DoS
+  MAX_EPOCH: 100_000, // maximum reasonable epoch number
+  POOL_ID_BYTES: 28, // standard pool ID payload length
 }
 /**
  * Parse available backends from BACKENDS environment variable
- * Format: "blockfrost,koios" or "koios" or single backend
+ * Format: "blockfrost,koios" or "hybrid" or single backend
  */
 function parseAvailableBackends(): BackendName[] {
-  const backendsEnv = process.env.BACKENDS || 'blockfrost,koios';
+  const backendsEnv = process.env.BACKENDS || 'hybrid';
   const available = backendsEnv
     .split(',')
     .map(b => b.trim().toLowerCase() as BackendName)
-    .filter((b): b is BackendName => ['blockfrost', 'koios'].includes(b));
+    .filter((b): b is BackendName => ['ogmios','blockfrost', 'koios', 'hybrid'].includes(b));
   
-  return available.length > 0 ? available : ['blockfrost', 'koios'];
+  // default to Koios if none valid backends found
+  return available.length > 0 ? available : ['koios'];
 }
 
 export const CONFIG = {
@@ -50,11 +51,12 @@ export const CONFIG = {
   blockfrostApiUrl: BLOCKFROST_URLS[NETWORK],
   koiosApiUrl: KOIOS_URLS[NETWORK],
   koiosApiKey: process.env.KOIOS_API_KEY ?? '',
-  primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 8000),
+  ogmiosUrl: process.env.OGMIOS_URL || 'ws://localhost:1337',
+  primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 118000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
-  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 600000),
+  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 300000), // 5 minutes default
   logLevel: process.env.LOG_LEVEL || 'info',
-  // Backend configuration
+  // backend configuration
   backends: parseAvailableBackends(),
 };
 

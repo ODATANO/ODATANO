@@ -54,3 +54,25 @@ test/**/*.js.map
 
 db.sqlite-shm
 db.sqlite-wal
+
+docker-compose.preview.yml
+docker-compose.preprod.yml
+docker-compose.mainnet.yml
+
+DOCKER_COMPOSE_GUIDE.md
+HYBRID_BACKEND.md
+DOCKER_COMPOSE_GUIDE.md
+TRANSACTION_WORKFLOW.md
+
+/config/preview 
+
+logs.ps1
+start-stack.ps1
+stop-stack.ps1
+payment.addr
+payment.skey
+payment.vkey
+
+general_dev_notes.txt
+
+ogmios-tests.yaml

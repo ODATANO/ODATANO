@@ -3,7 +3,6 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
-
 import {
   Transaction,
   BlockData,
@@ -15,17 +14,21 @@ import {
   MetadataLabelTx,
   PoolData,
   AccountData,
-  DrepData, 
+  DrepData,
+  LedgerProtocolParameters 
 } from '../../utils/types';
 
-
-// ---------------------------------------------------------------------------
-// Blockfrost Backend Implementation
-// ---------------------------------------------------------------------------
+/**
+ * BlockfrostBackend Implementation for CardanoBackend Interface
+ * Implements the CardanoBackend interface using Blockfrost API SDK
+ */
 export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
-
+  
+  /** 
+   * Constructor
+   */
   constructor() {
   const projectId = CONFIG.blockfrostApiKey;
   if (!projectId) {
@@ -34,11 +37,15 @@ export class BlockfrostBackend implements CardanoBackend {
   this.api = new BlockFrostAPI({ projectId });
   }
   
+   /** 
+    * Initialize the backend 
+    */
   async init(): Promise<void> { }
 
-  // ---------------------------------------------------------------------------
-  // Network Information
-  // ---------------------------------------------------------------------------
+  /** 
+   * Get Network Information
+   * @returns {Promise<Network>} network information
+   */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
@@ -51,9 +58,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Block Data
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Block Data
+   * @param blockHash block hash (hex)
+   * @returns {Promise<BlockData>} block data
+   */
   async getBlock(blockHash: string): Promise<BlockData> {
      return handleBackendRequest(
       async () => {
@@ -74,9 +84,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Epoch Data
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Epoch Data
+   * @param epochNumber epoch number
+   * @returns {Promise<EpochData>} epoch data
+   */
    async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -97,9 +110,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  // Transaction
-  // ---------------------------------------------------------------------------
+
+  /** 
+   * Get Transaction Data
+   * @param hash transaction hash (hex)
+   * @returns {Promise<Transaction>} transaction data
+   */
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
@@ -150,9 +166,12 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  // ---------------------------------------------------------------------------
-  //  Transaction Metadata
-  // ---------------------------------------------------------------------------
+  
+  /**
+   * Get Transaction Metadata
+   * @param tx_hash transaction hash (hex)
+   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
+   */
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(
       async () => {
@@ -172,9 +191,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Address
-  // ---------------------------------------------------------------------------
+/** 
+ * Get Address Data
+ * @param address bech32 address string
+ * @returns {Promise<Address>} address data
+ */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
@@ -202,6 +223,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Address UTxOs
+   * @param address bech32 address string
+   * @returns {Promise<UTxO[]>} list of UTxOs
+   */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
@@ -220,6 +246,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Pool Data
+   * @param poolId stake pool id (hex)
+   * @return {Promise<PoolData>} pool data
+   */
   async getPool(poolId: string): Promise<PoolData> {
    return handleBackendRequest(
       async () => {
@@ -245,6 +276,11 @@ export class BlockfrostBackend implements CardanoBackend {
     ); 
   }
 
+  /**
+   * Get Drep Data
+   * @param drepId drep id (bech32)
+   * @return {Promise<DrepData>} drep data
+   */
   async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(
       async () => {
@@ -264,6 +300,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
+  /** 
+   * Get Account Data
+   * @param stakeAddress bech32 stake address
+   * @return {Promise<AccountData>} account data
+   */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(
       async () => {
@@ -285,6 +326,122 @@ export class BlockfrostBackend implements CardanoBackend {
           poolId: accountData.pool_id,
           drepId : accountData.drep_id ?? null,
           addresses: addresses,
+        };
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Submit Transaction
+   * @param signedTxCbor hex-encoded signed transaction CBOR
+   * @returns {Promise<string>} transaction hash
+   */
+  async submitTransaction(signedTxCbor: string): Promise<string> {
+    const txBytes = Buffer.from(signedTxCbor, "hex");
+    return handleBackendRequest(
+      async () => {
+        const txHash = await this.api.txSubmit(txBytes);
+        return txHash;
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Get Protocol Parameters
+   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
+   */
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    return handleBackendRequest(
+      async () => {
+        const protocolParams = await this.api.epochsLatestParameters();
+        return {
+          network: CONFIG.network,
+          epoch: protocolParams.epoch,
+          minUtxo: protocolParams.min_utxo,
+          nonce: protocolParams.nonce,
+          costModels: JSON.stringify(protocolParams.cost_models),
+          minFeeA: protocolParams.min_fee_a,
+          minFeeB: protocolParams.min_fee_b,
+          maxBlockSize: protocolParams.max_block_size,
+          priceMem: protocolParams.price_mem,
+          priceStep: protocolParams.price_step,
+          maxTxExMem: protocolParams.max_tx_ex_mem,
+          maxTxExSteps: protocolParams.max_tx_ex_steps,
+          maxBlockExMem: protocolParams.max_block_ex_mem,
+          maxBlockExSteps: protocolParams.max_block_ex_steps,
+          maxValSize: protocolParams.max_val_size,
+          collateralPercent: protocolParams.collateral_percent,
+          maxCollateralInputs: protocolParams.max_collateral_inputs,
+          coinsPerUtxoSize: protocolParams.coins_per_utxo_size,
+          maxBlockHeaderSize: protocolParams.max_block_header_size,
+          maxTxSize: protocolParams.max_tx_size,
+          keyDeposit: protocolParams.key_deposit,
+          minPoolCost: protocolParams.min_pool_cost,
+          poolDeposit: protocolParams.pool_deposit,
+          eMax: protocolParams.e_max,
+          nOpt: protocolParams.n_opt,
+          a0: protocolParams.a0,
+          rho: protocolParams.rho,
+          tau: protocolParams.tau,
+          decentralisationParam: protocolParams.decentralisation_param,
+          extraEntropy: protocolParams.extra_entropy,
+          protocolMajorVer: protocolParams.protocol_major_ver,
+          protocolMinorVer: protocolParams.protocol_minor_ver,
+          fetchedAt: new Date().toISOString(),
+          source: this.name,
+
+        };
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Get Latest Epoch Data
+   * @returns {Promise<EpochData>} latest epoch data
+   */
+  async getLatestEpoch(): Promise<EpochData> {
+    return handleBackendRequest(
+      async () => {
+        const epochData = await this.api.epochsLatest();
+        return {
+          epoch: epochData.epoch,
+          start_time: epochData.start_time,
+          end_time: epochData.end_time,
+          first_block_time: epochData.first_block_time,
+          last_block_time: epochData.last_block_time,
+          block_count: epochData.block_count,
+          tx_count: epochData.tx_count,
+          output: epochData.output,
+          fees: epochData.fees,
+          active_stake: epochData.active_stake,
+        };
+      },
+      this.name
+    );
+  }
+
+  /** 
+   * Get Latest Block Data
+   * @returns {Promise<BlockData>} latest block data
+   */
+  async getLatestBlock(): Promise<BlockData> {
+     return handleBackendRequest(
+      async () => {
+        const blockdata = await this.api.blocksLatest();
+        return {
+          time: blockdata.time,
+          height: blockdata.height,
+          hash: blockdata.hash,
+          slot: blockdata.slot,
+          slotLeader: blockdata.slot_leader,
+          epoch: blockdata.epoch,
+          epochSlot: blockdata.epoch_slot,
+          size: blockdata.size,
+          txCount: blockdata.tx_count,
+          fees: blockdata.fees,
         };
       },
       this.name

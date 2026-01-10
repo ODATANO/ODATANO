@@ -41,3 +41,44 @@ describe('BlockfrostBackend constructor Error Test', () => {
     });
   });
 });
+
+describe('BlockfrostBackend submitTransaction', () => {
+  it('should submit a transaction and return the transaction hash', async () => {
+    const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+    const mockTxSubmit = jest.fn().mockResolvedValue(mockTxHash);
+
+    jest.isolateModules(() => {
+      jest.doMock('@blockfrost/blockfrost-js', () => ({
+        BlockFrostAPI: jest.fn().mockImplementation(() => ({
+          txSubmit: mockTxSubmit,
+        })),
+      }));
+
+      jest.doMock('../../config/config', () => ({
+        CONFIG: {
+          blockfrostApiKey: 'test-key',
+          blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
+          koiosApiUrl: '',
+          koiosApiKey: '',
+          network: 'preview',
+          hrp: { addr: /^addr_test/, stake: /^stake_test/ },
+          primaryTimeoutMs: 5000,
+          fallbackTimeoutMs: 3000,
+          indexTtlMs: 60000,
+          logLevel: 'info',
+          backends: ['blockfrost'],
+        },
+      }));
+    });
+
+    const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
+    const backend = new BlockfrostBackend();
+    
+    const signedTxCbor = '84a300818258201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef00018182581d60abcdef1234567890abcdef1234567890abcdef1234567890abcdef12341a000f4240021a0002a389a0f6';
+    
+    const result = await backend.submitTransaction(signedTxCbor);
+    
+    expect(result).toBe(mockTxHash);
+    expect(mockTxSubmit).toHaveBeenCalledWith(Buffer.from(signedTxCbor, 'hex'));
+  });
+});

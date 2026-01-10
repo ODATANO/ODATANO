@@ -11,7 +11,8 @@ import {
   MetadataLabelTx,
   PoolData,
   DrepData,
-  AccountData
+  AccountData,
+  LedgerProtocolParameters
 } from '../../srv/utils/types';
 
 // Mock backend for testing
@@ -53,6 +54,12 @@ class MockBackend implements CardanoBackend {
   async getEpoch(_epochNumber: number): Promise<EpochData> {
     throw new Error('Not implemented in mock');
   }
+  async getLatestBlock(): Promise<BlockData> {
+    throw new Error('Not implemented in mock');
+  }
+  async getLatestEpoch(): Promise<EpochData> {
+    throw new Error('Not implemented in mock');
+  }
   async getPool(_poolId: string): Promise<PoolData> {
     throw new Error('Not implemented in mock');
   }
@@ -60,6 +67,21 @@ class MockBackend implements CardanoBackend {
     throw new Error('Not implemented in mock');
   }
   async getAccount(_stakeAddress: string): Promise<AccountData> {
+    throw new Error('Not implemented in mock');
+  }
+  async submitTransaction(_signedTxCbor: string): Promise<string> {
+    throw new Error('Not implemented in mock');
+  }
+
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    throw new Error('Not implemented in mock');
+  }
+
+  async getlatestBlock(): Promise<BlockData> {
+    throw new Error('Not implemented in mock');
+  }
+
+  async getlatestEpoch(): Promise<EpochData> {
     throw new Error('Not implemented in mock');
   }
 

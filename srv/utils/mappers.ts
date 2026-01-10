@@ -12,6 +12,8 @@ import {
   PoolData as PoolProviderData,
   DrepData as DrepProviderData,
   AccountData as AccountProviderData,
+  TxBuildResult as TransactionBuildResult,
+  LedgerProtocolParameters as ProtocolParameters,
 } from './types';
 
 import {
@@ -31,19 +33,34 @@ import {
   Pool as PoolRow,
   Drep as DrepRow,
   Account as AccountRow,
-} from '#cds-models/CardanoODataService';
+  LedgerProtocolParameter as ProtocolParameterRow,
+}  from '#cds-models/CardanoODataService';
+
+import type { TransactionBuild as  TransactionBuildRow, 
+              TransactionBuildInput as TransactionBuildInputRow,
+              TransactionBuildOutput as TransactionBuildOutputRow,
+              TransactionSubmission as TransactionSubmissionRow
+} from '#cds-models/CardanoTransactionService';
+
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
 import { CONFIG } from '../../config/config';
+import cds from '@sap/cds';
 
+/** 
+ * Maximum age for cached/indexed data in milliseconds 
+ */
 const MAX_AGE_MS = CONFIG.indexTtlMs;
-// -----------------------------------------------------------------------------
-// Transactions
-// -----------------------------------------------------------------------------
 
+/** 
+ * Map Transaction Data
+ * Converts provider transaction data into TransactionRow format
+ * @param providerTx 
+ * @returns {TransactionRow} mapped transaction row 
+ */
 export function mapTransaction(providerTx: TransactionProviderData): TransactionRow {
-  // Determine presence of optional data
+  // determine presence of optional data
   const hasMetadata = providerTx.metadata != null && (Array.isArray(providerTx.metadata));
   const hasInputs = Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
   const hasOutputs = Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
@@ -63,14 +80,19 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     hasMetadata: hasMetadata,
   };
 }
-// -----------------------------------------------------------------------------
-// Transaction Inputs
-// -----------------------------------------------------------------------------
+
+/** 
+ * Map Transaction Inputs
+ * Converts provider transaction input data into TransactionInputRow format
+ * @param txHash transaction hash
+ * @param txInputs transaction inputs from provider
+ * @returns {TransactionInputRow[]} mapped transaction input rows
+ */
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
-    // Determine input index, defaulting to array index if not provided
+    // determine input index, defaulting to array index if not provided
     const inputIndex = input.outputIndex ?? idx;
-    // Check presence of address and amount arrays
+    // check presence of address and amount arrays
     const hasAddress = !!input.address?.length;
     const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
 
@@ -89,12 +111,17 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
   });
 }
 
+/** 
+ * Map Transaction Input Assets
+ * Converts provider transaction input asset data into TransactionInputAssetRow format
+ * @param txHash transaction hash
+ * @param inputs transaction inputs from provider
+ * @returns {TransactionInputAssetRow[]} mapped transaction input asset rows
+ */
 export function mapTransactionInputAssets(
   txHash: string,
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
-  if (!Array.isArray(inputs)) return [];
-
   return inputs.flatMap((input, idx) => {
 
     const inputIndex = input.outputIndex ?? idx;
@@ -116,9 +143,13 @@ export function mapTransactionInputAssets(
   });
 }
 
-// -----------------------------------------------------------------------------
-// Transaction Outputs
-// -----------------------------------------------------------------------------
+/** 
+ * Map Transaction Outputs
+ * Converts provider transaction output data into TransactionOutputRow format
+ * @param txHash transaction hash
+ * @param txOutputs transaction outputs from provider
+ * @returns {TransactionOutputRow[]} mapped transaction output rows
+ */
 export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
   return txOutputs.map((output, idx: number) => {
 
@@ -139,6 +170,13 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   });
 }
 
+/** 
+ * Map Transaction Output Assets
+ * Converts provider transaction output asset data into TransactionOutputAssetRow format
+ * @param txHash transaction hash
+ * @param outputs transaction outputs from provider
+ * @returns {TransactionOutputAssetRow[]} mapped transaction output asset rows
+ */
 export function mapTransactionOutputAssets(
   txHash: string, 
   outputs: TxOutputProviderData[]
@@ -161,10 +199,14 @@ export function mapTransactionOutputAssets(
     });
   });
 }
-// -----------------------------------------------------------------------------
-// Addresses
-// -----------------------------------------------------------------------------
 
+/** 
+ * Map Address Data
+ * Converts provider address data into AddressRow format
+ * @param address address string
+ * @param addressData address data from provider
+ * @returns {AddressRow} mapped address row
+ */
 export function mapAddress(address: string, addressData: AddressProviderData): AddressRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -188,6 +230,14 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   };
 }
 
+/** 
+ * Map Address UTxOs
+ * @param addr address string
+ * @param validFrom validFrom
+ * @param validTo validTo
+ * @param addressUtxosData address UTxOs data from provider 
+ * @returns {AddressUTxORow[]} mapped address UTxO rows
+ */
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
   
    const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) => 
@@ -214,6 +264,15 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
   }));
 }
 
+/** 
+ * Map Address Assets
+ * Converts provider address asset data into AddressAssetRow format
+ * @param addr address string
+ * @param validFrom validFrom
+ * @param validTo validTo
+ * @param AssetAssets address assets from provider
+ * @returns {AddressAssetRow[]} mapped address asset rows
+ */
 export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
@@ -231,6 +290,14 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
     });
 }
 
+/** 
+ * Map UTxO Assets
+ * Converts provider address UTxO asset data into UTxOAssetRow format
+ * @param addressUtxosData address UTxOs data from provider
+ * @param validFrom validFrom
+ * @param validTo validTo
+ * @returns {UTxOAssetRow[]} mapped UTxO asset rows
+ */ 
 export function mapAddressUtxoAssets(
   addressUtxosData: UtxosProviderData[],
   validFrom: string, validTo: string,
@@ -259,9 +326,12 @@ export function mapAddressUtxoAssets(
   return assets;
 }
 
-// -----------------------------------------------------------------------------
-// Network Information
-// -----------------------------------------------------------------------------
+/** 
+ * Map Network Information
+ * Converts provider network information data into NetworkInfoRow format
+ * @param providerNetworkData 
+ * @returns {NetworkInfoRow} mapped network information row
+ */
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -282,9 +352,13 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): Ne
   };
 }
 
-// -----------------------------------------------------------------------------
-// Blocks
-// -----------------------------------------------------------------------------
+/** 
+ * Map Block Data
+ * Converts provider block data into BlockRow format
+ * @param providerBlockData block data from provider
+ * @param epochData epoch data for the block's epoch
+ * @returns {BlockRow} mapped block row
+ */
 export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochRow): BlockRow {
   return {
     time: new Date(providerBlockData.time * 1000).toISOString(),
@@ -300,9 +374,12 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochR
   };
 }
 
-// -----------------------------------------------------------------------------
-// Epochs
-// -----------------------------------------------------------------------------
+/** 
+ * Map Epoch Data
+ * Converts provider epoch data into EpochRow format
+ * @param providerEpochData epoch data from provider
+ * @returns {EpochRow} mapped epoch row
+ */
 export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   return {
     epoch: providerEpochData.epoch,
@@ -318,9 +395,12 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   };
 }
 
-// -----------------------------------------------------------------------------
-// Transaction Metadata
-// -----------------------------------------------------------------------------
+/** 
+ * Map Transaction Metadata
+ * Converts provider transaction metadata labels into TransactionMetadataRow format
+ * @param providerLabels array of metadata label data from provider
+ * @returns {TransactionMetadataRow[]} mapped transaction metadata rows
+ */
 export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[]): TransactionMetadataRow[] {
   const rows: TransactionMetadataRow[] = [];
 
@@ -335,9 +415,12 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   return rows;
 }
 
-// -----------------------------------------------------------------------------
-// Pools
-// -----------------------------------------------------------------------------
+/** 
+ * Map Pool Data
+ * Converts provider pool data into PoolRow format
+ * @param providerPoolData pool data from provider
+ * @returns {PoolRow} mapped pool row
+ */
 export function mapPool(providerPoolData: PoolProviderData): PoolRow {
   return {
     poolId: providerPoolData.poolId,
@@ -357,9 +440,12 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
   };
 }
 
-// -----------------------------------------------------------------------------
-// DREPs
-// -----------------------------------------------------------------------------
+/** 
+ * Map Drep Data
+ * Converts provider drep data into DrepRow format
+ * @param providerDrepData drep data from provider
+ * @returns {DrepRow} mapped drep row
+ */
 export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   return {
     drepId  : providerDrepData.drepId,
@@ -372,9 +458,12 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   };
 }
 
-// -----------------------------------------------------------------------------
-// Accounts
-// -----------------------------------------------------------------------------
+/** 
+ * Map Account Data
+ * Converts provider account data into AccountRow format
+ * @param providerAccountData account data from provider
+ * @returns {AccountRow} mapped account row
+ */
 export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
   const validFrom = new Date().toISOString();
   const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
@@ -395,9 +484,13 @@ export function mapAccount(providerAccountData: AccountProviderData): AccountRow
   };
 }
 
-// -----------------------------------------------------------------------------
-// Error Mapping
-// -----------------------------------------------------------------------------
+/** 
+ * Map Backend Error
+ * Converts BackendError into OData request rejection
+ * @param req OData request
+ * @param err error object
+ * @param ctx context string for error message
+ */
 export function mapError(req: Request, err: unknown, ctx: string) {
   if (err instanceof BackendError) {
     return req.reject(
@@ -408,17 +501,157 @@ export function mapError(req: Request, err: unknown, ctx: string) {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Helper Functions
-// -----------------------------------------------------------------------------
+/** 
+ * Map Transaction Build Result
+ * Converts provider transaction build result into TransactionBuildRow format
+ * @param txbuildResult transaction build result from provider
+ * @returns {TransactionBuildRow} mapped transaction build row
+ */
+export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow{
+  const buildId = cds.utils.uuid();
+  const now = Math.floor(Date.now() / 1000);
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const hasInputs = Array.isArray(txbuildResult.inputs) && txbuildResult.inputs.length > 0;
+  const hasOutputs = Array.isArray(txbuildResult.outputs) && txbuildResult.outputs.length > 0;
 
-/**
+  return {
+    id: buildId,
+    validFrom: validFrom,
+    validTo: validTo,
+    builderEngine: txbuildResult.builderEngine,
+    network: txbuildResult.network,
+    senderAddress: txbuildResult.senderAddress,
+    changeAddress: txbuildResult.senderAddress,
+    unsignedTxCbor: txbuildResult.unsignedTxCbor,
+    txBodyHash: txbuildResult.txBodyHash,
+    fee: Number(txbuildResult.feeLovelace),
+    size               : txbuildResult.sizeBytes, // size in bytes
+    createdAt          : now, // epoch seconds
+   // inputs             : txbuildResult.inputs,
+   // outputs            : txbuildResult.outputs ? JSON.stringify(txbuildResult.outputs) : null,
+    submission         : null,
+    hasInputs          : hasInputs, // indicates if build has inputs
+    hasOutputs         : hasOutputs, // indicates if build has outputs
+    wasSubmitted       : false, // indicates if this build was submitted
+  }
+  
+}
+
+/** 
+ * Map Transaction Build Inputs
+ * Converts transaction build result inputs into TransactionBuildInputRow format
+ * @param buildId the transaction build ID
+ * @param inputs transaction build result inputs
+ * @returns {TransactionBuildInputRow[]} mapped transaction build input rows
+ */
+export function mapBuildInputs(buildId: string, inputs: Array<{ txHash: string; index: number; lovelace: string; address?: string }>): TransactionBuildInputRow[] {
+  return inputs.map((input, idx) => ({
+    build_id: buildId,
+    inputIndex: idx,
+    txHash: input.txHash,
+    outputIndex: input.index,
+    address: input.address || null,
+    lovelace: Number(input.lovelace),
+    hasAssets: false, // simple ADA transfers don't have assets
+  }));
+}
+
+/** 
+ * Map Transaction Build Outputs
+ * Converts transaction build result outputs into TransactionBuildOutputRow format
+ * @param buildId the transaction build ID
+ * @param outputs transaction build result outputs
+ * @param changeAddress the change address to identify change outputs
+ * @returns {TransactionBuildOutputRow[]} mapped transaction build output rows
+ */
+export function mapBuildOutputs(buildId: string, outputs: Array<{ address: string; lovelace: string }>, changeAddress?: string): TransactionBuildOutputRow[] {
+  return outputs.map((output, idx) => ({
+    build_id: buildId,
+    outputIndex: idx,
+    address: output.address,
+    lovelace: Number(output.lovelace),
+    isChange: changeAddress ? output.address === changeAddress : false,
+    hasAssets: false, // simple ADA transfers don't have assets
+  }));
+}
+
+/** 
+ * Map Protocol Parameters
+ * Converts provider protocol parameters into ProtocolParameterRow format
+ * @param providerParams protocol parameters from provider
+ * @returns {ProtocolParameterRow} mapped protocol parameter row
+ */
+export function mapProtocolParameters(providerParams: ProtocolParameters): ProtocolParameterRow {
+  return {
+    network: providerParams.network,
+    epoch: providerParams.epoch,
+    minFeeA: providerParams.minFeeA,
+    minFeeB: providerParams.minFeeB,
+    maxBlockSize: providerParams.maxBlockSize,
+    maxTxSize: providerParams.maxTxSize,
+    maxBlockHeaderSize: providerParams.maxBlockHeaderSize,
+    keyDeposit: providerParams.keyDeposit,
+    poolDeposit: providerParams.poolDeposit,
+    eMax: providerParams.eMax,
+    nOpt: providerParams.nOpt,
+    a0: providerParams.a0,
+    rho: providerParams.rho,
+    tau: providerParams.tau,
+    minPoolCost: providerParams.minPoolCost,
+    decentralisationParam: providerParams.decentralisationParam,
+    extraEntropy: providerParams.extraEntropy,
+    protocolMajorVer: providerParams.protocolMajorVer,
+    protocolMinorVer: providerParams.protocolMinorVer,
+    minUtxo: providerParams.minUtxo,
+    nonce: providerParams.nonce,
+    costModels: providerParams.costModels,
+    priceMem: providerParams.priceMem,
+    priceStep: providerParams.priceStep,
+    maxTxExMem: providerParams.maxTxExMem,
+    maxTxExSteps: providerParams.maxTxExSteps,
+    maxBlockExMem: providerParams.maxBlockExMem,
+    maxBlockExSteps: providerParams.maxBlockExSteps,
+    maxValSize: providerParams.maxValSize,
+    collateralPercent: providerParams.collateralPercent,
+    maxCollateralInputs: providerParams.maxCollateralInputs,
+    coinsPerUtxoSize: providerParams.coinsPerUtxoSize,
+    fetchedAt: providerParams.fetchedAt,
+    source: providerParams.source,
+  };
+}
+
+/** 
+ * Map Transaction Submission
+ * Converts signed transaction CBOR and hash into TransactionSubmissionRow format
+ * @param signedTxCbor signed transaction in CBOR hex format
+ * @param txHash transaction hash
+ * @returns {TransactionSubmissionRow} mapped transaction submission row
+ */
+export function mapTransactionSubmission(signedTxCbor: string, txHash: string): TransactionSubmissionRow {
+  const now = Math.floor(Date.now() / 1000);
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  return {
+    signedTxCbor: signedTxCbor,
+    txHash: txHash,
+    validFrom: validFrom,
+    validTo: validTo,
+    submittedAt: now,
+  };
+}
+
+//-----------------------------------------------------------------------
+// Helper Functions
+//-----------------------------------------------------------------------
+
+/** 
  * Convert hex string to UTF-8 string, falling back to hex if conversion fails.
  * This helper reduces code duplication and improves performance by centralizing
  * the conversion logic.
  * 
  * @param hex - Hexadecimal string to convert
- * @returns UTF-8 string or original hex on error
+ * @returns {string} UTF-8 string or original hex if conversion fails
  */
 function hexToUtf8(hex: string): string {
   if (!hex) return hex;
@@ -426,12 +659,11 @@ function hexToUtf8(hex: string): string {
   return Buffer.from(hex, 'hex').toString('utf8');
 }
 
-/**
+/** 
  * Parse asset unit (policyId + assetNameHex) into components.
  * Optimizes repeated parsing logic across multiple mapper functions.
- * 
  * @param unit - Asset unit string (56 char policyId + asset name hex)
- * @returns Object with policyId and assetName
+ * @returns { policyId: string | null; assetName: string | null } Object with policyId and assetName
  */
 function parseAssetUnit(unit: string): { policyId: string | null; assetName: string | null } {
   if (unit === 'lovelace') {
@@ -445,6 +677,13 @@ function parseAssetUnit(unit: string): { policyId: string | null; assetName: str
   return { policyId, assetName };
 }
 
-function fmt(code: string, ctx: string, msg: string) {
+/** 
+ * Format error message
+ * @param code error code
+ * @param ctx context string
+ * @param msg error message
+ * @returns {string} formatted error message
+ */
+function fmt(code: string, ctx: string, msg: string): string {
   return `[${code}] ${ctx}: ${msg}`;
 }
