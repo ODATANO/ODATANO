@@ -35,7 +35,7 @@ jobs:
         id: cache-cardano
         uses: actions/cache/restore@v4
         with:
-          path: cardano-preview-db
+          path: ${{ github.workspace }}/cardano-preview-db
           key: cardano-node-preview-${{ steps.date.outputs.date }}
           restore-keys: |
             cardano-node-preview-
@@ -154,7 +154,7 @@ jobs:
         if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: cardano-preview-db
+          path: ${{ github.workspace }}/cardano-preview-db
           key: cardano-node-preview-${{ steps.date.outputs.date }}
 
       # ==========================================
