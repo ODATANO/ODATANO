@@ -39,10 +39,11 @@ jobs:
       - name: Deploy database
         run: npm run db:deploy
 
-      - name: Run tests with coverage (excluding Ogmios)
+      - name: Run tests with coverage (Koios + Blockfrost)
         env:
           NODE_ENV: test
           NETWORK: 'preview'
+          BACKENDS: 'koios,blockfrost'
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
           PRIMARY_TIMEOUT_MS: 8000
           FALLBACK_TIMEOUT_MS: 8000

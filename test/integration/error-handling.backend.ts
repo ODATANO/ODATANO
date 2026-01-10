@@ -11,8 +11,9 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 	describe(`Error Handling – Backend-Specific [${backendConfig.name.toUpperCase()}]`, () => {
 		const { GET, POST, expect } = cds.test(__dirname + '/../../');
 
-		// Error 404 resource not found with valid-looking inputs
-		describe('Resource Not Found (valid inputs)', () => {
+		describe('ODATANO Milestone 1 - Error Handling Tests', () => {
+			// Error 404 resource not found with valid-looking inputs
+			describe('Resource Not Found (valid inputs)', () => {
 
 			it('GET / single Transaction with nonexistent hash', async () => {
 				const nonexistentHash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -90,6 +91,14 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/not found/i);
 				expect(status).to.equal(404);
+			});
+			});
+		});
+
+		describe('ODATANO Milestone 2 - Error Handling Tests', () => {
+			// Error 400 bad request with invalid inputs
+			describe('Bad Request (invalid inputs)', () => {
+				
 			});
 		});
 	});

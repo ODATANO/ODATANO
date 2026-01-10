@@ -21,20 +21,24 @@ export interface CardanoTxBuilder {
    * @returns {Promise<TxBuildResult>} transaction build result
    */
   buildUnsignedAdaTransfer( req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
-
+ /*/
   /** 
    * Calculate minimum UTxO amount for given output
    * @param output transaction output
    * @param protocolParameters current protocol parameters
    * @returns {Promise<number>} minimum UTxO amount in lovelaces
    */
+  /*
   calculateMinUtxoAmount(output: any, protocolParameters: any ): Promise<number>;
-
+  /*
   /** 
    * Calculate transaction fee for given unsigned transaction
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
    * @param protocolParameters current protocol parameters
    * @returns {Promise<number>} transaction fee in lovelaces
    */
+
+  /*
   calculateTransactionFee( unsignedTxCbor: string, protocolParameters: any): Promise<number>;
-}
+  /*/
+  }

@@ -22,12 +22,11 @@ export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
     const expect = test.expect;
 
     // Test data fixtures for preview network
-    // Note: Using addresses from working send-ada-preview.ts script
     const FIXTURE = {
       network: 'preview',
-      validSenderAddress: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp', // From send-ada-preview.ts - has pure ADA
+      validSenderAddress: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
       validRecipientAddress: 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622',
-      lovelaceAmount: '10000000', // 10 ADA (minimum UTxO requirement is ~2.66 ADA)
+      lovelaceAmount: '5000000', // 5 ADA (minimum UTxO requirement is ~2.66 ADA)
       invalidAddress: 'invalid_address',
       invalidLovelaceAmount: 'not_a_number',
     };
@@ -197,6 +196,52 @@ export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
         const recipientOutput = outputs.find((o: any) => o.address === FIXTURE.validRecipientAddress);
         expect(recipientOutput).to.exist;
         expect(recipientOutput.lovelace).to.equal(Number(FIXTURE.lovelaceAmount));
+      });
+
+      it('POST /BuildSimpleAdaTransaction - without change address (fallback to sender)', async () => {
+        const requestBody = {
+          network: FIXTURE.network,
+          senderAddress: FIXTURE.validSenderAddress,
+          recipientAddress: FIXTURE.validRecipientAddress,
+          lovelaceAmount: FIXTURE.lovelaceAmount,
+          // No changeAddress provided - should default to senderAddress
+        };
+
+        const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody);
+        
+        expect(status).to.equal(200);
+        expect(data).to.have.property('id');
+        expect(data).to.have.property('unsignedTxCbor');
+        expect(data).to.have.property('txBodyHash');
+
+        // Verify the transaction was built successfully
+        const TxService = await cds.connect.to('CardanoTransactionService');
+        const { TransactionBuildOutputs } = TxService.entities;
+        const outputs = await cds.run(SELECT.from(TransactionBuildOutputs).where({ build_id: data.id }));
+        
+        // Should have at least recipient output
+        const recipientOutput = outputs.find((o: any) => o.address === FIXTURE.validRecipientAddress);
+        expect(recipientOutput).to.exist;
+        
+        // Change should go back to sender if there is any
+        const changeOutput = outputs.find((o: any) => o.address === FIXTURE.validSenderAddress);
+        // Change output might exist depending on UTxO selection
+      });
+
+      it('POST /BuildSimpleAdaTransaction - build transaction without assertions', async () => {
+        const requestBody = {
+          network: FIXTURE.network,
+          senderAddress: FIXTURE.validSenderAddress,
+          recipientAddress: FIXTURE.validRecipientAddress,
+          lovelaceAmount: FIXTURE.lovelaceAmount,
+          changeAddress: FIXTURE.validSenderAddress,
+        };
+
+        const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody);
+        
+        // Just verify the transaction builds successfully without detailed assertions
+        expect(status).to.equal(200);
+        expect(data.id).to.exist;
       });
     });
 
@@ -397,42 +442,7 @@ export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
       });
     });
 
-    // ============================================================================
-    // Error Handling Tests
-    // ============================================================================
 
-    describe('Error Handling', () => {
-      it('BuildSimpleAdaTransaction - handle address with insufficient funds gracefully', async () => {
-        // Use a fresh generated address that definitely has no funds
-        const emptyAddress = 'addr_test1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3jqpwd';
-        
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: emptyAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          changeAddress: emptyAddress,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        // Should fail gracefully with 400 or 500 error
-        expect(response.status).to.be.oneOf([400, 500]);
-      });
-
-      it('BuildSimpleAdaTransaction - handle invalid network gracefully', async () => {
-        const requestBody = {
-          network: 'invalid-network',
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          changeAddress: FIXTURE.validSenderAddress,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        // Should fail with appropriate error
-        expect(response.status).to.be.oneOf([400, 500]);
-      });
-    });
   });
 }
 

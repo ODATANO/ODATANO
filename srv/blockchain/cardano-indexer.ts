@@ -99,8 +99,8 @@ export class CardanoIndexer {
       }
 
       // Inputs + InputAssets
-      const inputRows = mapTransactionInputs(txHash, providerTx.inputs || []);
-      const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs || []);
+      const inputRows = mapTransactionInputs(txHash, providerTx.inputs);
+      const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs);
 
       if (inputRows.length) {
           
@@ -150,13 +150,10 @@ export class CardanoIndexer {
     
     tx.run(UPSERT.into(Addresses).entries(AddrEntity))
 
-    const validTo = AddrEntity.validTo ?? new Date().toISOString();
-    const validFrom = AddrEntity.validFrom ?? new Date().toISOString();
-
     const assetEntities = mapAddressAssets(
       addr,
-      validFrom,
-      validTo, 
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString(),
       addrData.amount
     );
 
@@ -170,8 +167,8 @@ export class CardanoIndexer {
     
     const utxoEntities = mapAddressUtxos(
       addr,
-      validFrom,
-      validTo,
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString(),
       utxoData
     );
 
@@ -183,8 +180,8 @@ export class CardanoIndexer {
 
     const utxoAssetEntities = mapAddressUtxoAssets(
       utxoData,
-      validFrom,
-      validTo
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString()
     );
     logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
@@ -413,8 +410,8 @@ export class CardanoIndexer {
   private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
     const set = new Set<string>();
 
-    const inputs = txUtxos.inputs ?? [];
-    const outputs = txUtxos.outputs ?? [];
+    const inputs = txUtxos.inputs;
+    const outputs = txUtxos.outputs;
     
     for (const i of inputs) {
       if (i.address) set.add(i.address);

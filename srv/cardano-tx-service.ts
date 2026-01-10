@@ -1,7 +1,8 @@
 import cds, { Request, __UUID } from '@sap/cds';
 import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, rejectMissing } from './utils/errors';
+import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
+import { ERROR_CODES } from './utils/error-codes';
 import { isValidBech32Address } from './utils/validators';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
@@ -159,7 +160,16 @@ module.exports = (srv: cds.Service) => {
 
       // Validate build exists
       const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!build) return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
+      if (!build) {
+        throw new BackendError(
+          'Build not found',
+          400,
+          ERROR_CODES.INVALID_INPUT,
+          undefined,
+          undefined,
+          'buildId'
+        );
+      }
 
       // extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
@@ -238,6 +248,18 @@ module.exports = (srv: cds.Service) => {
     if (!submissionId) return rejectMissing(req, 'CheckSubmissionStatus', 'submissionId');
 
     // handle the request / checking submission status
-    return handleRequest(req, (db) => db.run(req.query));
+    return handleRequest(req, async (db) => {
+      const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
+      
+      if (!submission) {
+        throw new BackendError(
+          `Submission with ID ${submissionId} not found`,
+          404,
+          ERROR_CODES.NOT_FOUND
+        );
+      }
+      
+      return submission;
+    });
   });
 };

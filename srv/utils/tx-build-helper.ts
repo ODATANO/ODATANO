@@ -8,7 +8,7 @@ import { fromHex } from '@harmoniclabs/uint8array-utils';
  * @returns {bigint} lovelace amount
  */
 export function getLovelace(u: OdatanoUtxo): bigint {
-  const entry = u.amount.find(a => (a.unit ?? "").toLowerCase() === "lovelace");
+  const entry = u.amount.find(a => (a.unit).toLowerCase() === "lovelace");
   return BigInt(entry?.quantity ?? "0");
 }
 
@@ -18,7 +18,7 @@ export function getLovelace(u: OdatanoUtxo): bigint {
  * @throws {Error} if UTxO contains non-ADA assets
  */
 export function assertAdaOnly(u: OdatanoUtxo): void {
-  const nonAda = u.amount.filter(a => (a.unit ?? "").toLowerCase() !== "lovelace" && BigInt(a.quantity) !== 0n);
+  const nonAda = u.amount.filter(a => (a.unit).toLowerCase() !== "lovelace" && BigInt(a.quantity) !== 0n);
   if (nonAda.length > 0) {
     throw new Error(`UTxO ${u.txHash}#${u.outputIndex} contains non-ADA assets`);
   }

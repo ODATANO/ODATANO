@@ -24,8 +24,8 @@ import {
 /**
  * Timeout settings for backends 
  */
-const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs) || 8000;
-const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs) || 8000;
+const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs);
+const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs);
 
 /** 
  * Export class content CardanoClient - Multi-backend Cardano Client with Fallback and Timeout
@@ -322,16 +322,6 @@ for (const backendName of CONFIG.backends) {
   } else if (backendName === 'ogmios') {
     backends.push(new OgmiosBackend());
   }
-}
-
-// fallback if no backends configured
-if (backends.length === 0) {
-  logger.warn('[CardanoClient] No backends configured, using fallback (Hybrid mode)');
-  const ogmios = new OgmiosBackend();
-  const historical = CONFIG.blockfrostApiKey 
-    ? new BlockfrostBackend() 
-    : new KoiosBackend();
-  backends.push(new HybridBackend(ogmios, historical));
 }
 
 /** CardanoClient exported singleton instance using configured backends */

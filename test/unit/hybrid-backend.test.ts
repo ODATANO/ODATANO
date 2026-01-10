@@ -265,6 +265,94 @@ describe('HybridBackend Unit Tests', () => {
         expect(result).toEqual(expectedTxHash);
       });
     });
+
+    describe('getNetworkInformation', () => {
+      const mockNetwork = {
+        network: 'preview',
+        protocolMagic: 2
+      };
+
+      it('should use Ogmios backend when successful', async () => {
+        mockOgmiosBackend.getNetworkInformation.mockResolvedValue(mockNetwork);
+
+        const result = await hybridBackend.getNetworkInformation();
+
+        expect(mockOgmiosBackend.getNetworkInformation).toHaveBeenCalled();
+        expect(mockHistoricalBackend.getNetworkInformation).not.toHaveBeenCalled();
+        expect(result).toEqual(mockNetwork);
+      });
+
+      it('should fallback to historical backend when Ogmios fails', async () => {
+        mockOgmiosBackend.getNetworkInformation.mockRejectedValue(new Error('Ogmios error'));
+        mockHistoricalBackend.getNetworkInformation.mockResolvedValue(mockNetwork);
+
+        const result = await hybridBackend.getNetworkInformation();
+
+        expect(mockOgmiosBackend.getNetworkInformation).toHaveBeenCalled();
+        expect(mockHistoricalBackend.getNetworkInformation).toHaveBeenCalled();
+        expect(result).toEqual(mockNetwork);
+      });
+    });
+
+    describe('getPool', () => {
+      const poolId = 'pool1pu5jlj4q9w9jlxeu370a3c9myx47md5j5m2str0naunn2q3lkdy';
+      const mockPool = {
+        pool_id: poolId,
+        hex: 'abcd1234',
+        active_stake: '5000000000'
+      };
+
+      it('should use Ogmios backend when successful', async () => {
+        mockOgmiosBackend.getPool.mockResolvedValue(mockPool);
+
+        const result = await hybridBackend.getPool(poolId);
+
+        expect(mockOgmiosBackend.getPool).toHaveBeenCalledWith(poolId);
+        expect(mockHistoricalBackend.getPool).not.toHaveBeenCalled();
+        expect(result).toEqual(mockPool);
+      });
+
+      it('should fallback to historical backend when Ogmios fails', async () => {
+        mockOgmiosBackend.getPool.mockRejectedValue(new Error('Ogmios error'));
+        mockHistoricalBackend.getPool.mockResolvedValue(mockPool);
+
+        const result = await hybridBackend.getPool(poolId);
+
+        expect(mockOgmiosBackend.getPool).toHaveBeenCalledWith(poolId);
+        expect(mockHistoricalBackend.getPool).toHaveBeenCalledWith(poolId);
+        expect(result).toEqual(mockPool);
+      });
+    });
+
+    describe('getAccount', () => {
+      const stakeAddress = 'stake_test1uzpq2pktpnj9ww62xxt8fl8g9wz6c3myw2y3fwz9lrhgsds';
+      const mockAccount = {
+        stake_address: stakeAddress,
+        active: true,
+        controlled_amount: '100000000'
+      };
+
+      it('should use Ogmios backend when successful', async () => {
+        mockOgmiosBackend.getAccount.mockResolvedValue(mockAccount);
+
+        const result = await hybridBackend.getAccount(stakeAddress);
+
+        expect(mockOgmiosBackend.getAccount).toHaveBeenCalledWith(stakeAddress);
+        expect(mockHistoricalBackend.getAccount).not.toHaveBeenCalled();
+        expect(result).toEqual(mockAccount);
+      });
+
+      it('should fallback to historical backend when Ogmios fails', async () => {
+        mockOgmiosBackend.getAccount.mockRejectedValue(new Error('Ogmios error'));
+        mockHistoricalBackend.getAccount.mockResolvedValue(mockAccount);
+
+        const result = await hybridBackend.getAccount(stakeAddress);
+
+        expect(mockOgmiosBackend.getAccount).toHaveBeenCalledWith(stakeAddress);
+        expect(mockHistoricalBackend.getAccount).toHaveBeenCalledWith(stakeAddress);
+        expect(result).toEqual(mockAccount);
+      });
+    });
   });
 
   describe('Historical Data Queries (Historical Backend Primary)', () => {
@@ -362,6 +450,31 @@ describe('HybridBackend Unit Tests', () => {
 
         expect(mockHistoricalBackend.getTransactionMetadata).toHaveBeenCalledWith(txHash);
         expect(result).toEqual(mockMetadata);
+      });
+    });
+
+    describe('getDrep', () => {
+      const drepId = 'drep1vpzcgfrlgdh4fft0p0ju70czkxxkuknw0jjztl3x7aqzvhx';
+      const mockDrep = {
+        drep_id: drepId,
+        hex: 'abcd1234',
+        active: true
+      };
+
+      it('should use historical backend directly', async () => {
+        mockHistoricalBackend.getDrep.mockResolvedValue(mockDrep);
+
+        const result = await hybridBackend.getDrep(drepId);
+
+        expect(mockHistoricalBackend.getDrep).toHaveBeenCalledWith(drepId);
+        expect(result).toEqual(mockDrep);
+      });
+
+      it('should propagate errors from historical backend', async () => {
+        mockHistoricalBackend.getDrep.mockRejectedValue(new Error('Drep not found'));
+
+        await expect(hybridBackend.getDrep(drepId)).rejects.toThrow('Drep not found');
+        expect(mockHistoricalBackend.getDrep).toHaveBeenCalledWith(drepId);
       });
     });
   });

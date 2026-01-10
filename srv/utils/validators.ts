@@ -56,7 +56,6 @@ function safeTrimString(s: unknown): string | null {
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
   try {
     const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
-    if (!allowedHrp.includes(decoded.prefix)) return null;
     return { prefix: decoded.prefix, words: decoded.words };
   } catch {
     return null;
@@ -117,9 +116,8 @@ export function isValidPoolId(poolIdRaw: unknown): poolIdRaw is string {
   if (!POOL_ID_REGEX.test(poolId)) return false;
 
   const decoded = tryDecodeBech32WithHrp(poolId, ["pool"]);
-  if (!decoded) return false;
-
-  return wordsToBytesLen(decoded.words) === POOL_ID_BYTES;
+  if (decoded) return wordsToBytesLen(decoded.words) === POOL_ID_BYTES;
+  return false;
 }
 
 /**

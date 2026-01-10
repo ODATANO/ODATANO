@@ -186,9 +186,9 @@ export class HybridBackend implements CardanoBackend {
    * @returns {Promise<AccountData>} account data
    */
   async getAccount(stakeAddress: string): Promise<AccountData> {
-    try {
     logger.debug('[HybridBackend] Account → Ogmios (live state)');
-    return this.liveBackend.getAccount(stakeAddress);
+    try {
+      return await this.liveBackend.getAccount(stakeAddress);
     } catch (error: any) {
       // Fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for account, falling back to historical backend');

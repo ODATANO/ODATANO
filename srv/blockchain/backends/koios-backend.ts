@@ -450,9 +450,6 @@ export class KoiosBackend implements CardanoBackend {
         };
         const { data } = await this.api.post('/submit_tx', body);
 
-        if (!data || !Array.isArray(data) || data.length === 0) {
-          throw new Error('Failed to submit transaction');
-        }
         return data[0].tx_hash;
       },
       this.name
@@ -468,9 +465,6 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         const { data } = await this.api.get('/cli_protocol_params');
         console.log("Protocol parameters data received:", data);
-        if (!data) {
-          throw new NotFoundError('Protocol Parameters', this.name);
-        }
         
         return {
           network: CONFIG.network,
@@ -545,9 +539,6 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
-        if (!data) {
-          throw new NotFoundError('Latest Epoch', this.name);
-        }
         return this.getEpoch(data.epoch_no);
       },
       this.name

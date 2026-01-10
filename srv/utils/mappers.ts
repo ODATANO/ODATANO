@@ -122,8 +122,6 @@ export function mapTransactionInputAssets(
   txHash: string,
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
-  if (!Array.isArray(inputs)) return [];
-
   return inputs.flatMap((input, idx) => {
 
     const inputIndex = input.outputIndex ?? idx;

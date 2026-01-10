@@ -95,6 +95,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * @param protocolParameters current protocol parameters
    * @returns {Promise<number>} minimum UTxO amount in lovelaces
    */
+  /*
   public async calculateMinUtxoAmount(
     output: any, // @TODO Define a proper type for output
     protocolParameters: any // TODO Define a proper type for protocol parameters
@@ -109,6 +110,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * @param protocolParameters current protocol parameters
    * @returns {Promise<number>} transaction fee in lovelaces
    */
+  /*/
   public async calculateTransactionFee(
     unsignedTxCbor: string,
     protocolParameters: any // TODO Define a proper type for protocol parameters
@@ -116,6 +118,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     // TODO Implement the logic to calculate the transaction fee
     return 200000; // TODO Return a dummy value
   }
+  /*
 
 //---------------------------------------------------------------------------
 // Private Helper Methods

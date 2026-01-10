@@ -244,9 +244,6 @@ export function normalizeBackendError(
 
   // Priority 5: Other 4xx → Check if it's a disguised "not found"
   if (status >= 400) {
-    if (messageLower.includes('not found') || messageLower.includes('does not exist')) {
-      return new NotFoundError('Resource', backendName, err);
-    }
     // Other 4xx like bad requests → treat as unavailable
     return new ProviderUnavailableError(
       message || 'Provider request failed',
@@ -256,9 +253,9 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 6: Network/unknown errors → Provider unavailable
+  // Priority 6: Unknown/network errors → treat as unavailable
   return new ProviderUnavailableError(
-    message || 'Provider communication failed',
+    message || 'Unknown backend error',
     backendName,
     undefined,
     err
