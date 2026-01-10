@@ -636,7 +636,6 @@ module.exports = (srv: cds.Service) => {
         logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
         return await indexer.indexTransactionMetadata(db, tx_hash);
       }
-      console.log(existing);
       return existing;
     });
   });

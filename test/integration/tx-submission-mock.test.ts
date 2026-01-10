@@ -1,7 +1,6 @@
 import cds from '@sap/cds';
 import nock from 'nock';
 
-const { INSERT } = cds.ql;
 jest.setTimeout(60000);
 // Configure environment to use only Koios backend for these tests with mocks because it uses HTTP
 process.env.BACKENDS = 'koios';

@@ -544,8 +544,6 @@ describe(`Complete Service Tests Cardano Service [${backendConfig.name.toUpperCa
         );
 
         const {status, data} = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: FIXTURE.validTxHash });
-
-        console.log(data);
         // get first row 
         const firstrow = data.value[0];
 
@@ -1076,7 +1074,7 @@ describe(`Complete Service Tests Cardano Service [${backendConfig.name.toUpperCa
          });
 
         it('POST /LedgerProtocolParameters– read ProtocolParameter', async () => {
-        const { status, data } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
+        const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`,{});
         expect(status).to.equal(200);
         });
       });
@@ -1086,12 +1084,10 @@ describe(`Complete Service Tests Cardano Service [${backendConfig.name.toUpperCa
         const CardanoService = await cds.connect.to('CardanoODataService');
         const { LedgerProtocolParameters } = CardanoService.entities as any;
         const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
-        console.log(before);
         expect(before).to.be.undefined;
         const { status } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
         expect(status).to.equal(200);
         const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
-        console.log(after);
         expect(after).to.not.be.undefined;
         });
 
@@ -1119,7 +1115,6 @@ describe(`Complete Service Tests Cardano Service [${backendConfig.name.toUpperCa
         }));
         const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
         expect(status).to.equal(200);
-        console.log(data);
         expect(data.value).to.be.an('array');
         expect(data.value[0]).to.have.property('epoch');
         });

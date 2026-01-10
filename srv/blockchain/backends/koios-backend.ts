@@ -18,7 +18,6 @@ import {
   Amount,
   LedgerProtocolParameters
 } from '../../utils/types';
-import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 
 /**
  * KoiosBackend Implementation for CardanoBackend Interface
@@ -115,13 +114,10 @@ export class KoiosBackend implements CardanoBackend {
    */
   async getBlock(blockHash: string): Promise<BlockData> {
 
-    console.log("Fetching block data for hash:", blockHash);
     return handleBackendRequest(
       async () => {
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
         const data = blockData.data[0];
-
-        console.log("Block data received:", data);
 
         return {
           time: data.block_time,
@@ -464,7 +460,6 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/cli_protocol_params');
-        console.log("Protocol parameters data received:", data);
         
         return {
           network: CONFIG.network,

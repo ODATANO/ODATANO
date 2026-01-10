@@ -1,4 +1,3 @@
-import { NotFoundError } from '../../srv/utils/errors';
 
 // Mock axios
 jest.mock('axios', () => ({

@@ -222,10 +222,6 @@ export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
         // Should have at least recipient output
         const recipientOutput = outputs.find((o: any) => o.address === FIXTURE.validRecipientAddress);
         expect(recipientOutput).to.exist;
-        
-        // Change should go back to sender if there is any
-        const changeOutput = outputs.find((o: any) => o.address === FIXTURE.validSenderAddress);
-        // Change output might exist depending on UTxO selection
       });
 
       it('POST /BuildSimpleAdaTransaction - build transaction without assertions', async () => {

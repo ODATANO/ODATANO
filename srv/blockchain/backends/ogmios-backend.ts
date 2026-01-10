@@ -23,6 +23,7 @@ import {
 } from '../../utils/types';
 
 import { CardanoBackend } from './cardano-backend';
+import logger from '../../utils/logger';
 
 /**
  * Ogmios Backend Implementation for Cardano Backend Interface
@@ -55,8 +56,8 @@ export class OgmiosBackend implements CardanoBackend {
     };
 
     this.context = await createInteractionContext(
-      (err) => console.error('[Ogmios] Error:', err),
-      () => console.log('[Ogmios] Closed'),
+      (err) => logger.error(`[OgmiosBackend] Interaction context error: ${err.message}`),
+      (err) => { logger.error(`[OgmiosBackend] Connection error: ${err}`); },
       { connection }
     );
 
@@ -316,7 +317,7 @@ export class OgmiosBackend implements CardanoBackend {
    * @returns {Promise<string>} transaction hash
    */
   async submitTransaction(signedTxCbor: string): Promise<string> {
-    console.log("OgmiosBackend: submitting transaction...");
+    
     return handleBackendRequest(async () => {
       if (!this.txSubmissionClient) {
         throw new Error('Ogmios transaction submission client not initialized');

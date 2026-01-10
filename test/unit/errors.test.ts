@@ -10,8 +10,6 @@ import {
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError,
-  rejectInvalid,
-  rejectMissing,
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 

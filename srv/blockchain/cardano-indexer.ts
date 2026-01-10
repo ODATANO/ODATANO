@@ -315,8 +315,6 @@ export class CardanoIndexer {
     
     const buildResult = mapBuildResult(txbuildResult);
 
-    console.log("Build result stored on DB:");
-
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
     // Store inputs if available
@@ -373,7 +371,7 @@ export class CardanoIndexer {
    */
   async indexLatestEpoch( tx: CapTransaction): Promise<Epoch> {
     const epochInfo = await cardano.getLatestEpoch();
-    console.log("Latest epoch info:", epochInfo);
+    
     const epochEntity = mapEpoch(epochInfo);
 
 
@@ -387,13 +385,11 @@ export class CardanoIndexer {
    * @returns {Promise<Block>} block entity data
    */
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
+   
     const blockInfo = await cardano.getLatestBlock();    
-
-    console.log("Latest block info:", blockInfo);
     const epoch= await this.indexEpoch(tx , blockInfo.epoch!);
-    console.log("Latest block epoch info:", epoch);
     const blockEntity = mapBlock(blockInfo, epoch);
-    console.log("Latest block entity:", blockEntity); 
+     
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
   }

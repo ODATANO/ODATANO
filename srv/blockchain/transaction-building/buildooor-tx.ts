@@ -12,7 +12,6 @@ import {
   TxOut,
   TxOutRef
 } from "@harmoniclabs/cardano-ledger-ts";
-import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
 import logger from "../../utils/logger";
 
 /** 
@@ -34,7 +33,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
 
-    const txbParameters = this._mapLedgerParametersToBuildooorParams(ctx.protocolParameters);
+    const txbParameters = this._mapLedgerParametersToBuildooorParams();
     const txb = new TxBuilder(txbParameters);
 
     // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
@@ -89,37 +88,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  /** 
-   * Calculate minimum UTxO amount for given output
-   * @param output transaction output
-   * @param protocolParameters current protocol parameters
-   * @returns {Promise<number>} minimum UTxO amount in lovelaces
-   */
-  /*
-  public async calculateMinUtxoAmount(
-    output: any, // @TODO Define a proper type for output
-    protocolParameters: any // TODO Define a proper type for protocol parameters
-  ): Promise<number> {
-    // TODO Implement the logic to calculate the minimum UTxO amount
-    return 1000000; // TODO Return a dummy value for now
-  }
-
-  /** 
-   * Calculate transaction fee for given unsigned transaction
-   * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @param protocolParameters current protocol parameters
-   * @returns {Promise<number>} transaction fee in lovelaces
-   */
-  /*/
-  public async calculateTransactionFee(
-    unsignedTxCbor: string,
-    protocolParameters: any // TODO Define a proper type for protocol parameters
-  ): Promise<number> {
-    // TODO Implement the logic to calculate the transaction fee
-    return 200000; // TODO Return a dummy value
-  }
-  /*
-
 //---------------------------------------------------------------------------
 // Private Helper Methods
 //---------------------------------------------------------------------------
@@ -130,7 +98,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * @returns mapped protocol parameters
    */
   private _mapLedgerParametersToBuildooorParams(
-    protocolParameters: LedgerProtocolParameter
+    //protocolParameters: LedgerProtocolParameter
   ): any {
     // Map LedgerProtocolParameter to Buildooor's ProtocolParameters shape
     return defaultProtocolParameters;

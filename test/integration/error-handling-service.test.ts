@@ -308,7 +308,6 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
         		const response = await POST('/odata/v4/cardano-transaction/CheckSubmissionStatus', {
           		submissionId: '1'
         		}).catch(err => err.response);
-        		console.log('Response status for non-existent submissionId:', response.status);
         		// Should handle gracefully (might be 404 or just return null/empty)
         		expect(response.status).to.be.oneOf([200, 400, 404]);
       		});

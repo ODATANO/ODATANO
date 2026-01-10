@@ -64,7 +64,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Protocol Parameters');
     try {
       return await this.liveBackend.getProtocolParameters();
-    } catch (error: any) {
+    } catch {
       // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for protocol params, falling back to historical backend');
       return this.historicalBackend.getProtocolParameters();
@@ -79,7 +79,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Latest Epoch');
     try {
       return await this.liveBackend.getLatestEpoch();
-    } catch (error: any) {
+    } catch {
       // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for latest epoch, falling back to historical backend');
       return this.historicalBackend.getLatestEpoch();
@@ -94,7 +94,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Latest Block');
     try {
       return await this.liveBackend.getLatestBlock();
-    } catch (error: any) {
+    } catch {
       // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for latest block, falling back to historical backend');
       return this.historicalBackend.getLatestBlock();
@@ -110,7 +110,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Address details');
     try {
       return await this.liveBackend.getAddress(address);
-    } catch (error: any) {
+    } catch {
       // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for address, falling back to historical backend');
       return this.historicalBackend.getAddress(address);
@@ -126,7 +126,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Address UTxOs');
     try {
       return await this.liveBackend.getAddressUtxos(address);
-    } catch (error: any) {
+    } catch {
       // fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for UTxOs, falling back to historical backend');
       return this.historicalBackend.getAddressUtxos(address);
@@ -142,7 +142,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] TX submit with Ogmios');
     try {
       return await this.liveBackend.submitTransaction(signedTxCbor);
-    } catch (error: any) {
+    } catch {
       // Fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for TX submit, falling back to historical backend');
       return this.historicalBackend.submitTransaction(signedTxCbor);
@@ -157,7 +157,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Network info → Ogmios (live)');
     try {
       return await this.liveBackend.getNetworkInformation();
-    } catch (error: any) {
+    } catch {
       // Fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for network info, falling back to historical backend');
       return this.historicalBackend.getNetworkInformation();
@@ -173,7 +173,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Pool → Ogmios (live state)');
     try {
       return await this.liveBackend.getPool(poolId);
-    } catch (error: any) {
+    } catch{
       // Fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for pool, falling back to historical backend');
       return this.historicalBackend.getPool(poolId);
@@ -189,7 +189,7 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Account → Ogmios (live state)');
     try {
       return await this.liveBackend.getAccount(stakeAddress);
-    } catch (error: any) {
+    } catch {
       // Fallback to historical backend if Ogmios fails
       logger.warn('[HybridBackend] Ogmios failed for account, falling back to historical backend');
       return this.historicalBackend.getAccount(stakeAddress);

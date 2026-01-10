@@ -20,7 +20,7 @@ process.env.OGMIOS_WS_URL = process.env.OGMIOS_WS_URL || 'ws://localhost:1337';
 
 describe('ODATANO Milestone 1 - OData Query Features', () => {
 
-  const { GET, POST, expect } = cds.test(__dirname + '/../../');
+  const {POST, expect } = cds.test(__dirname + '/../../');
 
   describe('Ogmios Backend Specific Tests', () => {
 

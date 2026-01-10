@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo } from '../../srv/utils/types';
 
 describe('tx-build-helper utilities', () => {

@@ -1,10 +1,9 @@
-import cds, { Request, __UUID } from '@sap/cds';
+import cds, { Request } from '@sap/cds';
 import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
 import { isValidBech32Address } from './utils/validators';
-import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
@@ -23,13 +22,7 @@ module.exports = (srv: cds.Service) => {
     TransactionBuildOutputs,
     TransactionSubmissions,
     TransactionSubmissionErrors,
-    LatestBlock,
-    LatestEpoch,
-    LedgerProtocolParameters,
   } = require('#cds-models/CardanoTransactionService');
-
-  // Initialize transaction builder
-  const txBuilder: CardanoTransactionBuilder = new CardanoTransactionBuilder();
 
   /**
    * READ handler for TransactionBuilds entity
