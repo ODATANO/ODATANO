@@ -17,6 +17,8 @@ ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData
 
 **v0.1-milestone1**: Multi-provider failover (Blockfrost → Koios), comprehensive input validation, 340 tests (96.28% coverage), full OData V4 query support
 
+10.01.2024: MVP merge from dev into `main` branch / first implementations for milestone 2 completed
+
 ## Key Features
 
 - **OData V4 Protocol**: Full query support ($filter, $select, $expand, $top, $skip, $count, $orderby)
