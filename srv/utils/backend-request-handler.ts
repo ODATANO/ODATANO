@@ -40,11 +40,9 @@ export async function handleRequest(
   try {
     return await handler(db);
   } catch (e: any) {
-    console.log(e);
     logger.error({ err: e }, `[CardanoService] ${context} error`);
-    console.log(e);
     return mapError(req, e, context);
-    
+
   }
 }
 

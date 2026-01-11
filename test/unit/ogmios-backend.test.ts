@@ -54,7 +54,7 @@ describe('OgmiosBackend', () => {
       // Verify the error is about ogmios backend initialization
       try {
         new OgmiosBackend();
-        fail('Should have thrown BackendInitError');
+        expect(true).toBe(false); // Should not reach here
       } catch (error) {
         expect(error).toBeInstanceOf(BackendInitError);
         expect((error as BackendInitError).backendName).toBe('ogmios');
