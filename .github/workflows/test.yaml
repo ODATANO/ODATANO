@@ -58,6 +58,17 @@ jobs:
       # ==========================================
       # Start Cardano Node + Ogmios (nur wenn Cache vorhanden)
       # ==========================================
+      - name: Verify config files exist
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          echo "Checking config files..."
+          ls -la ${{ github.workspace }}/config/preview/cardano-node/
+          
+      - name: Create DB directory
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          mkdir -p ${{ github.workspace }}/cardano-preview-db/db
+          
       - name: Setup Docker volumes and network
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
@@ -70,8 +81,8 @@ jobs:
           docker run -d \
             --name cardano-node-preview \
             --network odatano-network \
-            -v ${{ github.workspace }}/config/preview/cardano-node:/config:ro \
-            -v ${{ github.workspace }}/cardano-preview-db:/data \
+            -v "${{ github.workspace }}/config/preview/cardano-node:/config:ro" \
+            -v "${{ github.workspace }}/cardano-preview-db:/data" \
             -v cardano-preview-ipc:/ipc \
             ghcr.io/intersectmbo/cardano-node:10.1.3 \
             run \
