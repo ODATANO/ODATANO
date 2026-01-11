@@ -47,9 +47,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}
+          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}
           restore-keys: |
-            cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-
             cardano-node-preview-
 
       - name: Cache Status
@@ -202,7 +201,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}
+          key: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}
 
       - name: Cleanup
         if: always()
@@ -217,5 +216,5 @@ jobs:
           echo "- **Network**: ${{ matrix.network }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Node Version**: ${{ matrix.node-version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Ogmios Version**: ${{ matrix.ogmios-version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Cache Key**: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}-${{ steps.date-time.outputs.hour }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cache Key**: cardano-node-preview-${{ steps.date-time.outputs.timestamp }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

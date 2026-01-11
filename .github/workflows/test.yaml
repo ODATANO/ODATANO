@@ -45,6 +45,14 @@ jobs:
           restore-keys: |
             cardano-node-preview-
 
+      - name: Cache info
+        run: |
+          if [ "${{ steps.cache-cardano.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ Cache found: ${{ steps.cache-cardano.outputs.cache-matched-key }}"
+          else
+            echo "⚠️ No cache found - will skip Ogmios tests"
+          fi
+
       - name: Install dependencies
         run: npm ci
 
