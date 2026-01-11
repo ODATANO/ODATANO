@@ -1,6 +1,6 @@
 import cardano from './cardano-client';
 import type { UTxO } from '../utils/types';
-import type {TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
+import type { TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
 import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
@@ -11,7 +11,7 @@ import logger from '../utils/logger';
  * to build various types of Cardano transactions.
  */
 export class CardanoTransactionBuilder {
-    
+
     /** 
      * Build a simple ADA transfer transaction
      * @param req transaction build request
@@ -21,7 +21,7 @@ export class CardanoTransactionBuilder {
     async buildSimpleAdaTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         // Initialize the specific transaction builder (Buildooor in this case)
         const txBuilder: CardanoTxBuilder = new BuildooorTxBuilder();
-        
+
         // Initialize the builder
         await txBuilder.init();
 

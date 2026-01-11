@@ -33,12 +33,12 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
   beforeEach(async () => {
     await test.data.reset();
-    
+
     // cleanup nock before each test to avoid interference
     nock.cleanAll();
     nock.restore();
     nock.activate();
-    
+
     // Disable all real network connections except localhost (for CDS test server)
     nock.disableNetConnect();
     // Allow localhost (for CDS test server)
@@ -55,14 +55,14 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     nock.cleanAll();
     nock.restore();
     nock.enableNetConnect(); // Re-enable normal network calls
-    
+
     // Give the test server time to shut down
     return new Promise(resolve => setTimeout(resolve, 100));
   });
 
   describe('Koios Backend - TX Submission Mock', () => {
     it('SubmitSignedTransaction - successful submission via Koios', async () => {
-        // Mock Koios TX Submit
+      // Mock Koios TX Submit
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submit_tx', {
           _txs: [FIXTURE.signedTxCbor]
@@ -85,7 +85,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     });
 
     it('SubmitTransaction - successful submission with prior build', async () => {
-      
+
       // create a mock transaction build in the database
       const mockBuildId = 'test-build-123';
       const { INSERT } = cds.ql;

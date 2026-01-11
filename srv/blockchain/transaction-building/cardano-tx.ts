@@ -1,4 +1,4 @@
-import { TxBuildRequest,  TxBuildContext, TxBuildResult } from "../../utils/types";
+import { TxBuildRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
 
 /** 
  * CardanoTxBuilder - Interface Definition for multiple Cardano transaction builders (Buildooor, Lucid, Mesh, etc.)
@@ -20,14 +20,14 @@ export interface CardanoTxBuilder {
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
-  buildUnsignedAdaTransfer( req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
- /*/
-  /** 
-   * Calculate minimum UTxO amount for given output
-   * @param output transaction output
-   * @param protocolParameters current protocol parameters
-   * @returns {Promise<number>} minimum UTxO amount in lovelaces
-   */
+  buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
+  /*/
+   /** 
+    * Calculate minimum UTxO amount for given output
+    * @param output transaction output
+    * @param protocolParameters current protocol parameters
+    * @returns {Promise<number>} minimum UTxO amount in lovelaces
+    */
   /*
   calculateMinUtxoAmount(output: any, protocolParameters: any ): Promise<number>;
   /*
@@ -41,4 +41,4 @@ export interface CardanoTxBuilder {
   /*
   calculateTransactionFee( unsignedTxCbor: string, protocolParameters: any): Promise<number>;
   /*/
-  }
+}

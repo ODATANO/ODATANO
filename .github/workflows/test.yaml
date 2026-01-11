@@ -34,14 +34,14 @@ jobs:
       # ==========================================
       - name: Get current date for cache key
         id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: echo "timestamp=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Restore Cardano Node DB Cache
         id: cache-cardano
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date.outputs.date }}
+          key: cardano-node-preview-${{ steps.date.outputs.timestamp }}
           restore-keys: |
             cardano-node-preview-
 
@@ -103,8 +103,32 @@ jobs:
             --topology /config/topology.json \
             --database-path /data/db \
             --socket-path /ipc/node.socket
+          echo "Cardano Node started"
+          sleep 5
+          docker logs cardano-node-preview
+          
+      - name: Wait for Node socket
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
           echo "Waiting for node socket..."
-          sleep 30
+          sleep 10
+          
+          # Check if container is still running
+          if ! docker ps | grep -q cardano-node-preview; then
+            echo "ERROR: Cardano Node container stopped! Showing logs:"
+            docker logs cardano-node-preview
+            exit 1
+          fi
+          
+          timeout 120 bash -c 'until docker exec cardano-node-preview test -S /ipc/node.socket 2>/dev/null; do 
+            echo "Still waiting for socket..."
+            sleep 5
+          done' || {
+            echo "Timeout waiting for socket. Container logs:"
+            docker logs cardano-node-preview
+            exit 1
+          }
+          echo "Node socket ready"
           
       - name: Start Ogmios
         if: steps.cache-cardano.outputs.cache-hit == 'true'
@@ -179,7 +203,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date.outputs.date }}
+          key: cardano-node-preview-${{ steps.date.outputs.timestamp }}
 
       # ==========================================
       # Cleanup & Upload Coverage

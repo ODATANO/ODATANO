@@ -171,6 +171,13 @@ jobs:
               if [ -n "$SYNC_PERCENT" ]; then
                 SYNC_PERCENT_DISPLAY=$(awk "BEGIN {printf \"%.2f\", $SYNC_PERCENT * 100}")
                 echo "⏱️  Sync running: ${ELAPSED_HOURS}h ${ELAPSED_MINS}m | Progress: ${SYNC_PERCENT_DISPLAY}% | Epoch: ${EPOCH} | Slot: ${SLOT}"
+                
+                # Check if 100% synced
+                if awk "BEGIN {exit !($SYNC_PERCENT >= 1.0)}"; then
+                  echo "✅ Network fully synchronized (100%)!"
+                  echo "Total sync time: ${ELAPSED_HOURS}h ${ELAPSED_MINS}m"
+                  break
+                fi
               else
                 echo "⏱️  Sync running: ${ELAPSED_HOURS}h ${ELAPSED_MINS}m"
               fi

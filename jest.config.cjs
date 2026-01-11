@@ -21,7 +21,7 @@ module.exports = {
     'srv/**/*.ts',
     '!srv/**/*.d.ts',
     '!**/node_modules/**',
-    '!srv/blockchain/backends/ogmios-backend.ts'
+    //'!srv/blockchain/backends/ogmios-backend.ts'
   ],
   coverageThreshold: {
     global: { branches: 75, functions: 75, lines: 75 },

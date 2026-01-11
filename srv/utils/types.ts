@@ -13,7 +13,7 @@ export type Lovelace = number;
 /** 
  * JSON Value Type - Represents any valid JSON value 
  */
-export type JSONValue = | string| number| boolean | { [key: string]: JSONValue } | JSONValue[] | null;
+export type JSONValue = | string | number | boolean | { [key: string]: JSONValue } | JSONValue[] | null;
 
 /** 
  * Amount Data Structure Type - Multi-asset amount line as returned by common Cardano APIs 
@@ -87,73 +87,73 @@ export interface Address {
  * UTxO Data Structure Type - Unspent transaction outputs (UTxOs) 
  */
 export interface UTxO {
-    txHash: Hex;
-    outputIndex: number;
-    address: string;
-    amount: Amount[];
-    blockHash?: Hex;
-    datumHash?: Hex | null;
-    scriptRef?: Hex | null;
+  txHash: Hex;
+  outputIndex: number;
+  address: string;
+  amount: Amount[];
+  blockHash?: Hex;
+  datumHash?: Hex | null;
+  scriptRef?: Hex | null;
 }
 
 /** 
  * Block Data Structure Type - Basic block information structure
  */
 export interface BlockData {
-    time: number;
-    height: number | null;
-    hash: string;
-    slot: number | null;
-    slotLeader: string;
-    epoch: number | null;
-    epochSlot: number | null;
-    size: number;
-    txCount: number;
-    fees?: string | null;
+  time: number;
+  height: number | null;
+  hash: string;
+  slot: number | null;
+  slotLeader: string;
+  epoch: number | null;
+  epochSlot: number | null;
+  size: number;
+  txCount: number;
+  fees?: string | null;
 }
 
 /** 
  * Supply Data Structure Type - Network supply information
  */
-export interface Supply{
-    max: string;
-    total: string;
-    circulating: string;
-    locked: string;
-    treasury: string;
-    reserves: string;
+export interface Supply {
+  max: string;
+  total: string;
+  circulating: string;
+  locked: string;
+  treasury: string;
+  reserves: string;
 }
 
 /** 
  * Stake Data Structure Type - Network stake information
  */
-export interface Stake{
-    live: string;
-    active: string;
+export interface Stake {
+  live: string;
+  active: string;
 }
 
 /** 
  * Network Information Data Structure Type - Network supply and stake information
  */
-export interface Network{
-    supply: Supply;
-    stake: Stake;
+export interface Network {
+  supply: Supply;
+  stake: Stake;
 }
 
 /** 
  * Epoch Data Structure Type - Epoch information
  */
-export interface EpochData{
-    epoch: number;
-    start_time: number;
-    end_time: number;
-    first_block_time: number;
-    last_block_time: number;
-    block_count: number;
-    tx_count: number;
-    output: string;
-    fees: string;
-    active_stake: string | null;
+export interface EpochData {
+  epoch: number;
+  start_time: number;
+  end_time: number;
+  first_block_time: number;
+  last_block_time: number;
+  block_count: number;
+  tx_count: number;
+  output: string;
+  fees: string;
+  active_stake: string | null;
 }
 
 /** 
@@ -174,12 +174,12 @@ export interface AccountData {
   activeEpoch: number;
   controlledAmount: string;
   rewardsSum: string;
-  withdrawalsSum: string; 
+  withdrawalsSum: string;
   reservesSum: string;
   treasurySum: string;
   withdrawableAmount: string;
   poolId: string | null;
-  drepId : string | null;
+  drepId: string | null;
   addresses: Address[];
 }
 
@@ -187,79 +187,79 @@ export interface AccountData {
  * Pool Data Structure Type - Pool information 
  */
 export interface PoolData {
-  poolId: string; 
+  poolId: string;
   vrfKeyHash: string;
-  blocksMinted: number; 
-  blocksEpoch: number; 
-  liveStake: Lovelace; 
-  liveSize: number; 
-  liveSaturation: number; 
-  liveDelegators: number; 
+  blocksMinted: number;
+  blocksEpoch: number;
+  liveStake: Lovelace;
+  liveSize: number;
+  liveSaturation: number;
+  liveDelegators: number;
   activeStake: Lovelace;
-  activeSize: number; 
-  pledge: Lovelace; 
-  margin: number; 
-  fixedCost: Lovelace; 
-  rewardAccount  : string;
+  activeSize: number;
+  pledge: Lovelace;
+  margin: number;
+  fixedCost: Lovelace;
+  rewardAccount: string;
 }
 
 /** 
  * Drep Data Structure Type - Drep information 
  */
 export interface DrepData {
-  drepId: string; 
-  hex: string; 
+  drepId: string;
+  hex: string;
   amount: string;
-  hasScript: boolean; 
-  lastActiveEpoch: number; 
-  retired: boolean; 
-  expired: boolean; 
+  hasScript: boolean;
+  lastActiveEpoch: number;
+  retired: boolean;
+  expired: boolean;
 }
 
 /** 
  * Ledger Protocol Parameters Data Structure Type - Current protocol parameters 
  */
 export type LedgerProtocolParameters = {
-  network : string;     // mainnet | preprod | preview (dein ODATANO-Konzept)
-  epoch   : number;
+  network: string;     // mainnet | preprod | preview (dein ODATANO-Konzept)
+  epoch: number;
   // --- Fees / Sizes ---
-  minFeeA            : number;       // txFeePerByte Mapping
-  minFeeB            : number;       // txFeeFixed Mapping
-  maxBlockSize       : number;
-  maxTxSize          : number;
-  maxBlockHeaderSize : number;
+  minFeeA: number;       // txFeePerByte Mapping
+  minFeeB: number;       // txFeeFixed Mapping
+  maxBlockSize: number;
+  maxTxSize: number;
+  maxBlockHeaderSize: number;
   // --- Deposits / Pools ---
-  keyDeposit  : string;           // Lovelace
-  poolDeposit : string;           // Lovelace
-  eMax        : number;              // poolRetireMaxEpoch Mapping
-  nOpt        : number;              // stakePoolTargetNum Mapping
-  a0          : number;      // poolPledgeInfluence Mapping
-  rho         : number;      // monetaryExpansion Mapping
-  tau         : number;      // treasuryCut Mapping
-    minPoolCost : string;
+  keyDeposit: string;           // Lovelace
+  poolDeposit: string;           // Lovelace
+  eMax: number;              // poolRetireMaxEpoch Mapping
+  nOpt: number;              // stakePoolTargetNum Mapping
+  a0: number;      // poolPledgeInfluence Mapping
+  rho: number;      // monetaryExpansion Mapping
+  tau: number;      // treasuryCut Mapping
+  minPoolCost: string;
   // --- Legacy / Misc ---
-  decentralisationParam : number; // legacy / pre-conway
-  extraEntropy          : string | null;
-  protocolMajorVer      : number;
-  protocolMinorVer      : number;
-  minUtxo               : string;      // legacy
-  nonce                 : string;
+  decentralisationParam: number; // legacy / pre-conway
+  extraEntropy: string | null;
+  protocolMajorVer: number;
+  protocolMinorVer: number;
+  minUtxo: string;      // legacy
+  nonce: string;
   // --- Plutus / Execution units ---
-  costModels     : string;        // JSON blob (map)
-  priceMem       : number | null;
-  priceStep      : number | null;
-  maxTxExMem     : string | null;
-  maxTxExSteps   : string | null;
-  maxBlockExMem  : string | null;
+  costModels: string;        // JSON blob (map)
+  priceMem: number | null;
+  priceStep: number | null;
+  maxTxExMem: string | null;
+  maxTxExSteps: string | null;
+  maxBlockExMem: string | null;
   maxBlockExSteps: string | null;
   // --- Babbage+ UTxO cost / Collateral ---
-  maxValSize          : string | null;
-  collateralPercent   : number | null;
-  maxCollateralInputs : number | null;
-  coinsPerUtxoSize    : string | null;  // babbage+
+  maxValSize: string | null;
+  collateralPercent: number | null;
+  maxCollateralInputs: number | null;
+  coinsPerUtxoSize: string | null;  // babbage+
   // -- Hauskeeping ---
-  fetchedAt : string;
-  source    : string;              // "blockfrost/koios/direct"
+  fetchedAt: string;
+  source: string;              // "blockfrost/koios/direct"
 }
 
 /** 

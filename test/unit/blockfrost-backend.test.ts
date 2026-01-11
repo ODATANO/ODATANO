@@ -73,11 +73,11 @@ describe('BlockfrostBackend submitTransaction', () => {
 
     const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
     const backend = new BlockfrostBackend();
-    
+
     const signedTxCbor = '84a300818258201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef00018182581d60abcdef1234567890abcdef1234567890abcdef1234567890abcdef12341a000f4240021a0002a389a0f6';
-    
+
     const result = await backend.submitTransaction(signedTxCbor);
-    
+
     expect(result).toBe(mockTxHash);
     expect(mockTxSubmit).toHaveBeenCalledWith(Buffer.from(signedTxCbor, 'hex'));
   });

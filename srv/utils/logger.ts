@@ -7,7 +7,7 @@ const logger = pino({
   level: CONFIG.logLevel,
   transport: {
     target: 'pino-pretty',
-    options: { 
+    options: {
       colorize: true,
       translateTime: 'HH:mm:ss',
       ignore: 'pid,hostname'

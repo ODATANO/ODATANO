@@ -27,13 +27,13 @@ import {
 export class HybridBackend implements CardanoBackend {
   public readonly name = 'hybrid';
   private liveBackend: OgmiosBackend;
-  private historicalBackend: CardanoBackend;
+  private historicalBackend?: CardanoBackend;
   /** 
    * Constructor 
    */
   constructor(
     liveBackend: OgmiosBackend,
-    historicalBackend: BlockfrostBackend | KoiosBackend
+    historicalBackend?: BlockfrostBackend | KoiosBackend
   ) {
     this.liveBackend = liveBackend;
     this.historicalBackend = historicalBackend;
@@ -46,10 +46,13 @@ export class HybridBackend implements CardanoBackend {
     logger.info('[HybridBackend] Initializing live backend (Ogmios)');
     await this.liveBackend.init();
     
-    logger.info('[HybridBackend] Initializing historical backend');
-    await this.historicalBackend.init();
-    
-    logger.info('[HybridBackend] Both backends initialized successfully');
+    if (this.historicalBackend) {
+      logger.info('[HybridBackend] Initializing historical backend');
+      await this.historicalBackend.init();
+      logger.info('[HybridBackend] Both backends initialized successfully');
+    } else {
+      logger.info('[HybridBackend] No historical backend configured, using only live backend');
+    }
   }
 
 // ---------------------------------------------------------------------------
@@ -64,10 +67,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Protocol Parameters');
     try {
       return await this.liveBackend.getProtocolParameters();
-    } catch {
-      // fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for protocol params, falling back to historical backend');
-      return this.historicalBackend.getProtocolParameters();
+    } catch (error) {
+      // fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for protocol params, falling back to historical backend');
+        return this.historicalBackend.getProtocolParameters();
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -79,10 +86,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Latest Epoch');
     try {
       return await this.liveBackend.getLatestEpoch();
-    } catch {
-      // fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for latest epoch, falling back to historical backend');
-      return this.historicalBackend.getLatestEpoch();
+    } catch (error) {
+      // fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for latest epoch, falling back to historical backend');
+        return this.historicalBackend.getLatestEpoch();
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -94,10 +105,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Latest Block');
     try {
       return await this.liveBackend.getLatestBlock();
-    } catch {
-      // fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for latest block, falling back to historical backend');
-      return this.historicalBackend.getLatestBlock();
+    } catch (error) {
+      // fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for latest block, falling back to historical backend');
+        return this.historicalBackend.getLatestBlock();
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -110,10 +125,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Address details');
     try {
       return await this.liveBackend.getAddress(address);
-    } catch {
-      // fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for address, falling back to historical backend');
-      return this.historicalBackend.getAddress(address);
+    } catch (error) {
+      // fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for address, falling back to historical backend');
+        return this.historicalBackend.getAddress(address);
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -126,10 +145,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] get Address UTxOs');
     try {
       return await this.liveBackend.getAddressUtxos(address);
-    } catch {
-      // fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for UTxOs, falling back to historical backend');
-      return this.historicalBackend.getAddressUtxos(address);
+    } catch (error) {
+      // fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for UTxOs, falling back to historical backend');
+        return this.historicalBackend.getAddressUtxos(address);
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -142,10 +165,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] TX submit with Ogmios');
     try {
       return await this.liveBackend.submitTransaction(signedTxCbor);
-    } catch {
-      // Fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for TX submit, falling back to historical backend');
-      return this.historicalBackend.submitTransaction(signedTxCbor);
+    } catch (error) {
+      // Fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for TX submit, falling back to historical backend');
+        return this.historicalBackend.submitTransaction(signedTxCbor);
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -157,10 +184,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Network info → Ogmios (live)');
     try {
       return await this.liveBackend.getNetworkInformation();
-    } catch {
-      // Fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for network info, falling back to historical backend');
-      return this.historicalBackend.getNetworkInformation();
+    } catch (error) {
+      // Fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for network info, falling back to historical backend');
+        return this.historicalBackend.getNetworkInformation();
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
   
@@ -173,10 +204,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Pool → Ogmios (live state)');
     try {
       return await this.liveBackend.getPool(poolId);
-    } catch{
-      // Fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for pool, falling back to historical backend');
-      return this.historicalBackend.getPool(poolId);
+    } catch (error) {
+      // Fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for pool, falling back to historical backend');
+        return this.historicalBackend.getPool(poolId);
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -189,10 +224,14 @@ export class HybridBackend implements CardanoBackend {
     logger.debug('[HybridBackend] Account → Ogmios (live state)');
     try {
       return await this.liveBackend.getAccount(stakeAddress);
-    } catch {
-      // Fallback to historical backend if Ogmios fails
-      logger.warn('[HybridBackend] Ogmios failed for account, falling back to historical backend');
-      return this.historicalBackend.getAccount(stakeAddress);
+    } catch (error) {
+      // Fallback to historical backend if Ogmios fails and historical backend exists
+      if (this.historicalBackend) {
+        logger.warn('[HybridBackend] Ogmios failed for account, falling back to historical backend');
+        return this.historicalBackend.getAccount(stakeAddress);
+      }
+      logger.error('[HybridBackend] Ogmios failed and no historical backend available');
+      throw error;
     }
   }
 
@@ -206,8 +245,12 @@ export class HybridBackend implements CardanoBackend {
    * @returns {Promise<BlockData>} block data
    */
   async getBlock(hash: string): Promise<BlockData> {
-    logger.debug(`[HybridBackend] Block → ${this.historicalBackend.name} (historical)`);
-    return this.historicalBackend.getBlock(hash);
+    if (this.historicalBackend) {
+      logger.debug(`[HybridBackend] Block → ${this.historicalBackend.name} (historical)`);
+      return this.historicalBackend.getBlock(hash);
+    }
+    logger.debug('[HybridBackend] No historical backend, using live backend for block');
+    return this.liveBackend.getBlock(hash);
   }
 
   /** 
@@ -215,9 +258,13 @@ export class HybridBackend implements CardanoBackend {
    * @param epochNumber epoch number of the epoch to retrieve
    * @returns {Promise<EpochData>} epoch data
    */
-  async getEpoch(epochNumber: Number): Promise<EpochData> {
-    logger.debug(`[HybridBackend] Epoch → ${this.historicalBackend.name} (historical)`);
-    return this.historicalBackend.getEpoch(epochNumber);
+  async getEpoch(epochNumber: number): Promise<EpochData> {
+    if (this.historicalBackend) {
+      logger.debug(`[HybridBackend] Epoch → ${this.historicalBackend.name} (historical)`);
+      return this.historicalBackend.getEpoch(epochNumber);
+    }
+    logger.debug('[HybridBackend] No historical backend, using live backend for epoch');
+    return this.liveBackend.getEpoch(epochNumber);
   }
 
   /** 
@@ -226,8 +273,12 @@ export class HybridBackend implements CardanoBackend {
    * @returns {Promise<Transaction>} transaction data
    */
   async getTransaction(hash: string): Promise<Transaction> {
-    logger.debug(`[HybridBackend] Transaction → ${this.historicalBackend.name} (historical)`);
-    return this.historicalBackend.getTransaction(hash);
+    if (this.historicalBackend) {
+      logger.debug(`[HybridBackend] Transaction → ${this.historicalBackend.name} (historical)`);
+      return this.historicalBackend.getTransaction(hash);
+    }
+    logger.debug('[HybridBackend] No historical backend, using live backend for transaction');
+    return this.liveBackend.getTransaction(hash);
   }
 
   /** 
@@ -236,8 +287,12 @@ export class HybridBackend implements CardanoBackend {
    * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
    */
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
-    logger.debug(`[HybridBackend] TX Metadata → ${this.historicalBackend.name} (historical)`);
-    return this.historicalBackend.getTransactionMetadata(tx_hash);
+    if (this.historicalBackend) {
+      logger.debug(`[HybridBackend] TX Metadata → ${this.historicalBackend.name} (historical)`);
+      return this.historicalBackend.getTransactionMetadata(tx_hash);
+    }
+    logger.debug('[HybridBackend] No historical backend, using live backend for transaction metadata');
+    return this.liveBackend.getTransactionMetadata(tx_hash);
   }
 
   /**
@@ -246,7 +301,11 @@ export class HybridBackend implements CardanoBackend {
    * @returns {Promise<DrepData>} drep data
    */
   async getDrep(drepId: string): Promise<DrepData> {
-    logger.debug(`[HybridBackend] DRep → ${this.historicalBackend.name} (historical)`);
-    return this.historicalBackend.getDrep(drepId);
+    if (this.historicalBackend) {
+      logger.debug(`[HybridBackend] DRep → ${this.historicalBackend.name} (historical)`);
+      return this.historicalBackend.getDrep(drepId);
+    }
+    logger.debug('[HybridBackend] No historical backend, using live backend for drep');
+    return this.liveBackend.getDrep(drepId);
   }
 }

@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
-import { handleBackendRequest} from '../../utils/backend-request-handler';
+import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { NotFoundError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
 import {
@@ -12,8 +12,8 @@ import {
   EpochData,
   JSONValue,
   MetadataLabelTx,
-  PoolData, 
-  DrepData, 
+  PoolData,
+  DrepData,
   AccountData,
   Amount,
   LedgerProtocolParameters
@@ -26,7 +26,7 @@ import {
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
-  
+
   /**
    * Constructor 
    */
@@ -53,16 +53,16 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const body = {
-        _tx_hashes: [hash],
-        _inputs: true,
-        _metadata: true,
-        _assets: true,
-        _withdrawals: false,
-        _certs: false,
-        _scripts: false,
-        _bytecode: false,
-     };
-        
+          _tx_hashes: [hash],
+          _inputs: true,
+          _metadata: true,
+          _assets: true,
+          _withdrawals: false,
+          _certs: false,
+          _scripts: false,
+          _bytecode: false,
+        };
+
         const { data } = await this.api.post('/tx_info', body);
 
         if (!data || !Array.isArray(data) || data.length === 0) {
@@ -70,7 +70,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const tx = data[0];
-        
+
         let labels: MetadataLabelTx[] = [];
 
         if (tx.metadata) {
@@ -79,7 +79,7 @@ export class KoiosBackend implements CardanoBackend {
               txHash: hash,
               label: +label,
               json: json as JSONValue,
-          }));
+            }));
         }
 
         return {
@@ -147,9 +147,9 @@ export class KoiosBackend implements CardanoBackend {
 
         // get data of the given epoch
         let epochData;
-        
+
         epochData = await this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } });
-      
+
         if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
           throw new NotFoundError('Epoch', this.name);
         }
@@ -181,9 +181,9 @@ export class KoiosBackend implements CardanoBackend {
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
-        
+
         const { data } = await this.api.post('/address_info', { _addresses: [address] });
-        
+
         if (!data || !Array.isArray(data) || data.length === 0) {
           throw new NotFoundError('Address', this.name);
         }
@@ -237,7 +237,7 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.post('/address_utxos', { _addresses: [address] });
-                
+
         return data.map((utxo: any) => ({
           txHash: utxo.tx_hash,
           outputIndex: utxo.tx_index,
@@ -259,9 +259,9 @@ export class KoiosBackend implements CardanoBackend {
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');        
+        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
         const latest = data[0];
-        
+
         // @TODO: Check koios docs for missing fields
         return {
           supply: {
@@ -302,7 +302,7 @@ export class KoiosBackend implements CardanoBackend {
         };
 
         const { data } = await this.api.post('/tx_info', body);
-      
+
         if (data.length === 0 || data[0].metadata === null) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
@@ -311,9 +311,9 @@ export class KoiosBackend implements CardanoBackend {
             txHash: tx_hash,
             label: +label,
             json: json as JSONValue,
-        }));
-      return labels;
-      },this.name
+          }));
+        return labels;
+      }, this.name
     );
   }
 
@@ -326,32 +326,32 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
 
-      const { data } = await this.api.post('/pool_info',  { _pool_bech32_ids: [poolId] });
-    
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new NotFoundError('Pool', this.name);
+        const { data } = await this.api.post('/pool_info', { _pool_bech32_ids: [poolId] });
+
+        if (!Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('Pool', this.name);
         }
 
-      const poolData = data[0];
-      return {
-        poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
-        vrfKeyHash: poolData.vrf_key_hash,
-        blocksMinted: poolData.block_count,
-        blocksEpoch: poolData.epoch_no,
-        liveStake: parseInt(poolData.live_stake || '0', 10),
-        liveSize: poolData.live_size || 0,
-        liveDelegators: poolData.live_delegators || 0,
-        liveSaturation: poolData.live_saturation || 0,
-        activeStake: parseInt(poolData.active_stake || '0', 10),
-        activeSize: poolData.active_size || 0,
-        pledge: parseInt(poolData.pledge || '0', 10),
-        margin: poolData.margin || 0,
-        fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
-        rewardAccount: poolData.reward_addr,
-      };
-    },
-    this.name
-  );
+        const poolData = data[0];
+        return {
+          poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
+          vrfKeyHash: poolData.vrf_key_hash,
+          blocksMinted: poolData.block_count,
+          blocksEpoch: poolData.epoch_no,
+          liveStake: parseInt(poolData.live_stake || '0', 10),
+          liveSize: poolData.live_size || 0,
+          liveDelegators: poolData.live_delegators || 0,
+          liveSaturation: poolData.live_saturation || 0,
+          activeStake: parseInt(poolData.active_stake || '0', 10),
+          activeSize: poolData.active_size || 0,
+          pledge: parseInt(poolData.pledge || '0', 10),
+          margin: poolData.margin || 0,
+          fixedCost: parseInt(poolData.fixed_cost || '0', 10),
+          rewardAccount: poolData.reward_addr,
+        };
+      },
+      this.name
+    );
   }
 
   /** 
@@ -360,31 +360,31 @@ export class KoiosBackend implements CardanoBackend {
    * @returns {Promise<DrepData>} drep data
    */
   async getDrep(drepId: string): Promise<DrepData> {
-  return handleBackendRequest(
-    async () => {
-      const body = {
-       _drep_ids: [drepId],
-      };
+    return handleBackendRequest(
+      async () => {
+        const body = {
+          _drep_ids: [drepId],
+        };
 
-      const { data } = await this.api.post('/drep_info', body);
+        const { data } = await this.api.post('/drep_info', body);
 
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new NotFoundError('Drep', this.name);
-      }
+        if (!Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('Drep', this.name);
+        }
 
-      const drepData = data[0];
-      return {
-        drepId: drepData.drep_id,
-        hex: drepData.hex,
-        amount: drepData.amount,
-        hasScript: drepData.has_script,
-        lastActiveEpoch: drepData.last_active_epoch ?? 0,
-        expired: drepData.expired,
-        retired: drepData.retired,  
-      };
-    },
-    this.name
-  );
+        const drepData = data[0];
+        return {
+          drepId: drepData.drep_id,
+          hex: drepData.hex,
+          amount: drepData.amount,
+          hasScript: drepData.has_script,
+          lastActiveEpoch: drepData.last_active_epoch ?? 0,
+          expired: drepData.expired,
+          retired: drepData.retired,
+        };
+      },
+      this.name
+    );
   }
 
   /** 
@@ -393,44 +393,44 @@ export class KoiosBackend implements CardanoBackend {
    * @returns {Promise<AccountData>} account data
    */
   async getAccount(accountId: string): Promise<AccountData> {
-  return handleBackendRequest(
-    async () => {
-      
-      const body = {
-       _stake_addresses: [accountId],
-      };
-      const { data } = await this.api.post('/account_info', body);
+    return handleBackendRequest(
+      async () => {
 
-       if (!Array.isArray(data) || data.length === 0) {
-        throw new NotFoundError('Account', this.name);
-      }
-      // Fetch associated addresses
-      const addressDataResponse = await this.api.post('/account_addresses', body); 
-      
-      // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-      const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses);
-      const addresses = await Promise.all(
+        const body = {
+          _stake_addresses: [accountId],
+        };
+        const { data } = await this.api.post('/account_info', body);
+
+        if (!Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('Account', this.name);
+        }
+        // Fetch associated addresses
+        const addressDataResponse = await this.api.post('/account_addresses', body);
+
+        // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
+        const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses);
+        const addresses = await Promise.all(
           addressesFlat.map((addr: string) => this.getAddress(addr))
         );
 
-      const accountData = data[0];
-      return {
-        stakeaddress: accountData.stake_address,
-        active: accountData.active ?? false,
-        activeEpoch: accountData.active_epoch ?? 0,
-        controlledAmount: accountData.controlled_amount,
-        rewardsSum: accountData.rewards_sum,
-        withdrawalsSum: accountData.withdrawals_sum,
-        reservesSum: accountData.reserves_sum,
-        treasurySum: accountData.treasury_sum,
-        withdrawableAmount: accountData.withdrawable_amount,
-        poolId: accountData.pool_id || null,
-        drepId : accountData.drep_id || null,
-        addresses: addresses,
-      };
-    },
-    this.name
-  );
+        const accountData = data[0];
+        return {
+          stakeaddress: accountData.stake_address,
+          active: accountData.active ?? false,
+          activeEpoch: accountData.active_epoch ?? 0,
+          controlledAmount: accountData.controlled_amount,
+          rewardsSum: accountData.rewards_sum,
+          withdrawalsSum: accountData.withdrawals_sum,
+          reservesSum: accountData.reserves_sum,
+          treasurySum: accountData.treasury_sum,
+          withdrawableAmount: accountData.withdrawable_amount,
+          poolId: accountData.pool_id || null,
+          drepId: accountData.drep_id || null,
+          addresses: addresses,
+        };
+      },
+      this.name
+    );
   }
 
   /** 
@@ -460,7 +460,7 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/cli_protocol_params');
-        
+
         return {
           network: CONFIG.network,
           epoch: 0, // Koios doesn't provide current epoch in this endpoint
@@ -479,7 +479,7 @@ export class KoiosBackend implements CardanoBackend {
           rho: data.monetaryExpansion,
           tau: data.treasuryCut,
           minPoolCost: data.minPoolCost.toString(),
-          // --- Legacy / Misc ---
+          // --- Legacy / Misc ---S
           decentralisationParam: 0, // deprecated in Conway era
           extraEntropy: null,
           protocolMajorVer: data.protocolVersion.major,
@@ -517,13 +517,13 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         const { data } = await this.api.get('/tip');
 
-          if (!data) {
-            throw new NotFoundError('Latest Block', this.name);
-          }
-          return await this.getBlock(data[0].hash);
-        },
+        if (!data) {
+          throw new NotFoundError('Latest Block', this.name);
+        }
+        return await this.getBlock(data[0].hash);
+      },
       this.name
-    );  
+    );
   }
 
   /** 
@@ -537,6 +537,6 @@ export class KoiosBackend implements CardanoBackend {
         return this.getEpoch(data.epoch_no);
       },
       this.name
-    );  
+    );
   }
 }

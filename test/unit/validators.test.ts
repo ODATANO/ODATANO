@@ -7,10 +7,11 @@ import {
   isValidBech32Address,
   isValidBech32StakeAddress,
   isEpochNumber,
+  isValidCbor,
 } from '../../srv/utils/validators';
 
 describe('Validator Helper Methods and Type Guards', () => {
-  
+
   // ==========================================================================
   // isTxHash
   // ==========================================================================
@@ -177,8 +178,6 @@ describe('Validator Helper Methods and Type Guards', () => {
   // isValidDrepId
   // ==========================================================================
   describe('isValidDrepId', () => {
-    // Note: Testing with actual valid DRep IDs requires proper bech32 encoding
-    // which is complex to generate. These tests focus on validation logic.
 
     it('should return false for DRep ID with wrong HRP', () => {
       const invalidDrepId = 'pool1vpzcgfrlgdh4jnw9jvlvs9r0xkjfz4h7xs0x9q2wv3r9qgqxj7v';
@@ -206,7 +205,7 @@ describe('Validator Helper Methods and Type Guards', () => {
   // isValidBech32Address
   // ==========================================================================
   describe('isValidBech32Address', () => {
- 
+
 
     it('should return false for address with wrong HRP', () => {
       const invalidAddr = 'stake1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
@@ -245,7 +244,7 @@ describe('Validator Helper Methods and Type Guards', () => {
   // isValidBech32StakeAddress
   // ==========================================================================
   describe('isValidBech32StakeAddress', () => {
- 
+
     it('should return false for stake address with wrong HRP', () => {
       const invalidStake = 'addr1u9ttjzthqhmvn2p6eewpzhf8m6hpx8hgue8czs3mfe4gfvqw42lgy';
       expect(isValidBech32StakeAddress(invalidStake)).toBe(false);
@@ -318,4 +317,31 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isEpochNumber([])).toBe(false);
     });
   });
+
+  describe('isValidCbor', () => {
+    it('should return true for valid even-length hex string', () => {
+      const validCbor = 'a1b2c3d4';
+      expect(isValidCbor(validCbor)).toBe(true);
+    });
+    it('should return false for odd-length hex string', () => {
+      const oddLengthCbor = 'a1b2c3d';
+      expect(isValidCbor(oddLengthCbor)).toBe(false);
+    });
+
+    it('should return false for non-hex characters', () => {
+      const invalidCbor = 'g1h2i3j4';
+      expect(isValidCbor(invalidCbor)).toBe(false);
+    });
+    
+    it('should return false for empty string', () => {
+      expect(isValidCbor('')).toBe(false);
+      expect(isValidCbor('   ')).toBe(false);
+    });
+
+    it('should return false for non-string input', () => {
+      expect(isValidCbor(123)).toBe(false);
+      expect(isValidCbor(null)).toBe(false);
+      expect(isValidCbor(undefined)).toBe(false);
+    });
+  }); 
 });

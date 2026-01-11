@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import indexer from './blockchain/cardano-indexer';
-import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber} from './utils/validators';
+import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
@@ -13,45 +13,45 @@ const { SELECT } = cds.ql;
  */
 module.exports = (srv: cds.Service) => {
   logger.debug('[CardanoService] Module loaded - registering handlers');
-  
+
   const {
-      NetworkInformation,
-      Blocks,
-      Epochs,
-      Addresses,
-      AddressAssets,
-      AddressUTxOs,
-      Transactions,
-      TransactionInputs,
-      TransactionOutputs,
-      TransactionInputAssets,
-      TransactionOutputAssets,
-      TransactionMetadata,
-      Pools,
-      Accounts,
-      Dreps,
-      LedgerProtocolParameters
-    } = require('#cds-models/CardanoODataService');
+    NetworkInformation,
+    Blocks,
+    Epochs,
+    Addresses,
+    AddressAssets,
+    AddressUTxOs,
+    Transactions,
+    TransactionInputs,
+    TransactionOutputs,
+    TransactionInputAssets,
+    TransactionOutputAssets,
+    TransactionMetadata,
+    Pools,
+    Accounts,
+    Dreps,
+    LedgerProtocolParameters
+  } = require('#cds-models/CardanoODataService');
 
   /**
    * READ handler for `NetworkInformation`.
    * Cache-first read; indexes network information on first access.
    * @param req - The incoming request data
    * @returns {NetworkInformation} The current valid general network information
-   */  
+   */
   srv.on('READ', NetworkInformation, async (req: Request) => {
     logger.debug(`[CardanoService] NetworkInformation READ handler called`);
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
-        const existing = await db.run(SELECT.one.from(NetworkInformation));
-        if (!existing) {
+      const existing = await db.run(SELECT.one.from(NetworkInformation));
+      if (!existing) {
         logger.debug('[CardanoService] Indexing network information via indexer');
         return await indexer.indexNetworkInformation(db);
-        }
-        return existing;
-      });
+      }
+      return existing;
     });
-  
+  });
+
   /**
    * Action handler for `GetNetworkInformation`.
    * Returns network information; indexes it if not yet present.
@@ -59,17 +59,17 @@ module.exports = (srv: cds.Service) => {
    * @returns {NetworkInformation} The current valid general network information
    */
   srv.on('GetNetworkInformation', async (req: Request) => {
-      logger.debug(`[CardanoService] GetNetworkInformation Action handler called`);
-      // handle the action request / indexing result if needed
-      return handleRequest(req, async (db) => {
-        const existing = await db.run(SELECT.one.from(NetworkInformation));
-        if (!existing) {
-          logger.debug('[CardanoService] Indexing network information via indexer');
-          return await indexer.indexNetworkInformation(db);
-        }
-        return existing;
-      });
+    logger.debug(`[CardanoService] GetNetworkInformation Action handler called`);
+    // handle the action request / indexing result if needed
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(NetworkInformation));
+      if (!existing) {
+        logger.debug('[CardanoService] Indexing network information via indexer');
+        return await indexer.indexNetworkInformation(db);
+      }
+      return existing;
     });
+  });
 
   /**
    * READ handler for `Blocks`.
@@ -81,16 +81,16 @@ module.exports = (srv: cds.Service) => {
     logger.debug(`[CardanoService] Blocks READ handler called`);
     // get possible hash for single block lookup
     const hash = (req.data as { hash?: string })?.hash;
-      
+
     // validate input before business logic
     if (hash && !isBlockHash(hash)) return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
-      
+
     // handle the request / indexing if needed
-    return handleRequest(req, async (db) => { 
+    return handleRequest(req, async (db) => {
       if (hash) {
         const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
         if (!existing) {
-          logger.debug({ hash: hash },'[CardanoService] Indexing block via indexer');
+          logger.debug({ hash: hash }, '[CardanoService] Indexing block via indexer');
           return await indexer.indexBlock(db, hash);
         }
         return existing;
@@ -98,28 +98,28 @@ module.exports = (srv: cds.Service) => {
       return db.run(req.query);
     });
   });
-  
+
   /**
    * Action handler for `GetBlockByHash`.
    * Returns a block by hash; indexes it if not yet present.
    * @param req - The incoming request data
    * @returns {Blocks} The block data for the requested block
-   */  
+   */
   srv.on('GetBlockByHash', async (req: Request) => {
     logger.debug(`[CardanoService] GetBlockByHash Action handler called`);
     const hash = (req.data?.hash as string | undefined) ?? undefined;
-      
+
     // validate input before business logic
     if (!hash) return rejectMissing(req, 'Blocks', 'hash');
     if (!isTxHash(hash)) return rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
-      
+
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
-        if (!existing) {
-          logger.debug({ hash: hash },'[CardanoService] Indexing block via indexer');
-          return await indexer.indexBlock(db, hash);
-        }
+      if (!existing) {
+        logger.debug({ hash: hash }, '[CardanoService] Indexing block via indexer');
+        return await indexer.indexBlock(db, hash);
+      }
       return existing;
     });
   });
@@ -146,7 +146,7 @@ module.exports = (srv: cds.Service) => {
 
     logger.debug('[CardanoService] Epochs READ handler called');
     const epochNumber = (req.data as { epoch?: number })?.epoch;
-      
+
     // validate input before business logic
     if (epochNumber && !isEpochNumber(epochNumber))
       return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
@@ -156,8 +156,8 @@ module.exports = (srv: cds.Service) => {
       if (epochNumber) {
         const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
         if (!existing) {
-            logger.debug({ epochNumber },'[CardanoService] Indexing epoch via indexer');
-            return await indexer.indexEpoch(db, epochNumber);
+          logger.debug({ epochNumber }, '[CardanoService] Indexing epoch via indexer');
+          return await indexer.indexEpoch(db, epochNumber);
         }
         return existing;
       }
@@ -174,18 +174,18 @@ module.exports = (srv: cds.Service) => {
   srv.on('GetEpochByNumber', async (req: Request) => {
     logger.debug('[CardanoService] GetEpochByNumber Action handler called');
     const epochNumber = req.data?.epochNumber as Number | undefined;
-      
+
     // validate input before business logic
     if (epochNumber == null) return rejectMissing(req, 'Epochs', 'epochNumber');
-      
-    if (!isEpochNumber(epochNumber)) 
+
+    if (!isEpochNumber(epochNumber))
       return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
-      
+
     // handle the action request / indexing if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
       if (!existing) {
-        logger.debug({ epochNumber },'[CardanoService] Indexing epoch via indexer');
+        logger.debug({ epochNumber }, '[CardanoService] Indexing epoch via indexer');
         return await indexer.indexEpoch(db, epochNumber);
       }
       return existing;
@@ -211,21 +211,21 @@ module.exports = (srv: cds.Service) => {
    * @returns {Pools} The pool data for the requested pool or all fitting pools for general read
    */
   srv.on('READ', Pools, async (req: Request) => {
-    logger.debug('[CardanoService] Pools READ handler called'); 
+    logger.debug('[CardanoService] Pools READ handler called');
     const poolId = (req.data as { poolId?: string })?.poolId;
     // validate pool_id format before business logic
     if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
-      
+
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (poolId) {
-        const existing =  await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
-        if (!existing) {   
-          logger.debug({ poolId },'[CardanoService] Indexing Pool data via indexer');
+        const existing = await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
+        if (!existing) {
+          logger.debug({ poolId }, '[CardanoService] Indexing Pool data via indexer');
           return await indexer.indexPool(db, poolId);
         }
       }
-      return db.run(req.query); 
+      return db.run(req.query);
     });
   });
 
@@ -242,17 +242,17 @@ module.exports = (srv: cds.Service) => {
     if (!poolId) return rejectMissing(req, 'Pools', 'poolId');
 
     if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
-    
+
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existent = await db.run(SELECT.one.from(Pools).where({ poolId }));
-        if (!existent) {
-          logger.debug({ poolId },'[CardanoService] Indexing pool via indexer');
-          return await indexer.indexPool(db, poolId);
-        }
+      if (!existent) {
+        logger.debug({ poolId }, '[CardanoService] Indexing pool via indexer');
+        return await indexer.indexPool(db, poolId);
+      }
       return existent;
-      });
     });
+  });
 
   /**
    * READ handler for `Accounts`.
@@ -267,13 +267,13 @@ module.exports = (srv: cds.Service) => {
     // validate stake address format before business logic
     if (stakeAddress && !isValidBech32StakeAddress(stakeAddress))
       return rejectInvalid(req, 'Accounts', 'Invalid stakeAddress format', 'stakeAddress');
-    
+
     // proceed with handling the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (stakeAddress) {
         const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress: stakeAddress }));
         if (!existing) {
-          logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
+          logger.debug({ stakeAddress }, '[CardanoService] Indexing account via indexer');
           return await indexer.indexAccount(db, stakeAddress);
         }
         return existing;
@@ -281,7 +281,7 @@ module.exports = (srv: cds.Service) => {
       return db.run(req.query);
     });
   });
-  
+
   /**
    * Action handler for `GetAccountByStakeAddress`.
    * Returns an account by stake address; indexes it if not yet present.
@@ -298,17 +298,17 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32StakeAddress(stakeAddress))
       return rejectInvalid(req, 'GetAccountByStakeAddress', 'Invalid stakeAddress format', 'stakeAddress');
 
-      // proceed with handling the request / indexing result if needed
+    // proceed with handling the request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress }));
-      if (!existing) { 
-        logger.debug({ stakeAddress },'[CardanoService] Indexing account via indexer');
+      if (!existing) {
+        logger.debug({ stakeAddress }, '[CardanoService] Indexing account via indexer');
         return await indexer.indexAccount(db, stakeAddress);
       }
       return existing;
     });
   });
-   
+
   /**
    * READ handler for `Dreps`.
    *  Supports lookup by drep id with index-on-miss behavior or all dreps fitting general read.
@@ -318,24 +318,24 @@ module.exports = (srv: cds.Service) => {
   srv.on('READ', Dreps, async (req: Request) => {
     logger.debug('[CardanoService] Dreps READ handler called');
     const drepId = (req.data as { drepId?: string })?.drepId;
-    
+
     // validate drepID format before business logic
     if (drepId && !isValidDrepId(drepId)) return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
-      
-      // proceed with handling the request / indexing if needed
+
+    // proceed with handling the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (drepId) {
         const existing = await db.run(SELECT.one.from(Dreps).where({ drepId: drepId }));
-          if (!existing) {
-            logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
-            return await indexer.indexDrep(db, drepId);
-          }
+        if (!existing) {
+          logger.debug({ drepId }, '[CardanoService] Indexing drep via indexer');
+          return await indexer.indexDrep(db, drepId);
+        }
         return existing;
       }
       return db.run(req.query);
     });
   });
-  
+
   /**
    * Action handler for `GetDrepById`.
    * Returns a drep by id; indexes it if not yet present.
@@ -344,19 +344,19 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('GetDrepById', async (req: Request) => {
     logger.debug('[CardanoService] GetDrepById Action handler called');
-    const drepId  = (req.data as { drepId?: string }).drepId;
-      
+    const drepId = (req.data as { drepId?: string }).drepId;
+
     // validate input before business logic
     if (!drepId) return rejectMissing(req, 'Dreps', 'drepId');
-      
+
     if (drepId && !isValidDrepId(drepId))
       return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
 
     // proceed with handling the request
     return handleRequest(req, async (db) => {
-      const existing = await db.run( SELECT.one.from(Dreps).where({ drepId }));
+      const existing = await db.run(SELECT.one.from(Dreps).where({ drepId }));
       if (!existing) {
-        logger.debug({ drepId },'[CardanoService] Indexing drep via indexer');
+        logger.debug({ drepId }, '[CardanoService] Indexing drep via indexer');
         return await indexer.indexDrep(db, drepId);
       }
       return existing;
@@ -374,7 +374,7 @@ module.exports = (srv: cds.Service) => {
 
     // Validate address format before business logic
     if (addr && !isValidBech32Address(addr)) return rejectInvalid(req, 'Addresses', 'Invalid bech32 address format', 'address');
-      
+
     // Proceed with handling the request
     return handleRequest(req, async (db) => {
       if (addr) {
@@ -401,13 +401,13 @@ module.exports = (srv: cds.Service) => {
 
     // validate input before business logic
     if (!address) return rejectMissing(req, 'GetAddressByBech32', 'address');
-    
+
     if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAddressByBech32', 'Invalid bech32 address format', 'address');
 
     // proceed with handling the request / indexing result if needed
     return handleRequest(req, async (db) => {
-      const existing = await db.run( SELECT.one.from(Addresses).where({ address }));
-      if (!existing){
+      const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
+      if (!existing) {
         logger.debug({ address }, '[CardanoService] Indexing address via indexer');
         return await indexer.indexAddress(db, address);
       }
@@ -425,7 +425,7 @@ module.exports = (srv: cds.Service) => {
     logger.debug('[CardanoService] AddressAssets READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
-  
+
   /**
    * Action handler for `GetAssetsByAddress`.
    * Returns address assets by bech32 address; indexes the address if not yet present.
@@ -433,12 +433,12 @@ module.exports = (srv: cds.Service) => {
    * @returns {AddressAssets} The address asset data for the requested address
    */
   srv.on('GetAssetsByAddress', async (req: Request) => {
-    logger.debug('[CardanoService] GetAssetsByAddress Action handler called');  
+    logger.debug('[CardanoService] GetAssetsByAddress Action handler called');
     const { address } = req.data as { address?: string };
 
     // Validate input before business logic
     if (!address) return rejectMissing(req, 'GetAssetsByAddress', 'address');
-    
+
     if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
@@ -476,7 +476,7 @@ module.exports = (srv: cds.Service) => {
     if (!address) return rejectMissing(req, 'GetUTxOsByAddress', 'address');
 
     if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
-      
+
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
       if (!existing || existing.length === 0) {
@@ -490,7 +490,7 @@ module.exports = (srv: cds.Service) => {
       return existing;
     });
   });
-    
+
   /**
    * READ handler for `Transactions`.
    * Supports lookup by transaction hash with index-on-miss behavior or all transactions fitting general read.
@@ -504,13 +504,13 @@ module.exports = (srv: cds.Service) => {
     // validate input before business logic
     if (txHash && !isTxHash(txHash))
       return rejectInvalid(req, 'Transactions', 'Invalid transaction hash format', 'hash');
-    
+
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (txHash) {
         const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
-        if (!existing){
-          logger.debug({ txHash },'[CardanoService] Indexing transaction via indexer');
+        if (!existing) {
+          logger.debug({ txHash }, '[CardanoService] Indexing transaction via indexer');
           return await indexer.indexTransaction(db, txHash);
         }
         return existing;
@@ -534,12 +534,12 @@ module.exports = (srv: cds.Service) => {
 
     if (!isTxHash(hash))
       return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
-    
+
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
       if (!existing) {
-        logger.debug({ hash },'[CardanoService] Indexing transaction via indexer');
+        logger.debug({ hash }, '[CardanoService] Indexing transaction via indexer');
         return await indexer.indexTransaction(db, hash);
       }
       return existing;
@@ -595,21 +595,21 @@ module.exports = (srv: cds.Service) => {
   srv.on('READ', TransactionMetadata, async (req: Request) => {
     logger.debug('[CardanoService] TransactionMetadata READ handler called');
     const { tx_hash } = req.data as { tx_hash?: string };
-    
+
     // validate input before business logic
     if (tx_hash && !isTxHash(tx_hash))
       return rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
-    
+
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (tx_hash) {
         const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
         if (!existing) {
-          logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+          logger.debug({ tx_hash }, '[CardanoService] Indexing transaction metadata via indexer');
           return await indexer.indexTransactionMetadata(db, tx_hash);
         }
         return existing;
-      } 
+      }
       return await db.run(req.query);
     });
   });
@@ -626,14 +626,14 @@ module.exports = (srv: cds.Service) => {
 
     // validate input before business logic
     if (!tx_hash) return rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
-    
+
     if (!isTxHash(tx_hash)) return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
-      
+
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }));
       if (!existing || existing.length == 0) {
-        logger.debug({ tx_hash },'[CardanoService] Indexing transaction metadata via indexer');
+        logger.debug({ tx_hash }, '[CardanoService] Indexing transaction metadata via indexer');
         return await indexer.indexTransactionMetadata(db, tx_hash);
       }
       return existing;
@@ -647,7 +647,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('READ', LedgerProtocolParameters, async (req: Request) => {
     logger.debug('[CardanoService] LedgerProtocolParameters READ handler called');
-     return handleRequest(req, async (db) => {
+    return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(LedgerProtocolParameters));
       if (!existing) {
         logger.debug('[CardanoService] Indexing protocol parameters via indexer');

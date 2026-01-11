@@ -15,7 +15,7 @@ import {
   PoolData,
   AccountData,
   DrepData,
-  LedgerProtocolParameters 
+  LedgerProtocolParameters
 } from '../../utils/types';
 
 /**
@@ -25,21 +25,21 @@ import {
 export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
-  
+
   /** 
    * Constructor
    */
   constructor() {
-  const projectId = CONFIG.blockfrostApiKey;
-  if (!projectId) {
+    const projectId = CONFIG.blockfrostApiKey;
+    if (!projectId) {
       throw new BackendInitError('blockfrost', new Error('CONFIG.blockfrostApiKey is not set'));
+    }
+    this.api = new BlockFrostAPI({ projectId });
   }
-  this.api = new BlockFrostAPI({ projectId });
-  }
-  
-   /** 
-    * Initialize the backend 
-    */
+
+  /** 
+   * Initialize the backend 
+   */
   async init(): Promise<void> { }
 
   /** 
@@ -65,7 +65,7 @@ export class BlockfrostBackend implements CardanoBackend {
    * @returns {Promise<BlockData>} block data
    */
   async getBlock(blockHash: string): Promise<BlockData> {
-     return handleBackendRequest(
+    return handleBackendRequest(
       async () => {
         const blockdata = await this.api.blocks(blockHash);
         return {
@@ -90,7 +90,7 @@ export class BlockfrostBackend implements CardanoBackend {
    * @param epochNumber epoch number
    * @returns {Promise<EpochData>} epoch data
    */
-   async getEpoch(epochNumber: number): Promise<EpochData> {
+  async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
         const epochData = await this.api.epochs(epochNumber);
@@ -131,9 +131,9 @@ export class BlockfrostBackend implements CardanoBackend {
 
         return {
           hash: tx.hash,
-          blockHash:  tx.block,
+          blockHash: tx.block,
           blockHeight: tx.block_height,
-          blockTime : tx.block_time,
+          blockTime: tx.block_time,
           slot: tx.slot,
           index: tx.index,
           fee: parseInt(tx.fees, 10),
@@ -166,7 +166,7 @@ export class BlockfrostBackend implements CardanoBackend {
       this.name
     );
   }
-  
+
   /**
    * Get Transaction Metadata
    * @param tx_hash transaction hash (hex)
@@ -176,7 +176,7 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const txMetadata = await this.api.txsMetadata(tx_hash);
-        
+
         if (txMetadata.length === 0 || txMetadata === null) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
@@ -191,11 +191,11 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
-/** 
- * Get Address Data
- * @param address bech32 address string
- * @returns {Promise<Address>} address data
- */
+  /** 
+   * Get Address Data
+   * @param address bech32 address string
+   * @returns {Promise<Address>} address data
+   */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
@@ -252,7 +252,7 @@ export class BlockfrostBackend implements CardanoBackend {
    * @return {Promise<PoolData>} pool data
    */
   async getPool(poolId: string): Promise<PoolData> {
-   return handleBackendRequest(
+    return handleBackendRequest(
       async () => {
         const poolData = await this.api.poolsById(poolId);
         return {
@@ -268,12 +268,12 @@ export class BlockfrostBackend implements CardanoBackend {
           activeSize: poolData.active_size,
           pledge: parseInt(poolData.live_pledge || '0', 10),
           margin: poolData.margin_cost,
-          fixedCost: parseInt(poolData.fixed_cost || '0', 10), 
+          fixedCost: parseInt(poolData.fixed_cost || '0', 10),
           rewardAccount: poolData.reward_account,
         }
       },
       this.name
-    ); 
+    );
   }
 
   /**
@@ -285,16 +285,16 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const drepData = await this.api.governance.drepsById(drepId);
-        
+
         return {
           drepId: drepData.drep_id,
           hex: drepData.hex,
           amount: drepData.amount,
           hasScript: drepData.has_script,
           lastActiveEpoch: drepData.last_active_epoch ?? 0,
-          expired: drepData.expired,    
-          retired: drepData.retired,  
-        };    
+          expired: drepData.expired,
+          retired: drepData.retired,
+        };
       },
       this.name
     );
@@ -318,13 +318,13 @@ export class BlockfrostBackend implements CardanoBackend {
           active: accountData.active,
           activeEpoch: accountData.active_epoch ?? 0,
           controlledAmount: accountData.controlled_amount,
-          rewardsSum:  accountData.rewards_sum,
+          rewardsSum: accountData.rewards_sum,
           withdrawalsSum: accountData.withdrawals_sum,
           reservesSum: accountData.reserves_sum,
           treasurySum: accountData.treasury_sum,
           withdrawableAmount: accountData.withdrawable_amount,
           poolId: accountData.pool_id,
-          drepId : accountData.drep_id ?? null,
+          drepId: accountData.drep_id ?? null,
           addresses: addresses,
         };
       },
@@ -428,7 +428,7 @@ export class BlockfrostBackend implements CardanoBackend {
    * @returns {Promise<BlockData>} latest block data
    */
   async getLatestBlock(): Promise<BlockData> {
-     return handleBackendRequest(
+    return handleBackendRequest(
       async () => {
         const blockdata = await this.api.blocksLatest();
         return {

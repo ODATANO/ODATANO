@@ -484,4 +484,97 @@ describe('HybridBackend Unit Tests', () => {
       expect(hybridBackend.name).toBe('hybrid');
     });
   });
+
+  describe('HybridBackend without Historical Backend', () => {
+    let hybridBackendNoHistorical: HybridBackend;
+
+    beforeEach(() => {
+      // Create hybrid backend WITHOUT historical backend
+      hybridBackendNoHistorical = new HybridBackend(mockOgmiosBackend);
+    });
+
+    it('should initialize only live backend when no historical backend is provided', async () => {
+      mockOgmiosBackend.init.mockClear();
+      await hybridBackendNoHistorical.init();
+
+      expect(mockOgmiosBackend.init).toHaveBeenCalled();
+    });
+
+    it('should throw error when Ogmios fails for live data and no historical backend available', async () => {
+      mockOgmiosBackend.getProtocolParameters.mockRejectedValue(new Error('Ogmios error'));
+
+      await expect(hybridBackendNoHistorical.getProtocolParameters()).rejects.toThrow('Ogmios error');
+      expect(mockOgmiosBackend.getProtocolParameters).toHaveBeenCalled();
+    });
+
+    it('should use live backend for historical queries when no historical backend available', async () => {
+      const mockTx: Partial<Transaction> = {
+        hash: 'tx_hash_123',
+        blockHash: 'block_hash_123',
+        blockHeight: 1000000
+      };
+      
+      mockOgmiosBackend.getTransaction.mockResolvedValue(mockTx);
+
+      const result = await hybridBackendNoHistorical.getTransaction('tx_hash_123');
+
+      expect(mockOgmiosBackend.getTransaction).toHaveBeenCalledWith('tx_hash_123');
+      expect(result).toEqual(mockTx);
+    });
+
+    it('should use live backend for getBlock when no historical backend available', async () => {
+      const mockBlock: Partial<BlockData> = {
+        height: 1000000,
+        hash: 'block_hash_123'
+      };
+      
+      mockOgmiosBackend.getBlock.mockResolvedValue(mockBlock);
+
+      const result = await hybridBackendNoHistorical.getBlock('block_hash_123');
+
+      expect(mockOgmiosBackend.getBlock).toHaveBeenCalledWith('block_hash_123');
+      expect(result).toEqual(mockBlock);
+    });
+
+    it('should use live backend for getEpoch when no historical backend available', async () => {
+      const mockEpoch: Partial<EpochData> = {
+        epoch: 100,
+        start_time: 1700000000
+      };
+      
+      mockOgmiosBackend.getEpoch.mockResolvedValue(mockEpoch);
+
+      const result = await hybridBackendNoHistorical.getEpoch(100);
+
+      expect(mockOgmiosBackend.getEpoch).toHaveBeenCalledWith(100);
+      expect(result).toEqual(mockEpoch);
+    });
+
+    it('should use live backend for getTransactionMetadata when no historical backend available', async () => {
+      const mockMetadata: MetadataLabelTx[] = [
+        { txHash: 'tx_hash_123', label: '721', json: { test: 'data' } }
+      ];
+      
+      mockOgmiosBackend.getTransactionMetadata.mockResolvedValue(mockMetadata);
+
+      const result = await hybridBackendNoHistorical.getTransactionMetadata('tx_hash_123');
+
+      expect(mockOgmiosBackend.getTransactionMetadata).toHaveBeenCalledWith('tx_hash_123');
+      expect(result).toEqual(mockMetadata);
+    });
+
+    it('should use live backend for getDrep when no historical backend available', async () => {
+      const mockDrep = {
+        drep_id: 'drep123',
+        active: true
+      };
+      
+      mockOgmiosBackend.getDrep.mockResolvedValue(mockDrep);
+
+      const result = await hybridBackendNoHistorical.getDrep('drep123');
+
+      expect(mockOgmiosBackend.getDrep).toHaveBeenCalledWith('drep123');
+      expect(result).toEqual(mockDrep);
+    });
+  });
 });

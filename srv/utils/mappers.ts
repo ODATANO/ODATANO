@@ -34,12 +34,13 @@ import {
   Drep as DrepRow,
   Account as AccountRow,
   LedgerProtocolParameter as ProtocolParameterRow,
-}  from '#cds-models/CardanoODataService';
+} from '#cds-models/CardanoODataService';
 
-import type { TransactionBuild as  TransactionBuildRow, 
-              TransactionBuildInput as TransactionBuildInputRow,
-              TransactionBuildOutput as TransactionBuildOutputRow,
-              TransactionSubmission as TransactionSubmissionRow
+import type {
+  TransactionBuild as TransactionBuildRow,
+  TransactionBuildInput as TransactionBuildInputRow,
+  TransactionBuildOutput as TransactionBuildOutputRow,
+  TransactionSubmission as TransactionSubmissionRow
 } from '#cds-models/CardanoTransactionService';
 
 
@@ -178,14 +179,14 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
  * @returns {TransactionOutputAssetRow[]} mapped transaction output asset rows
  */
 export function mapTransactionOutputAssets(
-  txHash: string, 
+  txHash: string,
   outputs: TxOutputProviderData[]
 ): TransactionOutputAssetRow[] {
   return outputs.flatMap((output, idx) => {
 
     const outputIndex = output.outputIndex ?? idx;
     if (!Array.isArray(output.amount)) return [];
-    
+
     return output.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
       return {
@@ -211,7 +212,7 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
-  const totalLovelace = Array.isArray(addressData.amount) 
+  const totalLovelace = Array.isArray(addressData.amount)
     ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
     : 0;
 
@@ -239,8 +240,8 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
  * @returns {AddressUTxORow[]} mapped address UTxO rows
  */
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
-  
-   const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) => 
+
+  const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) =>
     Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace')
   );
   const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
@@ -297,16 +298,16 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
  * @param validFrom validFrom
  * @param validTo validTo
  * @returns {UTxOAssetRow[]} mapped UTxO asset rows
- */ 
+ */
 export function mapAddressUtxoAssets(
   addressUtxosData: UtxosProviderData[],
   validFrom: string, validTo: string,
-  ): UTxOAssetRow[] {
+): UTxOAssetRow[] {
   const assets: UTxOAssetRow[] = [];
 
   addressUtxosData.forEach((utxo: UtxosProviderData) => {
     if (!Array.isArray(utxo.amount)) return;
-    
+
     for (const asset of utxo.amount) {
       if (!asset || !asset.unit || asset.unit === 'lovelace') continue;
       const { policyId, assetName } = parseAssetUnit(asset.unit);
@@ -322,7 +323,7 @@ export function mapAddressUtxoAssets(
         asset_assetName: assetName,
       });
     }
-      });
+  });
   return assets;
 }
 
@@ -448,7 +449,7 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
  */
 export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   return {
-    drepId  : providerDrepData.drepId,
+    drepId: providerDrepData.drepId,
     hex: providerDrepData.hex,
     amount: Number(providerDrepData.amount),
     hasScript: Boolean(providerDrepData.hasScript),
@@ -467,7 +468,7 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
 export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
   const validFrom = new Date().toISOString();
   const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
-        
+
   return {
     validFrom: validFrom,
     validTo: validTo,
@@ -507,7 +508,7 @@ export function mapError(req: Request, err: unknown, ctx: string) {
  * @param txbuildResult transaction build result from provider
  * @returns {TransactionBuildRow} mapped transaction build row
  */
-export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow{
+export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow {
   const buildId = cds.utils.uuid();
   const now = Math.floor(Date.now() / 1000);
   const validFrom = new Date().toISOString();
@@ -526,16 +527,16 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult): Transacti
     unsignedTxCbor: txbuildResult.unsignedTxCbor,
     txBodyHash: txbuildResult.txBodyHash,
     fee: Number(txbuildResult.feeLovelace),
-    size               : txbuildResult.sizeBytes, // size in bytes
-    createdAt          : now, // epoch seconds
-   // inputs             : txbuildResult.inputs,
-   // outputs            : txbuildResult.outputs ? JSON.stringify(txbuildResult.outputs) : null,
-    submission         : null,
-    hasInputs          : hasInputs, // indicates if build has inputs
-    hasOutputs         : hasOutputs, // indicates if build has outputs
-    wasSubmitted       : false, // indicates if this build was submitted
+    size: txbuildResult.sizeBytes, // size in bytes
+    createdAt: now, // epoch seconds
+    // inputs             : txbuildResult.inputs,
+    // outputs            : txbuildResult.outputs ? JSON.stringify(txbuildResult.outputs) : null,
+    submission: null,
+    hasInputs: hasInputs, // indicates if build has inputs
+    hasOutputs: hasOutputs, // indicates if build has outputs
+    wasSubmitted: false, // indicates if this build was submitted
   }
-  
+
 }
 
 /** 

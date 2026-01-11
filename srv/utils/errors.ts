@@ -1,5 +1,5 @@
 import { ERROR_CODES, type ErrorCode } from './error-codes';
-import { Request } from '@sap/cds'; 
+import { Request } from '@sap/cds';
 /** 
  * Backend Errors Implementation
  * Defines typed errors for backend communication issues
@@ -212,13 +212,13 @@ export function normalizeBackendError(
   }
 
   // Priority 2: Rate limiting detection (status 429 or message patterns)
-  if (status === 429 || 
-      messageLower.includes('rate limit') || 
-      messageLower.includes('too many requests') ||
-      messageLower.includes('quota exceeded')) {
+  if (status === 429 ||
+    messageLower.includes('rate limit') ||
+    messageLower.includes('too many requests') ||
+    messageLower.includes('quota exceeded')) {
     // Try to extract retry-after header
-    const retryAfter = err.response?.headers?.["retry-after"] || 
-                       err.response?.headers?.["x-ratelimit-reset"];
+    const retryAfter = err.response?.headers?.["retry-after"] ||
+      err.response?.headers?.["x-ratelimit-reset"];
     return new RateLimitError(
       message || 'Rate limit exceeded',
       backendName,
@@ -307,10 +307,17 @@ export class AllBackendsInitFailedError extends Error {
  * @param ctx - Context string for the error
  * @param message - Detailed error message
  * @param target - Optional target resource
- * @returns {Promise<any>} rejection response
+ * @throws {BackendError} BackendError with 400 status code
  */
-export function rejectInvalid(req: Request, ctx: string, message: string, target?: string) {
-  return req .reject(400, `[${ERROR_CODES.INVALID_INPUT}] ${ctx}: ${message}`, target);
+export function rejectInvalid(req: Request, ctx: string, message: string, target?: string): never {
+  throw new BackendError(
+    `${ctx}: ${message}`,
+    400,
+    ERROR_CODES.INVALID_INPUT,
+    undefined,
+    undefined,
+    target
+  );
 }
 
 /** 
@@ -318,8 +325,15 @@ export function rejectInvalid(req: Request, ctx: string, message: string, target
  * @param req - The incoming request
  * @param ctx - Context string for the error
  * @param field - Name of the missing field
- * @returns {Promise<any>} rejection response 
+ * @throws {BackendError} BackendError with 400 status code
 */
-export function rejectMissing(req: Request, ctx: string, field: string) {
-  return req.reject(400, `[${ERROR_CODES.INVALID_INPUT}] ${ctx}: ${field} is required`, field);
+export function rejectMissing(req: Request, ctx: string, field: string): never {
+  throw new BackendError(
+    `${ctx}: ${field} is required`,
+    400,
+    ERROR_CODES.INVALID_INPUT,
+    undefined,
+    undefined,
+    field
+  );
 }

@@ -15,8 +15,8 @@ import {
   BlockData,
   EpochData,
   MetadataLabelTx,
-  PoolData, 
-  DrepData, 
+  PoolData,
+  DrepData,
   AccountData,
   LedgerProtocolParameters
 } from '../utils/types';
@@ -150,25 +150,25 @@ export class CardanoClient {
 
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
-        
+
         // 404 errors are expected - log as debug, not warn
         if (backendError.statusCode === 404) {
           logger.debug(
-            { 
-              backend: backend.name, 
+            {
+              backend: backend.name,
               error: backendError.message,
-              code: backendError.code 
-            }, 
+              code: backendError.code
+            },
             'Backend: resource not found'
           );
         } else {
           logger.warn(
-            { 
-              backend: backend.name, 
+            {
+              backend: backend.name,
               error: backendError.message,
               statusCode: backendError.statusCode,
-              code: backendError.code 
-            }, 
+              code: backendError.code
+            },
             'Backend failed'
           );
         }
@@ -194,7 +194,7 @@ export class CardanoClient {
   getAddress(address: string): Promise<Address> {
     return this.withFallback(b => b.getAddress(address));
   }
-  
+
   /** 
    * Get address UTxOs with fallback between backends
    * @param address bech32 address
@@ -203,7 +203,7 @@ export class CardanoClient {
   getAddressUtxos(address: string): Promise<UTxO[]> {
     return this.withFallback(b => b.getAddressUtxos(address));
   }
-  
+
   /** 
    * Get network information with fallback between backends
    * @returns {Promise<Network>} network information
@@ -211,7 +211,7 @@ export class CardanoClient {
   getNetworkInformation(): Promise<Network> {
     return this.withFallback(b => b.getNetworkInformation());
   }
-  
+
   /** 
    * Get transaction metadata with fallback between backends
    * @param tx_hash transaction hash (hex)
@@ -220,7 +220,7 @@ export class CardanoClient {
   getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return this.withFallback(b => b.getTransactionMetadata(tx_hash));
   }
-  
+
   /** 
    * Get block data with fallback between backends
    * @param block_hash block hash (hex)
@@ -229,16 +229,16 @@ export class CardanoClient {
   getBlock(block_hash: string): Promise<BlockData> {
     return this.withFallback(b => b.getBlock(block_hash));
   }
-  
+
   /** 
    * Get epoch data with fallback between backends
    * @param epochNumber epoch number
    * @returns {Promise<EpochData>} epoch data
    */
-  getEpoch(epochNumber: Number): Promise<EpochData> {
+  getEpoch(epochNumber: number): Promise<EpochData> {
     return this.withFallback(b => b.getEpoch(epochNumber));
   }
-  
+
   /** 
    * Get Pool data with fallback between backends
    * @param poolId pool id
@@ -247,7 +247,7 @@ export class CardanoClient {
   getPool(poolId: string): Promise<PoolData> {
     return this.withFallback(b => b.getPool(poolId));
   }
-  
+
   /** 
    * Get drep data with fallback between backends
    * @param drepId drep id
@@ -256,7 +256,7 @@ export class CardanoClient {
   getDrep(drepId: string): Promise<DrepData> {
     return this.withFallback(b => b.getDrep(drepId));
   }
-  
+
   /** 
    * Get account data with fallback between backends
    * @param stakeAddress stake address
@@ -265,7 +265,7 @@ export class CardanoClient {
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.withFallback(b => b.getAccount(stakeAddress));
   }
-  
+
   /** 
    * Get protocol parameters with fallback between backends
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
@@ -273,7 +273,7 @@ export class CardanoClient {
   getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return this.withFallback(b => b.getProtocolParameters());
   }
-  
+
   /** 
    * Get latest block data with fallback between backends
    * @returns {Promise<BlockData>} latest block data
@@ -308,12 +308,21 @@ const backends: CardanoBackend[] = [];
 // build backends from configuration
 for (const backendName of CONFIG.backends) {
   if (backendName === 'hybrid') {
-    // hybrid mode: Ogmios for live data and submit / Blockfrost/Koios for historical data
-    logger.info('[CardanoClient] Building Hybrid backend (Ogmios + Blockfrost/Koios)');
+    // hybrid mode: Ogmios for live data and submit / Blockfrost/Koios for historical data (if available)
+    logger.info('[CardanoClient] Building Hybrid backend (Ogmios + optional Blockfrost/Koios)');
     const ogmios = new OgmiosBackend();
-    const historical = CONFIG.blockfrostApiKey 
-      ? new BlockfrostBackend() 
-      : new KoiosBackend();
+    let historical: BlockfrostBackend | KoiosBackend | undefined;
+    
+    if (CONFIG.blockfrostApiKey) {
+      logger.info('[CardanoClient] Blockfrost API key found, using Blockfrost as historical backend');
+      historical = new BlockfrostBackend();
+    } else if (CONFIG.koiosApiKey) {
+      logger.info('[CardanoClient] Koios API key found, using Koios as historical backend');
+      historical = new KoiosBackend();
+    } else {
+      logger.warn('[CardanoClient] No historical backend API keys configured, using only Ogmios');
+    }
+    
     backends.push(new HybridBackend(ogmios, historical));
   } else if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
     backends.push(new BlockfrostBackend());
@@ -339,9 +348,14 @@ export function createCardanoClientForBackends(backendNames: string[]): CardanoC
   for (const backendName of backendNames) {
     if (backendName === 'hybrid') {
       const ogmios = new OgmiosBackend();
-      const historical = CONFIG.blockfrostApiKey 
-        ? new BlockfrostBackend() 
-        : new KoiosBackend();
+      let historical: BlockfrostBackend | KoiosBackend | undefined;
+      
+      if (CONFIG.blockfrostApiKey) {
+        historical = new BlockfrostBackend();
+      } else if (CONFIG.koiosApiKey) {
+        historical = new KoiosBackend();
+      }
+      
       testBackends.push(new HybridBackend(ogmios, historical));
     } else if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
       testBackends.push(new BlockfrostBackend());

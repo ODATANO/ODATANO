@@ -1,4 +1,4 @@
-import type { UTxO as OdatanoUtxo} from '../utils/types';
+import type { UTxO as OdatanoUtxo } from '../utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
 

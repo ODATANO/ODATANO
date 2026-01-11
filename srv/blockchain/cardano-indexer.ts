@@ -14,10 +14,10 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
-  TransactionMetadata, 
+  TransactionMetadata,
   NetworkInformation,
   UTxOAssets,
-  Block ,
+  Block,
   Epoch,
   Accounts,
   Pools,
@@ -60,7 +60,7 @@ import {
   mapTransactionSubmission
 } from '../utils/mappers';
 
-import {Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
+import { Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
 
 const { UPSERT } = cds.ql;
 
@@ -85,12 +85,12 @@ export class CardanoIndexer {
    * @param txHash  Cardano transaction hash (hex)
    * @returns {Promise<CardanoTransaction>} transaction entity data
    */
-  async indexTransaction(tx: CapTransaction,txHash: string,): Promise<CardanoTransaction> {
+  async indexTransaction(tx: CapTransaction, txHash: string,): Promise<CardanoTransaction> {
     // getting data from cardano data provider
     const providerTx = await cardano.getTransaction(txHash);
     const txRow = mapTransaction(providerTx);
 
-    tx.run( UPSERT.into(Transactions).entries(txRow))
+    tx.run(UPSERT.into(Transactions).entries(txRow))
 
     if (providerTx.inputs || providerTx.outputs) {
       const addresses = this._collectAddressesFromUtxos(providerTx);
@@ -103,16 +103,16 @@ export class CardanoIndexer {
       const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs);
 
       if (inputRows.length) {
-          
-      tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
-      
+
+        tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
+
       }
 
       if (inputAssetRows.length) {
-          
-          tx.run( UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
+
+        tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
       }
-      
+
       // Outputs + OutputAssets
       const outputRows = mapTransactionOutputs(txHash, providerTx.outputs);
       const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs);
@@ -120,17 +120,17 @@ export class CardanoIndexer {
       if (outputRows.length) {
 
         tx.run(UPSERT.into(TransactionOutputs).entries(outputRows))
- 
+
       }
 
       if (outputAssetRows.length) {
-        tx.run( UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
+        tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
       }
     }
     const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
 
     if (metadataRows.length) {
-        tx.run( UPSERT.into(TransactionMetadata).entries(metadataRows))
+      tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows))
     }
     return txRow;
   }
@@ -147,7 +147,7 @@ export class CardanoIndexer {
     logger.debug({ addrData }, 'indexAddress: provider response');
 
     const AddrEntity = mapAddress(addr, addrData);
-    
+
     tx.run(UPSERT.into(Addresses).entries(AddrEntity))
 
     const assetEntities = mapAddressAssets(
@@ -164,7 +164,7 @@ export class CardanoIndexer {
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
-    
+
     const utxoEntities = mapAddressUtxos(
       addr,
       AddrEntity.validFrom ?? new Date().toISOString(),
@@ -174,8 +174,8 @@ export class CardanoIndexer {
 
     logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
-    if (utxoEntities.length) {  
-        tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
+    if (utxoEntities.length) {
+      tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
     }
 
     const utxoAssetEntities = mapAddressUtxoAssets(
@@ -220,31 +220,31 @@ export class CardanoIndexer {
     await tx.run(UPSERT.into(NetworkInformation).entries(netEntity));
     return netEntity;
   }
-  
-   /** 
-    * Index & return the block information data
-    * @param tx CAP transaction object
-    * @param blockHash block hash (hex)
-    * @returns {Promise<Block>} block entity data
-    */
+
+  /** 
+   * Index & return the block information data
+   * @param tx CAP transaction object
+   * @param blockHash block hash (hex)
+   * @returns {Promise<Block>} block entity data
+   */
   async indexBlock(tx: CapTransaction, blockHash: string): Promise<Block> {
-    const blockInfo = await cardano.getBlock(blockHash);    
-    const epoch = await this.indexEpoch(tx , blockInfo.epoch!);
-    const blockEntity = mapBlock(blockInfo, epoch); 
+    const blockInfo = await cardano.getBlock(blockHash);
+    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    const blockEntity = mapBlock(blockInfo, epoch);
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
   }
 
-   /** 
-    * Index & return the epoch information data
-    * @param tx CAP transaction object
-    * @param epochNumber epoch number
-    * @returns {Promise<Epoch>} epoch entity data
-    */
-  async indexEpoch(tx: CapTransaction,epochNumber: Number): Promise<Epoch> {
+  /** 
+   * Index & return the epoch information data
+   * @param tx CAP transaction object
+   * @param epochNumber epoch number
+   * @returns {Promise<Epoch>} epoch entity data
+   */
+  async indexEpoch(tx: CapTransaction, epochNumber: number): Promise<Epoch> {
     const epochInfo = await cardano.getEpoch(epochNumber);
     const epochEntity = mapEpoch(epochInfo);
-    
+
     await tx.run(UPSERT.into(Epoch).entries([epochEntity]))
     return epochEntity;
   }
@@ -258,15 +258,15 @@ export class CardanoIndexer {
   async indexAccount(tx: CapTransaction, stakeAddress: string): Promise<Account> {
     const accountInfo = await cardano.getAccount(stakeAddress);
     const accountEntity = mapAccount(accountInfo);
-    
-    await tx.run( UPSERT.into(Accounts).entries(accountEntity))
+
+    await tx.run(UPSERT.into(Accounts).entries(accountEntity))
 
     const addresses = accountInfo.addresses.map(a => a.address);
-    
-     if (accountEntity.hasAddresses) {
-        await this._ensureAddresses(tx, addresses);
-      }
-    
+
+    if (accountEntity.hasAddresses) {
+      await this._ensureAddresses(tx, addresses);
+    }
+
     return accountEntity;
   }
 
@@ -279,7 +279,7 @@ export class CardanoIndexer {
   async indexDrep(tx: CapTransaction, drepId: string): Promise<Drep> {
     const drepInfo = await cardano.getDrep(drepId);
     const drepEntity = mapDrep(drepInfo);
-    await tx.run( UPSERT.into(Dreps).entries(drepEntity));
+    await tx.run(UPSERT.into(Dreps).entries(drepEntity));
     return drepEntity;
   }
 
@@ -292,11 +292,11 @@ export class CardanoIndexer {
   async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
     const poolInfo = await cardano.getPool(poolId);
     const poolEntity = mapPool(poolInfo);
-   
-      tx.run(UPSERT.into(Pools).entries(poolEntity))
-    
+
+    tx.run(UPSERT.into(Pools).entries(poolEntity))
+
     return poolEntity;
-  } 
+  }
 
   /** 
    * Index & return the transaction build result data
@@ -305,14 +305,14 @@ export class CardanoIndexer {
    * @returns {Promise<TransactionBuild>} transaction build entity data
    */
   async indexBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
-     
+
     // make sure we have protocol parameters indexed
     const protocolParams = await this.indexProtocolParameters(tx);
 
-   const txbuildResult = await  cardanoTransactionBuilder.buildSimpleAdaTransaction(
+    const txbuildResult = await cardanoTransactionBuilder.buildSimpleAdaTransaction(
       buildreq,
       protocolParams);
-    
+
     const buildResult = mapBuildResult(txbuildResult);
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
@@ -358,7 +358,7 @@ export class CardanoIndexer {
    * @param txHash transaction hash (hex)
    * @returns {Promise<TransactionSubmissionRow>} transaction submission entity data
    */
-  async indexTransactionSubmission( signedTxCbor: string, txHash: string): Promise<TransactionSubmission> {
+  async indexTransactionSubmission(signedTxCbor: string, txHash: string): Promise<TransactionSubmission> {
     const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
     // return submission record without persisting (caller will persist it)
     return transactionSubmission;
@@ -369,9 +369,9 @@ export class CardanoIndexer {
    * @param tx CAP transaction object
    * @returns {Promise<Epoch>} epoch entity data
    */
-  async indexLatestEpoch( tx: CapTransaction): Promise<Epoch> {
+  async indexLatestEpoch(tx: CapTransaction): Promise<Epoch> {
     const epochInfo = await cardano.getLatestEpoch();
-    
+
     const epochEntity = mapEpoch(epochInfo);
 
 
@@ -385,18 +385,18 @@ export class CardanoIndexer {
    * @returns {Promise<Block>} block entity data
    */
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
-   
-    const blockInfo = await cardano.getLatestBlock();    
-    const epoch= await this.indexEpoch(tx , blockInfo.epoch!);
+
+    const blockInfo = await cardano.getLatestBlock();
+    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
     const blockEntity = mapBlock(blockInfo, epoch);
-     
+
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
   }
 
-//-----------------------------------------------------------------------------
-// Private Helpers
-//-----------------------------------------------------------------------------
+  //-----------------------------------------------------------------------------
+  // Private Helpers
+  //-----------------------------------------------------------------------------
 
   /** 
    * Collect all unique addresses from UTxOs in transaction data
@@ -408,7 +408,7 @@ export class CardanoIndexer {
 
     const inputs = txUtxos.inputs;
     const outputs = txUtxos.outputs;
-    
+
     for (const i of inputs) {
       if (i.address) set.add(i.address);
     }

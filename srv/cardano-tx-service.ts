@@ -3,7 +3,7 @@ import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
-import { isValidBech32Address } from './utils/validators';
+import { isValidBech32Address, isValidCbor } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
@@ -128,9 +128,9 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / fetching the build details
     const existing = await cds.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-    
+
     if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
-    
+
     return existing;
   });
 
@@ -146,23 +146,17 @@ module.exports = (srv: cds.Service) => {
     // Validate inputs
     if (!buildId) return rejectMissing(req, 'SubmitTransaction', 'buildId');
     if (!signedTxCbor) return rejectMissing(req, 'SubmitTransaction', 'signedTxCbor');
+    if (!isValidCbor(signedTxCbor))
+      return rejectInvalid(req, 'SubmitTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
+    
 
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
       logger.debug({ buildId }, '[TxService] Submitting signed transaction');
 
       // Validate build exists
-      const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!build) {
-        throw new BackendError(
-          'Build not found',
-          400,
-          ERROR_CODES.INVALID_INPUT,
-          undefined,
-          undefined,
-          'buildId'
-        );
-      }
+      const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+      if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
 
       // extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
@@ -184,7 +178,7 @@ module.exports = (srv: cds.Service) => {
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
       await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
-      
+
       return { submissionRecord };
     });
   });
@@ -201,7 +195,8 @@ module.exports = (srv: cds.Service) => {
     // validate inputs
     if (!signedTxCbor) return rejectMissing(req, 'SubmitSignedTransaction', 'signedTxCbor');
     if (!network) return rejectMissing(req, 'SubmitSignedTransaction', 'network');
-
+    if (!isValidCbor(signedTxCbor))
+      return rejectInvalid(req, 'SubmitSignedTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
       // extract txHash from signed CBOR (before submission)
@@ -243,7 +238,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / checking submission status
     return handleRequest(req, async (db) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
-      
+
       if (!submission) {
         throw new BackendError(
           `Submission with ID ${submissionId} not found`,
@@ -251,7 +246,7 @@ module.exports = (srv: cds.Service) => {
           ERROR_CODES.NOT_FOUND
         );
       }
-      
+
       return submission;
     });
   });

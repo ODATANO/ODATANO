@@ -19,7 +19,7 @@ import {
   PoolData,
   AccountData,
   DrepData,
-  LedgerProtocolParameters 
+  LedgerProtocolParameters
 } from '../../utils/types';
 
 import { CardanoBackend } from './cardano-backend';
@@ -34,7 +34,7 @@ export class OgmiosBackend implements CardanoBackend {
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
   private context: any = null;
-  
+
   /** 
    * Constructor 
    */
@@ -48,7 +48,7 @@ export class OgmiosBackend implements CardanoBackend {
    * Initialize the Ogmios backend connection
    */
   async init(): Promise<void> {
-    const url = new URL(CONFIG.ogmiosUrl || 'ws://localhost:1337');
+    const url = new URL(CONFIG.ogmiosUrl);
     const connection = {
       host: url.hostname,
       port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80),
@@ -86,20 +86,20 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new BackendInitError('ogmios', new Error('State query client not initialized'));
       }
-      
+
       // Get current epoch from ledgerTip
       const tip = await this.stateQueryClient.ledgerTip();
       if (tip === 'origin') {
         throw new NotFoundError('Epoch', this.name);
       }
-      
+
       const currentEpoch = Math.floor((tip.slot || 0) / 432000);
-      
+
       // Ogmios only supports current epoch queries
       if (epochNumber !== currentEpoch) {
         throw new NotFoundError(`Historic Epoch ${epochNumber} not supported (current: ${currentEpoch})`, this.name);
       }
-      
+
       // Return current epoch data
       return this.getLatestEpoch();
     }, this.name);
@@ -127,21 +127,21 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
- /** 
-  * Get specific Pool Data (not supported for Ogmios)
-  * @param _poolId pool id
-  * @returns {Promise<PoolData>} pool data
-  */
+  /** 
+   * Get specific Pool Data (not supported for Ogmios)
+   * @param _poolId pool id
+   * @returns {Promise<PoolData>} pool data
+   */
   async getDrep(_drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
       throw new Error('DRep queries not supported');
     }, this.name);
   }
 
- /** 
-  * Get specific Account Data (not supported for Ogmios)
-  * @returns {Promise<Network>} network information
-  */
+  /** 
+   * Get specific Account Data (not supported for Ogmios)
+   * @returns {Promise<Network>} network information
+   */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(async () => {
       if (!this.stateQueryClient) {
@@ -177,10 +177,10 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
-      
+
       // Query UTxOs without acquiring specific ledger state
       const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      
+
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
         const lovelace = u.value?.ada?.lovelace || u.value?.lovelace || '0';
         return sum + BigInt(lovelace);
@@ -217,17 +217,17 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
-      
+
       if (!this.stateQueryClient) {
         throw new Error('Ogmios state query client not initialized');
       }
-      
+
       const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
-      
+
       return utxos.map((u: any) => {
         // convert Ogmios value format to standard amount array
         const amount = this.convertOgmiosValue(u.value);
-        
+
         return {
           txHash: u.transaction?.id || '',
           outputIndex: u.index || 0,
@@ -242,7 +242,7 @@ export class OgmiosBackend implements CardanoBackend {
   }
 
   /** 
-   * Get current specific Pool Data (not supported for Ogmios)
+   * Get current specific Pool Data
    * @param poolId pool id
    * @returns {Promise<PoolData>} pool data
    */
@@ -254,8 +254,9 @@ export class OgmiosBackend implements CardanoBackend {
       await this.stateQueryClient.acquireLedgerState('origin');
       const pools = await this.stateQueryClient.stakePools([{ id: poolId }]) as any;
       await this.stateQueryClient.releaseLedgerState();
-      
-      const pool = Array.isArray(pools) && pools.length > 0 ? pools[0] : pools;
+
+      // Extract pool from response (can be array or object)
+      const pool = Array.isArray(pools) ? pools[0] : pools;
       if (!pool) throw new NotFoundError('Pool', this.name);
 
       return {
@@ -290,7 +291,7 @@ export class OgmiosBackend implements CardanoBackend {
       await this.stateQueryClient.acquireLedgerState('origin');
       const state = await this.stateQueryClient.rewardAccountSummaries({ keys: [stakeAddress] }) as any;
       await this.stateQueryClient.releaseLedgerState();
-      
+
       const account = state ? state[stakeAddress] : null;
       if (!account) throw new NotFoundError('Account', this.name);
 
@@ -317,7 +318,7 @@ export class OgmiosBackend implements CardanoBackend {
    * @returns {Promise<string>} transaction hash
    */
   async submitTransaction(signedTxCbor: string): Promise<string> {
-    
+
     return handleBackendRequest(async () => {
       if (!this.txSubmissionClient) {
         throw new Error('Ogmios transaction submission client not initialized');
@@ -337,10 +338,10 @@ export class OgmiosBackend implements CardanoBackend {
       if (!this.stateQueryClient) {
         throw new BackendInitError('ogmios', new Error('State query client not initialized'));
       }
-      
+
       const params = await this.stateQueryClient.protocolParameters();
       const tip = await this.stateQueryClient.ledgerTip();
-      
+
       // Calculate current epoch from tip
       const currentEpoch = tip !== 'origin' && tip.slot ? Math.floor(tip.slot / 432000) : 0;
 
@@ -384,10 +385,6 @@ export class OgmiosBackend implements CardanoBackend {
   }
 
   /** 
-   * Get current Latest Epoch Data
-   * @returns {Promise<BlockData>} latest block data
-   */
-  /** 
    * Get Latest Epoch Data
    * @returns {Promise<EpochData>} latest epoch data
    */
@@ -398,15 +395,15 @@ export class OgmiosBackend implements CardanoBackend {
       }
 
       const tip = await this.stateQueryClient.ledgerTip();
-      
+
       // Handle Point | "origin" type
       if (tip === 'origin') {
         throw new NotFoundError('Latest epoch', this.name);
       }
-      
+
       const slot = tip.slot || 0;
       const epoch = Math.floor(slot / 432000);
-      
+
       // Calculate epoch boundaries (approximation)
       // Each epoch has 432000 slots, each slot is ~1 second
       const epochStartSlot = epoch * 432000;
@@ -414,7 +411,7 @@ export class OgmiosBackend implements CardanoBackend {
       const currentTime = Date.now();
       const epochStartTime = currentTime - ((slot - epochStartSlot) * 1000);
       const epochEndTime = currentTime + ((epochEndSlot - slot) * 1000);
-      
+
       return {
         epoch,
         start_time: Math.floor(epochStartTime / 1000),
@@ -441,20 +438,20 @@ export class OgmiosBackend implements CardanoBackend {
       }
 
       const tip = await this.stateQueryClient.ledgerTip();
-      
+
       // Handle Point | "origin" type
       if (tip === 'origin') {
         throw new NotFoundError('Latest block', this.name);
       }
-      
+
       const slot = tip.slot || 0;
       const blockHeight = await this.stateQueryClient.networkBlockHeight();
       const height = blockHeight === 'origin' ? 0 : (blockHeight || 0);
-      
+
       // Calculate epoch from slot (432000 slots per epoch on mainnet)
       const epoch = Math.floor(slot / 432000);
       const epochSlot = slot % 432000;
-      
+
       return {
         time: Date.now(), // Use current timestamp as approximation
         height,
@@ -470,9 +467,9 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
   /**
    * Convert Ogmios value format to odatano amount array
@@ -481,7 +478,7 @@ export class OgmiosBackend implements CardanoBackend {
    */
   private convertOgmiosValue(value: any): Array<{ unit: string; quantity: string }> {
     const amounts: Array<{ unit: string; quantity: string }> = [];
-    
+
     // Handle ADA (lovelace)
     if (value.ada?.lovelace) {
       amounts.push({
@@ -489,11 +486,11 @@ export class OgmiosBackend implements CardanoBackend {
         quantity: value.ada.lovelace.toString()
       });
     }
-    
+
     // handle native assets (policy.assetName)
     for (const [policyId, assets] of Object.entries(value)) {
       if (policyId === 'ada') continue;
-      
+
       for (const [assetName, quantity] of Object.entries(assets as Record<string, any>)) {
         amounts.push({
           unit: `${policyId}${assetName}`,

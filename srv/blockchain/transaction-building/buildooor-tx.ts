@@ -1,4 +1,4 @@
-import type { CardanoTxBuilder} from "./cardano-tx";
+import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
@@ -19,12 +19,12 @@ import logger from "../../utils/logger";
  */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = "buildooor";
-  
+
   /** 
    * Initialize the builder (no-op for Buildooor) 
    */
-  public async init(): Promise<void> {}
-  
+  public async init(): Promise<void> { }
+
   /**
    * Build unsigned ADA transfer transaction
    * @param req transaction build request
@@ -38,7 +38,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
     const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
-    
+
     // Buildooor TxIn objects for inputs
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
     // Addresses
@@ -65,7 +65,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const unsignedTxBytes = tx.toCbor().toBuffer();
     const unsignedTxCbor = toHex(unsignedTxBytes);
     const txBodyHash = tx.hash.toString();
-    
+
     logger.info(`[BuildooorTxBuilder] Built unsigned transaction successfully.`);
 
     return {
@@ -88,9 +88,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-//---------------------------------------------------------------------------
-// Private Helper Methods
-//---------------------------------------------------------------------------
+  //---------------------------------------------------------------------------
+  // Private Helper Methods
+  //---------------------------------------------------------------------------
 
   /** 
    * Map ODATANO LedgerProtocolParameter to Buildooor's ProtocolParameters shape
@@ -111,25 +111,25 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   private _mapOdatanoUtxoToLedgerUtxo(utxos: OdatanoUtxo): any {
     assertAdaOnly(utxos);
-    const txId = utxos.txHash; 
+    const txId = utxos.txHash;
 
     const outRef = new TxOutRef({
       id: txId as any,
       index: utxos.outputIndex
     });
 
-  const addr = Address.fromString(utxos.address)
-  const value = Value.lovelaces(getLovelace(utxos));
+    const addr = Address.fromString(utxos.address)
+    const value = Value.lovelaces(getLovelace(utxos));
 
-  return new (LedgerUTxO as any)({
-    utxoRef: outRef,
-    resolved: {
-      address: addr,
-      value,
-      datum: undefined,
-      refScript: undefined
-    }
-  });
-}
+    return new (LedgerUTxO as any)({
+      utxoRef: outRef,
+      resolved: {
+        address: addr,
+        value,
+        datum: undefined,
+        refScript: undefined
+      }
+    });
+  }
 }
 

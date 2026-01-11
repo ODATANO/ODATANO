@@ -245,7 +245,6 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 	});
     
 	describe('ODATANO Milestone 2 - Error Handling Tests', () => {
-		// Error 400 bad request with invalid inputs
 
 		 // Test data fixtures for preview network
     	const FIXTURE = {

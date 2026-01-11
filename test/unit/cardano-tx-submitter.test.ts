@@ -27,7 +27,7 @@ describe('CardanoTransactionSubmitter Unit Tests', () => {
   beforeEach(() => {
     // Create a new submitter instance for each test
     submitter = new CardanoTransactionSubmitter();
-    
+
     // Clear all mock calls before each test
     jest.clearAllMocks();
   });
@@ -139,7 +139,7 @@ describe('CardanoTransactionSubmitter Unit Tests', () => {
   describe('Singleton Instance', () => {
     it('should export a default singleton instance', async () => {
       const defaultSubmitter = (await import('../../srv/blockchain/cardano-tx-submitter')).default;
-      
+
       expect(defaultSubmitter).toBeDefined();
       expect(defaultSubmitter).toBeInstanceOf(CardanoTransactionSubmitter);
     });

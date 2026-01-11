@@ -54,10 +54,10 @@ function safeTrimString(s: unknown): string | null {
  * @returns { prefix: string; words: number[] } decoded bech32 parts or null if invalid
  */
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
-    try {
-      const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
-      if (!allowedHrp.includes(decoded.prefix)) return null;
-      return { prefix: decoded.prefix, words: decoded.words };
+  try {
+    const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
+    if (!allowedHrp.includes(decoded.prefix)) return null;
+    return { prefix: decoded.prefix, words: decoded.words };
   } catch {
     return null;
   }
@@ -185,4 +185,16 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
  */
 export function isEpochNumber(s: unknown): s is number {
   return typeof s === "number" && s >= 0 && s <= MAX_EPOCH && Number.isInteger(s);
+}
+
+/** 
+ * Validate CBOR string: must be a non-empty even-length hexadecimal string
+ * @param cborRaw - The raw value to validate against CBOR format
+ * @returns { boolean } true if valid CBOR false otherwise
+ */
+export function isValidCbor(cborRaw: unknown): cborRaw is string {
+  const cbor = safeTrimString(cborRaw);
+  if (!cbor) return false;
+  // basic validation: must be even-length hex string
+  return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
 }
