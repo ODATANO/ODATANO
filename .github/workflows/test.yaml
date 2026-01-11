@@ -109,13 +109,14 @@ jobs:
           
       - name: Wait for Node socket
         if: steps.cache-cardano.outputs.cache-hit == 'true'
+        continue-on-error: true
         run: |
           echo "Waiting for node socket..."
           sleep 10
           
           # Check if container is still running
           if ! docker ps | grep -q cardano-node-preview; then
-            echo "ERROR: Cardano Node container stopped! Showing logs:"
+            echo "⚠️ Cardano Node container stopped! Showing logs:"
             docker logs cardano-node-preview
             exit 1
           fi
@@ -124,11 +125,11 @@ jobs:
             echo "Still waiting for socket..."
             sleep 5
           done' || {
-            echo "Timeout waiting for socket. Container logs:"
+            echo "⚠️ Timeout waiting for socket. Ogmios tests will be skipped."
             docker logs cardano-node-preview
             exit 1
           }
-          echo "Node socket ready"
+          echo "✅ Node socket ready"
           
       - name: Start Ogmios
         if: steps.cache-cardano.outputs.cache-hit == 'true'
@@ -157,36 +158,28 @@ jobs:
       - name: Cache Status Info
         run: |
           if [ "${{ steps.cache-cardano.outputs.cache-hit }}" != "true" ]; then
-            echo "⚠️ No Cardano Node cache found - Ogmios tests will be skipped"
+            echo "⚠️ No Cardano Node cache found - running tests with Koios + Blockfrost only"
             echo "💡 Run the 'Network Synchronization' workflow first to create a cache"
           elif [ "${{ steps.ogmios-ready.outputs.ready }}" != "true" ]; then
-            echo "⚠️ Ogmios not ready - Ogmios tests will be skipped"
+            echo "⚠️ Ogmios not ready - running tests with Koios + Blockfrost only"
           else
-            echo "✅ Ogmios is ready - all tests will run"
+            echo "✅ Ogmios is ready - running all tests with Koios + Blockfrost + Ogmios"
           fi
 
       # ==========================================
       # Run Tests
       # ==========================================
-      - name: Run tests with coverage (Koios + Blockfrost)
+      - name: Run tests with coverage (All Backends)
         env:
           NODE_ENV: test
           NETWORK: 'preview'
-          BACKENDS: 'koios,blockfrost'
+          BACKENDS: ${{ steps.ogmios-ready.outputs.ready == 'true' && 'koios,blockfrost,ogmios' || 'koios,blockfrost' }}
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
+          OGMIOS_WS_URL: 'ws://localhost:1337'
           PRIMARY_TIMEOUT_MS: 8000
           FALLBACK_TIMEOUT_MS: 8000
           INDEX_TTL_MS: 60000
         run: npm run test:ci:coverage
-
-      - name: Run Ogmios integration tests
-        if: steps.ogmios-ready.outputs.ready == 'true'
-        env:
-          NODE_ENV: test
-          NETWORK: 'preview'
-          BACKENDS: 'ogmios'
-          OGMIOS_WS_URL: 'ws://localhost:1337'
-        run: npm test -- test/integration/core-ogmios.test.ts
 
       # ==========================================
       # Save Cardano Node DB Cache
