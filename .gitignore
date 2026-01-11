@@ -64,7 +64,8 @@ HYBRID_BACKEND.md
 DOCKER_COMPOSE_GUIDE.md
 TRANSACTION_WORKFLOW.md
 
-/config/preview 
+# Preview config should be in git for GitHub Actions and local development
+# /config/preview 
 
 logs.ps1
 start-stack.ps1

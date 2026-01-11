@@ -1,0 +1,19 @@
+{
+  "Producers": [
+    {
+      "addr": "preview-node.world.dev.cardano.org",
+      "port": 30002,
+      "valency": 1
+    },
+    {
+      "addr": "preview-node.play.dev.cardano.org",
+      "port": 3001,
+      "valency": 1
+    },
+    {
+      "addr": "preview.cardano-testnet.iohkdev.io",
+      "port": 3001,
+      "valency": 1
+    }
+  ]
+}
