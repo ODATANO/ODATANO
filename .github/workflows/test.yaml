@@ -155,6 +155,39 @@ jobs:
           echo "Ogmios is ready!"
           echo "ready=true" >> $GITHUB_OUTPUT
 
+      - name: Wait for Node to be 100% synced
+        id: sync-complete
+        if: steps.ogmios-ready.outputs.ready == 'true'
+        continue-on-error: true
+        run: |
+          echo "Waiting for Cardano Node to be fully synchronized..."
+          MAX_WAIT=1800  # 30 minutes max
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            HEALTH=$(curl -s http://localhost:1337/health)
+            SYNC_PERCENT=$(echo "$HEALTH" | grep -o '"networkSynchronization":[0-9.]*' | cut -d':' -f2)
+            
+            if [ -n "$SYNC_PERCENT" ]; then
+              SYNC_PERCENT_DISPLAY=$(awk "BEGIN {printf \"%.2f\", $SYNC_PERCENT * 100}")
+              echo "Sync progress: ${SYNC_PERCENT_DISPLAY}%"
+              
+              # Check if 100% synced
+              if awk "BEGIN {exit !($SYNC_PERCENT >= 1.0)}"; then
+                echo "✅ Network fully synchronized (100%)!"
+                echo "complete=true" >> $GITHUB_OUTPUT
+                break
+              fi
+            fi
+            
+            sleep 30
+            ELAPSED=$((ELAPSED + 30))
+          done
+          
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "⚠️ Timeout waiting for full sync - running tests anyway"
+          fi
+
       - name: Cache Status Info
         run: |
           if [ "${{ steps.cache-cardano.outputs.cache-hit }}" != "true" ]; then
@@ -162,18 +195,33 @@ jobs:
             echo "💡 Run the 'Network Synchronization' workflow first to create a cache"
           elif [ "${{ steps.ogmios-ready.outputs.ready }}" != "true" ]; then
             echo "⚠️ Ogmios not ready - running tests with Koios + Blockfrost only"
+          elif [ "${{ steps.sync-complete.outputs.complete }}" == "true" ]; then
+            echo "✅ Node fully synced - running all tests with Koios + Blockfrost + Ogmios"
           else
-            echo "✅ Ogmios is ready - running all tests with Koios + Blockfrost + Ogmios"
+            echo "⚠️ Node not fully synced - running tests with Koios + Blockfrost only"
           fi
 
       # ==========================================
       # Run Tests
       # ==========================================
-      - name: Run tests with coverage (All Backends)
+      - name: Run tests with coverage (Koios + Blockfrost only)
+        if: steps.sync-complete.outputs.complete != 'true'
         env:
           NODE_ENV: test
           NETWORK: 'preview'
-          BACKENDS: ${{ steps.ogmios-ready.outputs.ready == 'true' && 'koios,blockfrost,ogmios' || 'koios,blockfrost' }}
+          BACKENDS: 'koios,blockfrost'
+          BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
+          PRIMARY_TIMEOUT_MS: 8000
+          FALLBACK_TIMEOUT_MS: 8000
+          INDEX_TTL_MS: 60000
+        run: npm run test:ci:coverage
+
+      - name: Run tests with coverage (All Backends including Ogmios)
+        if: steps.sync-complete.outputs.complete == 'true'
+        env:
+          NODE_ENV: test
+          NETWORK: 'preview'
+          BACKENDS: 'koios,blockfrost,ogmios'
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
           OGMIOS_WS_URL: 'ws://localhost:1337'
           PRIMARY_TIMEOUT_MS: 8000
