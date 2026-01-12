@@ -120,9 +120,9 @@ export class OgmiosBackend implements CardanoBackend {
   }
 
   /** 
-   * Get specific Pool Data (not supported for Ogmios)
-   * @param _poolId pool id
-   * @returns {Promise<PoolData>} pool data
+   * Get specific Drep Data (not supported for Ogmios)
+   * @param _drepId drep id
+   * @returns {Promise<DrepData>} drep data
    */
   async getDrep(_drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
@@ -131,7 +131,7 @@ export class OgmiosBackend implements CardanoBackend {
   }
 
   /** 
-   * Get specific Account Data (not supported for Ogmios)
+   * Get specific Network Information
    * @returns {Promise<Network>} network information
    */
   async getNetworkInformation(): Promise<Network> {
@@ -167,7 +167,7 @@ export class OgmiosBackend implements CardanoBackend {
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
 
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
-        const lovelace = u.value?.ada?.lovelace || u.value?.lovelace || '0';
+        const lovelace = u.value?.ada?.lovelace || 0;
         return sum + BigInt(lovelace);
       }, 0n);
 

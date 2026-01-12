@@ -1,7 +1,5 @@
 import { CardanoBackend } from './backends/cardano-backend';
-import { BlockfrostBackend } from './backends/blockfrost-backend';
-import { KoiosBackend } from './backends/koios-backend';
-import { OgmiosBackend } from './backends/ogmios-backend';
+import { BackendRegistry } from './backends/backend-registry';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import logger from '../utils/logger';
 import { CONFIG } from '../../config/config';
@@ -25,6 +23,26 @@ import {
  */
 const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs);
 const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs);
+
+/**
+ * Method routing configuration - defines which backend type to prefer for each method
+ */
+const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
+  getTransaction: { preferLive: false },
+  getAddress: { preferLive: true },
+  getAddressUtxos: { preferLive: true },
+  getNetworkInformation: { preferLive: true },
+  getTransactionMetadata: { preferLive: false },
+  getBlock: { preferLive: false },
+  getEpoch: { preferLive: false },
+  getLatestEpoch: { preferLive: true },
+  getLatestBlock: { preferLive: true },
+  getPool: { preferLive: true },
+  getDrep: { preferLive: false },
+  getAccount: { preferLive: true },
+  getProtocolParameters: { preferLive: true },
+  submitTransaction: { preferLive: true },
+};
 
 /** 
  * CardanoClient - Smart Multi-backend Cardano Client
@@ -153,36 +171,35 @@ export class CardanoClient {
   }
 
   /** 
-   * Execute with live backend first, fallback to historical
-   * Used for queries that prefer live data but can fall back to historical
+   * Execute with priority-based backend selection and automatic fallback
+   * @param fn function to execute on backend
+   * @param preferLive whether to prefer live backend over historical
+   * @returns {Promise<T>} result from backend
    */
-  private async withLiveFirst<T>(
-    fn: (backend: CardanoBackend) => Promise<T>
+  private async executeWithPriority<T>(
+    fn: (backend: CardanoBackend) => Promise<T>,
+    preferLive: boolean
   ): Promise<T> {
     await this.ensureInitialized();
     const errors: BackendError[] = [];
-
-    // Try live backend first
-    if (this.liveBackend) {
+    
+    // Determine backend order based on preference
+    const primaryBackends = preferLive 
+      ? (this.liveBackend ? [this.liveBackend] : [])
+      : this.historicalBackends;
+      
+    const fallbackBackends = preferLive
+      ? this.historicalBackends
+      : (this.liveBackend ? [this.liveBackend] : []);
+    
+    const allBackends = [...primaryBackends, ...fallbackBackends];
+    
+    // Try each backend in order
+    for (const backend of allBackends) {
       try {
-        logger.debug({ backend: this.liveBackend.name }, 'Calling live backend');
-        const result = await this.withTimeout(
-          fn(this.liveBackend),
-          this.getTimeoutForBackend(this.liveBackend),
-          this.liveBackend.name
-        );
-        return result;
-      } catch (err: any) {
-        const backendError = normalizeBackendError(err, this.liveBackend.name);
-        errors.push(backendError);
-        logger.warn({ backend: this.liveBackend.name, error: backendError.message }, 'Live backend failed, trying historical');
-      }
-    }
-
-    // Fallback to historical backends
-    for (const backend of this.historicalBackends) {
-      try {
-        logger.debug({ backend: backend.name }, 'Calling historical backend');
+        const backendType = backend === this.liveBackend ? 'live' : 'historical';
+        logger.debug({ backend: backend.name, type: backendType }, 'Calling backend');
+        
         const result = await this.withTimeout(
           fn(backend),
           this.getTimeoutForBackend(backend),
@@ -193,67 +210,33 @@ export class CardanoClient {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
         
-        if (backendError.statusCode === 404) {
-          logger.debug({ backend: backend.name, error: backendError.message }, 'Backend: resource not found');
-        } else {
-          logger.warn({ backend: backend.name, error: backendError.message }, 'Backend failed');
-        }
+        const logLevel = backendError.statusCode === 404 ? 'debug' : 'warn';
+        logger[logLevel](
+          { backend: backend.name, error: backendError.message }, 
+          `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}`
+        );
       }
     }
-
+    
     throw new AllBackendsFailedError(errors);
   }
 
-  /** 
-   * Execute with historical backend first, fallback to live
-   * Used for historical queries that should prefer historical data sources
+  /**
+   * Route method call to appropriate backend based on method routing configuration
+   * @param methodName name of the method being called
+   * @param fn function to execute on backend
+   * @returns {Promise<T>} result from backend
    */
-  private async withHistoricalFirst<T>(
+  private route<T>(
+    methodName: string,
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
-    await this.ensureInitialized();
-    const errors: BackendError[] = [];
-
-    // Try historical backends first
-    for (const backend of this.historicalBackends) {
-      try {
-        logger.debug({ backend: backend.name }, 'Calling historical backend');
-        const result = await this.withTimeout(
-          fn(backend),
-          this.getTimeoutForBackend(backend),
-          backend.name
-        );
-        return result;
-      } catch (err: any) {
-        const backendError = normalizeBackendError(err, backend.name);
-        errors.push(backendError);
-        
-        if (backendError.statusCode === 404) {
-          logger.debug({ backend: backend.name, error: backendError.message }, 'Backend: resource not found');
-        } else {
-          logger.warn({ backend: backend.name, error: backendError.message }, 'Backend failed');
-        }
-      }
+    const config = METHOD_ROUTING[methodName];
+    if (!config) {
+      logger.warn({ methodName }, 'No routing config found, defaulting to live-first');
+      return this.executeWithPriority(fn, true);
     }
-
-    // Fallback to live backend
-    if (this.liveBackend) {
-      try {
-        logger.debug({ backend: this.liveBackend.name }, 'Calling live backend as fallback');
-        const result = await this.withTimeout(
-          fn(this.liveBackend),
-          this.getTimeoutForBackend(this.liveBackend),
-          this.liveBackend.name
-        );
-        return result;
-      } catch (err: any) {
-        const backendError = normalizeBackendError(err, this.liveBackend.name);
-        errors.push(backendError);
-        logger.warn({ backend: this.liveBackend.name, error: backendError.message }, 'Live backend failed');
-      }
-    }
-
-    throw new AllBackendsFailedError(errors);
+    return this.executeWithPriority(fn, config.preferLive);
   }
 
   /** 
@@ -262,7 +245,7 @@ export class CardanoClient {
    * @returns {Promise<Transaction>} transaction data
    */
   getTransaction(txHash: string): Promise<Transaction> {
-    return this.withHistoricalFirst(b => b.getTransaction(txHash));
+    return this.route('getTransaction', b => b.getTransaction(txHash));
   }
   
   /** 
@@ -271,7 +254,7 @@ export class CardanoClient {
    * @returns {Promise<Address>} address data
    */
   getAddress(address: string): Promise<Address> {
-    return this.withLiveFirst(b => b.getAddress(address));
+    return this.route('getAddress', b => b.getAddress(address));
   }
 
   /** 
@@ -280,7 +263,7 @@ export class CardanoClient {
    * @returns {Promise<UTxO[]>} list of UTxOs
    */
   getAddressUtxos(address: string): Promise<UTxO[]> {
-    return this.withLiveFirst(b => b.getAddressUtxos(address));
+    return this.route('getAddressUtxos', b => b.getAddressUtxos(address));
   }
 
   /** 
@@ -288,7 +271,7 @@ export class CardanoClient {
    * @returns {Promise<Network>} network information
    */
   getNetworkInformation(): Promise<Network> {
-    return this.withLiveFirst(b => b.getNetworkInformation());
+    return this.route('getNetworkInformation', b => b.getNetworkInformation());
   }
 
   /** 
@@ -297,7 +280,7 @@ export class CardanoClient {
    * @returns {Promise<MetadataLabelTx[]>} transaction metadata
    */
   getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
-    return this.withHistoricalFirst(b => b.getTransactionMetadata(tx_hash));
+    return this.route('getTransactionMetadata', b => b.getTransactionMetadata(tx_hash));
   }
 
   /** 
@@ -306,7 +289,7 @@ export class CardanoClient {
    * @returns {Promise<BlockData>} block data
    */
   getBlock(block_hash: string): Promise<BlockData> {
-    return this.withHistoricalFirst(b => b.getBlock(block_hash));
+    return this.route('getBlock', b => b.getBlock(block_hash));
   }
 
   /** 
@@ -315,7 +298,7 @@ export class CardanoClient {
    * @returns {Promise<EpochData>} epoch data
    */
   getEpoch(epochNumber: number): Promise<EpochData> {
-    return this.withHistoricalFirst(b => b.getEpoch(epochNumber));
+    return this.route('getEpoch', b => b.getEpoch(epochNumber));
   }
 
   /** 
@@ -324,7 +307,7 @@ export class CardanoClient {
    * @returns {Promise<PoolData>} pool data
    */
   getPool(poolId: string): Promise<PoolData> {
-    return this.withLiveFirst(b => b.getPool(poolId));
+    return this.route('getPool', b => b.getPool(poolId));
   }
 
   /** 
@@ -333,7 +316,7 @@ export class CardanoClient {
    * @returns {Promise<DrepData>} drep data
    */
   getDrep(drepId: string): Promise<DrepData> {
-    return this.withHistoricalFirst(b => b.getDrep(drepId));
+    return this.route('getDrep', b => b.getDrep(drepId));
   }
 
   /** 
@@ -342,7 +325,7 @@ export class CardanoClient {
    * @returns {Promise<AccountData>} account data
    */
   getAccount(stakeAddress: string): Promise<AccountData> {
-    return this.withLiveFirst(b => b.getAccount(stakeAddress));
+    return this.route('getAccount', b => b.getAccount(stakeAddress));
   }
 
   /** 
@@ -350,7 +333,7 @@ export class CardanoClient {
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
    */
   getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    return this.withLiveFirst(b => b.getProtocolParameters());
+    return this.route('getProtocolParameters', b => b.getProtocolParameters());
   }
 
   /** 
@@ -358,7 +341,7 @@ export class CardanoClient {
    * @returns {Promise<BlockData>} latest block data
    */
   getLatestBlock(): Promise<BlockData> {
-    return this.withLiveFirst(b => b.getLatestBlock());
+    return this.route('getLatestBlock', b => b.getLatestBlock());
   }
 
   /** 
@@ -366,7 +349,7 @@ export class CardanoClient {
    * @returns {Promise<EpochData>} latest epoch data
    */
   getLatestEpoch(): Promise<EpochData> {
-    return this.withLiveFirst(b => b.getLatestEpoch());
+    return this.route('getLatestEpoch', b => b.getLatestEpoch());
   }
 
   /** 
@@ -375,87 +358,65 @@ export class CardanoClient {
    * @returns {Promise<string>} transaction hash
    */
   submitTransaction(signedTxCbor: string): Promise<string> {
-    return this.withLiveFirst(b => b.submitTransaction(signedTxCbor));
+    return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
   }
 }
 
-/** 
- * CardanoClient singleton instance using configured backends
+/**
+ * CardanoClientFactory - Factory for creating CardanoClient instances
  */
-let liveBackend: CardanoBackend | undefined;
-const historicalBackends: CardanoBackend[] = [];
+export class CardanoClientFactory {
+  /**
+   * Create CardanoClient instance from configuration
+   * @returns {CardanoClient} configured client instance
+   */
+  static createFromConfig(): CardanoClient {
+    const liveBackend = BackendRegistry.createLiveBackend();
+    const historicalBackends = BackendRegistry.createHistoricalBackends();
+    
+    return new CardanoClient(liveBackend, historicalBackends);
+  }
 
-// Build backends based on configuration
-const configuredBackends = CONFIG.backends;
+  /**
+   * Create CardanoClient instance for specified backends (used in tests)
+   * @param backendNames list of backend names
+   * @returns {CardanoClient} CardanoClient instance
+   */
+  static createForBackends(backendNames: string[]): CardanoClient {
+    let testLiveBackend: CardanoBackend | undefined;
+    const testHistoricalBackends: CardanoBackend[] = [];
 
-// Check if we should use Ogmios (either explicitly or via 'hybrid')
-if (configuredBackends.includes('ogmios') || configuredBackends.includes('hybrid')) {
-  logger.info('[CardanoClient] Configuring Ogmios as live backend');
-  liveBackend = new OgmiosBackend();
-}
+    for (const backendName of backendNames) {
+      if (backendName === 'ogmios') {
+        testLiveBackend = BackendRegistry.create('ogmios');
+      }
+      
+      if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
+        testHistoricalBackends.push(BackendRegistry.create('blockfrost'));
+      }
+      
+      if (backendName === 'koios') {
+        // Koios doesn't require an API key (optional)
+        testHistoricalBackends.push(BackendRegistry.create('koios'));
+      }
+    }
 
-// Check for historical backends (Blockfrost or Koios)
-if (configuredBackends.includes('blockfrost') || 
-    (configuredBackends.includes('hybrid') && CONFIG.blockfrostApiKey)) {
-  if (CONFIG.blockfrostApiKey) {
-    logger.info('[CardanoClient] Adding Blockfrost as historical backend');
-    historicalBackends.push(new BlockfrostBackend());
-  } else {
-    logger.warn('[CardanoClient] Blockfrost configured but no API key found');
+    if (!testLiveBackend && testHistoricalBackends.length === 0) {
+      throw new ConfigError(`No valid backends configured: ${backendNames.join(',')}`);
+    }
+
+    return new CardanoClient(testLiveBackend, testHistoricalBackends);
   }
 }
 
-if (configuredBackends.includes('koios') || 
-    (configuredBackends.includes('hybrid') && CONFIG.koiosApiKey && !CONFIG.blockfrostApiKey)) {
-  logger.info('[CardanoClient] Adding Koios as historical backend');
-  historicalBackends.push(new KoiosBackend());
-}
-
-// Fallback: if no backends configured, use defaults based on available API keys
-if (!liveBackend && historicalBackends.length === 0) {
-  logger.warn('[CardanoClient] No backends explicitly configured, using defaults based on API keys');
-  
-  if (CONFIG.blockfrostApiKey) {
-    logger.info('[CardanoClient] Using Blockfrost as default backend');
-    historicalBackends.push(new BlockfrostBackend());
-  } else {
-    logger.info('[CardanoClient] Using Koios as default backend');
-    historicalBackends.push(new KoiosBackend());
-  }
+/**
+ * Legacy function for backward compatibility (used in tests)
+ * @deprecated Use CardanoClientFactory.createForBackends() instead
+ */
+export function createCardanoClientForBackends(backendNames: string[]): CardanoClient {
+  return CardanoClientFactory.createForBackends(backendNames);
 }
 
 /** CardanoClient exported singleton instance */
-export const cardanoClient = new CardanoClient(liveBackend, historicalBackends);
+export const cardanoClient = CardanoClientFactory.createFromConfig();
 export default cardanoClient;
-
-
-/** Create a CardanoClient instance for specified backends (used in tests)
- * @param backendNames list of backend names
- * @returns {CardanoClient} CardanoClient instance
- */
-export function createCardanoClientForBackends(backendNames: string[]): CardanoClient {
-  let testLiveBackend: CardanoBackend | undefined;
-  const testHistoricalBackends: CardanoBackend[] = [];
-
-  for (const backendName of backendNames) {
-    if (backendName === 'ogmios' || backendName === 'hybrid') {
-      testLiveBackend = new OgmiosBackend();
-    }
-    
-    if (backendName === 'blockfrost' || (backendName === 'hybrid' && CONFIG.blockfrostApiKey)) {
-      if (CONFIG.blockfrostApiKey) {
-        testHistoricalBackends.push(new BlockfrostBackend());
-      }
-    }
-    
-    if (backendName === 'koios' || (backendName === 'hybrid' && CONFIG.koiosApiKey && !CONFIG.blockfrostApiKey)) {
-      testHistoricalBackends.push(new KoiosBackend());
-    }
-  }
-
-  if (!testLiveBackend && testHistoricalBackends.length === 0) {
-    throw new ConfigError(`No valid backends configured: ${backendNames.join(',')}`);
-  }
-
-  return new CardanoClient(testLiveBackend, testHistoricalBackends);
-}

@@ -265,7 +265,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 6: Unknown/network errors → treat as unavailable
+  // Priority 6: Unknown/network errors → treat as unavailable (default fallback)
   return new ProviderUnavailableError(
     message || 'Unknown backend error',
     backendName,

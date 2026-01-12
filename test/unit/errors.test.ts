@@ -318,6 +318,16 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
 
+    it('should convert plain 404 status to NotFoundError (Priority 3 - exact 404 not caught earlier)', () => {
+      const error = { status: 404, message: 'Error occurred' };
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result.statusCode).toBe(404);
+      expect(result.code).toBe(ERROR_CODES.NOT_FOUND);
+      expect(result).toBeInstanceOf(NotFoundError);
+      expect(result.backendName).toBe('blockfrost');
+    });
+
     it('should convert 5xx error to 503 ProviderUnavailableError', () => {
       const error = { status: 500, message: 'Server error' };
       const result = normalizeBackendError(error, 'blockfrost');
@@ -389,6 +399,17 @@ describe('Error Classes', () => {
       // Unknown errors get status 500 from getErrorStatus, which triggers >= 500 path → 503
       expect(result.statusCode).toBe(503);
       expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+    });
+
+    it('should convert error without status to ProviderUnavailable (Priority 6 - unknown/network error)', () => {
+      const error = { message: 'Something went wrong', someProperty: 'value' };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.backendName).toBe('koios');
+      expect(result.message).toContain('Something went wrong');
     });
 
     it('should preserve original error', () => {

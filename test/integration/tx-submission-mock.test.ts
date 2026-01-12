@@ -130,5 +130,23 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       expect(submitResponse.data.submissionRecord.build_id).to.equal(mockBuildId);
       expect(scope.isDone()).to.be.true;
     });
+
+    it('getLatestBlock - should throw NotFoundError when /tip returns null', async () => {
+      // Mock Koios /tip endpoint to return null data (empty array simulates no data)
+      const scope = nock('https://preview.koios.rest')
+        .get('/api/v1/tip')
+        .reply(200, []);
+
+      // Attempt to get the latest block via GetLatestBlock action
+      try {
+        await test.post('/odata/v4/cardano-odata/GetLatestBlock', {});
+        expect.fail('Should have thrown an error');
+      } catch (error: any) {
+        // Should receive a 404 error for not found
+        expect(error.response.status).to.equal(404);
+        expect(error.response.data.error.message).to.include('Latest Block not found');
+      }
+      expect(scope.isDone()).to.be.true;
+    });
   });
 });

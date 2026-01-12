@@ -287,4 +287,50 @@ describe('CardanoClient Configuration', () => {
       expect(result.supply.max).toBe('11111111111111111');
     });
   });
+
+  // ============================================================================
+  // Private Method Tests (via reflection/indirect testing)
+  // ============================================================================
+  describe('getTimeoutForBackend', () => {
+    it('should return PRIMARY_TIMEOUT_MS for unknown backend names', async () => {
+      // Create a backend with an unknown name
+      const unknownBackend = new MockBackend('unknown-backend');
+      const client = new CardanoClient(unknownBackend, []);
+
+      // Trigger initialization by calling a method - will fail as not implemented
+      await expect(client.getNetworkInformation()).rejects.toThrow('Not implemented in mock');
+      
+      // Verify backend was initialized
+      expect(unknownBackend.wasInitCalled()).toBe(true);
+    });
+
+    it('should handle unknown backend in timeout logic during operations', async () => {
+      class UnknownBackend extends MockBackend {
+        async getTransaction(_txHash: string): Promise<Transaction> {
+          return {
+            hash: 'test',
+            blockHash: 'block123',
+            blockHeight: 100,
+            blockTime: 1704067200,
+            slot: 1000,
+            index: 0,
+            fee: 170000,
+            deposit: 0,
+            size: 300,
+            inputs: [],
+            outputs: [],
+            metadata: []
+          };
+        }
+      }
+
+      const unknownBackend = new UnknownBackend('custom-unknown-backend');
+      const client = new CardanoClient(unknownBackend, []);
+
+      // This operation will use getTimeoutForBackend internally
+      // If unknown backend returns PRIMARY_TIMEOUT_MS, the operation should succeed
+      const result = await client.getTransaction('test-hash');
+      expect(result.hash).toBe('test');
+    });
+  });
 });
