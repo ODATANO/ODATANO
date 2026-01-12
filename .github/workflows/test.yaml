@@ -32,16 +32,12 @@ jobs:
       # ==========================================
       # Cardano Node DB Cache (Sync-Workflow)
       # ==========================================
-      - name: Get current date for cache key
-        id: date
-        run: echo "timestamp=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
       - name: Restore Cardano Node DB Cache
         id: cache-cardano
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date.outputs.timestamp }}
+          key: cardano-node-preview-latest
           restore-keys: |
             cardano-node-preview-
 
@@ -161,7 +157,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Waiting for Cardano Node to be fully synchronized..."
-          MAX_WAIT=1800  # 30 minutes max
+          MAX_WAIT=3800  # Max wait time in seconds (e.g., ~1.5 hours)
           ELAPSED=0
           
           while [ $ELAPSED -lt $MAX_WAIT ]; do
@@ -239,12 +235,20 @@ jobs:
           docker stop cardano-node-preview || true
         continue-on-error: true
 
+      - name: Delete old cache
+        if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache delete cardano-node-preview-latest || echo "No old cache to delete"
+
       - name: Save Cardano Node DB Cache
         if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-${{ steps.date.outputs.timestamp }}
+          key: cardano-node-preview-latest
 
       # ==========================================
       # Cleanup & Upload Coverage

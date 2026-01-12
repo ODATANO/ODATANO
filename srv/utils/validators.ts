@@ -56,7 +56,10 @@ function safeTrimString(s: unknown): string | null {
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
   try {
     const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
+    if (allowedHrp.includes(decoded.prefix)) {
       return { prefix: decoded.prefix, words: decoded.words };
+    }
+    return null;
   } catch {
     return null;
   }
