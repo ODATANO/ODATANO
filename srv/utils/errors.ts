@@ -189,6 +189,18 @@ export function normalizeBackendError(
   // Already normalized
   if (err instanceof BackendError) return err;
 
+  // Check for uninitialized backend client (TypeError from accessing null/undefined)
+  if (err instanceof TypeError && 
+      (err.message.includes('Cannot read properties of null') || 
+       err.message.includes('Cannot read properties of undefined') ||
+       err.message.includes('null is not an object') ||
+       err.message.includes('undefined is not an object'))) {
+    return new BackendInitError(
+      backendName || 'unknown',
+      new Error('Backend client not initialized - call init() first')
+    );
+  }
+
   const message = getErrorMessage(err);
   const status = getErrorStatus(err);
   const messageLower = message.toLowerCase();
@@ -277,12 +289,18 @@ export class ConfigError extends Error {
  * BackendInitError - Error initializing a specific backend
  * Captures backend name and original error
  */
-export class BackendInitError extends Error {
+export class BackendInitError extends BackendError {
   constructor(
-    public readonly backendName: String,
-    public readonly originalError: unknown
+    backendName: string,
+    originalError: unknown
   ) {
-    super(`Failed to initialize backend: ${backendName}`);
+    super(
+      `Failed to initialize backend: ${backendName}`,
+      500,
+      ERROR_CODES.INTERNAL_ERROR,
+      backendName,
+      originalError
+    );
     this.name = 'BackendInitError';
   }
 }

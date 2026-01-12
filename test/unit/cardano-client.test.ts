@@ -97,26 +97,33 @@ describe('CardanoClient Configuration', () => {
   // ============================================================================
   describe('Constructor', () => {
     it('should throw ConfigError when no backends provided', () => {
-      expect(() => new CardanoClient([])).toThrow(ConfigError);
-      expect(() => new CardanoClient([])).toThrow('no backend available');
+      expect(() => new CardanoClient(undefined, [])).toThrow(ConfigError);
+      expect(() => new CardanoClient(undefined, [])).toThrow('no backend available');
     });
 
-    it('should throw ConfigError when backends array is null/undefined', () => {
-      expect(() => new CardanoClient(null as any)).toThrow(ConfigError);
-      expect(() => new CardanoClient(undefined as any)).toThrow(ConfigError);
+    it('should accept only live backend', () => {
+      const liveBackend = new MockBackend('ogmios');
+      expect(() => new CardanoClient(liveBackend, [])).not.toThrow();
     });
 
-    it('should accept valid backends array', () => {
-      const backend = new MockBackend('test-backend');
-      expect(() => new CardanoClient([backend])).not.toThrow();
+    it('should accept only historical backends', () => {
+      const historical = [new MockBackend('blockfrost')];
+      expect(() => new CardanoClient(undefined, historical)).not.toThrow();
     });
 
-    it('should accept multiple backends', () => {
-      const backends = [
-        new MockBackend('backend1'),
-        new MockBackend('backend2'),
+    it('should accept both live and historical backends', () => {
+      const liveBackend = new MockBackend('ogmios');
+      const historical = [new MockBackend('blockfrost')];
+      expect(() => new CardanoClient(liveBackend, historical)).not.toThrow();
+    });
+
+    it('should accept multiple historical backends', () => {
+      const liveBackend = new MockBackend('ogmios');
+      const historical = [
+        new MockBackend('blockfrost'),
+        new MockBackend('koios'),
       ];
-      expect(() => new CardanoClient(backends)).not.toThrow();
+      expect(() => new CardanoClient(liveBackend, historical)).not.toThrow();
     });
   });
 
@@ -125,48 +132,47 @@ describe('CardanoClient Configuration', () => {
   // ============================================================================
   describe('Backend Initialization', () => {
     it('should initialize all backends on first call', async () => {
-      const backend1 = new MockBackend('backend1');
-      const backend2 = new MockBackend('backend2');
-      const client = new CardanoClient([backend1, backend2]);
+      const live = new MockBackend('ogmios');
+      const hist = new MockBackend('blockfrost');
+      const client = new CardanoClient(live, [hist]);
 
       // Trigger initialization via getNetworkInformation (will fail but init should happen)
       await expect(client.getNetworkInformation()).rejects.toThrow();
 
-      expect(backend1.wasInitCalled()).toBe(true);
-      expect(backend2.wasInitCalled()).toBe(true);
+      expect(live.wasInitCalled()).toBe(true);
+      expect(hist.wasInitCalled()).toBe(true);
     });
 
     it('should throw AllBackendsInitFailedError when all backends fail to init', async () => {
-      const backend1 = new MockBackend('backend1', true);
-      const backend2 = new MockBackend('backend2', true);
-      const client = new CardanoClient([backend1, backend2]);
+      const live = new MockBackend('ogmios', true);
+      const hist = new MockBackend('blockfrost', true);
+      const client = new CardanoClient(live, [hist]);
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
     });
 
     it('should continue with working backends when some fail to init', async () => {
-      const failingBackend = new MockBackend('failing', true);
-      const workingBackend = new MockBackend('working', false);
-      const client = new CardanoClient([failingBackend, workingBackend]);
+      const failingLive = new MockBackend('ogmios', true);
+      const workingHist = new MockBackend('blockfrost', false);
+      const client = new CardanoClient(failingLive, [workingHist]);
 
-      // Trigger init - should not throw because workingBackend succeeds
+      // Trigger init - should not throw because historical backend succeeds
       await expect(client.getNetworkInformation()).rejects.toThrow('Not implemented in mock');
 
-      expect(failingBackend.wasInitCalled()).toBe(true);
-      expect(workingBackend.wasInitCalled()).toBe(true);
+      expect(failingLive.wasInitCalled()).toBe(true);
+      expect(workingHist.wasInitCalled()).toBe(true);
     });
 
     it('should only initialize once', async () => {
-      const backend = new MockBackend('backend');
-      const client = new CardanoClient([backend]);
+      const live = new MockBackend('ogmios');
+      const client = new CardanoClient(live, []);
 
       // Call multiple times
       await expect(client.getNetworkInformation()).rejects.toThrow();
       await expect(client.getNetworkInformation()).rejects.toThrow();
 
-      // Init should only be called once (we can't test this directly with current mock,
-      // but we verify it doesn't throw on second call)
-      expect(backend.wasInitCalled()).toBe(true);
+      // Init should only be called once
+      expect(live.wasInitCalled()).toBe(true);
     });
   });
 
@@ -195,13 +201,13 @@ describe('CardanoClient Configuration', () => {
   });
 
   // ============================================================================
-  // Fallback Mechanism
+  // Fallback Mechanism  
   // ============================================================================
   describe('Fallback Mechanism', () => {
-    it('should try second backend when first fails', async () => {
+    it('should try historical backend when live fails for live-first query', async () => {
       class FailingBackend extends MockBackend {
         async getNetworkInformation(): Promise<Network> {
-          throw new Error('First backend failed');
+          throw new Error('Live backend failed');
         }
       }
 
@@ -224,9 +230,9 @@ describe('CardanoClient Configuration', () => {
         }
       }
 
-      const failingBackend = new FailingBackend('failing');
-      const workingBackend = new WorkingBackend('working');
-      const client = new CardanoClient([failingBackend, workingBackend]);
+      const failingLive = new FailingBackend('ogmios');
+      const workingHist = new WorkingBackend('blockfrost');
+      const client = new CardanoClient(failingLive, [workingHist]);
 
       const result = await client.getNetworkInformation();
       expect(result.supply.max).toBe('45000000000000000');
@@ -239,15 +245,15 @@ describe('CardanoClient Configuration', () => {
         }
       }
 
-      const backend1 = new FailingBackend('backend1');
-      const backend2 = new FailingBackend('backend2');
-      const client = new CardanoClient([backend1, backend2]);
+      const live = new FailingBackend('ogmios');
+      const hist = new FailingBackend('blockfrost');
+      const client = new CardanoClient(live, [hist]);
 
       await expect(client.getNetworkInformation()).rejects.toThrow('All backends failed');
     });
 
-    it('should use first successful backend result', async () => {
-      class FastBackend extends MockBackend {
+    it('should use live backend first for live-first queries', async () => {
+      class FastLive extends MockBackend {
         async getNetworkInformation(): Promise<Network> {
           return {
             supply: {
@@ -266,16 +272,16 @@ describe('CardanoClient Configuration', () => {
         }
       }
 
-      class SlowBackend extends MockBackend {
+      class HistoricalBackend extends MockBackend {
         async getNetworkInformation(): Promise<Network> {
-          // This should never be called because first backend succeeds
+          // This should never be called because live backend succeeds
           throw new Error('Should not be called');
         }
       }
 
-      const fastBackend = new FastBackend('fast');
-      const slowBackend = new SlowBackend('slow');
-      const client = new CardanoClient([fastBackend, slowBackend]);
+      const live = new FastLive('ogmios');
+      const hist = new HistoricalBackend('blockfrost');
+      const client = new CardanoClient(live, [hist]);
 
       const result = await client.getNetworkInformation();
       expect(result.supply.max).toBe('11111111111111111');

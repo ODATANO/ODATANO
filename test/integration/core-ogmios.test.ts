@@ -10,13 +10,20 @@ jest.setTimeout(20000);
  * NOTE: These tests require a running Ogmios instance at OGMIOS_WS_URL (default: ws://localhost:1337)
  */
 
+// Test data fixtures for preview network  
+  const OGMIOS_FIXTURE = {
+    network: 'preview',
+    addressWithFunds: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
+    addressWithAssets: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae',
+    emptyAddress: 'addr_test1vr8nl4u0u6fmtfnawx2rxfz95dy7m46t6dhzdftp2uha87syeufdg',
+    stakeAddress: 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p',
+    poolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
+  };
 
-// Configure environment to use only Ogmios backend
+// configure environment to use only Ogmios backend
 process.env.BACKENDS = 'ogmios';
 
 process.env.OGMIOS_WS_URL = process.env.OGMIOS_WS_URL || 'ws://localhost:1337';
-
-// Import and run the shared test suite
 
 describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
@@ -81,21 +88,9 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(response.data).to.have.property('error');
     });
 
-    
-
   });
 
-  // Test data fixtures for preview network  
-  const OGMIOS_FIXTURE = {
-    network: 'preview',
-    addressWithFunds: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
-    addressWithAssets: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae',
-    emptyAddress: 'addr_test1vr8nl4u0u6fmtfnawx2rxfz95dy7m46t6dhzdftp2uha87syeufdg',
-    stakeAddress: 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p',
-    poolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
-  };
-
-  describe('Ogmios Backend - Real Coverage Tests', () => {
+  describe('Ogmios Backend - Gernal Data Conversion Tests', () => {
     
     // Test convertOgmiosValue() with different UTxO types
     it('POST /GetUTxOsByAddress - verify convertOgmiosValue handles lovelace-only UTxOs', async () => {
@@ -187,12 +182,10 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(maxSupply).to.equal('45000000000000000');
     });
 
-    // Test current epoch query (getEpoch for current epoch should work)
+    // Test current epoch query
     it('POST /GetEpochByNumber - current epoch should succeed', async () => {
-      // First get current epoch
+      // first get current epoch
       const { data: latestEpoch } = await POST('/odata/v4/cardano-odata/GetLatestEpoch', {});
-      
-      // Query that same epoch
       const requestBody = {
         epochNumber: latestEpoch.epoch
       };
@@ -203,7 +196,6 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
     // Test empty address (should return empty array, not error)
     it('POST /GetUTxOsByAddress - handle address with no UTxOs', async () => {
-      // Use the OGMIOS_FIXTURE emptyAddress which is valid bech32
       const requestBody = {
         address: OGMIOS_FIXTURE.emptyAddress
       };
@@ -258,8 +250,6 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(data.startTime).to.be.a('number');
       expect(data.endTime).to.be.a('number');
       expect(data.endTime).to.be.greaterThan(data.startTime);
-      
-      // Epoch duration should be reasonable (approx 5 days = 432000 seconds)
       const duration = data.endTime - data.startTime;
       expect(duration).to.be.greaterThan(400000); // At least close to expected duration
     });

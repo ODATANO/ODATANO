@@ -42,7 +42,7 @@ describe('BlockfrostBackend constructor Error Test', () => {
   });
 });
 
-describe('BlockfrostBackend submitTransaction', () => {
+describe('BlockfrostBackend submitTransaction mock test', () => {
   it('should submit a transaction and return the transaction hash', async () => {
     const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
     const mockTxSubmit = jest.fn().mockResolvedValue(mockTxHash);

@@ -83,17 +83,9 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
-      }
-
       // Get current epoch from ledgerTip
-      const tip = await this.stateQueryClient.ledgerTip();
-      if (tip === 'origin') {
-        throw new NotFoundError('Epoch', this.name);
-      }
-
-      const currentEpoch = Math.floor((tip.slot || 0) / 432000);
+      const tip = await this.stateQueryClient!.ledgerTip();
+      const currentEpoch = tip === 'origin' ? 0 : Math.floor((tip.slot || 0) / 432000);
 
       // Ogmios only supports current epoch queries
       if (epochNumber !== currentEpoch) {
@@ -144,9 +136,6 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
       // Using hardcoded max supply for Cardano mainnet
       const maxSupply = '45000000000000000';
 
@@ -174,12 +163,8 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
-
       // Query UTxOs without acquiring specific ledger state
-      const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
+      const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
 
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
         const lovelace = u.value?.ada?.lovelace || u.value?.lovelace || '0';
@@ -217,12 +202,7 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
-
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
-
-      const utxos = await this.stateQueryClient.utxo({ addresses: [address] });
+      const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
 
       return utxos.map((u: any) => {
         // convert Ogmios value format to standard amount array
@@ -248,12 +228,9 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
-      await this.stateQueryClient.acquireLedgerState('origin');
-      const pools = await this.stateQueryClient.stakePools([{ id: poolId }]) as any;
-      await this.stateQueryClient.releaseLedgerState();
+      await this.stateQueryClient!.acquireLedgerState('origin');
+      const pools = await this.stateQueryClient!.stakePools([{ id: poolId }]) as any;
+      await this.stateQueryClient!.releaseLedgerState();
 
       // Extract pool from response (can be array or object)
       const pool = Array.isArray(pools) ? pools[0] : pools;
@@ -285,12 +262,9 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new Error('Ogmios state query client not initialized');
-      }
-      await this.stateQueryClient.acquireLedgerState('origin');
-      const state = await this.stateQueryClient.rewardAccountSummaries({ keys: [stakeAddress] }) as any;
-      await this.stateQueryClient.releaseLedgerState();
+      await this.stateQueryClient!.acquireLedgerState('origin');
+      const state = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] }) as any;
+      await this.stateQueryClient!.releaseLedgerState();
 
       const account = state ? state[stakeAddress] : null;
       if (!account) throw new NotFoundError('Account', this.name);
@@ -318,13 +292,8 @@ export class OgmiosBackend implements CardanoBackend {
    * @returns {Promise<string>} transaction hash
    */
   async submitTransaction(signedTxCbor: string): Promise<string> {
-
     return handleBackendRequest(async () => {
-      if (!this.txSubmissionClient) {
-        throw new Error('Ogmios transaction submission client not initialized');
-      }
-
-      const txHash = await this.txSubmissionClient.submitTransaction(signedTxCbor);
+      const txHash = await this.txSubmissionClient!.submitTransaction(signedTxCbor);
       return txHash;
     }, this.name);
   }
@@ -335,12 +304,8 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
-      }
-
-      const params = await this.stateQueryClient.protocolParameters();
-      const tip = await this.stateQueryClient.ledgerTip();
+      const params = await this.stateQueryClient!.protocolParameters();
+      const tip = await this.stateQueryClient!.ledgerTip();
 
       // Calculate current epoch from tip
       const currentEpoch = tip !== 'origin' && tip.slot ? Math.floor(tip.slot / 432000) : 0;
@@ -390,18 +355,8 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
-      }
-
-      const tip = await this.stateQueryClient.ledgerTip();
-
-      // Handle Point | "origin" type
-      if (tip === 'origin') {
-        throw new NotFoundError('Latest epoch', this.name);
-      }
-
-      const slot = tip.slot || 0;
+      const tip = await this.stateQueryClient!.ledgerTip();
+      const slot = tip === 'origin' ? 0 : (tip.slot || 0);
       const epoch = Math.floor(slot / 432000);
 
       // Calculate epoch boundaries (approximation)
@@ -433,36 +388,42 @@ export class OgmiosBackend implements CardanoBackend {
    */
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(async () => {
-      if (!this.stateQueryClient) {
-        throw new BackendInitError('ogmios', new Error('State query client not initialized'));
-      }
+      // Fetch ledger tip and block height in parallel for efficiency
+      const [tip, blockHeight] = await Promise.all([
+        this.stateQueryClient!.ledgerTip(),
+        this.stateQueryClient!.networkBlockHeight()
+      ]);
 
-      const tip = await this.stateQueryClient.ledgerTip();
-
-      // Handle Point | "origin" type
-      if (tip === 'origin') {
-        throw new NotFoundError('Latest block', this.name);
-      }
-
-      const slot = tip.slot || 0;
-      const blockHeight = await this.stateQueryClient.networkBlockHeight();
+      // Handle genesis case with defaults (practically never occurs in production)
+      const slot = tip === 'origin' ? 0 : (tip.slot || 0);
+      const hash = tip === 'origin' ? '' : (tip.id || '');
       const height = blockHeight === 'origin' ? 0 : (blockHeight || 0);
 
-      // Calculate epoch from slot (432000 slots per epoch on mainnet)
-      const epoch = Math.floor(slot / 432000);
-      const epochSlot = slot % 432000;
+      // Network-specific configuration for accurate time calculation
+      // Shelley era start: mainnet = 1596491091 (slot 4492800), preview/preprod vary
+      const SHELLEY_START_TIME = CONFIG.network === 'mainnet' ? 1596491091 : 1666656000; // Fallback for testnets
+      const SHELLEY_START_SLOT = CONFIG.network === 'mainnet' ? 4492800 : 0;
+      const SLOT_LENGTH = 1; // 1 second per slot in Shelley era
+
+      // Calculate actual block time based on slot number
+      const blockTime = SHELLEY_START_TIME + ((slot - SHELLEY_START_SLOT) * SLOT_LENGTH);
+
+      // Calculate epoch and slot within epoch
+      const SLOTS_PER_EPOCH = 432000; // Standard for mainnet and most testnets
+      const epoch = Math.floor(slot / SLOTS_PER_EPOCH);
+      const epochSlot = slot % SLOTS_PER_EPOCH;
 
       return {
-        time: Date.now(), // Use current timestamp as approximation
+        time: blockTime * 1000, // Convert to milliseconds
         height,
-        hash: tip.id || '',
+        hash,
         slot,
         epoch,
         epochSlot,
-        slotLeader: '', // Ogmios doesn't provide this via ledgerTip
-        size: 0, // Not available from ledgerTip
-        txCount: 0, // Not available from ledgerTip
-        fees: '0',
+        slotLeader: '', // Not available via ledgerTip - would need blockQuery
+        size: 0, // Not available via ledgerTip - would need full block data
+        txCount: 0, // Not available via ledgerTip - would need full block data
+        fees: '0', // Not available via ledgerTip - would need full block data
       };
     }, this.name);
   }

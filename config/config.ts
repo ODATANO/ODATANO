@@ -30,7 +30,14 @@ const VALIDITY_VARIANTS = {
 }
 /**
  * Parse available backends from BACKENDS environment variable
- * Format: "blockfrost,koios" or "hybrid" or single backend
+ * 
+ * Supported configurations:
+ * - "hybrid" (default): Ogmios for live + Blockfrost/Koios for historical
+ * - "ogmios": Only Ogmios (historical queries may fail)
+ * - "blockfrost": Only Blockfrost
+ * - "koios": Only Koios  
+ * - "ogmios,blockfrost": Ogmios + Blockfrost with fallback
+ * - "blockfrost,koios": Blockfrost + Koios with fallback
  */
 function parseAvailableBackends(): BackendName[] {
   const backendsEnv = process.env.BACKENDS || 'hybrid';
@@ -39,8 +46,8 @@ function parseAvailableBackends(): BackendName[] {
     .map(b => b.trim().toLowerCase() as BackendName)
     .filter((b): b is BackendName => ['ogmios','blockfrost', 'koios', 'hybrid'].includes(b));
   
-  // default to Koios if none valid backends found
-  return available.length > 0 ? available : ['koios'];
+  // default to hybrid (Ogmios + historical fallback) if no valid backends found
+  return available.length > 0 ? available : ['hybrid'];
 }
 
 export const CONFIG = {

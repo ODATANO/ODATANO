@@ -213,7 +213,7 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
   const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + MAX_AGE_MS).toISOString();
   const totalLovelace = Array.isArray(addressData.amount)
-    ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity || 0)
+    ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity)
     : 0;
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
@@ -246,7 +246,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
   );
   const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
     if (!Array.isArray(utxo.amount)) return sum;
-    const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity || 0);
+    const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity);
     return sum + lovelaceAmount;
   }, 0);
 

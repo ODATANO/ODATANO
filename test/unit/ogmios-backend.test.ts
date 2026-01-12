@@ -236,7 +236,7 @@ describe('OgmiosBackend', () => {
 
       await expect(
         backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr')
-      ).rejects.toThrow('Ogmios state query client not initialized');
+      ).rejects.toThrow('Failed to initialize backend: ogmios');
     });
 
     it('should handle account with no delegation or drep', async () => {
