@@ -31,7 +31,7 @@ jobs:
         restore-keys: |
           cardano-node-ogmios-${{ matrix.network }}
 
-    - uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e5
+    - uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
       with:
         db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
         network: ${{ matrix.network }}
