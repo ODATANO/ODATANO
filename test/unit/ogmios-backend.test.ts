@@ -181,15 +181,13 @@ describe('OgmiosBackend', () => {
   describe('getAccount', () => {
     it('should return account data for valid stake address', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue({
-          'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr': {
-            controlledAmount: 50000000000,
-            rewards: 1500000,
-            withdrawals: 500000,
-            delegation: { poolId: 'pool1abc123' },
-            drep: { id: 'drep1xyz456' }
-          }
-        })
+        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+          controlledAmount: 50000000000,
+          rewards: 1500000,
+          withdrawals: 500000,
+          delegation: { poolId: 'pool1abc123' },
+          drep: { id: 'drep1xyz456' }
+        }])
       };
 
       const backend = new OgmiosBackend();
@@ -220,7 +218,7 @@ describe('OgmiosBackend', () => {
 
     it('should throw NotFoundError when account does not exist', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue({})
+        rewardAccountSummaries: jest.fn().mockResolvedValue([])
       };
 
       const backend = new OgmiosBackend();
@@ -242,13 +240,11 @@ describe('OgmiosBackend', () => {
 
     it('should handle account with no delegation or drep', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue({
-          'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr': {
-            controlledAmount: 2000000,
-            rewards: 0,
-            withdrawals: 0
-          }
-        })
+        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+          controlledAmount: 2000000,
+          rewards: 0,
+          withdrawals: 0
+        }])
       };
 
       const backend = new OgmiosBackend();

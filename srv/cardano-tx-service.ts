@@ -53,27 +53,6 @@ module.exports = (srv: cds.Service) => {
     logger.debug('[CardanoTxService] TransactionBuildOutputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
-
-  /** 
-   * READ handler for TransactionSubmissions entity
-   * @param req - The incoming request data
-   * @returns {TransactionSubmissions} The transaction submissions fitting the request query
-   */
-  srv.on('READ', TransactionBuildInputs, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionBuildInputs READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for TransactionBuildOutputs entity
-   * @param req - The incoming request data
-   * @returns {TransactionBuildOutputs} The transaction build outputs fitting the request query
-   */
-  srv.on('READ', TransactionBuildOutputs, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionBuildOutputs READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
   /** 
    * READ handler for TransactionSubmissions entity
    * @param req - The incoming request data

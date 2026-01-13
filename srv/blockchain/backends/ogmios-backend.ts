@@ -167,16 +167,11 @@ export class OgmiosBackend implements CardanoBackend {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
       
-      // Validate address format
-      if (!address || address.length < 20) {
-        throw new Error('Invalid address format');
-      }
-      
       // Query UTxOs from tip (no acquire needed - queries from tip by default)
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
 
       const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
-        const lovelace = u.value?.ada?.lovelace || 0;
+        const lovelace = u.value?.ada?.lovelace;
         return sum + BigInt(lovelace);
       }, 0n);
 
@@ -213,11 +208,6 @@ export class OgmiosBackend implements CardanoBackend {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
       
-      // Validate address format
-      if (!address || address.length < 20) {
-        throw new Error('Invalid address format');
-      }
-      
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
 
       return utxos.map((u: any) => {
@@ -245,12 +235,7 @@ export class OgmiosBackend implements CardanoBackend {
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
-      
-      // Validate pool ID format (bech32 pool ID)
-      if (!poolId || poolId.length < 10) {
-        throw new Error('Invalid pool ID format');
-      }
-      
+            
       // Query from tip (no acquire needed) with stake included
       const pools = await this.stateQueryClient!.stakePools([{ id: poolId }], true) as any;
 
@@ -287,29 +272,15 @@ export class OgmiosBackend implements CardanoBackend {
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
-      
-      // Validate stake address format (should be hex string, 56 chars for stake key hash)
-      if (!stakeAddress || (stakeAddress.length !== 56 && !stakeAddress.startsWith('stake'))) {
-        throw new Error('Invalid stake address format');
-      }
-      
+ 
       // Extract key hash if bech32 address provided, otherwise use as-is
       const keyHash = stakeAddress.startsWith('stake') ? stakeAddress : stakeAddress;
       
       // Query from tip (no acquire needed)
       const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [keyHash] }) as any;
 
-      // Handle both response formats: array (real Ogmios) or object (for test compatibility)
-      let account: any;
-      if (Array.isArray(summaries)) {
-        // Real Ogmios API returns array
-        account = summaries && summaries.length > 0 ? summaries[0] : null;
-      } else if (typeof summaries === 'object' && summaries[keyHash]) {
-        // Test mock returns object keyed by stake address
-        account = summaries[keyHash];
-      } else {
-        account = null;
-      }
+      // Ogmios API returns array of account summaries
+      const account = summaries && summaries.length > 0 ? summaries[0] : null;
       
       if (!account) {
         throw new NotFoundError('Account', this.name);
@@ -340,11 +311,7 @@ export class OgmiosBackend implements CardanoBackend {
   async submitTransaction(signedTxCbor: string): Promise<string> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
-      
-      if (!signedTxCbor || signedTxCbor.length < 10) {
-        throw new Error('Invalid transaction CBOR');
-      }
-      
+            
       const txHash = await this.txSubmissionClient!.submitTransaction(signedTxCbor);
       return txHash;
     }, this.name);

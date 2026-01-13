@@ -412,6 +412,84 @@ describe('Error Classes', () => {
       expect(result.message).toContain('Something went wrong');
     });
 
+    // ============================================================================
+    // Priority 6: Explicit tests for true Priority 6 scenarios
+    // ============================================================================
+    it('should convert null error to ProviderUnavailable (Priority 6)', () => {
+      const result = normalizeBackendError(null, 'blockfrost');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toBe('Unknown error');
+    });
+
+    it('should convert undefined error to ProviderUnavailable (Priority 6)', () => {
+      const result = normalizeBackendError(undefined, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toBe('Unknown error');
+    });
+
+    it('should convert generic Error without HTTP properties to ProviderUnavailable (Priority 6)', () => {
+      const error = new Error('Generic network failure');
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toContain('Generic network failure');
+    });
+
+    it('should convert ECONNREFUSED error to ProviderUnavailable (Priority 6)', () => {
+      const error = new Error('ECONNREFUSED - Connection refused');
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toContain('ECONNREFUSED');
+    });
+
+    it('should convert ETIMEDOUT error to ProviderUnavailable (Priority 6)', () => {
+      const error = new Error('ETIMEDOUT - Connection timeout');
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert status < 400 to ProviderUnavailable (Priority 6 - unusual redirect)', () => {
+      const error = { status: 301, message: 'Moved permanently' };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toContain('Moved permanently');
+    });
+
+    it('should convert status 200 with error message to ProviderUnavailable (Priority 6)', () => {
+      const error = { status: 200, message: 'Unexpected success status with error' };
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should convert status 302 to ProviderUnavailable (Priority 6)', () => {
+      const error = { status: 302, message: 'Found - redirect' };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
     it('should preserve original error', () => {
       const originalError = { status: 503, message: 'Timeout' };
       const result = normalizeBackendError(originalError, 'blockfrost');

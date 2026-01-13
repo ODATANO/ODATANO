@@ -59,10 +59,10 @@ function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: 
     if (allowedHrp.includes(decoded.prefix)) {
       return { prefix: decoded.prefix, words: decoded.words };
     }
-    return null;
   } catch {
-    return null;
+    // invalid bech32 format
   }
+  return null;
 }
 
 /** 
@@ -153,11 +153,12 @@ export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
 
   const allowed = ["addr", "addr_test"];
   const decoded = tryDecodeBech32WithHrp(addr, allowed);
-  if (!decoded) return false;
-
+  if (decoded) {
   // avoid absurdly short/long decoded payloads
   const len = wordsToBytesLen(decoded.words);
   return len >= 1 && len <= 128;
+  }
+  return false;
 }
 
 /** 
