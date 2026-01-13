@@ -79,11 +79,27 @@ jobs:
           docker stop ogmios-preview cardano-node-preview || true
           sleep 10
           
-          # Reduce DB size
+          # Reduce DB size aggressively
           rm -rf cardano-preview-db/db/ledger cardano-preview-db/db/volatile || true
+          rm -rf cardano-preview-db/db/analysis || true
+          find cardano-preview-db -name "*.log" -delete || true
+          
+          echo "Database size:"
           du -sh cardano-preview-db
           
           docker rm -f ogmios-preview cardano-node-preview || true
+
+      - name: Free Disk Space
+        if: always()
+        run: |
+          # Clean Docker cache
+          docker system prune -af --volumes || true
+          
+          # Clean package caches
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          
+          echo "Available disk space:"
+          df -h /
 
       - name: Delete old cache
         if: always()
@@ -95,6 +111,7 @@ jobs:
 
       - name: Save Cache
         if: always()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: cardano-preview-db

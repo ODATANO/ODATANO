@@ -157,7 +157,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Waiting for Cardano Node to be fully synchronized..."
-          MAX_WAIT=3800  # Max wait time in seconds (e.g., ~1.5 hours)
+          MAX_WAIT=7200  # Max wait time in seconds (2 hours)
           ELAPSED=0
           
           while [ $ELAPSED -lt $MAX_WAIT ]; do

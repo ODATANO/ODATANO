@@ -29,7 +29,13 @@ describe('OgmiosBackend', () => {
 
   beforeEach(() => {
     originalOgmiosUrl = CONFIG.ogmiosUrl;
+    // Clear all mocks but restore logger implementation
     jest.clearAllMocks();
+    const logger = require('../../srv/utils/logger').default;
+    logger.info.mockImplementation(jest.fn());
+    logger.error.mockImplementation(jest.fn());
+    logger.warn.mockImplementation(jest.fn());
+    logger.debug.mockImplementation(jest.fn());
   });
 
   afterEach(() => {
@@ -175,7 +181,6 @@ describe('OgmiosBackend', () => {
   describe('getAccount', () => {
     it('should return account data for valid stake address', async () => {
       const mockStateQueryClient = {
-        acquireLedgerState: jest.fn().mockResolvedValue(undefined),
         rewardAccountSummaries: jest.fn().mockResolvedValue({
           'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr': {
             controlledAmount: 50000000000,
@@ -184,8 +189,7 @@ describe('OgmiosBackend', () => {
             delegation: { poolId: 'pool1abc123' },
             drep: { id: 'drep1xyz456' }
           }
-        }),
-        releaseLedgerState: jest.fn().mockResolvedValue(undefined)
+        })
       };
 
       const backend = new OgmiosBackend();
@@ -193,11 +197,10 @@ describe('OgmiosBackend', () => {
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
 
-      expect(mockStateQueryClient.acquireLedgerState).toHaveBeenCalledWith('origin');
+      // Ogmios queries from tip by default - no acquire/release needed
       expect(mockStateQueryClient.rewardAccountSummaries).toHaveBeenCalledWith({
         keys: ['stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr']
       });
-      expect(mockStateQueryClient.releaseLedgerState).toHaveBeenCalled();
       
       expect(result).toEqual({
         stakeaddress: 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr',
@@ -217,9 +220,7 @@ describe('OgmiosBackend', () => {
 
     it('should throw NotFoundError when account does not exist', async () => {
       const mockStateQueryClient = {
-        acquireLedgerState: jest.fn().mockResolvedValue(undefined),
-        rewardAccountSummaries: jest.fn().mockResolvedValue({}),
-        releaseLedgerState: jest.fn().mockResolvedValue(undefined)
+        rewardAccountSummaries: jest.fn().mockResolvedValue({})
       };
 
       const backend = new OgmiosBackend();
@@ -241,15 +242,13 @@ describe('OgmiosBackend', () => {
 
     it('should handle account with no delegation or drep', async () => {
       const mockStateQueryClient = {
-        acquireLedgerState: jest.fn().mockResolvedValue(undefined),
         rewardAccountSummaries: jest.fn().mockResolvedValue({
           'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr': {
             controlledAmount: 2000000,
             rewards: 0,
             withdrawals: 0
           }
-        }),
-        releaseLedgerState: jest.fn().mockResolvedValue(undefined)
+        })
       };
 
       const backend = new OgmiosBackend();
@@ -261,6 +260,147 @@ describe('OgmiosBackend', () => {
       expect(result.drepId).toBe(null);
       expect(result.controlledAmount).toBe('2000000');
       expect(result.rewardsSum).toBe('0');
+    });
+  });
+
+  describe('shutdown', () => {
+    it('should shutdown all clients and set isShutdown flag', async () => {
+      const mockStateQueryClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+      const mockTxSubmissionClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+      const mockSocket = {
+        close: jest.fn()
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = false;
+
+      await backend.shutdown();
+
+      expect(mockStateQueryClient.shutdown).toHaveBeenCalled();
+      expect(mockTxSubmissionClient.shutdown).toHaveBeenCalled();
+      expect(mockSocket.close).toHaveBeenCalled();
+      expect((backend as any).isShutdown).toBe(true);
+      expect((backend as any).stateQueryClient).toBe(null);
+      expect((backend as any).txSubmissionClient).toBe(null);
+      expect((backend as any).context).toBe(null);
+    });
+
+    it('should handle null clients during shutdown', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = null;
+      (backend as any).txSubmissionClient = null;
+      (backend as any).context = null;
+
+      await expect(backend.shutdown()).resolves.not.toThrow();
+      expect((backend as any).isShutdown).toBe(true);
+    });
+  });
+
+  describe('isConnected', () => {
+    it('should return true when socket is open and not shutdown', () => {
+      const mockSocket = {
+        readyState: 1, // OPEN
+        OPEN: 1
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = false;
+
+      expect(backend.isConnected()).toBe(true);
+    });
+
+    it('should return false when shutdown', () => {
+      const mockSocket = {
+        readyState: 1, // OPEN
+        OPEN: 1
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = true;
+
+      expect(backend.isConnected()).toBe(false);
+    });
+
+    it('should return false when socket is not open', () => {
+      const mockSocket = {
+        readyState: 3, // CLOSED
+        OPEN: 1
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = false;
+
+      expect(backend.isConnected()).toBe(false);
+    });
+
+    it('should return false when context is null', () => {
+      const backend = new OgmiosBackend();
+      (backend as any).context = null;
+      (backend as any).isShutdown = false;
+
+      // When context is null, context?.socket?.readyState is undefined
+      // and context?.socket?.OPEN is also undefined
+      // undefined === undefined is true, BUT we want false
+      // So the implementation needs to check for null/undefined context first
+      expect(backend.isConnected()).toBe(false);
+    });
+  });
+
+  describe('ensureNotShutdown', () => {
+    it('should not throw when client is not shutdown', () => {
+      const mockStateQueryClient = {
+        epoch: jest.fn().mockResolvedValue(500)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      // Should not throw - ensureNotShutdown is synchronous
+      expect(() => (backend as any).ensureNotShutdown()).not.toThrow();
+    });
+
+    it('should throw when client is shutdown', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).isShutdown = true;
+
+      expect(() => (backend as any).ensureNotShutdown()).toThrow('Ogmios client has been shutdown');
+    });
+
+    it('should prevent operations after shutdown', async () => {
+      const mockStateQueryClient = {
+        epoch: jest.fn().mockResolvedValue(500),
+        protocolParameters: jest.fn().mockResolvedValue({})
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = true;
+
+      // getProtocolParameters should fail because ensureNotShutdown is called
+      await expect(backend.getProtocolParameters()).rejects.toThrow('Ogmios client has been shutdown');
     });
   });
 });
