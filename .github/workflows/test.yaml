@@ -37,9 +37,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-latest
+          key: cardano-node-ogmios-preview
           restore-keys: |
-            cardano-node-preview-
+            cardano-node-ogmios-preview
 
       - name: Cache info
         run: |
@@ -241,14 +241,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh cache delete cardano-node-preview-latest || echo "No old cache to delete"
+          gh cache delete cardano-node-ogmios-preview || echo "No old cache to delete"
 
       - name: Save Cardano Node DB Cache
         if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/cardano-preview-db
-          key: cardano-node-preview-latest
+          key: cardano-node-ogmios-preview
 
       # ==========================================
       # Cleanup & Upload Coverage

@@ -1,118 +1,51 @@
-name: Network Synchronization
+name: Nightly Sync
 
 on:
   schedule:
-    - cron: '00 18 * * *'
+    - cron: '00 08,22 * * *'
   workflow_dispatch:
+    inputs:
+      synchronization-level:
+        description: 'Desired % synchronization level. Between 0 and 1.'
+        required: false
+        default: '1'
+        type: number
 
 jobs:
-  sync:
+  sync_and_cache:
+    strategy:
+      matrix:
+        network: [ preview ]
+        ogmios_version: [ v6.14.0 ]
+        cardano_node_version: [ 10.5.3 ]
+
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
 
-      - name: Get Date
-        id: date
-        run: echo "timestamp=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+    - uses: actions/checkout@v4
 
-      - name: Restore DB Cache
-        id: cache
-        uses: actions/cache/restore@v4
-        with:
-          path: cardano-preview-db
-          key: cardano-node-preview-latest
-          restore-keys: cardano-node-preview-
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/db-${{ matrix.network }}
+        key: cardano-node-ogmios-${{ matrix.network }}
+        restore-keys: |
+          cardano-node-ogmios-${{ matrix.network }}
 
-      - name: Setup Docker
-        run: |
-          mkdir -p cardano-preview-db/db
-          docker volume create cardano-preview-ipc
-          docker network create odatano-network || true
-          
-      - name: Start Cardano Node & Ogmios
-        run: |
-          docker run -d --name cardano-node-preview --network odatano-network \
-            -v "$PWD/config/preview/cardano-node:/config:ro" \
-            -v "$PWD/cardano-preview-db:/data" \
-            -v cardano-preview-ipc:/ipc \
-            ghcr.io/intersectmbo/cardano-node:10.1.3 run \
-            --config /config/config.json \
-            --topology /config/topology.json \
-            --database-path /data/db \
-            --socket-path /ipc/node.socket
-          
-          sleep 30
-          
-          docker run -d --name ogmios-preview --network odatano-network -p 1337:1337 \
-            -v cardano-preview-ipc:/ipc:ro \
-            -v "$PWD/config/preview/cardano-node:/config:ro" \
-            cardanosolutions/ogmios:v6.14.0 \
-            --node-socket /ipc/node.socket \
-            --node-config /config/config.json \
-            --host 0.0.0.0 --port 1337
+    - uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e5
+      with:
+        db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
+        network: ${{ matrix.network }}
+        version: ${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}
+        synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
-      - name: Sync to 100%
-        run: |
-          START=$(date +%s)
-          while true; do
-            HEALTH=$(curl -s http://localhost:1337/health || echo "")
-            SYNC=$(echo "$HEALTH" | grep -o '"networkSynchronization":[0-9.]*' | cut -d':' -f2)
-            
-            if [ -n "$SYNC" ]; then
-              PCT=$(awk "BEGIN {printf \"%.1f\", $SYNC * 100}")
-              ELAPSED=$(( ($(date +%s) - START) / 60 ))
-              echo "⏱️ ${ELAPSED}m | ${PCT}%"
-              
-              if awk "BEGIN {exit !($SYNC >= 1.0)}"; then
-                echo "✅ Sync complete!"
-                break
-              fi
-            fi
-            sleep 300
-          done
+    - name: prune node db
+      shell: bash
+      working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
+      run: |
+        sudo chown -R $(whoami):$(whoami) immutable
+        ls immutable/*.chunk | sort | head -n -1000 | xargs -r rm -f --
 
-      - name: Cleanup & Save
-        if: always()
-        run: |
-          docker stop ogmios-preview cardano-node-preview || true
-          sleep 10
-          
-          # Reduce DB size aggressively
-          rm -rf cardano-preview-db/db/ledger cardano-preview-db/db/volatile || true
-          rm -rf cardano-preview-db/db/analysis || true
-          find cardano-preview-db -name "*.log" -delete || true
-          
-          echo "Database size:"
-          du -sh cardano-preview-db
-          
-          docker rm -f ogmios-preview cardano-node-preview || true
-
-      - name: Free Disk Space
-        if: always()
-        run: |
-          # Clean Docker cache
-          docker system prune -af --volumes || true
-          
-          # Clean package caches
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
-          
-          echo "Available disk space:"
-          df -h /
-
-      - name: Delete old cache
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh cache delete cardano-node-preview-latest || echo "No old cache to delete"
-
-      - name: Save Cache
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@v4
-        with:
-          path: cardano-preview-db
-          key: cardano-node-preview-latest
+    - uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/db-${{ matrix.network }}
+        key: cardano-node-ogmios-${{ matrix.network }}
