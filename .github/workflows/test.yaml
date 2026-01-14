@@ -73,10 +73,11 @@ jobs:
           echo "Checking config files..."
           ls -la ${{ github.workspace }}/config/preview/cardano-node/
           
-      - name: Create DB directory
+      - name: Check cached DB structure
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
-          mkdir -p ${{ runner.temp }}/db-preview/db
+          echo "Checking cached DB structure..."
+          ls -la ${{ runner.temp }}/db-preview/ || echo "DB directory empty or not found"
           
       - name: Setup Docker volumes and network
         if: steps.cache-cardano.outputs.cache-hit == 'true'
@@ -97,7 +98,7 @@ jobs:
             run \
             --config /config/config.json \
             --topology /config/topology.json \
-            --database-path /data/db \
+            --database-path /data \
             --socket-path /ipc/node.socket
           echo "Cardano Node started"
           sleep 5
