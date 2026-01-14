@@ -1,7 +1,7 @@
 import cardano from './cardano-client';
 import type { UTxO } from '../utils/types';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
-import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
+import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 import logger from '../utils/logger';
@@ -11,6 +11,14 @@ import logger from '../utils/logger';
  * to build various types of Cardano transactions.
  */
 export class CardanoTransactionBuilder {
+    private txBuilder!: CardanoTxBuilder;
+
+    async init(): Promise<void> {
+        // Create transaction builder from registry
+        this.txBuilder = TxBuilderRegistry.createDefault();
+        await this.txBuilder.init();
+        logger.info(`[CardanoTransactionBuilder] Initialized with builder: ${this.txBuilder.name}`);
+    }
 
     /** 
      * Build a simple ADA transfer transaction
@@ -19,11 +27,10 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildSimpleAdaTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        // Initialize the specific transaction builder (Buildooor in this case)
-        const txBuilder: CardanoTxBuilder = new BuildooorTxBuilder();
-
-        // Initialize the builder
-        await txBuilder.init();
+        // Ensure builder is initialized
+        if (!this.txBuilder) {
+            await this.init();
+        }
 
         // Prepare the transaction build context
         const txContext: TxBuildContext = {
@@ -31,7 +38,7 @@ export class CardanoTransactionBuilder {
             protocolParameters: protocolParameters
         };
         // Build the unsigned ADA transfer transaction
-        const txBuildResult = await txBuilder.buildUnsignedAdaTransfer(req, txContext);
+        const txBuildResult = await this.txBuilder.buildUnsignedAdaTransfer(req, txContext);
 
         logger.info(`[CardanoTransactionBuilder] Built simple ADA transaction successfully.`);
         // Return the transaction build result

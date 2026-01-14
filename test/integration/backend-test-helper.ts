@@ -1,11 +1,17 @@
 /**
  * Backend Test Helper
- * Utility to run the same integration tests against multiple backends (Blockfrost, Koios)
+ * Utility to run the same integration tests against multiple backends (Blockfrost, Koios, Ogmios)
  */
 export type BackendType = 'blockfrost' | 'koios' | 'ogmios';
+export type TxBuilderType = 'buildooor' | 'csl';
 
 export interface BackendTestConfig {
   name: BackendType;
+  enabled: boolean;
+}
+
+export interface TxBuilderTestConfig {
+  name: TxBuilderType;
   enabled: boolean;
 }
 
@@ -28,4 +34,13 @@ export function configureBackendForTest(
       process.env.BLOCKFROST_KEY = originalBlockfrostKey;
     }
   }
+}
+
+/**
+ * Configure environment for a specific transaction builder test
+ */
+export function configureTxBuilderForTest(
+  txBuilderConfig: TxBuilderTestConfig
+): void {
+  process.env.TX_BUILDERS = txBuilderConfig.name;
 }

@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { BackendTestConfig, configureBackendForTest } from './backend-test-helper';
+import { TxBuilderTestConfig, configureTxBuilderForTest } from './backend-test-helper';
 
 const { SELECT } = cds.ql;
 jest.setTimeout(60000);
@@ -8,15 +8,15 @@ jest.setTimeout(60000);
  * Cardano Transaction Service Integration Tests
  * 
  * Tests the transaction building and submission functionality
- * across different backends (Blockfrost, Koios, Ogmios)
+ * across different transaction builders (Buildooor, CSL)
  */
 
-// Helper function to create test suite for a specific backend
-export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
-  // Configure environment to use this specific backend
-  configureBackendForTest(backendConfig);
+// Helper function to create test suite for a specific transaction builder
+export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
+  // Configure environment to use this specific transaction builder
+  configureTxBuilderForTest(txBuilderConfig);
 
-  describe(`Cardano Transaction Service Tests [${backendConfig.name.toUpperCase()}]`, () => {
+  describe(`Cardano Transaction Service Tests [${txBuilderConfig.name.toUpperCase()}]`, () => {
     // Initialize the test suite
     const test = cds.test(__dirname + '/../../');
     const expect = test.expect;
@@ -441,31 +441,4 @@ export function createTxServiceTestSuite(backendConfig: BackendTestConfig) {
 
   });
 }
-
-// Run test suite for all configured backends
-describe('Cardano Transaction Service - All Backends', () => {
-  // Blockfrost backend tests
-  if (process.env.BLOCKFROST_KEY) {
-    createTxServiceTestSuite({
-      name: 'blockfrost',
-      enabled: true,
-    });
-  }
-
-  // Koios backend tests
-  if (process.env.KOIOS_API_KEY || process.env.BACKENDS?.includes('koios')) {
-    createTxServiceTestSuite({
-      name: 'koios',
-      enabled: true,
-    });
-  }
-
-  // Ogmios backend tests (only if explicitly configured)
-  if (process.env.BACKENDS === 'ogmios' && process.env.OGMIOS_WS_URL) {
-    createTxServiceTestSuite({
-      name: 'ogmios',
-      enabled: true,
-    });
-  }
-});
 

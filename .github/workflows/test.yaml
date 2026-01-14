@@ -93,7 +93,7 @@ jobs:
             -v "${{ github.workspace }}/config/preview/cardano-node:/config:ro" \
             -v "${{ github.workspace }}/cardano-preview-db:/data" \
             -v cardano-preview-ipc:/ipc \
-            ghcr.io/intersectmbo/cardano-node:10.1.3 \
+            ghcr.io/intersectmbo/cardano-node:10.5.3 \
             run \
             --config /config/config.json \
             --topology /config/topology.json \
@@ -151,12 +151,12 @@ jobs:
           echo "Ogmios is ready!"
           echo "ready=true" >> $GITHUB_OUTPUT
 
-      - name: Wait for Node to be 100% synced
+      - name: Wait for Node to be synced (≥95%)
         id: sync-complete
         if: steps.ogmios-ready.outputs.ready == 'true'
         continue-on-error: true
         run: |
-          echo "Waiting for Cardano Node to be fully synchronized..."
+          echo "Waiting for Cardano Node to be synchronized (≥95%)..."
           MAX_WAIT=7200  # Max wait time in seconds (2 hours)
           ELAPSED=0
           
@@ -168,9 +168,9 @@ jobs:
               SYNC_PERCENT_DISPLAY=$(awk "BEGIN {printf \"%.2f\", $SYNC_PERCENT * 100}")
               echo "Sync progress: ${SYNC_PERCENT_DISPLAY}%"
               
-              # Check if 100% synced
-              if awk "BEGIN {exit !($SYNC_PERCENT >= 1.0)}"; then
-                echo "✅ Network fully synchronized (100%)!"
+              # Check if ≥95% synced
+              if awk "BEGIN {exit !($SYNC_PERCENT >= 0.95)}"; then
+                echo "✅ Network synchronized (${SYNC_PERCENT_DISPLAY}% ≥ 95%)!"
                 echo "complete=true" >> $GITHUB_OUTPUT
                 break
               fi
@@ -181,7 +181,7 @@ jobs:
           done
           
           if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "⚠️ Timeout waiting for full sync - running tests anyway"
+            echo "⚠️ Timeout waiting for sync - running tests anyway"
           fi
 
       - name: Cache Status Info
@@ -192,9 +192,9 @@ jobs:
           elif [ "${{ steps.ogmios-ready.outputs.ready }}" != "true" ]; then
             echo "⚠️ Ogmios not ready - running tests with Koios + Blockfrost only"
           elif [ "${{ steps.sync-complete.outputs.complete }}" == "true" ]; then
-            echo "✅ Node fully synced - running all tests with Koios + Blockfrost + Ogmios"
+            echo "✅ Node synced (≥95%) - running all tests with Koios + Blockfrost + Ogmios"
           else
-            echo "⚠️ Node not fully synced - running tests with Koios + Blockfrost only"
+            echo "⚠️ Node not sufficiently synced (<95%) - running tests with Koios + Blockfrost only"
           fi
 
       # ==========================================

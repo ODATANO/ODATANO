@@ -32,7 +32,7 @@ const VALIDITY_VARIANTS = {
  * Parse available backends from BACKENDS environment variable
  * 
  * Supported configurations:
- * - "hybrid" (default): Ogmios for live + Blockfrost/Koios for historical
+ * - "koios" (default): Only Koios
  * - "ogmios": Only Ogmios (historical queries may fail)
  * - "blockfrost": Only Blockfrost
  * - "koios": Only Koios  
@@ -40,14 +40,23 @@ const VALIDITY_VARIANTS = {
  * - "blockfrost,koios": Blockfrost + Koios with fallback
  */
 function parseAvailableBackends(): BackendName[] {
-  const backendsEnv = process.env.BACKENDS || 'hybrid';
+  const backendsEnv = process.env.BACKENDS || 'koios';
   const available = backendsEnv
     .split(',')
     .map(b => b.trim().toLowerCase() as BackendName)
-    .filter((b): b is BackendName => ['ogmios','blockfrost', 'koios', 'hybrid'].includes(b));
+    .filter((b): b is BackendName => ['ogmios','blockfrost', 'koios'].includes(b));
   
   // default to hybrid (Ogmios + historical fallback) if no valid backends found
-  return available.length > 0 ? available : ['hybrid'];
+  return available.length > 0 ? available : ['koios'];
+}
+
+function parseAvailableTransactionBuilders(): string[] {
+  const buildersEnv = process.env.TX_BUILDERS || 'csl';
+  const available = buildersEnv
+    .split(',')
+    .map(b => b.trim().toLowerCase())
+    .filter(b => ['csl', 'buildooor'].includes(b));
+  return available.length > 0 ? available : ['csl'];
 }
 
 export const CONFIG = {
@@ -61,9 +70,11 @@ export const CONFIG = {
   ogmiosUrl: process.env.OGMIOS_URL || 'ws://localhost:1337',
   primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 118000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
-  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 300000), // 5 minutes default
+  indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 600000), // 10 minutes default
   logLevel: process.env.LOG_LEVEL || 'info',
   // backend configuration
   backends: parseAvailableBackends(),
+  // transaction builders
+  transactionBuilders: parseAvailableTransactionBuilders(),
 };
 

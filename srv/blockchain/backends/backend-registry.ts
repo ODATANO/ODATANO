@@ -6,7 +6,7 @@ import { ConfigError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
 import logger from '../../utils/logger';
 
-export type BackendName = 'ogmios' | 'blockfrost' | 'koios' | 'hybrid';
+export type BackendName = 'ogmios' | 'blockfrost' | 'koios';
 
 /**
  * BackendRegistry - Central registry for creating and managing backend instances
@@ -57,7 +57,7 @@ export class BackendRegistry {
     const configuredBackends = CONFIG.backends;
     const backends: CardanoBackend[] = [];
 
-    // Check for Blockfrost
+    // check for Blockfrost
     if (configuredBackends.includes('blockfrost') || 
         (configuredBackends.includes('hybrid') && CONFIG.blockfrostApiKey)) {
       if (CONFIG.blockfrostApiKey) {

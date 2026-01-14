@@ -36,7 +36,7 @@ async function main() {
 
     // unsignedTxCbor → tx.body.json (TextEnvelope)
     const textEnvelope = {
-      type: "Tx ConwayEra",
+      type: "Unwitnessed Tx ConwayEra",
       description: "Ledger Cddl Format",
       cborHex: unsignedTxCbor
     };
@@ -63,8 +63,9 @@ async function main() {
     const signedJson = JSON.parse(signedJsonContent);
     const signedTxCbor = signedJson.cborHex;
 
-    if (!signedTxCbor.startsWith('84a5') && !signedTxCbor.startsWith('84a4')) {
-      throw new Error('Warning: signedTxCbor does not start with 84a – invalid format!');
+    // Validate CBOR format (84 = CBOR array with 4 elements, followed by map marker)
+    if (!signedTxCbor.startsWith('84a')) {
+      throw new Error(`Warning: signedTxCbor has unexpected format! Starts with: ${signedTxCbor.slice(0, 6)}`);
     }
 
     console.log('signedTxCbor extracted (starts with', signedTxCbor.slice(0, 6), ')');
