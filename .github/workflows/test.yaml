@@ -36,7 +36,7 @@ jobs:
         id: cache-cardano
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/cardano-preview-db
+          path: ${{ runner.temp }}/db-preview
           key: cardano-node-ogmios-preview
           restore-keys: |
             cardano-node-ogmios-preview
@@ -76,7 +76,7 @@ jobs:
       - name: Create DB directory
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
-          mkdir -p ${{ github.workspace }}/cardano-preview-db/db
+          mkdir -p ${{ runner.temp }}/db-preview/db
           
       - name: Setup Docker volumes and network
         if: steps.cache-cardano.outputs.cache-hit == 'true'
@@ -91,7 +91,7 @@ jobs:
             --name cardano-node-preview \
             --network odatano-network \
             -v "${{ github.workspace }}/config/preview/cardano-node:/config:ro" \
-            -v "${{ github.workspace }}/cardano-preview-db:/data" \
+            -v "${{ runner.temp }}/db-preview:/data" \
             -v cardano-preview-ipc:/ipc \
             ghcr.io/intersectmbo/cardano-node:10.5.3 \
             run \
@@ -247,7 +247,7 @@ jobs:
         if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/cardano-preview-db
+          path: ${{ runner.temp }}/db-preview
           key: cardano-node-ogmios-preview
 
       # ==========================================
