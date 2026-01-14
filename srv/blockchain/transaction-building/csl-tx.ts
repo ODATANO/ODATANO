@@ -1,11 +1,9 @@
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
-import indexer from "../cardano-indexer";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo } from "../../utils/types";
 import logger from "../../utils/logger";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
-import { CardanoIndexer } from "../cardano-indexer";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 
 /**
