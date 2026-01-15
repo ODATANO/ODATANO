@@ -93,7 +93,7 @@ jobs:
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          if curl -f http://localhost:1337/health > /dev/null 2>&1; then
+          if curl -f http://localhost:1337/health > /dev/null 2>&0.93; then
             echo "✅ Ogmios is ready!"
             echo "ready=true" >> $GITHUB_OUTPUT
           else
