@@ -88,6 +88,15 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(response.data).to.have.property('error');
     });
 
+    it('POST /GetPoolById - get stake pool information', async () => {
+      const requestBody = {
+        poolId: OGMIOS_FIXTURE.poolId
+      };
+      const { status, data } = await POST('/odata/v4/cardano-odata/GetPoolById', requestBody);
+      expect(data).to.have.property('poolId');
+      expect(status).to.equal(200);
+    });
+
   });
 
   describe('Ogmios Backend - Gernal Data Conversion Tests', () => {

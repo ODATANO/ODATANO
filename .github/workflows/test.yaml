@@ -81,25 +81,34 @@ jobs:
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 60
         with:
           db-dir: ${{ runner.temp }}/db-preview
           network: preview
           version: v6.14.0_10.5.3
-          synchronization-level: 0.94
+          synchronization-level: 1
 
       - name: Check Ogmios availability
         id: ogmios-ready
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          if curl -f http://localhost:1337/health > /dev/null 2>&0.93; then
-            echo "✅ Ogmios is ready!"
-            echo "ready=true" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ Ogmios not available"
-            echo "ready=false" >> $GITHUB_OUTPUT
-          fi
+          MAX_RETRIES=10
+          RETRY_DELAY=3
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: Checking Ogmios health..."
+            if curl -f http://localhost:1337/health > /dev/null 2>&1; then
+              echo "✅ Ogmios is ready!"
+              echo "ready=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Not ready yet, waiting ${RETRY_DELAY}s..."
+            sleep $RETRY_DELAY
+          done
+          
+          echo "⚠️ Ogmios not available after $MAX_RETRIES attempts"
+          echo "ready=false" >> $GITHUB_OUTPUT
 
       - name: Cache Status Info
         run: |
