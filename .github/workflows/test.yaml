@@ -85,7 +85,7 @@ jobs:
         with:
           db-dir: ${{ runner.temp }}/db-preview
           network: preview
-          version: v6.14.0_10.1.3
+          version: latest
           synchronization-level: 1
 
       - name: Check Ogmios availability

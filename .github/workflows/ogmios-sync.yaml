@@ -16,8 +16,7 @@ jobs:
     strategy:
       matrix:
         network: [ preview ]
-        ogmios_version: [ v6.14.0 ]
-        cardano_node_version: [ 10.1.3 ]
+        version: [ latest ]
 
     runs-on: ubuntu-latest
     steps:
@@ -35,7 +34,7 @@ jobs:
       with:
         db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
         network: ${{ matrix.network }}
-        version: ${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}
+        version: ${{ matrix.version }}
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
     - name: prune node db
