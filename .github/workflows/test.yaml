@@ -65,7 +65,7 @@ jobs:
         run: npm run db:deploy
 
       # ==========================================
-      # Start Cardano Node + Ogmios (nur wenn Cache vorhanden)
+      # Start Cardano Node + Ogmios (if cache exists)
       # ==========================================
       - name: Verify config files exist
         if: steps.cache-cardano.outputs.cache-hit == 'true'
@@ -86,7 +86,7 @@ jobs:
           db-dir: ${{ runner.temp }}/db-preview
           network: preview
           version: latest
-          synchronization-level: 1
+          synchronization-level: 0.95
 
       - name: Check Ogmios availability
         id: ogmios-ready

@@ -554,6 +554,35 @@ export function createBackendTestSuite(backendConfig: BackendTestConfig) {
             expect(firstrow.label).to.equal('721');
           });
 
+          it('READ /TransactionMetadata(key) – warm key read without re-index', async () => {
+            const CardanoService = await cds.connect.to('CardanoODataService');
+            const { Transactions, TransactionMetadata } = CardanoService.entities as any;
+            // ensure transaction exists
+            await cds.run(
+              INSERT.into(Transactions).entries({
+                hash: FIXTURE.validTxHash,
+                blockHash: 'c'.repeat(64),
+                blockHeight: 1, 
+              }),
+            );
+            // seed metadata
+            await cds.run(
+              INSERT.into(TransactionMetadata).entries({
+                id: 1,
+                tx_hash: FIXTURE.validTxHash,
+                label: '1990',
+                payload: JSON.stringify({ test: true }),
+              }),
+            );
+            const { status, data } = await test.get(
+              `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${FIXTURE.validTxHash}',id=1)`
+            );  
+            expect(status).to.equal(200);
+            expect(data).to.have.property('tx_hash');
+            expect(data.tx_hash).to.equal(FIXTURE.validTxHash);
+            expect(data).to.have.property('label');
+            expect(data.label).to.equal('1990');
+          });
         });
       });
 
@@ -739,6 +768,25 @@ export function createBackendTestSuite(backendConfig: BackendTestConfig) {
 
             const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: FIXTURE.validAddress });
 
+            expect(data).to.have.property('address');
+            expect(data.address).to.equal(FIXTURE.validAddress);
+            expect(status).to.equal(200);
+          });
+
+          it('GET /Addresses – warm read serves seeded DB without re-index', async () => {
+            const CardanoService = await cds.connect.to('CardanoODataService');
+            const { Addresses } = CardanoService.entities as any;
+            await cds.run(
+              INSERT.into(Addresses).entries({
+                address: FIXTURE.validAddress,
+                type: 'base',
+                isScript: false,
+                totalLovelace: 0,
+                validFrom: new Date().toISOString(),
+                validTo: new Date(Date.now() + 60000).toISOString(),
+              }),
+            );
+            const { status, data } = await test.get(`/odata/v4/cardano-odata/Addresses(address='${FIXTURE.validAddress}')`);
             expect(data).to.have.property('address');
             expect(data.address).to.equal(FIXTURE.validAddress);
             expect(status).to.equal(200);

@@ -92,7 +92,7 @@ export class CardanoIndexer {
 
     tx.run(UPSERT.into(Transactions).entries(txRow))
 
-    if (providerTx.inputs || providerTx.outputs) {
+    if (providerTx.inputs) {
       const addresses = this._collectAddressesFromUtxos(providerTx);
       if (addresses.length) {
         await this._ensureAddresses(tx, addresses);

@@ -118,10 +118,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    */
 
   private _newTxBuilderFromProtocolParams(protocolParams: LedgerProtocolParameter): CSL.TransactionBuilder {
-    if (!protocolParams.epoch) {
-      throw new Error("[CSLTxBuilder] Missing protocol parameters (ctx.protocolParameters).");
-    }
-
+    
     // required values for CSL config
     const minFeeA = protocolParams.minFeeA;
     const minFeeB = protocolParams.minFeeB;

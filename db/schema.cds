@@ -31,8 +31,7 @@ type MetadataLabel : String(5);
 
 @title      : 'Bech32 Address'
 @description: 'Bech32 encoded address string'
-type Bech32        : String(120)
-@assert.format: '^(addr1|stake1|addr_test1|stake_test1)[0-9a-z]+$';
+type Bech32        : String(120);
 
 // -----------------------------------------------------
 // Shared structural slices
@@ -172,7 +171,7 @@ entity Epochs {
 
         @title      : 'Epoch Number (Key)'
         @description: 'Epoch number as integer'
-    key epoch          : Integer;
+    key epoch         : Integer;
 
         @title      : 'Epoch Start Time'
         @description: 'Epoch start time as unix timestamp'

@@ -63,8 +63,6 @@ export class BackendRegistry {
       if (CONFIG.blockfrostApiKey) {
         logger.info('[BackendRegistry] Adding Blockfrost as historical backend');
         backends.push(this.create('blockfrost'));
-      } else {
-        logger.warn('[BackendRegistry] Blockfrost configured but no API key found');
       }
     }
 

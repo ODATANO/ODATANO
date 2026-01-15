@@ -387,9 +387,6 @@ export class CardanoClientFactory {
     const testHistoricalBackends: CardanoBackend[] = [];
 
     for (const backendName of backendNames) {
-      if (backendName === 'ogmios') {
-        testLiveBackend = BackendRegistry.create('ogmios');
-      }
       
       if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
         testHistoricalBackends.push(BackendRegistry.create('blockfrost'));

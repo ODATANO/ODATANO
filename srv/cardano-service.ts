@@ -78,12 +78,14 @@ module.exports = (srv: cds.Service) => {
    * @returns {Blocks} The block data for the requested block or all fitting blocks for general read
    */
   srv.on('READ', Blocks, async (req: Request) => {
+    console.log('Blocks READ handler called');
     logger.debug(`[CardanoService] Blocks READ handler called`);
     // get possible hash for single block lookup
     const hash = (req.data as { hash?: string })?.hash;
-
+    console.log('hash before:', hash);
     // validate input before business logic
     if (hash && !isBlockHash(hash)) return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
+    console.log('hash after:', hash);
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -146,6 +148,8 @@ module.exports = (srv: cds.Service) => {
 
     logger.debug('[CardanoService] Epochs READ handler called');
     const epochNumber = (req.data as { epoch?: number })?.epoch;
+
+    console.log('epochNumber before:', epochNumber);
 
     // validate input before business logic
     if (epochNumber && !isEpochNumber(epochNumber))
@@ -324,6 +328,7 @@ module.exports = (srv: cds.Service) => {
     logger.debug('[CardanoService] Dreps READ handler called');
     const drepId = (req.data as { drepId?: string })?.drepId;
 
+    console.log('drepId bevor:', drepId);
     // validate drepID format before business logic
     if (drepId && !isValidDrepId(drepId)) return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
 
@@ -354,7 +359,7 @@ module.exports = (srv: cds.Service) => {
     // validate input before business logic
     if (!drepId) return rejectMissing(req, 'Dreps', 'drepId');
 
-    if (drepId && !isValidDrepId(drepId))
+    if (!isValidDrepId(drepId))
       return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
 
     // proceed with handling the request
@@ -490,7 +495,7 @@ module.exports = (srv: cds.Service) => {
         // After indexing, fetch and return the UTxOs
         const utxos = await db.run(SELECT.from(AddressUTxOs).where({ address }));
         logger.debug({ utxos, count: utxos?.length }, '[CardanoService] UTxOs after indexing');
-        return utxos || [];
+        return utxos;
       }
       return existing;
     });
@@ -598,7 +603,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionMetadata} The transaction metadata for the requested transaction or all fitting transaction metadata for general read
    */
   srv.on('READ', TransactionMetadata, async (req: Request) => {
-    logger.debug('[CardanoService] TransactionMetadata READ handler called');
+    logger.info('[CardanoService] TransactionMetadata READ handler called');
     const { tx_hash } = req.data as { tx_hash?: string };
 
     // validate input before business logic

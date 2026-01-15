@@ -1,5 +1,8 @@
-import cds from '@sap/cds';
+import cds, { build } from '@sap/cds';
 import { TxBuilderTestConfig, configureTxBuilderForTest } from './backend-test-helper';
+import { response } from 'express';
+import { sign } from 'crypto';
+import { isTxHash } from '../../srv/utils/validators';
 
 const { SELECT } = cds.ql;
 jest.setTimeout(60000);
@@ -279,6 +282,33 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
           buildId: '00000000-0000-0000-0000-000000000000',
         }).catch(err => err.response);
         expect(response.status).to.equal(400);
+      });
+    });
+
+    describe('CheckSubmissionStatus Action', () => {
+      it('POST /CheckSubmissionStatus Action', async () => {
+        // Verify the transaction was built successfully
+        const TxService = await cds.connect.to('CardanoTransactionService');
+        const { TransactionSubmissions } = TxService.entities;
+
+        // save a dummy submission to check status
+        const submission = await cds.run(INSERT.into(TransactionSubmissions).entries({
+          id: '12345678-1234-1234-1234-1234567890ab',
+          signedTxCbor: 'dummycbor',
+          txHash: 'dummyhash',
+          status: 'pending',
+          validFrom: new Date(),
+          validTo: new Date(Date.now() + 3600000), // +1 hour
+        }));
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/CheckSubmissionStatus', {
+          submissionId: '12345678-1234-1234-1234-1234567890ab',
+        });
+        expect(data.id).to.equal('12345678-1234-1234-1234-1234567890ab');
+        expect(data.txHash).to.equal('dummyhash');
+        expect(data.signedTxCbor).to.equal('dummycbor');
+        expect(data.status).to.equal('pending');
+        expect(status).to.equal(200);
       });
     });
 
