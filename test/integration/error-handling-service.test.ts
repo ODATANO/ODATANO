@@ -95,19 +95,19 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 			});
 
 			it('POST / GetBlockByHash with invalid hash format', async () => {
-				const response = await POST('/odata/v4/cardano-odata/GetBlockByHash', { blockHash: 'invalid_hash' }).catch(err => err.response);
+				const response = await POST('/odata/v4/cardano-odata/GetBlockByHash', { hash: 'invalid_hash' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
-				expect(response.data.error.message).to.match(/Invalid|blockHash/i);
+				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
 
 			it('POST / GetBlockByHash with short hash', async () => {
-				const response = await POST('/odata/v4/cardano-odata/GetBlockByHash', { blockHash: 'abc123' }).catch(err => err.response);
+				const response = await POST('/odata/v4/cardano-odata/GetBlockByHash', { hash: 'abc123' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
-				expect(response.data.error.message).to.match(/Invalid|blockHash/i);
+				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
 
-			it ('READ / BlockEntity with invalid block hash', async () => {
-				const response = await GET('/odata/v4/cardano-odata/BlockEntity(hash=invalid_hash)').catch(err => err.response);
+			it ('READ / Blocks with invalid block hash', async () => {
+				const response = await GET(`/odata/v4/cardano-odata/Blocks(hash=hash123)`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
@@ -133,8 +133,8 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.data.error.message).to.include('epochNumber');
 			});
 
-			it('READ / EpochEntity with non-numeric epochNumber', async () => {
-				const response = await GET('/odata/v4/cardano-odata/EpochEntity(epoch_number=not_a_number)').catch(err => err.response);
+			it('READ / Epochs with non-numeric epochNumber', async () => {
+				const response = await GET('/odata/v4/cardano-odata/Epochs(epoch_number=not_a_number)').catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid value');
 			});
@@ -196,8 +196,8 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.data.error.message).to.match(/pattern|bech32/i);
 			});
 
-			it('READ / AddressEntity with invalid bech32 address', async () => {
-				const response = await GET('/odata/v4/cardano-odata/AddressEntity(address=invalid_address)').catch(err => err.response);
+			it('READ / Addresses with invalid bech32 address', async () => {
+				const response = await GET('/odata/v4/cardano-odata/Addresses(address=invalid_address)').catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|bech32/i);
 			});
@@ -217,8 +217,8 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.data.error.message).to.include('stakeAddress is required');
 			});
 
-			it('READ / AccountEntity with invalid stake address', async () => {
-				const response = await GET('/odata/v4/cardano-odata/AccountEntity(stake_address=invalid_stake_addr)').catch(err => err.response);
+			it('READ / Accounts with invalid stake address', async () => {
+				const response = await GET('/odata/v4/cardano-odata/Accounts(stake_address=invalid_stake_addr)').catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|stake|bech32/i);
 			});
@@ -244,8 +244,8 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.data.error.message).to.match(/Invalid poolId format|Pools/i);
 			});
 
-			it('READ / PoolEntity with invalid poolId', async () => {
-				const response = await GET('/odata/v4/cardano-odata/PoolEntity(pool_id=invalid_pool)').catch(err => err.response);
+			it('READ / Pools with invalid poolId', async () => {
+				const response = await GET('/odata/v4/cardano-odata/Pools(pool_id=invalid_pool)').catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|poolId/i);
 			});
