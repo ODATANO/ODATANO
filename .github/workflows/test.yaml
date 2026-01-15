@@ -73,116 +73,32 @@ jobs:
           echo "Checking config files..."
           ls -la ${{ github.workspace }}/config/preview/cardano-node/
           
-      - name: Check cached DB structure
+      # ==========================================
+      # Start Cardano Node + Ogmios with GitHub Action
+      # ==========================================
+      - name: Start Cardano Node and Ogmios
+        id: cardano-ogmios-sync
         if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          echo "Checking cached DB structure..."
-          ls -la ${{ runner.temp }}/db-preview/ || echo "DB directory empty or not found"
-          
-      - name: Setup Docker volumes and network
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          docker volume create cardano-preview-ipc || true
-          docker network create odatano-network || true
-          
-      - name: Start Cardano Node
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          docker run -d \
-            --name cardano-node-preview \
-            --network odatano-network \
-            -v "${{ github.workspace }}/config/preview/cardano-node:/config:ro" \
-            -v "${{ runner.temp }}/db-preview:/data" \
-            -v cardano-preview-ipc:/ipc \
-            ghcr.io/intersectmbo/cardano-node:10.5.3 \
-            run \
-            --config /config/config.json \
-            --topology /config/topology.json \
-            --database-path /data \
-            --socket-path /ipc/node.socket
-          echo "Cardano Node started"
-          sleep 5
-          docker logs cardano-node-preview
-          
-      - name: Wait for Node socket
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
         continue-on-error: true
-        run: |
-          echo "Waiting for node socket..."
-          sleep 10
-          
-          # Check if container is still running
-          if ! docker ps | grep -q cardano-node-preview; then
-            echo "⚠️ Cardano Node container stopped! Showing logs:"
-            docker logs cardano-node-preview
-            exit 1
-          fi
-          
-          timeout 120 bash -c 'until docker exec cardano-node-preview test -S /ipc/node.socket 2>/dev/null; do 
-            echo "Still waiting for socket..."
-            sleep 5
-          done' || {
-            echo "⚠️ Timeout waiting for socket. Ogmios tests will be skipped."
-            docker logs cardano-node-preview
-            exit 1
-          }
-          echo "✅ Node socket ready"
-          
-      - name: Start Ogmios
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          docker run -d \
-            --name ogmios-preview \
-            --network odatano-network \
-            -p 1337:1337 \
-            -v cardano-preview-ipc:/ipc:ro \
-            -v ${{ github.workspace }}/config/preview/cardano-node:/config:ro \
-            cardanosolutions/ogmios:v6.14.0 \
-            --node-socket /ipc/node.socket \
-            --node-config /config/config.json \
-            --host 0.0.0.0 \
-            --port 1337
+        timeout-minutes: 30
+        with:
+          db-dir: ${{ runner.temp }}/db-preview
+          network: preview
+          version: v6.14.0_10.5.3
+          synchronization-level: 0.94
 
-      - name: Wait for Ogmios to be ready
+      - name: Check Ogmios availability
         id: ogmios-ready
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          timeout 180 bash -c 'until curl -f http://localhost:1337/health > /dev/null 2>&1; do echo "Waiting for Ogmios..."; sleep 5; done'
-          echo "Ogmios is ready!"
-          echo "ready=true" >> $GITHUB_OUTPUT
-
-      - name: Wait for Node to be synced (≥95%)
-        id: sync-complete
-        if: steps.ogmios-ready.outputs.ready == 'true'
-        continue-on-error: true
-        run: |
-          echo "Waiting for Cardano Node to be synchronized (≥95%)..."
-          MAX_WAIT=7200  # Max wait time in seconds (2 hours)
-          ELAPSED=0
-          
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
-            HEALTH=$(curl -s http://localhost:1337/health)
-            SYNC_PERCENT=$(echo "$HEALTH" | grep -o '"networkSynchronization":[0-9.]*' | cut -d':' -f2)
-            
-            if [ -n "$SYNC_PERCENT" ]; then
-              SYNC_PERCENT_DISPLAY=$(awk "BEGIN {printf \"%.2f\", $SYNC_PERCENT * 100}")
-              echo "Sync progress: ${SYNC_PERCENT_DISPLAY}%"
-              
-              # Check if ≥95% synced
-              if awk "BEGIN {exit !($SYNC_PERCENT >= 0.95)}"; then
-                echo "✅ Network synchronized (${SYNC_PERCENT_DISPLAY}% ≥ 95%)!"
-                echo "complete=true" >> $GITHUB_OUTPUT
-                break
-              fi
-            fi
-            
-            sleep 30
-            ELAPSED=$((ELAPSED + 30))
-          done
-          
-          if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "⚠️ Timeout waiting for sync - running tests anyway"
+          if curl -f http://localhost:1337/health > /dev/null 2>&1; then
+            echo "✅ Ogmios is ready!"
+            echo "ready=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Ogmios not available"
+            echo "ready=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Cache Status Info
@@ -190,19 +106,17 @@ jobs:
           if [ "${{ steps.cache-cardano.outputs.cache-hit }}" != "true" ]; then
             echo "⚠️ No Cardano Node cache found - running tests with Koios + Blockfrost only"
             echo "💡 Run the 'Network Synchronization' workflow first to create a cache"
-          elif [ "${{ steps.ogmios-ready.outputs.ready }}" != "true" ]; then
-            echo "⚠️ Ogmios not ready - running tests with Koios + Blockfrost only"
-          elif [ "${{ steps.sync-complete.outputs.complete }}" == "true" ]; then
-            echo "✅ Node synced (≥95%) - running all tests with Koios + Blockfrost + Ogmios"
+          elif [ "${{ steps.ogmios-ready.outputs.ready }}" == "true" ]; then
+            echo "✅ Ogmios ready - running all tests with Koios + Blockfrost + Ogmios"
           else
-            echo "⚠️ Node not sufficiently synced (<95%) - running tests with Koios + Blockfrost only"
+            echo "⚠️ Ogmios not ready - running tests with Koios + Blockfrost only"
           fi
 
       # ==========================================
       # Run Tests
       # ==========================================
       - name: Run tests with coverage (Koios + Blockfrost only)
-        if: steps.sync-complete.outputs.complete != 'true'
+        if: steps.ogmios-ready.outputs.ready != 'true'
         env:
           NODE_ENV: test
           NETWORK: 'preview'
@@ -214,7 +128,7 @@ jobs:
         run: npm run test:ci:coverage
 
       - name: Run tests with coverage (All Backends including Ogmios)
-        if: steps.sync-complete.outputs.complete == 'true'
+        if: steps.ogmios-ready.outputs.ready == 'true'
         env:
           NODE_ENV: test
           NETWORK: 'preview'
@@ -236,27 +150,16 @@ jobs:
           docker stop cardano-node-preview || true
         continue-on-error: true
 
-      - name: Delete old cache
-        if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh cache delete cardano-node-ogmios-preview || echo "No old cache to delete"
-
-      - name: Save Cardano Node DB Cache
-        if: always() && steps.cache-cardano.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/db-preview
-          key: cardano-node-ogmios-preview
-
       # ==========================================
       # Cleanup & Upload Coverage
       # ==========================================
+      # Note: Cache is only saved by the sync job (ogmios-sync.yaml)
+      # This job only restores the cache to avoid conflicts
       - name: Cleanup Docker containers
         if: always()
-        run: docker rm -f ogmios-preview cardano-node-preview || true
+        run: |
+          docker stop $(docker ps -q) || true
+          docker rm -f $(docker ps -aq) || true
         continue-on-error: true
 
       - name: Upload coverage to Codecov

@@ -61,7 +61,7 @@ describe('TxBuilderRegistry', () => {
     it('should create the first configured transaction builder', () => {
       const builder = TxBuilderRegistry.createDefault();
       expect(builder).toBeDefined();
-      expect(builder.name).toBe('csl'); // First in CONFIG.transactionBuilders
+      expect(builder.name).toBe('csl');
     });
 
     it('should log the default builder name', () => {
@@ -79,7 +79,6 @@ describe('TxBuilderRegistry', () => {
 
       const builder = TxBuilderRegistry.createDefault();
       expect(builder.name).toBe('buildooor');
-
       // Restore original config
       (CONFIG as any).transactionBuilders = originalBuilders;
     });
