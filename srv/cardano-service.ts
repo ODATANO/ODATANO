@@ -213,8 +213,13 @@ module.exports = (srv: cds.Service) => {
   srv.on('READ', Pools, async (req: Request) => {
     logger.debug('[CardanoService] Pools READ handler called');
     const poolId = (req.data as { poolId?: string })?.poolId;
+    
+    console.log('poolId bevor:', poolId);
+    
     // validate pool_id format before business logic
     if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
+
+    console.log(poolId ,'poolId nach if');
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {

@@ -105,6 +105,12 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid|blockHash/i);
 			});
+
+			it ('READ / BlockEntity with invalid block hash', async () => {
+				const response = await GET('/odata/v4/cardano-odata/BlockEntity(hash=invalid_hash)').catch(err => err.response);
+				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Invalid|hash/i);
+			});
 		});
 
 		// Epochs – invalid inputs handled by service
@@ -125,6 +131,12 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				const response = await POST('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: null }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('epochNumber');
+			});
+
+			it('READ / EpochEntity with non-numeric epochNumber', async () => {
+				const response = await GET('/odata/v4/cardano-odata/EpochEntity(epoch_number=not_a_number)').catch(err => err.response);
+				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.include('Invalid value');
 			});
 		});
 
@@ -183,6 +195,12 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/pattern|bech32/i);
 			});
+
+			it('READ / AddressEntity with invalid bech32 address', async () => {
+				const response = await GET('/odata/v4/cardano-odata/AddressEntity(address=invalid_address)').catch(err => err.response);
+				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Invalid value|bech32/i);
+			});
 		});
 
 		// Accounts – invalid inputs handled by service
@@ -197,6 +215,12 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				const response = await POST('/odata/v4/cardano-odata/GetAccountByStakeAddress', {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('stakeAddress is required');
+			});
+
+			it('READ / AccountEntity with invalid stake address', async () => {
+				const response = await GET('/odata/v4/cardano-odata/AccountEntity(stake_address=invalid_stake_addr)').catch(err => err.response);
+				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Invalid value|stake|bech32/i);
 			});
 		});
 
@@ -218,6 +242,12 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 				const response = await POST('/odata/v4/cardano-odata/GetPoolById', { poolId: 'poolx' + 'a'.repeat(10) }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid poolId format|Pools/i);
+			});
+
+			it('READ / PoolEntity with invalid poolId', async () => {
+				const response = await GET('/odata/v4/cardano-odata/PoolEntity(pool_id=invalid_pool)').catch(err => err.response);
+				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Invalid value|poolId/i);
 			});
 		});
 
