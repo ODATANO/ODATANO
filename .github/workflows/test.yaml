@@ -88,6 +88,27 @@ jobs:
           version: latest
           synchronization-level: 0.95
 
+      - name: Ensure containers are running
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          echo "Checking Docker containers..."
+          docker ps -a
+          
+          # Restart containers if they're stopped
+          if ! docker ps | grep -q cardano-node-preview; then
+            echo "Cardano Node not running, starting it..."
+            docker start cardano-node-preview || echo "Failed to start cardano-node"
+          fi
+          
+          if ! docker ps | grep -q ogmios-preview; then
+            echo "Ogmios not running, starting it..."
+            docker start ogmios-preview || echo "Failed to start ogmios"
+          fi
+          
+          echo "Waiting 5s for containers to be ready..."
+          sleep 5
+          docker ps
+
       - name: Check Ogmios availability
         id: ogmios-ready
         if: steps.cache-cardano.outputs.cache-hit == 'true'
