@@ -1,8 +1,5 @@
-import cds, { build } from '@sap/cds';
+import cds from '@sap/cds';
 import { TxBuilderTestConfig, configureTxBuilderForTest } from './backend-test-helper';
-import { response } from 'express';
-import { sign } from 'crypto';
-import { isTxHash } from '../../srv/utils/validators';
 
 const { SELECT } = cds.ql;
 jest.setTimeout(60000);
@@ -292,7 +289,7 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         const { TransactionSubmissions } = TxService.entities;
 
         // save a dummy submission to check status
-        const submission = await cds.run(INSERT.into(TransactionSubmissions).entries({
+        await cds.run(INSERT.into(TransactionSubmissions).entries({
           id: '12345678-1234-1234-1234-1234567890ab',
           signedTxCbor: 'dummycbor',
           txHash: 'dummyhash',
