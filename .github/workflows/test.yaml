@@ -67,47 +67,60 @@ jobs:
       # ==========================================
       # Start Cardano Node + Ogmios (if cache exists)
       # ==========================================
-      - name: Verify config files exist
+      - name: Start Cardano Node + Ogmios containers
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
-          echo "Checking config files..."
-          ls -la ${{ github.workspace }}/config/preview/cardano-node/
+          CONFDIR=${{ github.workspace }}/config/preview
           
-      # ==========================================
-      # Start Cardano Node + Ogmios with GitHub Action
-      # ==========================================
-      - name: Start Cardano Node and Ogmios
-        id: cardano-ogmios-sync
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
-        continue-on-error: true
-        timeout-minutes: 60
-        with:
-          db-dir: ${{ runner.temp }}/db-preview
-          network: preview
-          version: latest
-          synchronization-level: 0.95
-
-      - name: Ensure containers are running
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          echo "Checking Docker containers..."
-          docker ps -a
+          # Start Cardano Node
+          docker run -d --name cardano-node-preview \
+            -v ${{ runner.temp }}/db-preview:/db \
+            -v ${{ runner.temp }}/ipc:/ipc \
+            -v $CONFDIR/cardano-node:/config \
+            ghcr.io/intersectmbo/cardano-node:10.1.3 run \
+              --config /config/config.json \
+              --database-path /db \
+              --socket-path /ipc/node.socket \
+              --topology /config/topology.json
           
-          # Restart containers if they're stopped
-          if ! docker ps | grep -q cardano-node-preview; then
-            echo "Cardano Node not running, starting it..."
-            docker start cardano-node-preview || echo "Failed to start cardano-node"
-          fi
+          # Start Ogmios
+          docker run -d --name ogmios-preview \
+            -p 1337:1337 \
+            -v ${{ runner.temp }}/ipc:/ipc \
+            cardanosolutions/ogmios:latest-preview \
+              --host 0.0.0.0 \
+              --node-socket /ipc/node.socket \
+              --node-config $CONFDIR/cardano-node/config.json
           
-          if ! docker ps | grep -q ogmios-preview; then
-            echo "Ogmios not running, starting it..."
-            docker start ogmios-preview || echo "Failed to start ogmios"
-          fi
-          
-          echo "Waiting 5s for containers to be ready..."
-          sleep 5
+          echo "Waiting for containers to start..."
+          sleep 10
           docker ps
+
+      - name: Wait for Cardano Node sync
+        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        run: |
+          echo "Waiting for node to sync to tip (may take up to 1 hour)..."
+          MAX_WAIT=3600  # 1 hour max
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            if docker logs cardano-node-preview 2>&1 | grep -q "Chain extended"; then
+              echo "Node is syncing..."
+              PROGRESS=$(docker logs --tail 50 cardano-node-preview 2>&1 | grep -oP 'Progress: \K[0-9.]+' | tail -1 || echo "0")
+              echo "Sync progress: ${PROGRESS}%"
+              
+              if (( $(echo "$PROGRESS > 99.9" | bc -l) )); then
+                echo "✅ Node synced to tip!"
+                break
+              fi
+            fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+          
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "⚠️ Sync timeout after ${MAX_WAIT}s, proceeding anyway..."
+          fi
 
       - name: Check Ogmios availability
         id: ogmios-ready
