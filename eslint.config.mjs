@@ -1,9 +1,11 @@
 import cds from '@sap/cds/eslint.config.mjs';
-
+import cdsPlugin from '@sap/eslint-plugin-cds'
 import tsParser from '@typescript-eslint/parser';
 import tseslint from '@typescript-eslint/eslint-plugin';
 
 export default [
+  
+  cdsPlugin.configs.recommended,
   
   // Global ignores (generated / noise)
   {

@@ -63,6 +63,28 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                      @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
                                      changeAddress: db.Bech32) returns TransactionBuilds;
 
+    @title : 'Build Transaction with Metadata'
+    @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
+    action BuildTransactionWithMetadata(
+                                            @title: 'Network'
+                                            @description: 'The Cardano network to build the transaction for (e.g., preview)'
+                                            network: String(10),
+                                            @title: 'Sender Address'
+                                            @description: 'The Bech32 encoded address of the sender'
+                                            senderAddress: db.Bech32,
+                                            @title: 'Recipient Address'
+                                            @description: 'The Bech32 encoded address of the recipient'
+                                            recipientAddress: db.Bech32,
+                                            @title: 'Lovelace Amount'
+                                            @description: 'The amount of ADA to send in lovelace'
+                                            lovelaceAmount: db.Lovelace,
+                                            @title: 'Change Address'
+                                            @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
+                                            changeAddress: db.Bech32,
+                                            @title: 'Metadata JSON'
+                                            @description: 'The JSON representation of the transaction metadata'
+                                            metadataJson: db.MetadataSlice) returns TransactionBuilds;
+                                            
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
     action GetBuildDetails(

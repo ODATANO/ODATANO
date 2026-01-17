@@ -61,6 +61,19 @@ type AssetSlice {
     fingerprint  : String(44);
 }
 
+@title      : 'Metadata Slice'
+@description: 'Structural slice for metadata details'
+type MetadataSlice {
+
+    @title      : 'Metadata Label'
+    @description: 'Metadata label as string (max 5 digits)'
+    label   : MetadataLabel;
+
+    @title      : 'Metadata Payload'
+    @description: 'Metadata payload as JSON string'
+    payload : LargeString;
+}
+
 @title      : 'UTxO Data Slice'
 @description: 'Structural slice for UTxO specific data'
 type UTxODataSlice {
@@ -658,16 +671,16 @@ entity TransactionOutputAssets {
 @description: 'Projection for Transaction Metadata'
 entity TransactionMetadata {
 
-        @title      : 'Metadata Label (key)'
-        @description: 'The metadata label as string'
+        @title      : 'ID (key)'
+        @description: 'Unique identifier for the metadata entry'
     key id      : Integer;
 
         @title      : 'Transaction (key)'
         @description: 'The associated transaction'
     key tx      : Association to Transactions;
 
-        @title      : 'Metadata Payload'
-        @description: 'The metadata payload as JSON string'
+        @title      : 'Label'
+        @description: 'The metadata label as string'
         label   : String;
 
         @title      : 'Metadata Payload'
