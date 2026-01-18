@@ -1,7 +1,9 @@
 import { normalizeBackendError } from './errors';
 import cds, { Request } from '@sap/cds';
-import logger from './logger';
 import { mapError } from './mappers';
+
+const COMPONENT_NAME = 'BackendRequestHandler';
+const logger = cds.log(COMPONENT_NAME);
 
 /** 
  * BackendRequestHandler - Provides standardized handling for backend requests 

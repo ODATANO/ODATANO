@@ -2,10 +2,11 @@ import cds, { Request } from '@sap/cds';
 import indexer from './blockchain/cardano-indexer';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
-import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
+
+const logger = cds.log(`CardanoService`);
 
 /**
  * Cardano Service Implementation
@@ -40,12 +41,12 @@ module.exports = (srv: cds.Service) => {
    * @returns {NetworkInformation} The current valid general network information
    */
   srv.on('READ', NetworkInformation, async (req: Request) => {
-    logger.debug(`[CardanoService] NetworkInformation READ handler called`);
+    logger.debug(`NetworkInformation READ handler called`);
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(NetworkInformation));
       if (!existing) {
-        logger.debug('[CardanoService] Indexing network information via indexer');
+        logger.debug('Indexing network information via indexer');
         return await indexer.indexNetworkInformation(db);
       }
       return existing;
@@ -59,12 +60,12 @@ module.exports = (srv: cds.Service) => {
    * @returns {NetworkInformation} The current valid general network information
    */
   srv.on('GetNetworkInformation', async (req: Request) => {
-    logger.debug(`[CardanoService] GetNetworkInformation Action handler called`);
+    logger.debug('GetNetworkInformation Action handler called');
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(NetworkInformation));
       if (!existing) {
-        logger.debug('[CardanoService] Indexing network information via indexer');
+        logger.debug('Indexing network information via indexer');
         return await indexer.indexNetworkInformation(db);
       }
       return existing;
@@ -78,7 +79,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Blocks} The block data for the requested block or all fitting blocks for general read
    */
   srv.on('READ', Blocks, async (req: Request) => {
-    logger.debug(`[CardanoService] Blocks READ handler called`);
+    logger.debug(`Blocks READ handler called`);
     // get possible hash for single block lookup
     const hash = (req.data as { hash?: string })?.hash;
 
@@ -91,7 +92,7 @@ module.exports = (srv: cds.Service) => {
       if (hash) {
         const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
         if (!existing) {
-          logger.debug({ hash: hash }, '[CardanoService] Indexing block via indexer');
+          logger.debug({ hash: hash }, 'Indexing block via indexer');
           return await indexer.indexBlock(db, hash);
         }
         return existing;
@@ -107,7 +108,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Blocks} The block data for the requested block
    */
   srv.on('GetBlockByHash', async (req: Request) => {
-    logger.debug(`[CardanoService] GetBlockByHash Action handler called`);
+    logger.debug(`GetBlockByHash Action handler called`);
     const hash = (req.data?.hash as string | undefined) ?? undefined;
 
     // validate input before business logic
@@ -118,7 +119,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
       if (!existing) {
-        logger.debug({ hash: hash }, '[CardanoService] Indexing block via indexer');
+        logger.debug({ hash: hash }, 'Indexing block via indexer');
         return await indexer.indexBlock(db, hash);
       }
       return existing;
@@ -157,7 +158,7 @@ module.exports = (srv: cds.Service) => {
       if (epochNumber) {
         const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
         if (!existing) {
-          logger.debug({ epochNumber }, '[CardanoService] Indexing epoch via indexer');
+          logger.debug({ epochNumber }, 'Indexing epoch via indexer');
           return await indexer.indexEpoch(db, epochNumber);
         }
         return existing;
@@ -173,7 +174,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Epochs} The epoch data for the requested epoch
    */
   srv.on('GetEpochByNumber', async (req: Request) => {
-    logger.debug('[CardanoService] GetEpochByNumber Action handler called');
+    logger.debug('GetEpochByNumber Action handler called');
     const epochNumber = req.data?.epochNumber as Number | undefined;
 
     // validate input before business logic
@@ -186,7 +187,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
       if (!existing) {
-        logger.debug({ epochNumber }, '[CardanoService] Indexing epoch via indexer');
+        logger.debug({ epochNumber }, 'Indexing epoch via indexer');
         return await indexer.indexEpoch(db, epochNumber);
       }
       return existing;
@@ -212,20 +213,18 @@ module.exports = (srv: cds.Service) => {
    * @returns {Pools} The pool data for the requested pool or all fitting pools for general read
    */
   srv.on('READ', Pools, async (req: Request) => {
-    logger.debug('[CardanoService] Pools READ handler called');
+    logger.debug('3Pools READ handler called');
     const poolId = (req.data as { poolId?: string })?.poolId;
     
     // validate pool_id format before business logic
     if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
-
-
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
       if (poolId) {
         const existing = await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
         if (!existing) {
-          logger.debug({ poolId }, '[CardanoService] Indexing Pool data via indexer');
+          logger.debug({ poolId }, 'Indexing Pool data via indexer');
           return await indexer.indexPool(db, poolId);
         }
       }
@@ -251,7 +250,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existent = await db.run(SELECT.one.from(Pools).where({ poolId }));
       if (!existent) {
-        logger.debug({ poolId }, '[CardanoService] Indexing pool via indexer');
+        logger.debug({ poolId }, 'Indexing pool via indexer');
         return await indexer.indexPool(db, poolId);
       }
       return existent;
@@ -265,7 +264,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Accounts} The account data for the requested account or all fitting accounts for general read
    */
   srv.on('READ', Accounts, async (req: Request) => {
-    logger.debug('[CardanoService] Accounts READ handler called');
+    logger.debug('Accounts READ handler called');
     const stakeAddress = (req.data as { stakeAddress?: string })?.stakeAddress;
 
     // validate stake address format before business logic
@@ -277,7 +276,7 @@ module.exports = (srv: cds.Service) => {
       if (stakeAddress) {
         const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress: stakeAddress }));
         if (!existing) {
-          logger.debug({ stakeAddress }, '[CardanoService] Indexing account via indexer');
+          logger.debug({ stakeAddress }, 'Indexing account via indexer');
           return await indexer.indexAccount(db, stakeAddress);
         }
         return existing;
@@ -293,7 +292,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Accounts} The account data for the requested account
    */
   srv.on('GetAccountByStakeAddress', async (req: Request) => {
-    logger.debug('[CardanoService] GetAccountByStakeAddress Action handler called');
+    logger.debug('GetAccountByStakeAddress Action handler called');
     const { stakeAddress } = req.data as { stakeAddress?: string };
 
     // validate input before business logic
@@ -320,7 +319,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Dreps} The drep data for the requested drep or all fitting dreps for general read
    */
   srv.on('READ', Dreps, async (req: Request) => {
-    logger.debug('[CardanoService] Dreps READ handler called');
+    logger.debug('Dreps READ handler called');
     const drepId = (req.data as { drepId?: string })?.drepId;
 
     // validate drepID format before business logic
@@ -331,7 +330,7 @@ module.exports = (srv: cds.Service) => {
       if (drepId) {
         const existing = await db.run(SELECT.one.from(Dreps).where({ drepId: drepId }));
         if (!existing) {
-          logger.debug({ drepId }, '[CardanoService] Indexing drep via indexer');
+          logger.debug({ drepId }, 'Indexing drep via indexer');
           return await indexer.indexDrep(db, drepId);
         }
         return existing;
@@ -347,7 +346,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Dreps} The drep data for the requested drep
    */
   srv.on('GetDrepById', async (req: Request) => {
-    logger.debug('[CardanoService] GetDrepById Action handler called');
+    logger.debug('GetDrepById Action handler called');
     const drepId = (req.data as { drepId?: string }).drepId;
 
     // validate input before business logic
@@ -360,7 +359,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Dreps).where({ drepId }));
       if (!existing) {
-        logger.debug({ drepId }, '[CardanoService] Indexing drep via indexer');
+        logger.debug({ drepId }, 'Indexing drep via indexer');
         return await indexer.indexDrep(db, drepId);
       }
       return existing;
@@ -384,7 +383,7 @@ module.exports = (srv: cds.Service) => {
       if (addr) {
         const existing = await db.run(SELECT.one.from(Addresses).where({ address: addr }));
         if (!existing) {
-          logger.debug({ address: addr }, '[CardanoService] Indexing address');
+          logger.debug({ address: addr }, 'Indexing address');
           return await indexer.indexAddress(db, addr);
         }
         return existing;
@@ -400,7 +399,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Addresses} The address data for the requested address
    */
   srv.on('GetAddressByBech32', async (req: Request) => {
-    logger.debug('[CardanoService] GetAddressByBech32 Action handler called');
+    logger.debug('GetAddressByBech32 Action handler called');
     const { address } = req.data as { address?: string };
 
     // validate input before business logic
@@ -412,7 +411,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
-        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        logger.debug({ address }, 'Indexing address via indexer');
         return await indexer.indexAddress(db, address);
       }
       return existing;
@@ -426,7 +425,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {AddressAssets} The address asset data for the requested address or all fitting address assets for general read
    */
   srv.on('READ', AddressAssets, async (req: Request) => {
-    logger.debug('[CardanoService] AddressAssets READ handler called');
+    logger.debug('AddressAssets READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -437,7 +436,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {AddressAssets} The address asset data for the requested address
    */
   srv.on('GetAssetsByAddress', async (req: Request) => {
-    logger.debug('[CardanoService] GetAssetsByAddress Action handler called');
+    logger.debug('GetAssetsByAddress Action handler called');
     const { address } = req.data as { address?: string };
 
     // Validate input before business logic
@@ -448,7 +447,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressAssets).where({ address }));
       if (!existing || existing.length === 0) {
-        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        logger.debug({ address }, 'Indexing address via indexer');
         await indexer.indexAddress(db, address);
         return db.run(SELECT.from(AddressAssets).where({ address }));
       }
@@ -463,7 +462,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {AddressUTxOs} The address UTxO data for the requested address or all fitting address UTxOs for general read
    */
   srv.on('READ', AddressUTxOs, async (req: Request) => {
-    logger.debug('[CardanoService] AddressUTxOs READ handler called');
+    logger.debug('AddressUTxOs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -484,11 +483,11 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
       if (!existing || existing.length === 0) {
-        logger.debug({ address }, '[CardanoService] Indexing address via indexer');
+        logger.debug({ address }, 'Indexing address via indexer');
         await indexer.indexAddress(db, address);
         // After indexing, fetch and return the UTxOs
         const utxos = await db.run(SELECT.from(AddressUTxOs).where({ address }));
-        logger.debug({ utxos, count: utxos?.length }, '[CardanoService] UTxOs after indexing');
+        logger.debug({ utxos, count: utxos?.length }, 'UTxOs after indexing');
         return utxos;
       }
       return existing;
@@ -502,7 +501,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Transactions} The transaction data for the requested transaction or all fitting transactions for general read
    */
   srv.on('READ', Transactions, async (req: Request) => {
-    logger.debug('[CardanoService] Transactions READ handler called');
+    logger.debug('Transactions READ handler called');
     const txHash = (req.data as { hash?: string })?.hash;
 
     // validate input before business logic
@@ -514,7 +513,7 @@ module.exports = (srv: cds.Service) => {
       if (txHash) {
         const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
         if (!existing) {
-          logger.debug({ txHash }, '[CardanoService] Indexing transaction via indexer');
+          logger.debug({ txHash }, 'Indexing transaction via indexer');
           return await indexer.indexTransaction(db, txHash);
         }
         return existing;
@@ -530,7 +529,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {Transactions} The transaction data for the requested transaction
    */
   srv.on('GetTransactionByHash', async (req: Request) => {
-    logger.debug('[CardanoService] GetTransactionByHash Action handler called');
+    logger.debug('GetTransactionByHash Action handler called');
     const { hash } = req.data as { hash?: string };
 
     // validate input before business logic
@@ -543,7 +542,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
       if (!existing) {
-        logger.debug({ hash }, '[CardanoService] Indexing transaction via indexer');
+        logger.debug({ hash }, 'Indexing transaction via indexer');
         return await indexer.indexTransaction(db, hash);
       }
       return existing;
@@ -556,7 +555,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionInputs} The transaction input data for the requested inputs or all fitting inputs for general read
    */
   srv.on('READ', TransactionInputs, async (req: Request) => {
-    logger.debug('[CardanoService] TransactionInputs READ handler called');
+    logger.debug('TransactionInputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -566,7 +565,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionOutputs} The transaction output data for the requested outputs or all fitting outputs for general read
    */
   srv.on('READ', TransactionOutputs, async (req: Request) => {
-    logger.debug('[CardanoService] TransactionOutputs READ handler called');
+    logger.debug('TransactionOutputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -576,7 +575,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionInputAssets} The transaction input asset data for the requested input assets or all fitting input assets for general read
    */
   srv.on('READ', TransactionInputAssets, async (req: Request) => {
-    logger.debug('[CardanoService] TransactionInputAssets READ handler called');
+    logger.debug('TransactionInputAssets READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -586,7 +585,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionOutputAssets} The transaction output asset data for the requested output assets or all fitting output assets for general read
    */
   srv.on('READ', TransactionOutputAssets, async (req: Request) => {
-    logger.debug('[CardanoService] TransactionOutputAssets READ handler called');
+    logger.debug('TransactionOutputAssets READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -597,7 +596,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionMetadata} The transaction metadata for the requested transaction or all fitting transaction metadata for general read
    */
   srv.on('READ', TransactionMetadata, async (req: Request) => {
-    logger.info('[CardanoService] TransactionMetadata READ handler called');
+    logger.debug('TransactionMetadata READ handler called');
     const { tx_hash } = req.data as { tx_hash?: string };
 
     // validate input before business logic
@@ -609,7 +608,7 @@ module.exports = (srv: cds.Service) => {
       if (tx_hash) {
         const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
         if (!existing) {
-          logger.debug({ tx_hash }, '[CardanoService] Indexing transaction metadata via indexer');
+          logger.debug({ tx_hash }, 'Indexing transaction metadata via indexer');
           return await indexer.indexTransactionMetadata(db, tx_hash);
         }
         return existing;
@@ -625,7 +624,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionMetadata} The transaction metadata for the requested transaction
    */
   srv.on('GetMetadataByTxHash', async (req: Request) => {
-    logger.debug('[CardanoService] GetMetadataByTxHash Action handler called');
+    logger.debug('GetMetadataByTxHash Action handler called');
     const { tx_hash } = req.data as { tx_hash?: string };
 
     // validate input before business logic
@@ -667,12 +666,12 @@ module.exports = (srv: cds.Service) => {
    * @returns Protocol Parameters 
    */
   srv.on('GetLedgerProtocolParameters', async (req: Request) => {
-    logger.debug('[CardanoService] GetLedgerProtocolParameters Action handler called');
+    logger.debug('GetLedgerProtocolParameters Action handler called');
     return handleRequest(req, async (db) => {
-      logger.debug('[CardanoService] Indexing protocol parameters via indexer');
+      logger.debug('Indexing protocol parameters via indexer');
       return indexer.indexProtocolParameters(db);
     });
   });
 
-  logger.debug('[CardanoService] All handlers registered');
+  logger.debug('All handlers registered');
 };

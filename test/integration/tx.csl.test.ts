@@ -5,6 +5,9 @@
  * CSL is Emurgo's cardano-serialization-lib for transaction building.
  */
 
+// Configure environment to use only CSL transaction builder
+process.env.TX_BUILDERS = 'csl';
+
 // Import and run the transaction service test suite
 import { createTxServiceTestSuite } from './tx-test-suite';
 

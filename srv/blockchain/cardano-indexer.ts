@@ -1,7 +1,6 @@
 import cds from '@sap/cds';
-import type { Transaction as CapTransaction } from '@sap/cds';
+import type {Transaction as CapTransaction } from '@sap/cds';
 import cardano from './cardano-client';
-import logger from '../utils/logger';
 import cardanoTransactionBuilder from './cardano-tx-builder';
 
 import {
@@ -64,6 +63,8 @@ import { Transaction as TransactionProviderData, TxBuildRequest } from '../utils
 
 const { UPSERT } = cds.ql;
 
+const logger = cds.log('CardanoIndexer');
+
 /** 
  * CardanoIndexer - Indexer for Cardano blockchain data into OData entities
  * 
@@ -92,6 +93,8 @@ export class CardanoIndexer {
 
     tx.run(UPSERT.into(Transactions).entries(txRow))
 
+    logger.debug(`indexTransaction: upserted transaction ${txHash}`);
+
     if (providerTx.inputs) {
       const addresses = this._collectAddressesFromUtxos(providerTx);
       if (addresses.length) {
@@ -105,12 +108,13 @@ export class CardanoIndexer {
       if (inputRows.length) {
 
         tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
-
+        logger.debug(`indexTransaction: upserted ${inputRows.length} transaction inputs for ${txHash}`);
       }
 
       if (inputAssetRows.length) {
 
         tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
+        logger.debug(`indexTransaction: upserted ${inputAssetRows.length} transaction input assets for ${txHash}`);
       }
 
       // Outputs + OutputAssets
@@ -144,6 +148,7 @@ export class CardanoIndexer {
   async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
     const addrData = await cardano.getAddress(addr);
 
+    logger.debug(`indexAddress: provider response for address ${addr}`);
     logger.debug({ addrData }, 'indexAddress: provider response');
 
     const AddrEntity = mapAddress(addr, addrData);

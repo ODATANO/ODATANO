@@ -1,10 +1,12 @@
+import cds from '@sap/cds';
 import cardano from './cardano-client';
 import type { UTxO } from '../utils/types';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
-import logger from '../utils/logger';
+
+const logger = cds.log('CardanoTransactionBuilder');
 
 /** 
  * CardanoTransactionBuilder - High-level transaction builder that utilizes specific CardanoTxBuilder implementations
@@ -17,7 +19,7 @@ export class CardanoTransactionBuilder {
         // Create transaction builder from registry
         this.txBuilder = TxBuilderRegistry.createDefault();
         await this.txBuilder.init();
-        logger.info(`[CardanoTransactionBuilder] Initialized with builder: ${this.txBuilder.name}`);
+        logger.info(`Initialized with builder: ${this.txBuilder.name}`);
     }
 
     /** 
@@ -25,7 +27,7 @@ export class CardanoTransactionBuilder {
      */
     reset(): void {
         this.txBuilder = undefined as any;
-        logger.debug(`[CardanoTransactionBuilder] Builder reset`);
+        logger.debug(`Builder reset`);
     }
 
     /** 
@@ -48,7 +50,7 @@ export class CardanoTransactionBuilder {
         // Build the unsigned ADA transfer transaction
         const txBuildResult = await this.txBuilder.buildUnsignedAdaTransfer(req, txContext);
 
-        logger.info(`[CardanoTransactionBuilder] Built simple ADA transaction successfully.`);
+        logger.info(`Built simple ADA transaction successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }
@@ -65,7 +67,7 @@ export class CardanoTransactionBuilder {
         };
         // Build the unsigned transaction with metadata
         const txBuildResult = await this.txBuilder.buildUnsignedTransactionWithMetadata(req, txContext);
-        logger.info(`[CardanoTransactionBuilder] Built transaction with metadata successfully.`);
+        logger.info(`Built transaction with metadata successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }
@@ -77,7 +79,7 @@ export class CardanoTransactionBuilder {
      */
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
         // fetch UTxOs directly using cardano client
-        logger.debug(`[CardanoTransactionBuilder] Fetching UTxOs for address: ${address}`);
+        logger.debug(`Fetching UTxOs for address: ${address}`);
         const utxos = await cardano.getAddressUtxos(address);
         return utxos;
     }

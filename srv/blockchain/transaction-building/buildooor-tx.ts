@@ -5,7 +5,7 @@ import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
-
+import cds from "@sap/cds";
 import {
   defaultProtocolParameters,
   Address,
@@ -22,13 +22,13 @@ import { TxMetadatumText } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadat
 import { TxMetadatumList } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 import { TxMetadatumMap } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 
-import logger from "../../utils/logger";
+const logger = cds.log('BuildooorTxBuilder');
 
 /** 
  * BuildooorTxBuilder - Implementation of CardanoTxBuilder using Buildooor library
  */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
-  public readonly name = "buildooor";
+  public readonly name = 'BuildooorTxBuilder';
   private txBuilder!: TxBuilder;
 
   /** 
@@ -38,7 +38,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const protocolParams = await cardano.getProtocolParameters();
     const txbParameters = this._mapLedgerParametersToBuildooorParams(protocolParams);
     this.txBuilder = new TxBuilder(txbParameters);
-    logger.info(`[BuildooorTxBuilder] TxBuilder initialized with protocol parameters.`);
+    logger.debug(`TxBuilder initialized with protocol parameters`);
   }
 
   /**
@@ -79,7 +79,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const unsignedTxCbor = toHex(unsignedTxBytes);
     const txBodyHash = tx.hash.toString();
 
-    logger.info(`[BuildooorTxBuilder] Built unsigned transaction successfully.`);
+    logger.debug(`Built unsigned transaction successfully.`);
 
     return {
       unsignedTxCbor: unsignedTxCbor,
@@ -135,7 +135,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const unsignedTxCbor = toHex(unsignedTxBytes);
     const txBodyHash = tx.hash.toString();
 
-    logger.info(`[BuildooorTxBuilder] Built unsigned transaction successfully.`);
+    logger.debug(`Built unsigned transaction successfully.`);
 
     return {
       unsignedTxCbor: unsignedTxCbor,
@@ -239,13 +239,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
       // Konvertiere JSON Value zu TxMetadatum
       const txMetadatum = this._jsonToTxMetadatum(value);
-      logger.debug(`[BuildooorTxBuilder] Created TxMetadatum for label ${numericLabel}: ${txMetadatum.constructor.name}`);
+      logger.debug(`Created TxMetadatum for label ${numericLabel}: ${txMetadatum.constructor.name}`);
       metadata[numericLabel] = txMetadatum;
     }
 
-    logger.debug(`[BuildooorTxBuilder] Creating TxMetadata with ${Object.keys(metadata).length} labels`);
+    logger.debug(`Creating TxMetadata with ${Object.keys(metadata).length} labels`);
     const txMetadata = new TxMetadata(metadata);
-    logger.debug(`[BuildooorTxBuilder] TxMetadata created: ${txMetadata.constructor.name}, instanceof check: ${txMetadata instanceof TxMetadata}`);
+    logger.debug(`TxMetadata created: ${txMetadata.constructor.name}, instanceof check: ${txMetadata instanceof TxMetadata}`);
     return txMetadata;
   }
 

@@ -1,3 +1,4 @@
+import cds from '@sap/cds';
 import {
   createInteractionContext,
   createTransactionSubmissionClient,
@@ -7,7 +8,6 @@ import {
 import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
-
 import {
   Transaction,
   BlockData,
@@ -23,7 +23,8 @@ import {
 } from '../../utils/types';
 
 import { CardanoBackend } from './cardano-backend';
-import logger from '../../utils/logger';
+
+const logger = cds.log('OgmiosBackend');
 
 /**
  * Ogmios Backend Implementation for Cardano Backend Interface
@@ -476,7 +477,8 @@ export class OgmiosBackend implements CardanoBackend {
         await this.stateQueryClient.shutdown();
       }
     } catch (error) {
-      logger.error(`[OgmiosBackend] Error shutting down state query client: ${error}`);
+
+      logger.error(`Error shutting down state query client: ${error}`);
     }
 
     try {
@@ -484,7 +486,7 @@ export class OgmiosBackend implements CardanoBackend {
         await this.txSubmissionClient.shutdown();
       }
     } catch (error) {
-      logger.error(`[OgmiosBackend] Error shutting down tx submission client: ${error}`);
+      logger.error(`Error shutting down tx submission client: ${error}`);
     }
 
     try {
@@ -492,7 +494,7 @@ export class OgmiosBackend implements CardanoBackend {
         this.context.socket.close();
       }
     } catch (error) {
-      logger.error(`[OgmiosBackend] Error closing socket: ${error}`);
+      logger.error(`Error closing socket: ${error}`);
     }
 
     this.isShutdown = true;

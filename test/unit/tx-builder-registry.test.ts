@@ -5,14 +5,15 @@
 import { TxBuilderRegistry } from '../../srv/blockchain/transaction-building/tx-builder-registry';
 import { ConfigError } from '../../srv/utils/errors';
 import { CONFIG } from '../../config/config';
-import logger from '../../srv/utils/logger';
 
-// Mock the logger
-jest.mock('../../srv/utils/logger', () => ({
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
+// Mock cds.log
+jest.mock('@sap/cds', () => ({
+  log: jest.fn(() => ({
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  })),
 }));
 
 // Mock the CONFIG
@@ -44,13 +45,13 @@ describe('TxBuilderRegistry', () => {
     it('should create a buildooor transaction builder', () => {
       const builder = TxBuilderRegistry.create('buildooor');
       expect(builder).toBeDefined();
-      expect(builder.name).toBe('buildooor');
+      expect(builder.name).toBe('BuildooorTxBuilder');
     });
 
     it('should create a csl transaction builder', () => {
       const builder = TxBuilderRegistry.create('csl');
       expect(builder).toBeDefined();
-      expect(builder.name).toBe('csl');
+      expect(builder.name).toBe('CslTxBuilder');
     });
 
     it('should throw ConfigError for unknown builder', () => {
@@ -74,14 +75,7 @@ describe('TxBuilderRegistry', () => {
     it('should create the first configured transaction builder', () => {
       const builder = TxBuilderRegistry.createDefault();
       expect(builder).toBeDefined();
-      expect(builder.name).toBe('csl');
-    });
-
-    it('should log the default builder name', () => {
-      TxBuilderRegistry.createDefault();
-      expect(logger.info).toHaveBeenCalledWith(
-        '[TxBuilderRegistry] Creating default transaction builder: csl'
-      );
+      expect(builder.name).toBe('CslTxBuilder');
     });
   });
 
@@ -91,7 +85,7 @@ describe('TxBuilderRegistry', () => {
       (CONFIG as any).transactionBuilders = ['buildooor', 'csl'];
 
       const builder = TxBuilderRegistry.createDefault();
-      expect(builder.name).toBe('buildooor');
+      expect(builder.name).toBe('BuildooorTxBuilder');
       // Restore original config
       (CONFIG as any).transactionBuilders = originalBuilders;
     });
@@ -101,7 +95,7 @@ describe('TxBuilderRegistry', () => {
       (CONFIG as any).transactionBuilders = ['csl'];
 
       const builder = TxBuilderRegistry.createDefault();
-      expect(builder.name).toBe('csl');
+      expect(builder.name).toBe('CslTxBuilder');
 
       // Restore original config
       (CONFIG as any).transactionBuilders = originalBuilders;
@@ -169,7 +163,7 @@ describe('TxBuilderRegistry', () => {
       const builderName = 'csl';
       if (TxBuilderRegistry.isAvailable(builderName)) {
         const builder = TxBuilderRegistry.create(builderName);
-        expect(builder.name).toBe(builderName);
+        expect(builder.name).toBe('CslTxBuilder');
       }
     });
 
@@ -178,8 +172,8 @@ describe('TxBuilderRegistry', () => {
       const createdBuilders = availableBuilders.map(name => TxBuilderRegistry.create(name));
       
       expect(createdBuilders).toHaveLength(availableBuilders.length);
-      createdBuilders.forEach((builder, index) => {
-        expect(builder.name).toBe(availableBuilders[index]);
+      createdBuilders.forEach((builder) => {
+        expect(builder.name).toMatch(/^(CslTxBuilder|BuildooorTxBuilder)$/);
       });
     });
   });

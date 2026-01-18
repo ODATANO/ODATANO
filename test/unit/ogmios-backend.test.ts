@@ -1,10 +1,10 @@
-jest.mock('../../srv/utils/logger', () => ({
-  default: {
+jest.mock('@sap/cds', () => ({
+  log: jest.fn(() => ({
     info: jest.fn(),
     error: jest.fn(),
     warn: jest.fn(),
-    debug: jest.fn()
-  }
+    debug: jest.fn(),
+  })),
 }));
 
 jest.mock('../../config/config', () => ({
@@ -29,13 +29,8 @@ describe('OgmiosBackend', () => {
 
   beforeEach(() => {
     originalOgmiosUrl = CONFIG.ogmiosUrl;
-    // Clear all mocks but restore logger implementation
+    // Clear all mocks
     jest.clearAllMocks();
-    const logger = require('../../srv/utils/logger').default;
-    logger.info.mockImplementation(jest.fn());
-    logger.error.mockImplementation(jest.fn());
-    logger.warn.mockImplementation(jest.fn());
-    logger.debug.mockImplementation(jest.fn());
   });
 
   afterEach(() => {

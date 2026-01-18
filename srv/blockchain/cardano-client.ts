@@ -1,7 +1,7 @@
+import cds from '@sap/cds';
 import { CardanoBackend } from './backends/cardano-backend';
 import { BackendRegistry } from './backends/backend-registry';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
-import logger from '../utils/logger';
 import { CONFIG } from '../../config/config';
 
 import {
@@ -23,6 +23,7 @@ import {
  */
 const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs);
 const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs);
+const logger = cds.log('CardanoClient');
 
 /**
  * Method routing configuration - defines which backend type to prefer for each method
@@ -74,11 +75,7 @@ export class CardanoClient {
     }
     this.liveBackend = liveBackend;
     this.historicalBackends = historicalBackends;
-    
-    logger.info({
-      live: liveBackend?.name ?? 'none',
-      historical: historicalBackends.map(b => b.name).join(', ') || 'none'
-    }, '[CardanoClient] Initialized with backends');
+    logger.info('CardanoClient instance created.');
   }
 
   /** 
@@ -103,12 +100,12 @@ export class CardanoClient {
     // Initialize live backend
     if (this.liveBackend) {
       try {
-        logger.info({ backend: this.liveBackend.name }, 'Initializing live backend');
+        logger.debug(`Initializing live backend: ${this.liveBackend.name}`);
         await this.liveBackend.init();
-        logger.info({ backend: this.liveBackend.name }, 'Live backend initialized');
+        logger.debug(`Live backend initialized: ${this.liveBackend.name}`);
       } catch (err: any) {
         initErrors.push(new BackendInitError(this.liveBackend.name, err));
-        logger.error({ backend: this.liveBackend.name, err }, 'Failed to initialize live backend');
+        logger.error(`Failed to initialize live backend: ${this.liveBackend.name}`, err);
         this.liveBackend = undefined; // remove failed backend
       }
     }
@@ -117,13 +114,13 @@ export class CardanoClient {
     const initializedHistorical: CardanoBackend[] = [];
     for (const backend of this.historicalBackends) {
       try {
-        logger.info({ backend: backend.name }, 'Initializing historical backend');
+        logger.debug(`Initializing historical backend: ${backend.name}`);
         await backend.init();
         initializedHistorical.push(backend);
-        logger.info({ backend: backend.name }, 'Historical backend initialized');
+        logger.debug(`Historical backend initialized: ${backend.name}`);
       } catch (err: any) {
         initErrors.push(new BackendInitError(backend.name, err));
-        logger.error({ backend: backend.name, err }, 'Failed to initialize historical backend');
+        logger.error(`Failed to initialize historical backend: ${backend.name}`, err);
       }
     }
     this.historicalBackends = initializedHistorical;
@@ -198,7 +195,7 @@ export class CardanoClient {
     for (const backend of allBackends) {
       try {
         const backendType = backend === this.liveBackend ? 'live' : 'historical';
-        logger.debug({ backend: backend.name, type: backendType }, 'Calling backend');
+        logger.debug(`Calling backend: ${backend.name} (${backendType})`);
         
         const result = await this.withTimeout(
           fn(backend),
@@ -212,8 +209,7 @@ export class CardanoClient {
         
         const logLevel = backendError.statusCode === 404 ? 'debug' : 'warn';
         logger[logLevel](
-          { backend: backend.name, error: backendError.message }, 
-          `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}`
+          `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}: ${backend.name} - ${backendError.message}`
         );
       }
     }
@@ -233,7 +229,7 @@ export class CardanoClient {
   ): Promise<T> {
     const config = METHOD_ROUTING[methodName];
     if (!config) {
-      logger.warn({ methodName }, 'No routing config found, defaulting to live-first');
+      logger.warn(`No routing config found for method ${methodName}, defaulting to live-first`);
       return this.executeWithPriority(fn, true);
     }
     return this.executeWithPriority(fn, config.preferLive);

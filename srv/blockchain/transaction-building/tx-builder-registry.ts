@@ -3,8 +3,9 @@ import { BuildooorTxBuilder } from './buildooor-tx';
 import { CSLTxBuilder } from './csl-tx';
 import { ConfigError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
-import logger from '../../utils/logger';
+import cds from '@sap/cds';
 
+const logger = cds.log(`TxBuilderRegistry`);
 export type TxBuilderName = 'buildooor' | 'csl';
 
 /**
@@ -39,7 +40,7 @@ export class TxBuilderRegistry {
     // Use first configured builder as default
     const configuredBuilders = CONFIG.transactionBuilders;
     const defaultBuilder = configuredBuilders[0];
-    logger.info(`[TxBuilderRegistry] Creating default transaction builder: ${defaultBuilder}`);
+    logger.info(`Creating default transaction builder: ${defaultBuilder}`);
     return this.create(defaultBuilder);
   }
 

@@ -37,24 +37,12 @@ jobs:
         version: ${{ matrix.version }}
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
-    - name: prune node db (keep recent data only)
+    - name: prune node db
       shell: bash
       working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
       run: |
         sudo chown -R $(whoami):$(whoami) immutable
-        # Count total chunks
-        TOTAL_CHUNKS=$(ls immutable/*.chunk 2>/dev/null | wc -l)
-        echo "Total chunks found: $TOTAL_CHUNKS"
-        
-        # Delete only the oldest 200 chunks (keep most of the chain)
-        if [ $TOTAL_CHUNKS -gt 300 ]; then
-          CHUNKS_TO_DELETE=200
-          echo "Deleting oldest $CHUNKS_TO_DELETE chunks to save space..."
-          ls immutable/*.chunk | sort | head -n $CHUNKS_TO_DELETE | xargs -r rm -f
-          echo "✅ Pruned $CHUNKS_TO_DELETE old chunks, kept $(($TOTAL_CHUNKS - $CHUNKS_TO_DELETE))"
-        else
-          echo "⚠️ Only $TOTAL_CHUNKS chunks, skipping pruning to preserve sync data"
-        fi
+        ls immutable/*.chunk | sort | head -n -5000 | xargs -r rm -f --
 
     - uses: actions/cache/save@v4
       with:

@@ -1,5 +1,6 @@
 import axios, { AxiosError } from 'axios';
-import logger from '../srv/utils/logger';
+
+const COMPONENT_NAME = 'RequestExamples';
 
 const BASE_URL = 'http://localhost:4004/odata/v4/cardano-odata';
 
@@ -153,15 +154,15 @@ const examples: ExampleRequest[] = [
 ];
 
 (async () => {
-  logger.info('Starting ODATANO M1 Service Catalog Tests');
-  logger.info(`Total Requests: ${examples.length}`);
-  logger.info('='.repeat(80));
+  console.log('Starting ODATANO M1 Service Catalog Tests');
+  console.log(`Total Requests: ${examples.length}`);
+  console.log('='.repeat(80));
 
   let successCount = 0;
   let errorCount = 0;
 
   for (const ex of examples) {
-    logger.info({ name: ex.name }, `\n=== ${ex.name} ===`);
+    console.log(`\n=== ${ex.name} ===`);
 
     try {
       const config = {
@@ -173,7 +174,7 @@ const examples: ExampleRequest[] = [
         ? await axios.post(ex.url, ex.data, config)
         : await axios.get(ex.url, config);
 
-      logger.info(
+      console.log(
         { 
           status: res.status,
           dataSize: JSON.stringify(res.data).length,
@@ -186,7 +187,7 @@ const examples: ExampleRequest[] = [
       errorCount++;
 
       if (error.response) {
-        logger.warn(
+        console.log(
           {
             status: error.response.status,
             body: error.response.data,
@@ -194,7 +195,7 @@ const examples: ExampleRequest[] = [
           'Request failed with response'
         );
       } else {
-        logger.error(
+        console.error(
           { err: error.message },
           'Request failed with error'
         );
@@ -202,8 +203,8 @@ const examples: ExampleRequest[] = [
     }
   }
 
-  logger.info('='.repeat(80));
-  logger.info({
+  console.log('='.repeat(80));
+  console.log({
     total: examples.length,
     successful: successCount,
     failed: errorCount,

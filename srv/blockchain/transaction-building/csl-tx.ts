@@ -1,17 +1,19 @@
+import cds from '@sap/cds'
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
-import logger from "../../utils/logger";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
+
+const logger = cds.log('CSLTxBuilder');
 
 /**
  * CSLTxBuilder - Implementation of CardanoTxBuilder using cardano-serialization-lib (CSL)
  */
 export class CSLTxBuilder implements CardanoTxBuilder {
-  public readonly name = "csl";
+  public readonly name = "CslTxBuilder";
   private txBuilderConfig!: CSL.TransactionBuilderConfig;
 
   /**
@@ -20,9 +22,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   public async init(): Promise<void> {
     const protocolParams = await cardano.getProtocolParameters();
     this.txBuilderConfig = this._createTxBuilderConfig(protocolParams);
-    logger.info(`[CSLTxBuilder] TxBuilder initialized with protocol parameters.`);
+    logger.info(`Initialized with protocol parameters.`);
   }
-
   /**
    * Build unsigned ADA transfer transaction
    * @param req transaction build request
@@ -73,7 +74,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       });
     }
 
-    logger.info(`[CSLTxBuilder] Built unsigned transaction successfully.`);
+    logger.info(`Built unsigned transaction successfully.`);
 
     return {
       unsignedTxCbor,
@@ -152,7 +153,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       .coins_per_utxo_byte(CSL.BigNum.from_str(String(coinsPerUtxoByte)))
       .build();
 
-    logger.info(`[CSLTxBuilder] TransactionBuilderConfig created from protocol parameters.`);
+    logger.info(`TransactionBuilderConfig created from protocol parameters.`);
     return cfg;
   }
 
@@ -206,7 +207,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       });
     }
 
-    logger.info(`[CSLTxBuilder] Built unsigned transaction with metadata successfully.`);
+    logger.info(`Built unsigned transaction with metadata successfully.`);
 
     return {
       unsignedTxCbor,
@@ -258,11 +259,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       }
       // Convert JSON Value to CSL TransactionMetadatum
       const txMetadatum = this._jsonToCSLMetadatum(value);
-      logger.debug(`[CSLTxBuilder] Created TransactionMetadatum for label ${numericLabel}`);
+      logger.debug(`Created TransactionMetadatum for label ${numericLabel}`);
       metadata.insert(CSL.BigNum.from_str(String(numericLabel)), txMetadatum);
     }
 
-    logger.debug(`[CSLTxBuilder] Created metadata with ${metadata.len()} labels`);
+    logger.debug(`Created metadata with ${metadata.len()} labels`);
     return metadata;
   }
 

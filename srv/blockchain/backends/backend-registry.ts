@@ -1,11 +1,15 @@
+import cds from '@sap/cds';
 import { CardanoBackend } from './cardano-backend';
 import { OgmiosBackend } from './ogmios-backend';
 import { BlockfrostBackend } from './blockfrost-backend';
 import { KoiosBackend } from './koios-backend';
 import { ConfigError } from '../../utils/errors';
 import { CONFIG } from '../../../config/config';
-import logger from '../../utils/logger';
 
+const logger = cds.log('BackendRegistry');
+/**
+ * BackendName - Union type of supported backend names
+ */
 export type BackendName = 'ogmios' | 'blockfrost' | 'koios';
 
 /**
@@ -42,7 +46,7 @@ export class BackendRegistry {
     
     // Check if we should use Ogmios (either explicitly or via 'hybrid')
     if (configuredBackends.includes('ogmios') || configuredBackends.includes('hybrid')) {
-      logger.info('[BackendRegistry] Creating Ogmios as live backend');
+      logger.info('Creating Ogmios as live backend');
       return this.create('ogmios');
     }
     
@@ -61,7 +65,7 @@ export class BackendRegistry {
     if (configuredBackends.includes('blockfrost') || 
         (configuredBackends.includes('hybrid') && CONFIG.blockfrostApiKey)) {
       if (CONFIG.blockfrostApiKey) {
-        logger.info('[BackendRegistry] Adding Blockfrost as historical backend');
+        logger.info('Adding Blockfrost as historical backend');
         backends.push(this.create('blockfrost'));
       }
     }
@@ -69,7 +73,7 @@ export class BackendRegistry {
     // Check for Koios (API key is optional)
     if (configuredBackends.includes('koios') || 
         (configuredBackends.includes('hybrid') && !CONFIG.blockfrostApiKey)) {
-      logger.info('[BackendRegistry] Adding Koios as historical backend');
+      logger.info('Adding Koios as historical backend');
       backends.push(this.create('koios'));
     }
 

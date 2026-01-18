@@ -5,6 +5,9 @@
  * Buildooor is a transaction building library from HarmonicLabs.
  */
 
+// Configure environment to use only Buildooor transaction builder
+process.env.TX_BUILDERS = 'buildooor';
+
 // Import and run the transaction service test suite
 import { createTxServiceTestSuite } from './tx-test-suite';
 

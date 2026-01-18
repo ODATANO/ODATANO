@@ -1,5 +1,4 @@
 import cds, { Request } from '@sap/cds';
-import logger from './utils/logger';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
@@ -9,6 +8,8 @@ import { JSONValue } from './utils/types';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
 const { SELECT } = cds.ql;
+
+const logger = cds.log('CardanoTxService');
 
 /**
  * Cardano Transaction Service Implementation
@@ -31,7 +32,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuilds} The transaction builds fitting the request query
    */
   srv.on('READ', TransactionBuilds, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionBuilds READ handler called');
+    logger.debug('TransactionBuilds READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -41,7 +42,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuildInputs} The transaction build inputs fitting the request query
    */
   srv.on('READ', TransactionBuildInputs, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionBuildInputs READ handler called');
+    logger.debug('TransactionBuildInputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -51,7 +52,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuildOutputs} The transaction build outputs fitting the request query
    */
   srv.on('READ', TransactionBuildOutputs, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionBuildOutputs READ handler called');
+    logger.debug('TransactionBuildOutputs READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
   /** 
@@ -60,7 +61,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionSubmissions} The transaction submissions fitting the request query
    */
   srv.on('READ', TransactionSubmissions, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionSubmissions READ handler called');
+    logger.debug('TransactionSubmissions READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -70,7 +71,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionSubmissionErrors} The transaction submission errors fitting the request query
    */
   srv.on('READ', TransactionSubmissionErrors, async (req: Request) => {
-    logger.debug('[CardanoTxService] TransactionSubmissionErrors READ handler called');
+    logger.debug('TransactionSubmissionErrors READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -91,7 +92,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
+      logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
       return await indexer.indexSimpleBuildResult(db, req.data);
     });
   });
@@ -119,7 +120,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       logger.info(
         { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
-        '[TxService] Building transaction with metadata'
+        'Building transaction with metadata'
       );
       return await indexer.indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
     });
@@ -149,7 +150,7 @@ module.exports = (srv: cds.Service) => {
    * @returns Transaction submission details
    */
   srv.on('SubmitTransaction', async (req: Request) => {
-    logger.debug('[TxService] SubmitTransaction Action handler called');
+    logger.debug('SubmitTransaction Action handler called');
     const { buildId, signedTxCbor } = req.data;
 
     // Validate inputs
@@ -161,7 +162,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
-      logger.debug({ buildId }, '[TxService] Submitting signed transaction');
+      logger.debug({ buildId }, 'Submitting signed transaction');
 
       // Validate build exists
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
@@ -172,11 +173,11 @@ module.exports = (srv: cds.Service) => {
 
       // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
       await cardanoClient.submitTransaction(signedTxCbor);
-      logger.info({ txHash }, '[TxService] Transaction submitted to blockchain');
+      logger.info({ txHash }, 'Transaction submitted to blockchain');
 
       // index submission record
       const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
-      logger.debug('[TxService] Transaction indexed');
+      logger.debug('Transaction indexed');
 
       // store submission record with txHash
       const submissionRecord = {
@@ -198,7 +199,7 @@ module.exports = (srv: cds.Service) => {
    * @returns Transaction submission details
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
-    logger.info('[TxService] SubmitSignedTransaction Action handler called');
+    logger.info('SubmitSignedTransaction Action handler called');
     const { signedTxCbor, network } = req.data;
 
     // validate inputs
@@ -213,11 +214,11 @@ module.exports = (srv: cds.Service) => {
 
       // submit to blockchain
       await cardanoClient.submitTransaction(signedTxCbor);
-      logger.debug({ txHash }, '[TxService] External transaction submitted');
+      logger.debug({ txHash }, 'External transaction submitted');
 
       // index submission record
       const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
-      logger.debug('[TxService] External transaction indexed');
+      logger.debug('External transaction indexed');
 
       // store submission record with null buildId
       const submissionRecord = {
@@ -238,7 +239,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionSubmission} The transaction submission status
    */
   srv.on('CheckSubmissionStatus', async (req: Request) => {
-    logger.debug('[TxService] CheckSubmissionStatus Action handler called');
+    logger.debug('CheckSubmissionStatus Action handler called');
     const { submissionId } = req.data;
 
     // validate inputs
