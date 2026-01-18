@@ -225,11 +225,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  public async buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+  public async buildUnsignedMultiAssetTransaction(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
     throw new Error("[CSLTxBuilder] buildUnsignedMultiAssetTransaction not yet implemented");
   }
 
-  public async buildUnsignedPlutusTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+  public async buildUnsignedPlutusTransaction(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
     throw new Error("[CSLTxBuilder] buildUnsignedPlutusTransaction not yet implemented");
   }
 

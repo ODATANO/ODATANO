@@ -1,7 +1,6 @@
 import type { UTxO as OdatanoUtxo } from '../utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import blake2b from 'blake2b';
 import * as cbor from 'cbor';
 

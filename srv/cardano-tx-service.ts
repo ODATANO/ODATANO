@@ -110,7 +110,7 @@ module.exports = (srv: cds.Service) => {
     if (metadataJson) {
       try {
         parsedMetadata = typeof metadataJson === 'string' ? JSON.parse(metadataJson) : metadataJson;
-      } catch (error) {
+      } catch {
         return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
       }
     }
