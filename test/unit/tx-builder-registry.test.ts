@@ -19,6 +19,19 @@ jest.mock('../../srv/utils/logger', () => ({
 jest.mock('../../config/config', () => ({
   CONFIG: {
     transactionBuilders: ['csl', 'buildooor'],
+    backends: ['koios'], // Required for BackendRegistry
+    network: 'preview',
+    hrp: 'addr_test',
+    VALIDITY_VARIANTS: { CURRENT: 300, LONG: 900 },
+    blockfrostApiKey: '',
+    blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
+    koiosApiUrl: 'https://preview.koios.rest/api/v1',
+    koiosApiKey: '',
+    ogmiosUrl: 'ws://localhost:1337',
+    primaryTimeoutMs: 118000,
+    fallbackTimeoutMs: 10000,
+    indexTtlMs: 600000,
+    logLevel: 'info',
   },
 }));
 

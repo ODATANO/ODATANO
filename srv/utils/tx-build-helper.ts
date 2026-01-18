@@ -1,6 +1,9 @@
 import type { UTxO as OdatanoUtxo } from '../utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
+import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
+import blake2b from 'blake2b';
+import * as cbor from 'cbor';
 
 /** 
  * Extract lovelace amount from UTxO
@@ -30,7 +33,21 @@ export function assertAdaOnly(u: OdatanoUtxo): void {
  * @returns {string} transaction hash (hex)
  */
 export function getTxHashFromCbor(signedTxCbor: string): string {
-  const txBytes = fromHex(signedTxCbor);
-  const tx = Tx.fromCbor(txBytes);
-  return tx.hash.toString();
+  try {
+    // Try with harmoniclabs library first
+    const txBytes = fromHex(signedTxCbor);
+    const tx = Tx.fromCbor(txBytes);
+    return tx.hash.toString();
+  } catch (error) {
+    // Fallback: Decode CBOR and hash the original body bytes
+    try {
+      const txBytes = Buffer.from(signedTxCbor, 'hex');
+      const txArray = cbor.Decoder.decodeFirstSync(txBytes);
+      const bodyBytes = cbor.encode(txArray[0]);
+      const hash = blake2b(32).update(bodyBytes).digest('hex');
+      return hash;
+    } catch (cborError) {
+      throw new Error(`Failed to extract tx hash from CBOR: ${error}. CBOR fallback also failed: ${cborError}`);
+    }
+  }
 }

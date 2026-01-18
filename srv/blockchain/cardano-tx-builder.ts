@@ -21,6 +21,14 @@ export class CardanoTransactionBuilder {
     }
 
     /** 
+     * Reset the transaction builder (useful for testing)
+     */
+    reset(): void {
+        this.txBuilder = undefined as any;
+        logger.debug(`[CardanoTransactionBuilder] Builder reset`);
+    }
+
+    /** 
      * Build a simple ADA transfer transaction
      * @param req transaction build request
      * @param protocolParameters current protocol parameters
@@ -41,6 +49,23 @@ export class CardanoTransactionBuilder {
         const txBuildResult = await this.txBuilder.buildUnsignedAdaTransfer(req, txContext);
 
         logger.info(`[CardanoTransactionBuilder] Built simple ADA transaction successfully.`);
+        // Return the transaction build result
+        return txBuildResult;
+    }
+
+    async buildTransactionWithMetadata(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
+        // Ensure builder is initialized
+        if (!this.txBuilder) {
+            await this.init();
+        }
+        // Prepare the transaction build context
+        const txContext: TxBuildContext = {
+            utxos: await this._fetchUtxosForAddress(req.senderAddress),
+            protocolParameters: protocolParameters
+        };
+        // Build the unsigned transaction with metadata
+        const txBuildResult = await this.txBuilder.buildUnsignedTransactionWithMetadata(req, txContext);
+        logger.info(`[CardanoTransactionBuilder] Built transaction with metadata successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }

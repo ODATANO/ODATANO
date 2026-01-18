@@ -1,21 +1,33 @@
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo } from "../../utils/types";
+import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
 import logger from "../../utils/logger";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
+import cardano from "../cardano-client";
 
 /**
  * CSLTxBuilder - Implementation of CardanoTxBuilder using cardano-serialization-lib (CSL)
  */
 export class CSLTxBuilder implements CardanoTxBuilder {
   public readonly name = "csl";
-
-  public async init(): Promise<void> { }
+  private txBuilderConfig!: CSL.TransactionBuilderConfig;
 
   /**
-   * Build unsigned ADA transfer transaction (CSL)
+   * Initialize the builder
+   */
+  public async init(): Promise<void> {
+    const protocolParams = await cardano.getProtocolParameters();
+    this.txBuilderConfig = this._createTxBuilderConfig(protocolParams);
+    logger.info(`[CSLTxBuilder] TxBuilder initialized with protocol parameters.`);
+  }
+
+  /**
+   * Build unsigned ADA transfer transaction
+   * @param req transaction build request
+   * @param ctx transaction build context
+   * @returns {Promise<TxBuildResult>} transaction build result
    */
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     // prepare addresses
@@ -25,10 +37,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
     const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
 
-    const protocolParams = ctx.protocolParameters;
-
-    // create Transaction Builder from protocol parameters
-    const txb = this._newTxBuilderFromProtocolParams(protocolParams);
+    // create Transaction Builder from stored config
+    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
     // add recipient & output (lovelace)
     const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
@@ -82,13 +92,14 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  // ---------------------------------------------------------------------------
+  //---------------------------------------------------------------------------
   // Private Helper Methods
-  // ---------------------------------------------------------------------------
+  //---------------------------------------------------------------------------
 
   /**
-   * Map ODATANO UTxOs to CSL TransactionUnspentOutputs (ADA-only for now).
-   * This mirrors your Buildooor mapping logic in spirit.
+   * Map ODATANO UTxOs to CSL TransactionUnspentOutputs (ADA-only for now)
+   * @param utxos ODATANO UTxO array
+   * @returns CSL TransactionUnspentOutputs
    */
   private _mapOdatanoUtxosToCslUtxos(utxos: OdatanoUtxo[]): CSL.TransactionUnspentOutputs {
     const outs = CSL.TransactionUnspentOutputs.new();
@@ -111,13 +122,12 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   }
 
   /**
-   * Create a CSL TransactionBuilder from protocol parameters.
-   *
+   * Create a CSL TransactionBuilderConfig from protocol parameters
+   * This config is created once and reused for all transactions
    * @param protocolParams LedgerProtocolParameter
-   * @returns CSL.TransactionBuilder
+   * @returns CSL.TransactionBuilderConfig
    */
-
-  private _newTxBuilderFromProtocolParams(protocolParams: LedgerProtocolParameter): CSL.TransactionBuilder {
+  private _createTxBuilderConfig(protocolParams: LedgerProtocolParameter): CSL.TransactionBuilderConfig {
     
     // required values for CSL config
     const minFeeA = protocolParams.minFeeA;
@@ -142,7 +152,153 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       .coins_per_utxo_byte(CSL.BigNum.from_str(String(coinsPerUtxoByte)))
       .build();
 
-    return CSL.TransactionBuilder.new(cfg);
+    logger.info(`[CSLTxBuilder] TransactionBuilderConfig created from protocol parameters.`);
+    return cfg;
   }
 
+  public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    // prepare addresses
+    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+
+    // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
+    const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
+
+    // create Transaction Builder from stored config
+    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+
+    // add recipient & output (lovelace)
+    const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
+    const outValue = CSL.Value.new(amount);
+    const out = CSL.TransactionOutput.new(recipientAddress, outValue);
+    txb.add_output(out);
+
+    // add metadata if provided
+    if (req.metadataJson) {
+      const metadata = this._mapOdatanoMetadataToCSLMetadata(req.metadataJson);
+      txb.set_metadata(metadata);
+    }
+
+    // add inputs via coin selection + add change
+    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+    txb.add_change_if_needed(changeAddress);
+
+    // build unsigned tx
+    const unsignedTx = txb.build_tx();
+    
+    // Export the complete transaction (with empty witness set) for cardano-cli
+    const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
+
+    // hash + fee + outputs
+    const body = unsignedTx.body();
+    const bodyBytes = body.to_bytes();
+    const hash = blake2b(32).update(bodyBytes).digest('hex');
+    const txBodyHash = hash;
+    const feeLovelace = body.fee().to_str();
+
+    const outputs: Array<{ address: string; lovelace: string }> = [];
+    const txOuts = body.outputs();
+    for (let i = 0; i < txOuts.len(); i++) {
+      const o = txOuts.get(i);
+      outputs.push({
+        address: o.address().to_bech32(),
+        lovelace: o.amount().coin().to_str(),
+      });
+    }
+
+    logger.info(`[CSLTxBuilder] Built unsigned transaction with metadata successfully.`);
+
+    return {
+      unsignedTxCbor,
+      txBodyHash,
+      senderAddress: req.senderAddress,
+      network: req.network,
+      builderEngine: this.name,
+      feeLovelace,
+      inputs: ctx.utxos.map(u => ({
+        txHash: u.txHash,
+        index: u.outputIndex,
+        lovelace: getLovelace(u).toString(),
+      })),
+      outputs,
+      warnings: [],
+    };
+  }
+
+  public async buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    throw new Error("[CSLTxBuilder] buildUnsignedMultiAssetTransaction not yet implemented");
+  }
+
+  public async buildUnsignedPlutusTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    throw new Error("[CSLTxBuilder] buildUnsignedPlutusTransaction not yet implemented");
+  }
+
+  /**
+   * Map ODATANO metadata JSON to CSL GeneralTransactionMetadata
+   * @param metadataJson JSON metadata object
+   * @returns CSL GeneralTransactionMetadata
+   */
+  private _mapOdatanoMetadataToCSLMetadata(metadataJson: JSONValue | undefined): CSL.GeneralTransactionMetadata {
+    if (!metadataJson) {
+      return CSL.GeneralTransactionMetadata.new();
+    }
+
+    // Metadata must be an object with labels as keys
+    if (typeof metadataJson !== 'object' || Array.isArray(metadataJson) || metadataJson === null) {
+      throw new Error(`[CSLTxBuilder] Invalid metadata format. Expected object, got ${typeof metadataJson}`);
+    }
+
+    const metadata = CSL.GeneralTransactionMetadata.new();
+
+    for (const [label, value] of Object.entries(metadataJson)) {
+      // Convert label to BigNum
+      const numericLabel = parseInt(label, 10);
+      if (isNaN(numericLabel)) {
+        throw new Error(`[CSLTxBuilder] Invalid metadata label: ${label}. Labels must be numeric.`);
+      }
+      // Convert JSON Value to CSL TransactionMetadatum
+      const txMetadatum = this._jsonToCSLMetadatum(value);
+      logger.debug(`[CSLTxBuilder] Created TransactionMetadatum for label ${numericLabel}`);
+      metadata.insert(CSL.BigNum.from_str(String(numericLabel)), txMetadatum);
+    }
+
+    logger.debug(`[CSLTxBuilder] Created metadata with ${metadata.len()} labels`);
+    return metadata;
+  }
+
+  /**
+   * Convert JSON value to CSL TransactionMetadatum
+   * @param value JSON value
+   * @returns CSL TransactionMetadatum
+   */
+  private _jsonToCSLMetadatum(value: JSONValue): CSL.TransactionMetadatum {
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      const intValue = CSL.Int.new_i32(Number(value));
+      return CSL.TransactionMetadatum.new_int(intValue);
+    }
+    
+    if (typeof value === 'string') {
+      return CSL.TransactionMetadatum.new_text(value);
+    }
+    
+    if (Array.isArray(value)) {
+      const list = CSL.MetadataList.new();
+      for (const item of value) {
+        list.add(this._jsonToCSLMetadatum(item));
+      }
+      return CSL.TransactionMetadatum.new_list(list);
+    }
+    
+    if (typeof value === 'object' && value !== null) {
+      const map = CSL.MetadataMap.new();
+      for (const [k, v] of Object.entries(value)) {
+        const key = CSL.TransactionMetadatum.new_text(k);
+        const val = this._jsonToCSLMetadatum(v);
+        map.insert(key, val);
+      }
+      return CSL.TransactionMetadatum.new_map(map);
+    }
+
+    throw new Error(`[CSLTxBuilder] Unsupported metadata value type: ${typeof value}`);
+  }
 }

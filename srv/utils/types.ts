@@ -272,6 +272,7 @@ export type TxBuildRequest = {
   lovelaceAmount: number;
   changeAddress?: string;
   feeLovelace?: string;
+  metadataJson?: JSONValue;
 };
 
 /** 

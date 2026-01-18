@@ -99,8 +99,8 @@ jobs:
       - name: Wait for Cardano Node sync
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         run: |
-          echo "Waiting for node to sync to tip (may take up to 1 hour)..."
-          MAX_WAIT=3600  # 1 hour max
+          echo "Waiting for node to sync to tip (max 15 minutes)..."
+          MAX_WAIT=900  # 15 minutes max
           ELAPSED=0
           
           while [ $ELAPSED -lt $MAX_WAIT ]; do

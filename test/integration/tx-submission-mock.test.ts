@@ -100,6 +100,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
           changeAddress: FIXTURE.validSenderAddress,
           status: 'BUILT',
           unsignedTxCbor: 'mock_unsigned_tx_cbor',
+          txBodyHash: FIXTURE.expectedTxHash,
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -125,9 +126,9 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       );
 
       expect(submitResponse.status).to.equal(200);
-      expect(submitResponse.data.submissionRecord).to.exist;
-      expect(submitResponse.data.submissionRecord.txHash).to.equal(FIXTURE.expectedTxHash);
-      expect(submitResponse.data.submissionRecord.build_id).to.equal(mockBuildId);
+      expect(submitResponse.data).to.exist;
+      expect(submitResponse.data.txHash).to.equal(FIXTURE.expectedTxHash);
+      expect(submitResponse.data.build_id).to.equal(mockBuildId);
       expect(scope.isDone()).to.be.true;
     });
 

@@ -82,8 +82,8 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                             @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
                                             changeAddress: db.Bech32,
                                             @title: 'Metadata JSON'
-                                            @description: 'The JSON representation of the transaction metadata'
-                                            metadataJson: db.MetadataSlice) returns TransactionBuilds;
+                                            @description: 'The JSON representation of the transaction metadata as string'
+                                            metadataJson: String) returns TransactionBuilds;
                                             
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'

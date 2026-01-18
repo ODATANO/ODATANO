@@ -1,5 +1,6 @@
 import cds from '@sap/cds';
 import { TxBuilderTestConfig, configureTxBuilderForTest } from './backend-test-helper';
+import cardanoTransactionBuilder from '../../srv/blockchain/cardano-tx-builder';
 
 const { SELECT } = cds.ql;
 jest.setTimeout(60000);
@@ -26,7 +27,7 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
       network: 'preview',
       validSenderAddress: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
       validRecipientAddress: 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622',
-      lovelaceAmount: '5000000', // 5 ADA (minimum UTxO requirement is ~2.66 ADA)
+      lovelaceAmount: '5000000', // 5 ADA
       invalidAddress: 'invalid_address',
       invalidLovelaceAmount: 'not_a_number',
     };
@@ -34,6 +35,8 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
     // Reset the database before each test to ensure a clean state
     beforeEach(async () => {
       await test.data.reset();
+      // Reset the transaction builder to test initialization logic
+      cardanoTransactionBuilder.reset();
     });
 
     // ============================================================================
@@ -238,6 +241,30 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         // Just verify the transaction builds successfully without detailed assertions
         expect(status).to.equal(200);
         expect(data.id).to.exist;
+      });
+    });
+
+    describe('BuildTransactionWithMetadata Action', () => {
+      it('POST /BuildTransactionWithMetadata - successfully build ADA transaction with metadata', async () => {
+        const METADATA = {
+          "674": {
+            "msg": ["Hello", "from", "ODATANO"]
+          }
+        };
+
+        const requestBody = {
+          network: FIXTURE.network,
+          senderAddress: FIXTURE.validSenderAddress,
+          recipientAddress: FIXTURE.validRecipientAddress,
+          lovelaceAmount: FIXTURE.lovelaceAmount,
+          changeAddress: FIXTURE.validSenderAddress,
+          metadataJson: JSON.stringify(METADATA),
+        };
+        const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildTransactionWithMetadata', requestBody);
+        expect(status).to.equal(200);
+        expect(data).to.have.property('id'); // Build ID
+        expect(data).to.have.property('unsignedTxCbor');
+        expect(data).to.have.property('txBodyHash');
       });
     });
 

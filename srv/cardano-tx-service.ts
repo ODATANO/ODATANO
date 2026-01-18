@@ -5,6 +5,7 @@ import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
 import { isValidBech32Address, isValidCbor } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
+import { JSONValue } from './utils/types';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
 const { SELECT } = cds.ql;
@@ -91,7 +92,36 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, '[TxService] Building simple ADA transaction');
-      return await indexer.indexBuildResult(db, req.data);
+      return await indexer.indexSimpleBuildResult(db, req.data);
+    });
+  });
+
+  srv.on('BuildTransactionWithMetadata', async (req: Request) => {
+    const { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
+    // validate inputs
+    if (!network) return rejectMissing(req, 'BuildTransactionWithMetadata', 'network');
+    if (!senderAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'senderAddress');
+    if (!recipientAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'recipientAddress');
+    if (!isValidBech32Address(senderAddress))
+      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid sender address format', 'senderAddress');
+    
+    // Parse metadataJson if it's a string
+    let parsedMetadata: JSONValue | undefined;
+    if (metadataJson) {
+      try {
+        parsedMetadata = typeof metadataJson === 'string' ? JSON.parse(metadataJson) : metadataJson;
+      } catch (error) {
+        return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
+      }
+    }
+    
+    // handle the request / building the transaction / indexing the build result / returning build details
+    return handleRequest(req, async (db) => {
+      logger.info(
+        { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
+        '[TxService] Building transaction with metadata'
+      );
+      return await indexer.indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
     });
   });
 
@@ -137,8 +167,8 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
 
-      // extract txHash from signed CBOR
-      const txHash = getTxHashFromCbor(signedTxCbor);
+      // Use txBodyHash from build instead of parsing signed CBOR
+      const txHash = existing.txBodyHash;
 
       // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
       await cardanoClient.submitTransaction(signedTxCbor);
@@ -158,7 +188,7 @@ module.exports = (srv: cds.Service) => {
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
       await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
 
-      return { submissionRecord };
+      return submissionRecord;
     });
   });
 
