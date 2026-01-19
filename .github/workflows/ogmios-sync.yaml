@@ -31,6 +31,7 @@ jobs:
           cardano-node-ogmios-${{ matrix.network }}
 
     - uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
+      id: sync
       with:
         db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
         network: ${{ matrix.network }}
@@ -38,11 +39,13 @@ jobs:
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
     - name: prune node db
+      # Only prune if sync was already at or above 99.5% before this run
+      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.995 }}
       shell: bash
       working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
       run: |
         sudo chown -R $(whoami):$(whoami) immutable
-        ls immutable/*.chunk | sort | head -n -5000 | xargs -r rm -f --
+        ls immutable/*.chunk | sort | head -n -2500 | xargs -r rm -f --
 
     - uses: actions/cache/save@v4
       with:
