@@ -57,10 +57,10 @@ Once indexed, the data supports the full OData query set:
 
 ### Efficiency
 
-- **First read**: Live blockchain call via Blockfrost/Koios + persistence to
-  database
+- **First read**: Live blockchain call via Blockfrost/Koios/Ogmios + persistence to database
 - **Subsequent reads (within TTL)**: Fast local DB lookup
 - **After TTL expiry**: Automatic re-indexing on next access
+- **Transaction building (M2)**: Protocol parameters and UTxOs fetched from Ogmios (live) or Blockfrost/Koios (historical)
 
 ---
 
@@ -75,6 +75,8 @@ Temporal entities represent **mutable blockchain state** that can change over ti
 - **Accounts**: Stake delegation, rewards change
 - **AddressAssets**: Asset holdings change
 - **AddressUTxOs**: Available UTxOs change
+- **TransactionBuilds** (M2): Unsigned transaction builds with TTL expiry
+- **TransactionSubmissions** (M2): Transaction submission records with status tracking
 
 For example, the `NetworkInformation` entity is marked as **temporal**:
 
@@ -135,6 +137,9 @@ Non-temporal entities represent **immutable blockchain facts** that never change
 - **Epochs**: Epoch statistics are finalized after epoch ends
 - **Pools**: Pool registration data (though delegation changes)
 - **Dreps**: DRep registration data
+- **TransactionBuildInputs/Outputs** (M2): Transaction build details (linked to TransactionBuilds)
+- **TransactionBuildInputAssets/OutputAssets** (M2): Asset details in transaction builds
+- **TransactionSubmissionErrors** (M2): Error records from failed submissions
 
 These entities are stored **without** `validFrom`/`validTo` fields and remain in the database permanently once indexed. They do not respect the `INDEX_TTL_MS` setting.
 
@@ -159,8 +164,10 @@ The indexing behavior is controlled by environment variables:
 
 | Variable       | Default   | Description                                                     |
 | -------------- | --------- | --------------------------------------------------------------- |
-| `INDEX_TTL_MS` | `60000`   | Time-to-live for temporal entities in milliseconds (1 minute)   |
+| `INDEX_TTL_MS` | `600000`  | Time-to-live for temporal entities in milliseconds (10 minutes) |
 | `NETWORK`      | `preview` | Cardano network: `mainnet`, `preview`, or `preprod`             |
+| `BACKENDS`     | `blockfrost,koios,ogmios` | Enabled backends (M2: Ogmios added)              |
+| `TX_BUILDERS`  | `csl,buildooor` | Transaction builders (M2: CSL and Buildooor)            |
 
 **Note:** `INDEX_TTL_MS` only affects **temporal entities** (Addresses, Accounts, NetworkInformation). Non-temporal entities (Transactions, Blocks, Epochs) remain in the database permanently.
 
@@ -172,6 +179,12 @@ INDEX_TTL_MS=300000
 
 # Use mainnet
 NETWORK=mainnet
+
+# Enable specific backends (M2)
+BACKENDS=blockfrost,ogmios
+
+# Use CSL builder only (M2)
+TX_BUILDERS=csl
 ```
 
 ---
@@ -243,6 +256,84 @@ Service checks database for entry
   ↓ (found - never expires)
 Instant response from local DB (no blockchain call)
 ```
+
+---
+
+## M2: Transaction Build and Submission Indexing
+
+### Transaction Build Flow (Temporal Entity)
+
+The M2 milestone introduces **TransactionBuilds** as a temporal entity:
+
+```cds
+entity TransactionBuilds : temporal {
+    key buildId           : UUID;
+        network           : String;
+        senderAddress     : Bech32;
+        unsignedTxCbor    : HexBytes;
+        txHash            : Blake2b256;
+        fee               : Lovelace;
+        builder           : String; // 'csl' or 'buildooor'
+        hasInputs         : Boolean;
+        hasOutputs        : Boolean;
+}
+```
+
+#### Build Transaction Workflow
+
+```
+Client → POST /BuildSimpleAdaTransaction
+  ↓
+Service validates inputs (sender, recipient, amount)
+  ↓
+Transaction Builder (CSL or Buildooor) selected
+  ↓
+Fetch protocol parameters from Ogmios/Blockfrost
+  ↓
+Fetch UTxOs from sender address (Ogmios/Blockfrost)
+  ↓
+Build unsigned transaction with fee calculation
+  ↓
+Persist TransactionBuilds with inputs/outputs/assets
+  ↓
+Return unsigned transaction CBOR to client
+```
+
+**TTL Behavior**: TransactionBuilds respect `INDEX_TTL_MS`. After expiry, old builds are no longer returned by default queries, but remain in database for historical queries.
+
+### Transaction Submission Flow (Temporal Entity)
+
+**TransactionSubmissions** tracks submission attempts:
+
+```cds
+entity TransactionSubmissions : temporal {
+    key submissionId      : UUID;
+        network           : String;
+        signedTxCbor      : HexBytes;
+        txHash            : Blake2b256;
+        status            : String; // 'pending', 'submitted', 'failed'
+        backend           : String; // 'ogmios', 'blockfrost', 'koios'
+        submittedAt       : DateTime;
+        hasErrors         : Boolean;
+}
+```
+
+#### Submit Transaction Workflow
+
+```
+Client → POST /SubmitTransaction (with signed CBOR)
+  ↓
+Service validates signed transaction
+  ↓
+Submit via Ogmios (primary) or Blockfrost/Koios (fallback)
+  ↓
+Record submission in TransactionSubmissions
+  ↓
+If successful: return transaction hash
+If failed: record errors in TransactionSubmissionErrors
+```
+
+**TTL Behavior**: Submission records are temporal and respect `INDEX_TTL_MS` for active queries, but persist for historical analysis.
 
 ---
 

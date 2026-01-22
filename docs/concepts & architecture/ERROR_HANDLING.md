@@ -97,9 +97,9 @@ The `normalizeBackendError()` function converts any error into a typed `BackendE
 
 ## Backend Notes
 
-- Blockfrost: returns correct HTTP statuses; 404 maps directly to NotFoundError.
-- Koios: may return 5xx for "not found"; normalization converts to 404 for
-  consistency.
+- **Blockfrost**: Returns correct HTTP statuses; 404 maps directly to NotFoundError.
+- **Koios**: May return 5xx for "not found"; normalization converts to 404 for consistency.
+- **Ogmios** (M2): WebSocket-based live backend for protocol parameters, UTxO queries, and transaction submission. Connection errors normalized to ProviderUnavailableError.
 
 ## Best Practices
 
@@ -146,8 +146,9 @@ return handleRequest(req, async (db) => {
 
 ## Testing References
 
-- Error normalization unit tests: test/unit/errors.test.ts
-- Blockfrost backend constructor tests: test/unit/blockfrost-backend.test.ts
+- Error normalization unit tests: [test/unit/errors.test.ts](../../test/unit/errors.test.ts) (52 tests)
+- Blockfrost backend constructor tests: [test/unit/blockfrost-backend.test.ts](../../test/unit/blockfrost-backend.test.ts)
+- Error handling service integration tests: [test/integration/error-handling-service.test.ts](../../test/integration/error-handling-service.test.ts) (34 tests)
 
 ## Summary
 

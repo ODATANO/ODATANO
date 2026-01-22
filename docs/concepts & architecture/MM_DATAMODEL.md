@@ -186,6 +186,77 @@ erDiagram
         string fingerprint
     }
 
+    TransactionBuilds {
+        uuid buildId PK
+        string network
+        string senderAddress
+        string unsignedTxCbor
+        string txHash
+        decimal fee
+        string builder
+        boolean hasInputs
+        boolean hasOutputs
+        datetime validFrom
+        datetime validTo
+    }
+
+    TransactionBuildInputs {
+        uuid build FK
+        int inputIndex
+        string address
+        decimal lovelaceAmount
+        string utxoHash
+        int utxoIndex
+        boolean hasAssets
+    }
+
+    TransactionBuildInputAssets {
+        uuid buildInput FK
+        string unit
+        decimal quantity
+        string policyId
+        string assetNameHex
+        string assetName
+    }
+
+    TransactionBuildOutputs {
+        uuid build FK
+        int outputIndex
+        string address
+        decimal lovelaceAmount
+        boolean hasAssets
+    }
+
+    TransactionBuildOutputAssets {
+        uuid buildOutput FK
+        string unit
+        decimal quantity
+        string policyId
+        string assetNameHex
+        string assetName
+    }
+
+    TransactionSubmissions {
+        uuid submissionId PK
+        string network
+        string signedTxCbor
+        string txHash
+        string status
+        string backend
+        datetime submittedAt
+        boolean hasErrors
+        datetime validFrom
+        datetime validTo
+    }
+
+    TransactionSubmissionErrors {
+        uuid submission FK
+        int errorIndex
+        string errorCode
+        string errorMessage
+        string backend
+    }
+
     Epochs ||--o{ Blocks : has
     Addresses ||--o{ AddressAssets : contains
     Addresses ||--o{ AddressUTxOs : contains
@@ -200,4 +271,48 @@ erDiagram
     TransactionOutputs ||--o{ TransactionOutputAssets : contains
     Addresses ||--o{ TransactionInputs : references
     Addresses ||--o{ TransactionOutputs : references
+    TransactionBuilds ||--o{ TransactionBuildInputs : has
+    TransactionBuilds ||--o{ TransactionBuildOutputs : has
+    TransactionBuildInputs ||--o{ TransactionBuildInputAssets : contains
+    TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : contains
+    TransactionSubmissions ||--o{ TransactionSubmissionErrors : has
 ```
+
+---
+
+## M2 Milestone Additions
+
+### Transaction Building Entities (Temporal)
+
+**TransactionBuilds** stores unsigned transactions built via OData actions:
+- **Purpose**: Track transaction building requests and provide unsigned CBOR for external signing
+- **Temporal**: Yes - respects INDEX_TTL_MS
+- **Key**: UUID (buildId)
+- **Builder**: 'csl' (Cardano Serialization Lib) or 'buildooor'
+- **Relations**: Has inputs, outputs, and their associated assets
+
+**TransactionBuildInputs/Outputs**:
+- **Purpose**: Detail the inputs and outputs of a transaction build
+- **Temporal**: No - linked to parent TransactionBuilds
+- **Relations**: Each can have multiple assets
+
+**TransactionBuildInputAssets/OutputAssets**:
+- **Purpose**: Native assets in transaction build inputs/outputs
+- **Temporal**: No
+- **Fields**: Unit, quantity, policy ID, asset name
+
+### Transaction Submission Entities (Temporal)
+
+**TransactionSubmissions** records submission attempts:
+- **Purpose**: Track signed transaction submissions to Cardano network
+- **Temporal**: Yes - respects INDEX_TTL_MS
+- **Key**: UUID (submissionId)
+- **Status**: 'pending', 'submitted', 'failed'
+- **Backend**: Which backend processed the submission (ogmios, blockfrost, koios)
+
+**TransactionSubmissionErrors**:
+- **Purpose**: Error details from failed submissions
+- **Temporal**: No - linked to parent TransactionSubmissions
+- **Fields**: Error code, message, backend that failed
+
+---

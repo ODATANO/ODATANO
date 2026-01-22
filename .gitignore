@@ -60,9 +60,6 @@ docker-compose.preprod.yml
 docker-compose.mainnet.yml
 
 DOCKER_COMPOSE_GUIDE.md
-HYBRID_BACKEND.md
-DOCKER_COMPOSE_GUIDE.md
-TRANSACTION_WORKFLOW.md
 
 # Preview config should be in git for GitHub Actions and local development
 # /config/preview 
@@ -75,5 +72,5 @@ payment.skey
 payment.vkey
 
 general_dev_notes.txt
-
+.claude
 ogmios-tests.yaml
