@@ -96,7 +96,11 @@ module.exports = (srv: cds.Service) => {
       return await indexer.indexSimpleBuildResult(db, req.data);
     });
   });
-
+  /**
+   * Build a transaction with metadata
+   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
+   * @returns Transaction build details 
+   */
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
     const { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
     // validate inputs

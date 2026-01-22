@@ -1,0 +1,349 @@
+{
+  "info": {
+    "_postman_id": "4590227a-0ca0-4c97-96a9-d5d30ee7b487",
+    "name": "ODATANO M2 - Full Service Catalog",
+    "description": "This Postman collection provides a set of example requests for testing and validating the **ODATANO Cardano OData Transaction Service (Milestone 2)**.\n\nThe collection is intended as a **supplementary technical tool** to:\n\n- verify correct service behavior,\n    \n- inspect raw OData responses,\n    \n- test entity sets and actions independently,\n    \n- and support development, debugging, and demonstrations",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "44579347",
+    "_collection_link": "https://go.postman.co/collection/44579347-4590227a-0ca0-4c97-96a9-d5d30ee7b487?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "TransactionBuilds",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "TransactionBuilds",
+          "host": [
+            "TransactionBuilds"
+          ]
+        },
+        "description": "**Description**\n\nReturns Transactionbuilds saved after building\n\n**Typical Use Case**\n\nUsed to check specific builds with details"
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionBuildInputs",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/TransactionBuildInputs",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "TransactionBuildInputs"
+          ]
+        },
+        "description": "**Description**\n\nReturns TransactionBuildInputs saved after building\n\n**Typical Use Case**\n\nUsed to check specific builds with details"
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionBuildOutputs",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/TransactionBuildOutputs",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "TransactionBuildOutputs"
+          ]
+        },
+        "description": "**Description**\n\nReturns TransactionBuildOutputs saved after building\n\n**Typical Use Case**\n\nUsed to check specific builds with details"
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionSubmissions",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/TransactionSubmissions",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "TransactionSubmissions"
+          ]
+        },
+        "description": "**Description**\n\nReturns Transaction submissions saved after submitting\n\n**Typical Use Case**\n\nUsed to check specific submissions with details"
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionSubmissionErrors",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/TransactionSubmissionErrors",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "TransactionSubmissionErrors"
+          ]
+        },
+        "description": "**Description**\n\nReturns TransactionSubmissionErrors saved while submitting\n\n**Typical Use Case**\n\nUsed to check specific submissions with error details"
+      },
+      "response": []
+    },
+    {
+      "name": "BuildSimpleAdaTransaction",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"network\":\"preview\",\n    \"senderAddress\":\"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\n    \"recipientAddress\":\"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\n    \"lovelaceAmount\":10000000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "BuildSimpleAdaTransaction"
+          ]
+        },
+        "description": "**Description**\n\nBuilds simple Ada Transaction\n\n**Typical Use Case**\n\nUsed to build Simple Ada transafer transactions"
+      },
+      "response": []
+    },
+    {
+      "name": "BuildTransactionWithMetadata",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"network\": \"preview\",\r\n    \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n    \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n    \"lovelaceAmount\": 10000000,\r\n    \"metadataJson\": \"{\\\"674\\\":{\\\"msg\\\":[\\\"Hello\\\",\\\"from\\\",\\\"ODATANO\\\"]}}\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/BuildTransactionWithMetadata",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "BuildTransactionWithMetadata"
+          ]
+        },
+        "description": "**Description**\n\nBuilds simple Ada Transaction with Metadata\n\n**Typical Use Case**\n\nUsed to build Simple Ada transafer transactions with metadata attached"
+      },
+      "response": []
+    },
+    {
+      "name": "BuildMultiAssetTransaction",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"network\": \"preview\",\r\n  \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n  \"lovelaceAmount\": 2000000,\r\n  \"assetsJson\": \"[{\\\"unit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"500\\\"}]\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/BuildMultiAssetTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "BuildMultiAssetTransaction"
+          ]
+        },
+        "description": "**Description**\n\nBuilds Multi Asset Transaction\n\n**Typical Use Case**\n\nUsed to build simple transfers of assets like token or nfts"
+      },
+      "response": []
+    },
+    {
+      "name": "BuildMintTransaction",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"network\": \"preview\",\r\n  \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"recipientAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"lovelaceAmount\": 2000000,\r\n  \"mintActionsJson\": \"[{\\\"assetUnit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"1000\\\"}]\",\r\n  \"mintingPolicyScript\": \"585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/BuildMintTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "BuildMintTransaction"
+          ]
+        },
+        "description": "**Description**\n\nBuilds Minting Transaction\n\n**Typical Use Case**\n\nUsed to build simple mint or burn transactions"
+      },
+      "response": []
+    },
+    {
+      "name": "SubmitSignedTransaction",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"network\": \"preview\",\r\n    \"signedTxCbor\": \"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\" \r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/SubmitSignedTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "SubmitSignedTransaction"
+          ]
+        },
+        "description": "**Description**\n\nSubmit signed transaction without prior build\n\n**Typical Use Case**\n\nUsed to submit external build & signed transaction without prior build"
+      },
+      "response": []
+    },
+    {
+      "name": "SubmitTransaction",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"buildId\": \"fe390ec2-afa3-4243-b786-12152d84237d\",\r\n    \"signedTxCbor\": \"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\" \r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/SubmitTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "SubmitTransaction"
+          ]
+        },
+        "description": "**Description**\n\nSubmit signed transaction with prior build from Odatano\n\n**Typical Use Case**\n\nUsed to submit transaction after building with Odatano & external signed transactions after build"
+      },
+      "response": []
+    },
+    {
+      "name": "CheckSubmissionStatus",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"submissionId\": \"123456\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/CheckSubmissionStatus",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "CheckSubmissionStatus"
+          ]
+        },
+        "description": "**Description**\n\nCheck submission status  \n\n**Typical Use Case**\n\nUsed to check status of transactions after submitting"
+      },
+      "response": []
+    }
+  ]
+}

@@ -162,6 +162,7 @@ jobs:
         if: steps.ogmios-ready.outputs.ready != 'true'
         env:
           NODE_ENV: test
+          CDS_ENV: test
           NETWORK: 'preview'
           BACKENDS: 'koios,blockfrost'
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
@@ -175,6 +176,7 @@ jobs:
         if: steps.ogmios-ready.outputs.ready == 'true'
         env:
           NODE_ENV: test
+          CDS_ENV: test
           NETWORK: 'preview'
           BACKENDS: 'koios,blockfrost,ogmios'
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}

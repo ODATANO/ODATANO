@@ -1,7 +1,0 @@
-{
-  "network": "preview",
-  "senderAddress": "addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622",
-  "recipientAddress": "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
-  "lovelaceAmount": 2000000,
-  "assetsJson": "[{\"unit\":\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\",\"quantity\":\"500\"}]"
-}

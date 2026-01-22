@@ -32,28 +32,16 @@ const SIGNING_KEY_PATH = './payment.skey';
 
 const tempDir = tmpdir();
 const txBodyJsonPath = join(tempDir, 'tx-multiasset.body.json');
-const txSignedPath = join(tempDir, 'tx-multiasset.signed');
 
 async function main() {
   try {
     console.log('Starting Multi-Asset transfer on Preview...');
     console.log('Assets to send:', JSON.stringify(ASSETS, null, 2));
 
-    // build Transaction
+    // Build Multi-Asset Transaction
     console.log('\nBuilding Multi-Asset Transaction...');
-    console.log('Request Body:', JSON.stringify(BUILD_BODY, null, 2));
-    
     const buildResponse = await axios.post(`${ODATA_URL}/BuildMultiAssetTransaction`, BUILD_BODY);
-    
-    // Debug: Log the response status and headers
-    console.log('Response Status:', buildResponse.status);
-    console.log('Response Headers:', buildResponse.headers);
-    console.log('Build Response:', JSON.stringify(buildResponse.data, null, 2));
-    
     const buildData = buildResponse.data;
-
-    // Debug: Log the actual response
-    console.log('Build Response:', JSON.stringify(buildData, null, 2));
 
     const buildId = buildData.id;
     const unsignedTxCbor = buildData.unsignedTxCbor;
@@ -77,7 +65,7 @@ async function main() {
     writeFileSync(txBodyJsonPath, JSON.stringify(textEnvelope, null, 2));
     console.log('unsignedTxCbor as tx-multiasset.body.json saved');
 
-    // sign transaction with cardano-cli
+    // Sign transaction with cardano-cli
     console.log('\nSign with cardano-cli...');
     execSync(
       `docker run --rm -v ${tempDir}:/work -v ${process.cwd()}:/keys -w /work ` +
@@ -91,7 +79,7 @@ async function main() {
 
     console.log('Signed: tx-multiasset.signed.json created');
 
-    // extract signedTxCbor from tx.signed.json
+    // Extract signedTxCbor from tx.signed.json
     const signedJsonContent = readFileSync(join(tempDir, 'tx-multiasset.signed.json'), 'utf8');
     const signedJson = JSON.parse(signedJsonContent);
     const signedTxCbor = signedJson.cborHex;
@@ -102,8 +90,8 @@ async function main() {
     }
 
     console.log('signedTxCbor extracted (starts with', signedTxCbor.slice(0, 6), ')');
-    
-    // submit
+
+    // Submit Transaction
     console.log('\nSubmitting Transaction...');
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
@@ -111,35 +99,29 @@ async function main() {
     });
 
     console.log('Response Status:', submitResponse.status);
-    
+
     const submitData = submitResponse.data;
-    
+
     if (submitResponse.status === 204 || !submitData || submitData === '') {
       console.log('\nTransaction submitted successfully! (HTTP 204 - No Content)');
       console.log('Transaction Hash:', txHash);
       console.log('\nCheck transaction on Cardano Explorer:');
       console.log(`https://preview.cardanoscan.io/transaction/${txHash}`);
     } else {
-      console.log('\nTransaction submitted:');
-      console.log(JSON.stringify(submitData, null, 2));
+      console.log('\nTransaction submitted successfully!');
+      console.log('Full Response:', JSON.stringify(submitData, null, 2));
     }
 
   } catch (error: any) {
     console.error('\nError:');
     if (error.response) {
       console.error('Status:', error.response.status);
-      console.error('Status Text:', error.response.statusText);
-      console.error('Headers:', error.response.headers);
       console.error('Data:', JSON.stringify(error.response.data, null, 2));
-    } else if (error.request) {
-      console.error('No response received');
-      console.error('Request:', error.request);
     } else {
       console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
     }
   } finally {
-    // cleanup
+    // Cleanup temporary files
     try { unlinkSync(txBodyJsonPath); } catch {}
     try { unlinkSync(join(tempDir, 'tx-multiasset.signed.json')); } catch {}
   }
