@@ -8,7 +8,7 @@ ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData
 
 **Milestone Status:**
 - [Milestone 1: Final Release](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862543) - ✅ Completed
-- [Milestone 2: Transaction Building & Submission](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862544) - ✅ Completed
+- [Milestone 2: Transaction Building & Submission](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862544) - Pending Completion
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
