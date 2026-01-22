@@ -348,13 +348,35 @@ export class CardanoClient {
     return this.route('getLatestEpoch', b => b.getLatestEpoch());
   }
 
-  /** 
+  /**
    * Submit transaction with fallback between backends
    * @param signedTxCbor signed transaction in CBOR hex format
    * @returns {Promise<string>} transaction hash
    */
   submitTransaction(signedTxCbor: string): Promise<string> {
     return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
+  }
+
+  /**
+   * Evaluate transaction script execution units (Ogmios only)
+   * @param unsignedTxCbor unsigned transaction in CBOR hex format
+   * @returns {Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>>} evaluation results
+   */
+  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>> {
+    await this.ensureInitialized();
+
+    // Evaluation requires Ogmios live backend
+    if (!this.liveBackend || this.liveBackend.name !== 'ogmios') {
+      throw new Error('Transaction evaluation requires Ogmios backend');
+    }
+
+    // Cast to any to access evaluateTransaction method (it's not in the CardanoBackend interface)
+    const ogmiosBackend = this.liveBackend as any;
+    if (typeof ogmiosBackend.evaluateTransaction !== 'function') {
+      throw new Error('Ogmios backend does not support transaction evaluation');
+    }
+
+    return ogmiosBackend.evaluateTransaction(unsignedTxCbor);
   }
 }
 
@@ -411,5 +433,28 @@ export function createCardanoClientForBackends(backendNames: string[]): CardanoC
 }
 
 /** CardanoClient exported singleton instance */
-export const cardanoClient = CardanoClientFactory.createFromConfig();
+let cardanoClient = CardanoClientFactory.createFromConfig();
+
+/**
+ * Reset the CardanoClient singleton with specified backends (for testing)
+ * @param backendNames list of backend names to use
+ */
+export function resetCardanoClient(backendNames?: string[]): void {
+  if (backendNames) {
+    cardanoClient = CardanoClientFactory.createForBackends(backendNames);
+  } else {
+    cardanoClient = CardanoClientFactory.createFromConfig();
+  }
+}
+
+/**
+ * Get the current CardanoClient instance
+ * Use this function instead of importing cardanoClient directly if you need
+ * the client to be updated after resetCardanoClient() is called
+ */
+export function getCardanoClient(): CardanoClient {
+  return cardanoClient;
+}
+
+export { cardanoClient };
 export default cardanoClient;

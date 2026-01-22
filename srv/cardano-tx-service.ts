@@ -105,7 +105,7 @@ module.exports = (srv: cds.Service) => {
     if (!recipientAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'recipientAddress');
     if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid sender address format', 'senderAddress');
-    
+
     // Parse metadataJson if it's a string
     let parsedMetadata: JSONValue | undefined;
     if (metadataJson) {
@@ -115,7 +115,7 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
       }
     }
-    
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
@@ -123,6 +123,102 @@ module.exports = (srv: cds.Service) => {
         'Building transaction with metadata'
       );
       return await indexer.indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
+    });
+  });
+
+  /**
+   * Build a multi-asset transaction
+   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
+   * @returns Transaction build details 
+   */
+  srv.on('BuildMultiAssetTransaction', async (req: Request) => {
+    const { network, senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
+
+    // validate inputs
+    if (!network) return rejectMissing(req, 'BuildMultiAssetTransaction', 'network');
+    if (!senderAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'senderAddress');
+    if (!recipientAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'recipientAddress');
+    if (!assetsJson) return rejectMissing(req, 'BuildMultiAssetTransaction', 'assetsJson');
+    if (!isValidBech32Address(senderAddress))
+      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid sender address format', 'senderAddress');
+
+    // Parse assetsJson
+    let parsedAssets;
+    try {
+      parsedAssets = typeof assetsJson === 'string' ? JSON.parse(assetsJson) : assetsJson;
+      if (!Array.isArray(parsedAssets)) {
+        return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must be an array', 'assetsJson');
+      }
+    } catch {
+      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid JSON in assetsJson', 'assetsJson');
+    }
+
+    // handle the request / building the transaction / indexing the build result / returning build details
+    return handleRequest(req, async (db) => {
+      logger.info(
+        { network, senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets },
+        'Building multi-asset transaction'
+      );
+      // Create clean request object with parsed assets (remove assetsJson, add assets)
+      const cleanData = { ...req.data };
+      delete cleanData.assetsJson;
+
+      const result = await indexer.indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
+      logger.info({ result }, 'Multi-asset transaction build result');
+      return result;
+    });
+  });
+
+  /**
+   * Build a minting transaction
+   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
+   * @returns Transaction build details 
+   */
+  srv.on('BuildMintTransaction', async (req: Request) => {
+    const { network, senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
+
+    // validate inputs
+    if (!network) return rejectMissing(req, 'BuildMintTransaction', 'network');
+    if (!senderAddress) return rejectMissing(req, 'BuildMintTransaction', 'senderAddress');
+    if (!recipientAddress) return rejectMissing(req, 'BuildMintTransaction', 'recipientAddress');
+    if (!mintActionsJson) return rejectMissing(req, 'BuildMintTransaction', 'mintActionsJson');
+    if (!mintingPolicyScript) return rejectMissing(req, 'BuildMintTransaction', 'mintingPolicyScript');
+    if (!isValidBech32Address(senderAddress))
+      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid sender address format', 'senderAddress');
+    if (!isValidCbor(mintingPolicyScript))
+      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid mintingPolicyScript format', 'mintingPolicyScript');
+
+    // Parse mintActionsJson
+    let parsedMintActions;
+    try {
+      parsedMintActions = typeof mintActionsJson === 'string' ? JSON.parse(mintActionsJson) : mintActionsJson;
+      if (!Array.isArray(parsedMintActions)) {
+        return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be an array', 'mintActionsJson');
+      }
+      // Convert quantity strings to bigint
+      parsedMintActions = parsedMintActions.map((action: any) => ({
+        ...action,
+        quantity: BigInt(action.quantity)
+      }));
+    } catch {
+      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid JSON in mintActionsJson', 'mintActionsJson');
+    }
+
+    // handle the request / building the transaction / indexing the build result / returning build details
+    return handleRequest(req, async (db) => {
+      logger.info(
+        { network, senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
+        'Building minting transaction'
+      );
+      // Create clean request object with parsed mintActions (remove mintActionsJson, add mintActions)
+      const cleanData = { ...req.data };
+      delete cleanData.mintActionsJson;
+
+      return await indexer.indexMintBuildResult(db, {
+        ...cleanData,
+        mintActions: parsedMintActions,
+        mintingPolicyScript
+      });
     });
   });
 
@@ -158,7 +254,7 @@ module.exports = (srv: cds.Service) => {
     if (!signedTxCbor) return rejectMissing(req, 'SubmitTransaction', 'signedTxCbor');
     if (!isValidCbor(signedTxCbor))
       return rejectInvalid(req, 'SubmitTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
-    
+
 
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {

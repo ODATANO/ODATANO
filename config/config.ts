@@ -68,7 +68,7 @@ export const CONFIG = {
   koiosApiUrl: KOIOS_URLS[NETWORK],
   koiosApiKey: process.env.KOIOS_API_KEY ?? '',
   ogmiosUrl: process.env.OGMIOS_URL || 'ws://localhost:1337',
-  primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 118000),
+  primaryTimeoutMs: Number(process.env.PRIMARY_TIMEOUT_MS ?? 8000),
   fallbackTimeoutMs: Number(process.env.FALLBACK_TIMEOUT_MS ?? 10000),
   indexTtlMs: Number(process.env.INDEX_TTL_MS ?? 600000), // 10 minutes default
   logLevel: process.env.LOG_LEVEL || 'info',

@@ -91,8 +91,8 @@ export class CardanoIndexer {
     const providerTx = await cardano.getTransaction(txHash);
     const txRow = mapTransaction(providerTx);
 
-    tx.run(UPSERT.into(Transactions).entries(txRow))
-
+    await tx.run(UPSERT.into(Transactions).entries(txRow))
+    
     logger.debug(`indexTransaction: upserted transaction ${txHash}`);
 
     if (providerTx.inputs) {
@@ -107,13 +107,13 @@ export class CardanoIndexer {
 
       if (inputRows.length) {
 
-        tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
+        await tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
         logger.debug(`indexTransaction: upserted ${inputRows.length} transaction inputs for ${txHash}`);
       }
 
       if (inputAssetRows.length) {
 
-        tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
+        await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
         logger.debug(`indexTransaction: upserted ${inputAssetRows.length} transaction input assets for ${txHash}`);
       }
 
@@ -123,18 +123,18 @@ export class CardanoIndexer {
 
       if (outputRows.length) {
 
-        tx.run(UPSERT.into(TransactionOutputs).entries(outputRows))
+        await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows))
 
       }
 
       if (outputAssetRows.length) {
-        tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
+        await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
       }
     }
     const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
 
     if (metadataRows.length) {
-      tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows))
+      await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows))
     }
     return txRow;
   }
@@ -153,7 +153,7 @@ export class CardanoIndexer {
 
     const AddrEntity = mapAddress(addr, addrData);
 
-    tx.run(UPSERT.into(Addresses).entries(AddrEntity))
+    await tx.run(UPSERT.into(Addresses).entries(AddrEntity))
 
     const assetEntities = mapAddressAssets(
       addr,
@@ -165,7 +165,7 @@ export class CardanoIndexer {
     logger.debug({ assetEntities }, 'indexAddress: asset entities');
 
     if (assetEntities.length > 0) {
-      tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
+      await tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
@@ -180,7 +180,7 @@ export class CardanoIndexer {
     logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
     if (utxoEntities.length) {
-      tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
+      await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
     }
 
     const utxoAssetEntities = mapAddressUtxoAssets(
@@ -191,7 +191,7 @@ export class CardanoIndexer {
     logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
     if (utxoAssetEntities.length) {
-      tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
+      await tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
     }
 
     return AddrEntity;
@@ -298,7 +298,7 @@ export class CardanoIndexer {
     const poolInfo = await cardano.getPool(poolId);
     const poolEntity = mapPool(poolInfo);
 
-    tx.run(UPSERT.into(Pools).entries(poolEntity))
+    await tx.run(UPSERT.into(Pools).entries(poolEntity))
 
     return poolEntity;
   }
@@ -358,6 +358,74 @@ export class CardanoIndexer {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
+    return buildResult;
+  }
+
+  /** 
+   * Index & return the multi-asset transaction build result data
+   * @param tx CAP transaction object
+   * @param buildreq transaction build request data
+   * @returns {Promise<TransactionBuild>} transaction build entity data
+   */
+  async indexMultiAssetBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
+
+    // make sure we have protocol parameters indexed
+    const protocolParams = await this.indexProtocolParameters(tx);
+
+    const txbuildResult = await cardanoTransactionBuilder.buildMultiAssetTransaction(
+      buildreq,
+      protocolParams);
+
+    const buildResult = mapBuildResult(txbuildResult);
+
+    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
+
+    // Store inputs if available
+    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
+      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
+      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
+    }
+
+    // Store outputs if available
+    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
+      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
+      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
+    }
+
+    return buildResult;
+  }
+
+  /** 
+   * Index & return the minting transaction build result data
+   * @param tx CAP transaction object
+   * @param buildreq transaction build request data
+   * @returns {Promise<TransactionBuild>} transaction build entity data
+   */
+  async indexMintBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
+
+    // make sure we have protocol parameters indexed
+    const protocolParams = await this.indexProtocolParameters(tx);
+
+    const txbuildResult = await cardanoTransactionBuilder.buildMintTransaction(
+      buildreq,
+      protocolParams);
+
+    const buildResult = mapBuildResult(txbuildResult);
+
+    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
+
+    // Store inputs if available
+    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
+      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
+      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
+    }
+
+    // Store outputs if available
+    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
+      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
+      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
+    }
+
     return buildResult;
   }
 

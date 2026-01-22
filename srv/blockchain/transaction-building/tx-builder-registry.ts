@@ -2,7 +2,6 @@ import { CardanoTxBuilder } from './cardano-tx';
 import { BuildooorTxBuilder } from './buildooor-tx';
 import { CSLTxBuilder } from './csl-tx';
 import { ConfigError } from '../../utils/errors';
-import { CONFIG } from '../../../config/config';
 import cds from '@sap/cds';
 
 const logger = cds.log(`TxBuilderRegistry`);
@@ -37,9 +36,14 @@ export class TxBuilderRegistry {
    * @returns {CardanoTxBuilder} default transaction builder instance
    */
   static createDefault(): CardanoTxBuilder {
-    // Use first configured builder as default
-    const configuredBuilders = CONFIG.transactionBuilders;
-    const defaultBuilder = configuredBuilders[0];
+    // Read directly from environment to allow dynamic switching in tests
+    // (CONFIG.transactionBuilders is cached at module load time)
+    const buildersEnv = process.env.TX_BUILDERS || 'csl';
+    const configuredBuilders = buildersEnv
+      .split(',')
+      .map(b => b.trim().toLowerCase())
+      .filter(b => ['csl', 'buildooor'].includes(b));
+    const defaultBuilder = configuredBuilders.length > 0 ? configuredBuilders[0] : 'csl';
     logger.info(`Creating default transaction builder: ${defaultBuilder}`);
     return this.create(defaultBuilder);
   }

@@ -262,6 +262,33 @@ export type LedgerProtocolParameters = {
   source: string;              // "blockfrost/koios/direct"
 }
 
+/**
+ * Mint/Burn Asset Action Type
+ */
+export type MintAction = {
+  /** Asset unit to mint/burn (policyId + assetName) */
+  assetUnit: string;
+  /** Quantity to mint (positive) or burn (negative) */
+  quantity: bigint;
+};
+
+/**
+ * Plutus Script Execution Type - For spending from script addresses
+ */
+export type PlutusScriptExecution = {
+  /** Validator script (CBOR hex) */
+  validatorScript: string;
+  /** Redeemer data (JSON value that will be converted to PlutusData) */
+  redeemer: JSONValue;
+  /** Datum data (JSON value, optional - for script outputs) */
+  datum?: JSONValue;
+  /** Execution units budget for script execution */
+  executionUnits?: {
+    mem: number;
+    cpu: number;
+  };
+};
+
 /** 
  * Transaction Build Request Type - Parameters for building a simple ADA-only transaction 
  */
@@ -273,6 +300,14 @@ export type TxBuildRequest = {
   changeAddress?: string;
   feeLovelace?: string;
   metadataJson?: JSONValue;
+  /** Multi-asset amounts to send (optional) */
+  assets?: Amount[];
+  /** Mint/Burn actions (optional) */
+  mintActions?: MintAction[];
+  /** Minting policy script (CBOR hex, required if mintActions specified) */
+  mintingPolicyScript?: string;
+  /** Plutus script execution (optional) - for spending from script addresses */
+  plutusScriptExecution?: PlutusScriptExecution;
 };
 
 /** 

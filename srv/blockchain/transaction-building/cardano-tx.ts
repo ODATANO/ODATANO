@@ -44,5 +44,5 @@ export interface CardanoTxBuilder {
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
-  buildUnsignedPlutusTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
+  buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 }

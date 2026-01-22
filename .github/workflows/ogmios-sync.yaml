@@ -39,13 +39,18 @@ jobs:
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
     - name: prune node db
-      # Only prune if sync was already at or above 99.5% before this run
-      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.995 }}
+      # Prune if sync is at or above 95% to keep cache size manageable
+      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.95 }}
       shell: bash
       working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
       run: |
         sudo chown -R $(whoami):$(whoami) immutable
         ls immutable/*.chunk | sort | head -n -2500 | xargs -r rm -f --
+
+    - name: Delete old cache
+      run: gh cache delete "cardano-node-ogmios-${{ matrix.network }}" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - uses: actions/cache/save@v4
       with:

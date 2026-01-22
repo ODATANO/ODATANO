@@ -238,15 +238,32 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         const { data } = await this.api.post('/address_utxos', { _addresses: [address] });
 
-        return data.map((utxo: any) => ({
-          txHash: utxo.tx_hash,
-          outputIndex: utxo.tx_index,
-          address: address,
-          amount: utxo.value,
-          blockHash: utxo.block_hash,
-          datumHash: utxo.datum_hash || null,
-          scriptRef: utxo.reference_script || null,
-        }));
+        return data.map((utxo: any) => {
+          // Build amount array from lovelace value and asset_list
+          const amount: Amount[] = [
+            { unit: 'lovelace', quantity: utxo.value }
+          ];
+
+          // Add native assets if present
+          if (utxo.asset_list && Array.isArray(utxo.asset_list)) {
+            for (const asset of utxo.asset_list) {
+              amount.push({
+                unit: `${asset.policy_id}${asset.asset_name}`,
+                quantity: asset.quantity
+              });
+            }
+          }
+
+          return {
+            txHash: utxo.tx_hash,
+            outputIndex: utxo.tx_index,
+            address: address,
+            amount: amount,
+            blockHash: utxo.block_hash,
+            datumHash: utxo.datum_hash || null,
+            scriptRef: utxo.reference_script || null,
+          };
+        });
       },
       this.name
     );
@@ -259,18 +276,40 @@ export class KoiosBackend implements CardanoBackend {
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
-        const latest = data[0];
-
-        // @TODO: Check koios docs for missing fields
+        // Try /totals endpoint (works on mainnet, but returns empty array on preview testnet)
+        const { data: totalsData } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
+        
+        if (totalsData && totalsData.length > 0) {
+          const latest = totalsData[0];
+          return {
+            supply: {
+              max: '45000000000000000',
+              total: latest.supply || '0',
+              circulating: latest.circulation || '0',
+              locked: '0', // Not available in /totals
+              treasury: latest.treasury || '0',
+              reserves: latest.reserves || '0',
+            },
+            stake: {
+              live: '0',
+              active: '0',
+            },
+          };
+        }
+        
+        // Fallback for preview/preprod networks where /totals doesn't work
+        // Use genesis endpoint to get max supply at minimum
+        const { data: genesisData } = await this.api.get('/genesis');
+        const genesis = genesisData[0];
+        
         return {
           supply: {
-            max: '45000000000000000',
-            total: latest.supply || '0',
-            circulating: latest.circulation || '0',
-            locked: '0', // Not available in /totals
-            treasury: latest.treasury || '0',
-            reserves: latest.reserves || '0',
+            max: genesis.maxlovelacesupply || '45000000000000000',
+            total: '0', // Not available without /totals
+            circulating: '0', // Not available without /totals
+            locked: '0',
+            treasury: '0', // Not available without /totals
+            reserves: '0', // Not available without /totals
           },
           stake: {
             live: '0',

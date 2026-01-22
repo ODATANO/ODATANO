@@ -54,6 +54,61 @@ export class NotFoundError extends BackendError {
 }
 
 /** 
+ * InsufficientFundsError - Not enough funds or assets available (400)
+ * Indicates that the address does not have enough of a specific asset to complete the transaction
+ * Examples: trying to send more ADA than available, not enough native tokens
+ */
+export class InsufficientFundsError extends BackendError {
+  /** Constructor
+   * @param assetUnit the asset unit that is insufficient (e.g., "lovelace" or "policyId.assetName")
+   * @param required the required amount
+   * @param available the available amount
+   * @param originalError original error object
+   */
+  constructor(
+    public readonly assetUnit: string,
+    public readonly required: bigint,
+    public readonly available: bigint,
+    originalError?: any
+  ) {
+    super(
+      `Insufficient ${assetUnit}: required ${required}, available ${available}`,
+      400,
+      ERROR_CODES.INSUFFICIENT_FUNDS,
+      undefined,
+      originalError,
+      assetUnit
+    );
+  }
+}
+
+/** 
+ * MixedAssetsError - UTxO contains mixed assets when pure ADA is required (400)
+ * Indicates that a UTxO contains native assets in addition to ADA, but the operation requires ADA-only UTxOs
+ */
+export class MixedAssetsError extends BackendError {
+  /** Constructor
+   * @param utxoRef UTxO reference (txHash#outputIndex)
+   * @param assets list of non-ADA assets found in the UTxO
+   * @param originalError original error object
+   */
+  constructor(
+    public readonly utxoRef: string,
+    public readonly assets: string[],
+    originalError?: any
+  ) {
+    super(
+      `UTxO ${utxoRef} contains non-ADA assets: ${assets.join(', ')}`,
+      400,
+      ERROR_CODES.INVALID_INPUT,
+      undefined,
+      originalError,
+      utxoRef
+    );
+  }
+}
+
+/** 
  * ProviderUnavailableError - Provider unavailable or timeout (503)
  * Indicates a temporary issue - retrying may help
  * Examples: network timeout, 5xx errors, service down

@@ -1,8 +1,10 @@
 /**
  * Buildooor Transaction Builder Integration Tests
- * 
+ *
  * This test file runs the Cardano Transaction Service tests specifically with the Buildooor transaction builder.
  * Buildooor is a transaction building library from HarmonicLabs.
+ *
+ * Uses Koios backend with nock mocking for deterministic test results.
  */
 
 // Configure environment to use only Buildooor transaction builder

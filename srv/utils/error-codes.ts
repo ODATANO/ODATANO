@@ -15,6 +15,12 @@ export const ERROR_CODES = {
   NOT_FOUND: 'ODATANO_NOT_FOUND',
 
   /**
+   * 400 – Insufficient funds/assets
+   * Indicates that the address does not have enough funds or assets to complete the transaction
+   */
+  INSUFFICIENT_FUNDS: 'ODATANO_INSUFFICIENT_FUNDS',
+
+  /**
     * 429 – Rate limiting
     * indicates temporary unavailability
     */

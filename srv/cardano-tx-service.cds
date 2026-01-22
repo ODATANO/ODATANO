@@ -84,6 +84,53 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                             @title: 'Metadata JSON'
                                             @description: 'The JSON representation of the transaction metadata as string'
                                             metadataJson: String) returns TransactionBuilds;
+
+    @title : 'Build Multi-Asset Transaction'
+    @description: 'Build a transaction to send native assets (tokens) along with ADA'
+    action BuildMultiAssetTransaction(
+                                        @title: 'Network'
+                                        @description: 'The Cardano network to build the transaction for (e.g., preview)'
+                                        network: String(10),
+                                        @title: 'Sender Address'
+                                        @description: 'The Bech32 encoded address of the sender'
+                                        senderAddress: db.Bech32,
+                                        @title: 'Recipient Address'
+                                        @description: 'The Bech32 encoded address of the recipient'
+                                        recipientAddress: db.Bech32,
+                                        @title: 'Lovelace Amount'
+                                        @description: 'The amount of ADA to send in lovelace'
+                                        lovelaceAmount: db.Lovelace,
+                                        @title: 'Assets JSON'
+                                        @description: 'JSON array of assets to send (format: [{"unit":"policyId+assetName","quantity":"amount"}])'
+                                        assetsJson: String,
+                                        @title: 'Change Address'
+                                        @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
+                                        changeAddress: db.Bech32) returns TransactionBuilds;
+
+    @title : 'Build Minting Transaction'
+    @description: 'Build a transaction to mint or burn native assets'
+    action BuildMintTransaction(
+                                @title: 'Network'
+                                @description: 'The Cardano network to build the transaction for (e.g., preview)'
+                                network: String(10),
+                                @title: 'Sender Address'
+                                @description: 'The Bech32 encoded address of the sender (pays fees)'
+                                senderAddress: db.Bech32,
+                                @title: 'Recipient Address'
+                                @description: 'The Bech32 encoded address to receive minted assets'
+                                recipientAddress: db.Bech32,
+                                @title: 'Lovelace Amount'
+                                @description: 'The amount of ADA to send with minted assets in lovelace'
+                                lovelaceAmount: db.Lovelace,
+                                @title: 'Mint Actions JSON'
+                                @description: 'JSON array of mint/burn actions (format: [{"assetUnit":"policyId+assetName","quantity":"amount"}])'
+                                mintActionsJson: String,
+                                @title: 'Minting Policy Script'
+                                @description: 'The minting policy script in CBOR hex format'
+                                mintingPolicyScript: String,
+                                @title: 'Change Address'
+                                @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
+                                changeAddress: db.Bech32) returns TransactionBuilds;
                                             
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'

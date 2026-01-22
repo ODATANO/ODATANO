@@ -500,6 +500,9 @@ export function mapError(req: Request, err: unknown, ctx: string) {
       err.target
     );
   }
+  // Handle other errors
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  return req.reject(500, fmt('ODATANO_INTERNAL_ERROR', ctx, errorMessage));
 }
 
 /** 

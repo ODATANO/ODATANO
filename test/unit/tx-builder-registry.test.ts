@@ -4,7 +4,6 @@
 
 import { TxBuilderRegistry } from '../../srv/blockchain/transaction-building/tx-builder-registry';
 import { ConfigError } from '../../srv/utils/errors';
-import { CONFIG } from '../../config/config';
 
 // Mock cds.log
 jest.mock('@sap/cds', () => ({
@@ -72,44 +71,57 @@ describe('TxBuilderRegistry', () => {
   });
 
   describe('createDefault()', () => {
+    const originalTxBuilders = process.env.TX_BUILDERS;
+
+    afterEach(() => {
+      // Restore original env
+      if (originalTxBuilders !== undefined) {
+        process.env.TX_BUILDERS = originalTxBuilders;
+      } else {
+        delete process.env.TX_BUILDERS;
+      }
+    });
+
     it('should create the first configured transaction builder', () => {
+      process.env.TX_BUILDERS = 'csl';
       const builder = TxBuilderRegistry.createDefault();
       expect(builder).toBeDefined();
       expect(builder.name).toBe('CslTxBuilder');
     });
-  });
 
-  describe('createDefault() with different configurations', () => {
-    it('should use first configured builder from CONFIG', () => {
-      const originalBuilders = CONFIG.transactionBuilders;
-      (CONFIG as any).transactionBuilders = ['buildooor', 'csl'];
+    it('should use first configured builder from TX_BUILDERS env', () => {
+      process.env.TX_BUILDERS = 'buildooor,csl';
 
       const builder = TxBuilderRegistry.createDefault();
       expect(builder.name).toBe('BuildooorTxBuilder');
-      // Restore original config
-      (CONFIG as any).transactionBuilders = originalBuilders;
     });
 
     it('should handle single configured builder', () => {
-      const originalBuilders = CONFIG.transactionBuilders;
-      (CONFIG as any).transactionBuilders = ['csl'];
+      process.env.TX_BUILDERS = 'csl';
 
       const builder = TxBuilderRegistry.createDefault();
       expect(builder.name).toBe('CslTxBuilder');
-
-      // Restore original config
-      (CONFIG as any).transactionBuilders = originalBuilders;
     });
 
-    it('should throw error if configured builder is unavailable', () => {
-      const originalBuilders = CONFIG.transactionBuilders;
-      (CONFIG as any).transactionBuilders = ['invalid'];
+    it('should default to csl when TX_BUILDERS is not set', () => {
+      delete process.env.TX_BUILDERS;
 
-      expect(() => TxBuilderRegistry.createDefault()).toThrow(ConfigError);
-      expect(() => TxBuilderRegistry.createDefault()).toThrow('Unknown transaction builder: invalid');
+      const builder = TxBuilderRegistry.createDefault();
+      expect(builder.name).toBe('CslTxBuilder');
+    });
 
-      // Restore original config
-      (CONFIG as any).transactionBuilders = originalBuilders;
+    it('should filter out invalid builder names and use first valid one', () => {
+      process.env.TX_BUILDERS = 'invalid,buildooor';
+
+      const builder = TxBuilderRegistry.createDefault();
+      expect(builder.name).toBe('BuildooorTxBuilder');
+    });
+
+    it('should default to csl when all configured builders are invalid', () => {
+      process.env.TX_BUILDERS = 'invalid,unknown';
+
+      const builder = TxBuilderRegistry.createDefault();
+      expect(builder.name).toBe('CslTxBuilder');
     });
   });
 

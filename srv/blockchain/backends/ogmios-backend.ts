@@ -301,7 +301,7 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  /** 
+  /**
    * Submit Transaction to the network
    * @param signedTxCbor signed transaction in CBOR hex format
    * @returns {Promise<string>} transaction hash
@@ -309,9 +309,23 @@ export class OgmiosBackend implements CardanoBackend {
   async submitTransaction(signedTxCbor: string): Promise<string> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
-            
+
       const txHash = await this.txSubmissionClient!.submitTransaction(signedTxCbor);
       return txHash;
+    }, this.name);
+  }
+
+  /**
+   * Evaluate transaction script execution units
+   * @param unsignedTxCbor unsigned transaction in CBOR hex format
+   * @returns {Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>>} evaluation results
+   */
+  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>> {
+    return handleBackendRequest(async () => {
+      this.ensureNotShutdown();
+
+      const results = await this.txSubmissionClient!.evaluateTransaction(unsignedTxCbor);
+      return results;
     }, this.name);
   }
 

@@ -1,8 +1,10 @@
 /**
  * CSL (Cardano Serialization Lib) Transaction Builder Integration Tests
- * 
+ *
  * This test file runs the Cardano Transaction Service tests specifically with the CSL transaction builder.
  * CSL is Emurgo's cardano-serialization-lib for transaction building.
+ *
+ * Uses Koios backend with nock mocking for deterministic test results.
  */
 
 // Configure environment to use only CSL transaction builder
