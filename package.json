@@ -52,6 +52,13 @@
         "kind": "cardano-watcher",
         "network": "preview",
         "apiKey": "${env:BLOCKFROST_KEY}"
+      },
+      "[test]": {
+        "cardanoWatcher": {
+          "autoStart": false,
+          "addressPolling": { "enabled": false },
+          "transactionPolling": { "enabled": false }
+        }
       }
     },
     "plugins": {
