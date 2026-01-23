@@ -40,7 +40,7 @@ jobs:
       with:
         db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
         network: ${{ matrix.network }}
-        version: ${{ matrix.cardano_node_version }}-${{ matrix.ogmios_version }}
+        version: ${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
     - name: prune node db
