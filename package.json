@@ -51,7 +51,8 @@
       "cardanoWatcher": {
         "kind": "cardano-watcher",
         "network": "preview",
-        "apiKey": "${env:BLOCKFROST_KEY}"
+        "apiKey": "${env:BLOCKFROST_KEY}",
+        "autoStart": false
       },
       "[test]": {
         "cardanoWatcher": {
