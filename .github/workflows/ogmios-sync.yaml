@@ -11,6 +11,10 @@ on:
         default: '1'
         type: number
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   sync_and_cache:
     strategy:
@@ -39,8 +43,8 @@ jobs:
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
 
     - name: prune node db
-      # Prune if sync is at or above 95% to keep cache size manageable
-      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.95 }}
+      # Prune if sync is at or above 98% to keep cache size manageable
+      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.98 }}
       shell: bash
       working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
       run: |
