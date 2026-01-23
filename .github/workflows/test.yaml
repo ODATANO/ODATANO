@@ -77,7 +77,7 @@ jobs:
             -v ${{ runner.temp }}/db-preview:/db \
             -v ${{ runner.temp }}/ipc:/ipc \
             -v $CONFDIR/cardano-node:/config \
-            ghcr.io/intersectmbo/cardano-node:10.6.1 run \
+            ghcr.io/intersectmbo/cardano-node:10.1.4 run \
               --config /config/config.json \
               --database-path /db \
               --socket-path /ipc/node.socket \
@@ -87,7 +87,7 @@ jobs:
           docker run -d --name ogmios-preview \
             -p 1337:1337 \
             -v ${{ runner.temp }}/ipc:/ipc \
-            cardanosolutions/ogmios:latest-preview \
+            cardanosolutions/ogmios:v6.11.0-preview \
               --host 0.0.0.0 \
               --node-socket /ipc/node.socket \
               --node-config $CONFDIR/cardano-node/config.json

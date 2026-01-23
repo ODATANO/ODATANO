@@ -322,6 +322,83 @@ describe('OData Query Features', () => {
   });
 
   describe('ODATANO Milestone 2', () => {
-    
+
+    describe('$orderby operations', () => { 
+      it( '$orderby on TransactionBuilds by createdAt descending', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$orderby=createdAt desc&$top=3`;
+        expect(status).to.equal(200);
+      });
+
+      it( '$orderby on TransactionBuildInputs by createdAt ascending', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuildInputs?$orderby=inputIndex asc&$top=3`;
+        expect(status).to.equal(200);
+      });
+
+      it( '$orderby on TransactionBuildOutputs by createdAt descending', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuildOutputs?$orderby=outputIndex desc&$top=3`;
+        expect(status).to.equal(200);
+      });
+
+      it( '$orderby on TransactionSubmissions by createdAt ascending', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionSubmissions?$orderby=submittedAt asc&$top=3`;
+        expect(status).to.equal(200);
+      });
+
+      it( '$orderby on TransactionSubmissionErrors by submittedAt descending', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionSubmissionErrors?$orderby=id desc&$top=3`;
+        expect(status).to.equal(200);
+      });
+    });
+
+    describe('$expand operations', () => {
+      it('$expand inputs on TransactionBuilds', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$expand=inputs&$top=1`;
+        expect(status).to.equal(200);
+      });
+      it('$expand outputs on TransactionBuilds', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$expand=outputs&$top=1`;
+        expect(status).to.equal(200);
+      });
+    });
+
+    describe('Combined query operations', () => { 
+      it('$filter + $select + $top combination on TransactionSubmissions', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionSubmissions?$filter=status eq 'pending'&$select=id,txHash&$top=2`;
+        expect(status).to.equal(200);
+      });
+      it('$filter + $orderby + $top combination on TransactionBuilds', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$filter=wasSubmitted eq 'false'&$orderby=createdAt desc&$top=3`;
+        expect(status).to.equal(200);
+      });
+      it('$select + $expand combination on TransactionBuilds', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$select=id,network&$expand=inputs&$top=1`;
+        expect(status).to.equal(200);
+      });
+    });
+
+    describe('OData Query Capabilities', () => {
+     
+      it('GET /$metadata - OData metadata is accessible', async () => {
+        const { status, data } = await GET(`/odata/v4/cardano-transaction/$metadata`);
+        expect(status).to.equal(200);
+        expect(data).to.include('TransactionBuilds');
+        expect(data).to.include('TransactionBuildInputs');
+        expect(data).to.include('TransactionBuildOutputs');
+        expect(data).to.include('TransactionSubmissions');
+        expect(data).to.include('TransactionSubmissionErrors');
+      });
+
+      it('$count returns count metadata', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$count=true`;
+        expect(status).to.equal(200);
+        expect(data['@odata.count']).to.exist;
+      });
+
+      it('$select filters properties', async () => {
+        const { status, data } = await GET`/odata/v4/cardano-transaction/TransactionBuilds?$select=senderAddress,network`;
+        expect(status).to.equal(200);
+        expect(Array.isArray(data.value)).to.be.true;
+      });
+    });
   });
 });

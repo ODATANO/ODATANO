@@ -47,9 +47,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @title      : 'Build Simple ADA Transaction'
     @description: 'Build a simple ADA transfer transaction from sender to recipient with specified amount and change address'
     action BuildSimpleAdaTransaction(
-                                     @title: 'Network'
-                                     @description: 'The Cardano network to build the transaction for (e.g., mainnet, testnet)'
-                                     network: String(10),
                                      @title: 'Sender Address'
                                      @description: 'The Bech32 encoded address of the sender'
                                      senderAddress: db.Bech32,
@@ -66,9 +63,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @title : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
     action BuildTransactionWithMetadata(
-                                            @title: 'Network'
-                                            @description: 'The Cardano network to build the transaction for (e.g., preview)'
-                                            network: String(10),
                                             @title: 'Sender Address'
                                             @description: 'The Bech32 encoded address of the sender'
                                             senderAddress: db.Bech32,
@@ -88,9 +82,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @title : 'Build Multi-Asset Transaction'
     @description: 'Build a transaction to send native assets (tokens) along with ADA'
     action BuildMultiAssetTransaction(
-                                        @title: 'Network'
-                                        @description: 'The Cardano network to build the transaction for (e.g., preview)'
-                                        network: String(10),
                                         @title: 'Sender Address'
                                         @description: 'The Bech32 encoded address of the sender'
                                         senderAddress: db.Bech32,
@@ -110,9 +101,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @title : 'Build Minting Transaction'
     @description: 'Build a transaction to mint or burn native assets'
     action BuildMintTransaction(
-                                @title: 'Network'
-                                @description: 'The Cardano network to build the transaction for (e.g., preview)'
-                                network: String(10),
                                 @title: 'Sender Address'
                                 @description: 'The Bech32 encoded address of the sender (pays fees)'
                                 senderAddress: db.Bech32,

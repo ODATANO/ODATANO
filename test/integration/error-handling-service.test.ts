@@ -1,8 +1,9 @@
+import { assets } from '@blockfrost/blockfrost-js/lib/endpoints/api/assets';
 import cds from '@sap/cds';
 
 jest.setTimeout(20000);
 
-describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
+describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () => {
 	const test = cds.test(__dirname + '/../../');
 	const expect = test.expect;
 
@@ -313,6 +314,17 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
       		lovelaceAmount: '5000000', // 5 ADA (minimum UTxO requirement is ~2.66 ADA)
       		invalidAddress: 'invalid_address',
       		invalidLovelaceAmount: 'not_a_number',
+			validMintActionsJson: "[{\"assetUnit\":\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\",\"quantity\":\"1000\"}]",
+			invalidMintActionsJson: "invalid_json",
+			validMintingPolicyScript: '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009',
+			invalidMintingPolicyScript: 'invalid_script',
+			validAssetsJson: JSON.stringify([
+				{
+					"unit": "def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d",
+					"quantity": "1000"
+				}
+			]),
+			validMetadataJson: JSON.stringify({"721": {"MyToken": {"name": "TokenM", "description": "My first minted token"}}})
     	};
 		
     	describe('SubmitTransaction Action - Parameter Validation', () => {
@@ -320,6 +332,7 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
         		const response = await test.POST(`/odata/v4/cardano-transaction/SubmitTransaction`, {
           		signedTxCbor: '84a300...'
         		}).catch(err => err.response);
+				expect(response.data.error.message).to.include('buildId is required');
         		expect(response.status).to.equal(400);
       		});
 
@@ -327,6 +340,7 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
         		const response = await test.POST(`/odata/v4/cardano-transaction/SubmitTransaction`, {
           		buildId: '00000000-0000-0000-0000-000000000000'
         		}).catch(err => err.response);
+				expect(response.data.error.message).to.include('signedTxCbor is required');
         		expect(response.status).to.equal(400);
       		});
 
@@ -335,6 +349,7 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
           		buildId: '00000000-0000-0000-0000-000000000000',
           		signedTxCbor: '84a300818258200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00018182581d61b3b8c9d7e6f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e41a000f4240021a0002a095031a012d14e0'
         		}).catch(err => err.response);
+				expect(response.data.error.message).to.include('Build not found');
         		expect(response.status).to.equal(400);
       		});
 
@@ -343,6 +358,7 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 		  		buildId: '00000000-0000-0000-0000-000000000000',
 		  		signedTxCbor: 'invalid_cbor_format'
 				}).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid signedTxCbor format');
 				expect(response.status).to.equal(400);
 	  		});
     	});
@@ -350,31 +366,24 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
 	 	describe('SubmitSignedTransaction Action - Parameter Validation', () => {
       		it('POST /SubmitSignedTransaction - missing signedTxCbor parameter', async () => {
         		const response = await test.POST(`/odata/v4/cardano-transaction/SubmitSignedTransaction`, {
-          		network: FIXTURE.network
         		}).catch(err => err.response);
-        		expect(response.status).to.equal(400);
-      		});
-
-      		it('POST /SubmitSignedTransaction - missing network parameter', async () => {
-        		const response = await test.POST(`/odata/v4/cardano-transaction/SubmitSignedTransaction`, {
-          		signedTxCbor: '84a300818258200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00018182581d61b3b8c9d7e6f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e41a000f4240021a0002a095031a012d14e0'
-        		}).catch(err => err.response);
+				expect(response.data.error.message).to.include('signedTxCbor is required');
         		expect(response.status).to.equal(400);
       		});
 
 			it('POST /SubmitSignedTransaction - invalid signedTxCbor format', async () => {
 				const response = await test.POST(`/odata/v4/cardano-transaction/SubmitSignedTransaction`, {
-		  		network: FIXTURE.network,
 		  		signedTxCbor: 'invalid_cbor_format'
 				}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 	  		});
     	});
 
-		describe('CheckSubmissionStatus Action', () => {
+		describe('CheckSubmissionStatus Action - Parameter Validation', () => {
       		
 			it('POST /CheckSubmissionStatus - missing submissionId parameter', async () => {
         		const response = await test.POST(`/odata/v4/cardano-transaction/CheckSubmissionStatus`, {}).catch(err => err.response);
+				expect(response.data.error.message).to.include('submissionId is required');
         		expect(response.status).to.equal(400);
       		});
 
@@ -382,40 +391,361 @@ describe('Error Code 400 - Service-Level Invalid Input & OData Errors ', () => {
         		const response = await test.POST(`/odata/v4/cardano-transaction/CheckSubmissionStatus`, {
           		submissionId: '1'
         		}).catch(err => err.response);
-        		// Should handle gracefully (might be 404 or just return null/empty)
-        		expect(response.status).to.be.oneOf([200, 400, 404]);
+        		expect(response.data.error.message).to.include('Submission not found');
+        		expect(response.status).to.equal(400);
       		});
     	});
 
-    	describe('Build Simple Transaction', () => {
-      		it('BuildSimpleAdaTransaction - handle address with insufficient funds gracefully', async () => {
-        		// Use a fresh generated address that definitely has no funds
-        		const emptyAddress = 'addr_test1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3jqpwd';
-        
-       			const requestBody = {
-          			network: FIXTURE.network,
-                	senderAddress: emptyAddress,
-          			recipientAddress: FIXTURE.validRecipientAddress,
-          			lovelaceAmount: FIXTURE.lovelaceAmount,
-          			changeAddress: emptyAddress,
-        		};
-        		const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
-        		// Should fail gracefully with 400 or 500 error
-        		expect(response.status).to.be.oneOf([400, 500]);
-      		});
+    	describe('BuildSimpleAdaTransaction Action- Parameter Validation', () => {
 
-      		it('BuildSimpleAdaTransaction - handle invalid network gracefully', async () => {
-        		const requestBody = {
-          		network: 'invalid-network',
-          		senderAddress: FIXTURE.validSenderAddress,
-          		recipientAddress: FIXTURE.validRecipientAddress,
-          		lovelaceAmount: FIXTURE.lovelaceAmount,
-          		changeAddress: FIXTURE.validSenderAddress,
-        		};
-        		const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
-        
-       			expect(response.status).to.be.oneOf([400, 500]);
-      		});
-    	});
+			it('BuildSimpleAdaTransaction - missing senderAddress parameter', async () => {
+				const requestBody = {
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,	
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('senderAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildSimpleAdaTransaction - missing recipientAddress parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,	
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('recipientAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildSimpleAdaTransaction - missing lovelaceAmount parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					changeAddress: FIXTURE.validSenderAddress,	
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('lovelaceAmount is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildSimpleAdaTransaction - invalid senderAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.invalidAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,	
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid sender address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildSimpleAdaTransaction - invalid recipientAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.invalidAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,	
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildSimpleAdaTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid recipient address format');
+				expect(response.status).to.equal(400);
+			});
+		});
+
+		describe('BuildTransactionWithMetadata - Invalid Input Handling', () => {
+
+			it('BuildTransactionWithMetadata - missing senderAddress parameter', async () => {
+				const requestBody = {
+					recipientAddress: FIXTURE.validRecipientAddress,	
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.validMetadataJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('senderAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - missing recipientAddress parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.validMetadataJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('recipientAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - missing lovelaceAmount parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.validMetadataJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('lovelaceAmount is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - missing metadata parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('metadataJson is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - invalid senderAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.invalidAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.validMetadataJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid sender address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - invalid recipientAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.invalidAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.validMetadataJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid recipient address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildTransactionWithMetadata - invalid metadataJson format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					metadataJson: FIXTURE.invalidMintActionsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildTransactionWithMetadata`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid JSON in metadataJson');
+				expect(response.status).to.equal(400);
+			});
+		});
+
+		describe('BuildMultiAssetTransaction - Invalid Input Handling', () => {
+
+			it('BuildMultiAssetTransaction - missing senderAddress parameter', async () => {
+				const requestBody = {
+					recipientAddress: FIXTURE.validRecipientAddress,	
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.validAssetsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('senderAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - missing recipientAddress parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.validAssetsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('recipientAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - missing lovelaceAmount parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.validAssetsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('lovelaceAmount is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - missing assetsJson parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('assetsJson is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - invalid senderAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.invalidAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.validAssetsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid sender address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - invalid recipientAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.invalidAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.validAssetsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid recipient address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMultiAssetTransaction - invalid assetsJson format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					lovelaceAmount: FIXTURE.lovelaceAmount,
+					changeAddress: FIXTURE.validSenderAddress,
+					assetsJson: FIXTURE.invalidMintActionsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMultiAssetTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid JSON in assetsJson');
+				expect(response.status).to.equal(400);
+			});
+		});
+
+		describe('BuildMintTransaction - Invalid Input Handling', () => {
+
+			it('BuildMintTransaction - missing senderAddress parameter', async () => {
+				const requestBody = {
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('senderAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - missing recipientAddress parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('recipientAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - missing mintActionJson parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('mintActionsJson is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - missing mintingPolicyScript parameter', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('mintingPolicyScript is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - invalid senderAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.invalidAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid sender address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - invalid recipientAddress format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.invalidAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid recipient address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - invalid mintActionsJson format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintActionsJson: FIXTURE.invalidMintActionsJson,
+					mintingPolicyScript: FIXTURE.validMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid JSON in mintActionsJson');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildMintTransaction - invalid mintingPolicyScript format', async () => {
+				const requestBody = {
+					senderAddress: FIXTURE.validSenderAddress,
+					recipientAddress: FIXTURE.validRecipientAddress,
+					mintActionsJson: FIXTURE.validMintActionsJson,
+					mintingPolicyScript: FIXTURE.invalidMintingPolicyScript,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid mintingPolicyScript format');
+				expect(response.status).to.equal(400);
+			});
+		});
+
+		describe('GetBuildDetails – Invalid Input Handling', () => {
+			it('GetBuildDetails - missing buildId parameter', async () => {
+				const response = await test.POST(`/odata/v4/cardano-transaction/GetBuildDetails`, {}).catch(err => err.response);
+				expect(response.data.error.message).to.include('buildId is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('GetBuildDetails - non-existent buildId', async () => {
+				const response = await test.POST(`/odata/v4/cardano-transaction/GetBuildDetails`, {
+					buildId: '00000000-0000-0000-0000-000000000000'
+				}).catch(err => err.response);
+				
+				expect(response.data.error.message).to.include('Build not found');
+				expect(response.status).to.equal(400);
+			});
+		});
   	});
 });

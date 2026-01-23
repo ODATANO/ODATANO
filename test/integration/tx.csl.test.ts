@@ -12,9 +12,15 @@ process.env.TX_BUILDERS = 'csl';
 
 // Import and run the transaction service test suite
 import { createTxServiceTestSuite } from './tx-test-suite';
+import { createTxErrorTestSuite } from './tx-error-handling.builder';
 
 // Run transaction building tests with CSL
 createTxServiceTestSuite({
+  name: 'csl',
+  enabled: true,
+});
+// Run transaction error handling tests with CSL
+createTxErrorTestSuite({
   name: 'csl',
   enabled: true,
 });

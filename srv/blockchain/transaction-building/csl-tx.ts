@@ -6,8 +6,31 @@ import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
+import { InsufficientFundsError } from "../../utils/errors";
 
 const logger = cds.log('CSLTxBuilder');
+
+/**
+ * Maps builder errors to typed BackendErrors
+ * @param err Error from builder
+ * @param assetUnit Asset unit that caused the error (default: 'lovelace')
+ * @throws {InsufficientFundsError} if error is related to insufficient funds
+ * @throws {Error} original error if not mappable
+ */
+function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+  // CSL throws String errors, not Error objects - need to handle both
+  const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
+
+  // Check for insufficient funds patterns
+  if (msg.includes('not enough') ||
+      msg.includes('insufficient') ||
+      msg.includes('balance')) {
+    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
+  }
+
+  // Re-throw original error if not mappable
+  throw err;
+}
 
 /**
  * CSLTxBuilder - Implementation of CardanoTxBuilder using cardano-serialization-lib (CSL)
@@ -33,135 +56,143 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    * @returns {Promise<TxBuildResult>} transaction build result
    */
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    // prepare addresses
-    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
-    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+    try {
+      // prepare addresses
+      const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+      const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-    // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
-    const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
+      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
+      const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
 
-    // create Transaction Builder from stored config
-    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+      // create Transaction Builder from stored config
+      const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-    // add recipient & output (lovelace)
-    const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
-    const outValue = CSL.Value.new(amount);
-    const out = CSL.TransactionOutput.new(recipientAddress, outValue);
-    txb.add_output(out);
+      // add recipient & output (lovelace)
+      const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
+      const outValue = CSL.Value.new(amount);
+      const out = CSL.TransactionOutput.new(recipientAddress, outValue);
+      txb.add_output(out);
 
-    // add inputs via coin selection + add change
-    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
-    txb.add_change_if_needed(changeAddress);
+      // add inputs via coin selection + add change
+      txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+      txb.add_change_if_needed(changeAddress);
 
-    // build unsigned tx
-    const unsignedTx = txb.build_tx();
-    
-    // Export the complete transaction (with empty witness set) for cardano-cli
-    const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
+      // build unsigned tx
+      const unsignedTx = txb.build_tx();
 
-    // hash + fee + outputs
-    const body = unsignedTx.body();
-    const bodyBytes = body.to_bytes();
-    const hash = blake2b(32).update(bodyBytes).digest('hex');
-    const txBodyHash = hash;
-    const feeLovelace = body.fee().to_str();
+      // Export the complete transaction (with empty witness set) for cardano-cli
+      const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
 
-    const outputs: Array<{ address: string; lovelace: string }> = [];
-    const txOuts = body.outputs();
-    for (let i = 0; i < txOuts.len(); i++) {
-      const o = txOuts.get(i);
-      outputs.push({
-        address: o.address().to_bech32(),
-        lovelace: o.amount().coin().to_str(),
-      });
+      // hash + fee + outputs
+      const body = unsignedTx.body();
+      const bodyBytes = body.to_bytes();
+      const hash = blake2b(32).update(bodyBytes).digest('hex');
+      const txBodyHash = hash;
+      const feeLovelace = body.fee().to_str();
+
+      const outputs: Array<{ address: string; lovelace: string }> = [];
+      const txOuts = body.outputs();
+      for (let i = 0; i < txOuts.len(); i++) {
+        const o = txOuts.get(i);
+        outputs.push({
+          address: o.address().to_bech32(),
+          lovelace: o.amount().coin().to_str(),
+        });
+      }
+
+      logger.info(`Built unsigned transaction successfully.`);
+
+      return {
+        unsignedTxCbor,
+        txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace,
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString(),
+        })),
+        outputs,
+        warnings: [],
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
     }
-
-    logger.info(`Built unsigned transaction successfully.`);
-
-    return {
-      unsignedTxCbor,
-      txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString(),
-      })),
-      outputs,
-      warnings: [],
-    };
   }
 
   public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    // prepare addresses
-    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
-    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+    try {
+      // prepare addresses
+      const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+      const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-    // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
-    const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
+      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
+      const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
 
-    // create Transaction Builder from stored config
-    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+      // create Transaction Builder from stored config
+      const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-    // add recipient & output (lovelace)
-    const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
-    const outValue = CSL.Value.new(amount);
-    const out = CSL.TransactionOutput.new(recipientAddress, outValue);
-    txb.add_output(out);
+      // add recipient & output (lovelace)
+      const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
+      const outValue = CSL.Value.new(amount);
+      const out = CSL.TransactionOutput.new(recipientAddress, outValue);
+      txb.add_output(out);
 
-    // add metadata if provided
-    if (req.metadataJson) {
-      const metadata = this._mapOdatanoMetadataToCSLMetadata(req.metadataJson);
-      txb.set_metadata(metadata);
+      // add metadata if provided
+      if (req.metadataJson) {
+        const metadata = this._mapOdatanoMetadataToCSLMetadata(req.metadataJson);
+        txb.set_metadata(metadata);
+      }
+
+      // add inputs via coin selection + add change
+      txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+      txb.add_change_if_needed(changeAddress);
+
+      // build unsigned tx
+      const unsignedTx = txb.build_tx();
+
+      // Export the complete transaction (with empty witness set) for cardano-cli
+      const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
+
+      // hash + fee + outputs
+      const body = unsignedTx.body();
+      const bodyBytes = body.to_bytes();
+      const hash = blake2b(32).update(bodyBytes).digest('hex');
+      const txBodyHash = hash;
+      const feeLovelace = body.fee().to_str();
+
+      const outputs: Array<{ address: string; lovelace: string }> = [];
+      const txOuts = body.outputs();
+      for (let i = 0; i < txOuts.len(); i++) {
+        const o = txOuts.get(i);
+        outputs.push({
+          address: o.address().to_bech32(),
+          lovelace: o.amount().coin().to_str(),
+        });
+      }
+
+      logger.info(`Built unsigned transaction with metadata successfully.`);
+
+      return {
+        unsignedTxCbor,
+        txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace,
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString(),
+        })),
+        outputs,
+        warnings: [],
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
     }
-
-    // add inputs via coin selection + add change
-    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
-    txb.add_change_if_needed(changeAddress);
-
-    // build unsigned tx
-    const unsignedTx = txb.build_tx();
-    
-    // Export the complete transaction (with empty witness set) for cardano-cli
-    const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
-
-    // hash + fee + outputs
-    const body = unsignedTx.body();
-    const bodyBytes = body.to_bytes();
-    const hash = blake2b(32).update(bodyBytes).digest('hex');
-    const txBodyHash = hash;
-    const feeLovelace = body.fee().to_str();
-
-    const outputs: Array<{ address: string; lovelace: string }> = [];
-    const txOuts = body.outputs();
-    for (let i = 0; i < txOuts.len(); i++) {
-      const o = txOuts.get(i);
-      outputs.push({
-        address: o.address().to_bech32(),
-        lovelace: o.amount().coin().to_str(),
-      });
-    }
-
-    logger.info(`Built unsigned transaction with metadata successfully.`);
-
-    return {
-      unsignedTxCbor,
-      txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString(),
-      })),
-      outputs,
-      warnings: [],
-    };
   }
 
   public async buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
@@ -169,28 +200,29 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       throw new Error('[CSLTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
     }
 
-    // prepare addresses
-    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
-    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+    try {
+      // prepare addresses
+      const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+      const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-    // map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support)
-    const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
+      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support)
+      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
 
-    // create Transaction Builder from stored config
-    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+      // create Transaction Builder from stored config
+      const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-    // Build output value with ADA + multi-assets
-    const lovelace = CSL.BigNum.from_str(String(req.lovelaceAmount));
-    const outputValue = CSL.Value.new(lovelace);
+      // Build output value with ADA + multi-assets
+      const lovelace = CSL.BigNum.from_str(String(req.lovelaceAmount));
+      const outputValue = CSL.Value.new(lovelace);
 
-    // Create MultiAsset structure for native tokens
-    const multiAsset = CSL.MultiAsset.new();
+      // Create MultiAsset structure for native tokens
+      const multiAsset = CSL.MultiAsset.new();
 
-    for (const asset of req.assets) {
-      // Skip 'lovelace' unit (already handled above)
-      if (asset.unit === 'lovelace') continue;
+      for (const asset of req.assets) {
+        // Skip 'lovelace' unit (already handled above)
+        if (asset.unit === 'lovelace') continue;
 
-      const { policyId, assetName } = this._parseAssetUnit(asset.unit);
+        const { policyId, assetName } = this._parseAssetUnit(asset.unit);
       
       // Get or create Assets for this policy
       const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
@@ -212,54 +244,60 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Set multi-asset on output value
     outputValue.set_multiasset(multiAsset);
 
-    // Create output with all assets
-    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
-    txb.add_output(recipientOutput);
+      // Create output with all assets
+      const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
+      txb.add_output(recipientOutput);
 
-    // add inputs via coin selection + add change
-    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
-    txb.add_change_if_needed(changeAddress);
+      // add inputs via coin selection + add change
+      txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+      txb.add_change_if_needed(changeAddress);
 
-    // build unsigned tx
-    const unsignedTx = txb.build_tx();
-    
-    // Export the complete transaction (with empty witness set) for cardano-cli
-    const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
+      // build unsigned tx
+      const unsignedTx = txb.build_tx();
 
-    // hash + fee + outputs
-    const body = unsignedTx.body();
-    const bodyBytes = body.to_bytes();
-    const hash = blake2b(32).update(bodyBytes).digest('hex');
-    const txBodyHash = hash;
-    const feeLovelace = body.fee().to_str();
+      // Export the complete transaction (with empty witness set) for cardano-cli
+      const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
 
-    const outputs: Array<{ address: string; lovelace: string }> = [];
-    const txOuts = body.outputs();
-    for (let i = 0; i < txOuts.len(); i++) {
-      const o = txOuts.get(i);
-      outputs.push({
-        address: o.address().to_bech32(),
-        lovelace: o.amount().coin().to_str(),
-      });
+      // hash + fee + outputs
+      const body = unsignedTx.body();
+      const bodyBytes = body.to_bytes();
+      const hash = blake2b(32).update(bodyBytes).digest('hex');
+      const txBodyHash = hash;
+      const feeLovelace = body.fee().to_str();
+
+      const outputs: Array<{ address: string; lovelace: string }> = [];
+      const txOuts = body.outputs();
+      for (let i = 0; i < txOuts.len(); i++) {
+        const o = txOuts.get(i);
+        outputs.push({
+          address: o.address().to_bech32(),
+          lovelace: o.amount().coin().to_str(),
+        });
+      }
+
+      logger.info(`Built unsigned multi-asset transaction successfully.`);
+
+      return {
+        unsignedTxCbor,
+        txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace,
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString(),
+        })),
+        outputs,
+        warnings: [],
+      };
+    } catch (err: any) {
+      // Extract asset unit from error message if possible
+      const assetMatch = err?.message?.match(/not enough\s+([a-f0-9.]+)/i);
+      const assetUnit = assetMatch?.[1] || 'assets';
+      mapBuilderError(err, assetUnit);
     }
-
-    logger.info(`Built unsigned multi-asset transaction successfully.`);
-
-    return {
-      unsignedTxCbor,
-      txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString(),
-      })),
-      outputs,
-      warnings: [],
-    };
   }
 
   public async buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
@@ -430,7 +468,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       };
       } catch (error: any) {
       logger.error(`Error toString: ${error}`);
-      throw error;
+      mapBuilderError(error, 'lovelace');
     }
   }
 

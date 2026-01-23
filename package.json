@@ -11,7 +11,6 @@
     "@cardano-ogmios/client": "^6.14.0",
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.21",
-    "@odatano/watch": "0.1.0",
     "@sap/cds": "^9",
     "axios": "^1.13.2",
     "bech32": "^2.0.0",
@@ -23,6 +22,7 @@
     "@cap-js/cds-typer": "^0.38.0",
     "@cap-js/cds-types": "^0.15.0",
     "@sap/cds-dk": "^9.4.3",
+    "@sap/eslint-plugin-cds": "^4",
     "@types/blake2b": "^2.1.3",
     "@types/jest": "^29.5.14",
     "@types/nock": "^10.0.3",
@@ -37,8 +37,7 @@
     "ts-jest": "^29.4.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "@sap/eslint-plugin-cds": "^4"
+    "typescript": "^5.9.3"
   },
   "cds": {
     "requires": {
@@ -47,26 +46,7 @@
         "credentials": {
           "url": "db.sqlite"
         }
-      },
-      "cardanoWatcher": {
-        "kind": "cardano-watcher",
-        "network": "preview",
-        "apiKey": "${env:BLOCKFROST_KEY}",
-        "autoStart": false
-      },
-      "[test]": {
-        "cardanoWatcher": {
-          "autoStart": false,
-          "addressPolling": { "enabled": false },
-          "transactionPolling": { "enabled": false }
-        }
       }
-    },
-    "plugins": {
-      "@odatano/watch": {}
-    },
-    "deploy": {
-      "data": false
     }
   },
   "scripts": {

@@ -77,53 +77,58 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Build a simple ADA-only transaction
-   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, changeAddress)
+   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, changeAddress)
    * @returns Transaction build details 
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { network, senderAddress, recipientAddress, lovelaceAmount } = req.data;
+    const {senderAddress, recipientAddress, lovelaceAmount } = req.data;
 
     // validate inputs
-    if (!network) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'network');
     if (!senderAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'senderAddress');
     if (!recipientAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'recipientAddress');
+    if (!lovelaceAmount) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'lovelaceAmount');
     if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid sender address format', 'senderAddress');
+    if (!isValidBech32Address(recipientAddress))
+      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid recipient address format', 'recipientAddress');
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ network, senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
+      logger.info({senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
       return await indexer.indexSimpleBuildResult(db, req.data);
     });
   });
   /**
    * Build a transaction with metadata
-   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
+   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
    * @returns Transaction build details 
    */
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
-    const { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
     // validate inputs
-    if (!network) return rejectMissing(req, 'BuildTransactionWithMetadata', 'network');
     if (!senderAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'senderAddress');
     if (!recipientAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'recipientAddress');
-    if (!isValidBech32Address(senderAddress))
+    if (!lovelaceAmount) return rejectMissing(req, 'BuildTransactionWithMetadata', 'lovelaceAmount');
+    if (!metadataJson) return rejectMissing(req, 'BuildTransactionWithMetadata', 'metadataJson');
+
+     if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid sender address format', 'senderAddress');
+     if (!isValidBech32Address(recipientAddress))
+      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid recipient address format', 'recipientAddress');
 
     // Parse metadataJson if it's a string
-    let parsedMetadata: JSONValue | undefined;
-    if (metadataJson) {
-      try {
-        parsedMetadata = typeof metadataJson === 'string' ? JSON.parse(metadataJson) : metadataJson;
-      } catch {
-        return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
-      }
+   let parsedMetadata;
+    try {
+      parsedMetadata = JSON.parse(metadataJson);
+      console.log('Parsed Metadata:', parsedMetadata);
+    } catch {
+      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
     }
-
+    
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
-        { network, senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
+        { senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
         'Building transaction with metadata'
       );
       return await indexer.indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
@@ -132,27 +137,26 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Build a multi-asset transaction
-   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
+   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
    * @returns Transaction build details 
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
-    const { network, senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
 
     // validate inputs
-    if (!network) return rejectMissing(req, 'BuildMultiAssetTransaction', 'network');
     if (!senderAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'senderAddress');
     if (!recipientAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'recipientAddress');
+    if (!lovelaceAmount) return rejectMissing(req, 'BuildMultiAssetTransaction', 'lovelaceAmount');
     if (!assetsJson) return rejectMissing(req, 'BuildMultiAssetTransaction', 'assetsJson');
     if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid sender address format', 'senderAddress');
+    if (!isValidBech32Address(recipientAddress))
+      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid recipient address format', 'recipientAddress');
 
     // Parse assetsJson
     let parsedAssets;
     try {
-      parsedAssets = typeof assetsJson === 'string' ? JSON.parse(assetsJson) : assetsJson;
-      if (!Array.isArray(parsedAssets)) {
-        return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must be an array', 'assetsJson');
-      }
+      parsedAssets = JSON.parse(assetsJson);
     } catch {
       return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid JSON in assetsJson', 'assetsJson');
     }
@@ -160,7 +164,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
-        { network, senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets },
+        { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets },
         'Building multi-asset transaction'
       );
       // Create clean request object with parsed assets (remove assetsJson, add assets)
@@ -175,30 +179,28 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Build a minting transaction
-   * @param req - CDS request object (with network, senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
+   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
    * @returns Transaction build details 
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { network, senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
 
     // validate inputs
-    if (!network) return rejectMissing(req, 'BuildMintTransaction', 'network');
     if (!senderAddress) return rejectMissing(req, 'BuildMintTransaction', 'senderAddress');
     if (!recipientAddress) return rejectMissing(req, 'BuildMintTransaction', 'recipientAddress');
     if (!mintActionsJson) return rejectMissing(req, 'BuildMintTransaction', 'mintActionsJson');
     if (!mintingPolicyScript) return rejectMissing(req, 'BuildMintTransaction', 'mintingPolicyScript');
     if (!isValidBech32Address(senderAddress))
       return rejectInvalid(req, 'BuildMintTransaction', 'Invalid sender address format', 'senderAddress');
+    if (!isValidBech32Address(recipientAddress))
+      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid recipient address format', 'recipientAddress');
     if (!isValidCbor(mintingPolicyScript))
       return rejectInvalid(req, 'BuildMintTransaction', 'Invalid mintingPolicyScript format', 'mintingPolicyScript');
 
     // Parse mintActionsJson
     let parsedMintActions;
     try {
-      parsedMintActions = typeof mintActionsJson === 'string' ? JSON.parse(mintActionsJson) : mintActionsJson;
-      if (!Array.isArray(parsedMintActions)) {
-        return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be an array', 'mintActionsJson');
-      }
+      parsedMintActions = JSON.parse(mintActionsJson);
       // Convert quantity strings to bigint
       parsedMintActions = parsedMintActions.map((action: any) => ({
         ...action,
@@ -211,7 +213,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
-        { network, senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
+        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
         'Building minting transaction'
       );
       // Create clean request object with parsed mintActions (remove mintActionsJson, add mintActions)
@@ -259,7 +261,6 @@ module.exports = (srv: cds.Service) => {
     if (!isValidCbor(signedTxCbor))
       return rejectInvalid(req, 'SubmitTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
 
-
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
       logger.debug({ buildId }, 'Submitting signed transaction');
@@ -300,11 +301,10 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
     logger.info('SubmitSignedTransaction Action handler called');
-    const { signedTxCbor, network } = req.data;
+    const { signedTxCbor } = req.data;
 
     // validate inputs
     if (!signedTxCbor) return rejectMissing(req, 'SubmitSignedTransaction', 'signedTxCbor');
-    if (!network) return rejectMissing(req, 'SubmitSignedTransaction', 'network');
     if (!isValidCbor(signedTxCbor))
       return rejectInvalid(req, 'SubmitSignedTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
     // handle the request / submitting the transaction / indexing the submission / returning submission details
@@ -349,13 +349,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
 
-      if (!submission) {
-        throw new BackendError(
-          `Submission with ID ${submissionId} not found`,
-          404,
-          ERROR_CODES.NOT_FOUND
-        );
-      }
+      if (!submission) rejectInvalid(req, 'CheckSubmissionStatus', 'Submission not found', 'submissionId');
 
       return submission;
     });

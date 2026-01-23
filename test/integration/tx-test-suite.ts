@@ -22,7 +22,6 @@ jest.setTimeout(60000);
 
 // Test data fixtures for preview network
 const FIXTURE = {
-  network: 'preview',
   validSenderAddress: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
   validRecipientAddress: 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622',
   lovelaceAmount: '5000000', // 5 ADA
@@ -246,7 +245,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
     describe('BuildSimpleAdaTransaction Action', () => {
       it('POST /BuildSimpleAdaTransaction - successfully build ADA transaction', async () => {
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -259,7 +257,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(data).to.have.property('id');
         expect(data).to.have.property('unsignedTxCbor');
         expect(data).to.have.property('txBodyHash');
-        expect(data.network).to.equal(FIXTURE.network);
         expect(data.wasSubmitted).to.equal(false);
         expect(data.fee).to.be.greaterThan(0);
         expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i); // Valid hex
@@ -270,7 +267,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         const { TransactionBuilds } = TxService.entities;
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -287,57 +283,11 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(builds[0].unsignedTxCbor).to.equal(data.unsignedTxCbor);
       });
 
-      it('POST /BuildSimpleAdaTransaction - missing network parameter', async () => {
-        const requestBody = {
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildSimpleAdaTransaction - missing senderAddress parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildSimpleAdaTransaction - missing recipientAddress parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildSimpleAdaTransaction - invalid sender address format', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.invalidAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
       it('POST /BuildSimpleAdaTransaction - with inputs and outputs persisted', async () => {
         const TxService = await cds.connect.to('CardanoTransactionService');
         const { TransactionBuildInputs, TransactionBuildOutputs } = TxService.entities;
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -363,7 +313,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
 
       it('POST /BuildSimpleAdaTransaction - without change address (fallback to sender)', async () => {
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -393,7 +342,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         };
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -419,7 +367,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         setupUtxoMock(mockUtxosWithAssets);
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -435,7 +382,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(data).to.have.property('id');
         expect(data).to.have.property('unsignedTxCbor');
         expect(data).to.have.property('txBodyHash');
-        expect(data.network).to.equal(FIXTURE.network);
         expect(data.wasSubmitted).to.equal(false);
         expect(data.fee).to.be.greaterThan(0);
         expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
@@ -448,7 +394,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         const { TransactionBuilds } = TxService.entities;
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -475,7 +420,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         const { TransactionBuildInputs } = TxService.entities;
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -499,12 +443,11 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         const { TransactionBuildOutputs } = TxService.entities;
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
           assetsJson: JSON.stringify([
-            { unit: FIXTURE.assetUnit, quantity: '100' } // Send less than available
+            { unit: FIXTURE.assetUnit, quantity: '100' }
           ])
         };
 
@@ -514,39 +457,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
 
         const outputs = await cds.run(SELECT.from(TransactionBuildOutputs).where({ build_id: data.id }));
         expect(outputs.length).to.be.greaterThanOrEqual(1);
-      });
-
-      it('POST /BuildMultiAssetTransaction - fails with insufficient asset quantity', async () => {
-        const limitedUtxos = [{
-          tx_hash: '1939e853adca5ce67b101d46722d9a84861843f01d030e787c82bd060d294e33',
-          tx_index: 0,
-          value: '10000000', // 10 ADA
-          asset_list: [
-            { policy_id: FIXTURE.policyId, asset_name: FIXTURE.assetName, quantity: '100' } // Only 100 tokens
-          ],
-          block_hash: 'limited123',
-          datum_hash: null
-        }];
-
-        setupUtxoMock(limitedUtxos);
-
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: JSON.stringify([
-            { unit: FIXTURE.assetUnit, quantity: '500' } // Requesting more than available
-          ])
-        };
-
-        try {
-          await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody);
-          expect.fail('Should have thrown an error');
-        } catch (error: any) {
-          expect(error.response.status).to.be.oneOf([400, 500]);
-          expect(error.response.data.error.message).to.exist;
-        }
       });
 
       it('POST /BuildMultiAssetTransaction - handles multiple different assets', async () => {
@@ -565,7 +475,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         setupUtxoMock(multiAssetUtxos);
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -580,86 +489,10 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(data.unsignedTxCbor).to.exist;
       });
 
-      it('POST /BuildMultiAssetTransaction - missing network parameter', async () => {
-        const requestBody = {
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: JSON.stringify([{ unit: "test", quantity: "100" }]),
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMultiAssetTransaction - missing senderAddress parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: JSON.stringify([{ unit: "test", quantity: "100" }]),
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMultiAssetTransaction - missing assetsJson parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMultiAssetTransaction - invalid assetsJson format', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: 'invalid json',
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMultiAssetTransaction - assetsJson not an array', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: JSON.stringify({ unit: "test", quantity: "100" }), // Object instead of array
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMultiAssetTransaction - invalid sender address format', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.invalidAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          assetsJson: JSON.stringify([{ unit: "test", quantity: "100" }]),
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
       it('POST /BuildMultiAssetTransaction - generates valid CBOR hex string', async () => {
         setupUtxoMock(mockUtxosWithAssets);
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -680,7 +513,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
 
         // Request WITHOUT changeAddress - should fall back to senderAddress
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -718,7 +550,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         ];
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -733,7 +564,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(data).to.have.property('id');
         expect(data).to.have.property('unsignedTxCbor');
         expect(data).to.have.property('txBodyHash');
-        expect(data.network).to.equal(FIXTURE.network);
         expect(data.wasSubmitted).to.equal(false);
       });
 
@@ -749,7 +579,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         ];
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -802,7 +631,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         ];
 
         const requestBody = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -816,115 +644,7 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(status).to.equal(200);
         expect(data).to.have.property('id');
         expect(data).to.have.property('unsignedTxCbor');
-      });
-
-      it('POST /BuildMintTransaction - missing network parameter', async () => {
-        const requestBody = {
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify([{ assetUnit: "test", quantity: "100" }]),
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - missing senderAddress parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify([{ assetUnit: "test", quantity: "100" }]),
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - missing mintActionsJson parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - missing mintingPolicyScript parameter', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify([{ assetUnit: "test", quantity: "100" }]),
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - invalid mintActionsJson format', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: 'invalid json',
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - mintActionsJson not an array', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify({ assetUnit: "test", quantity: "100" }),
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - invalid mintingPolicyScript format (not valid CBOR)', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify([{ assetUnit: "test", quantity: "100" }]),
-          mintingPolicyScript: "not-valid-cbor",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /BuildMintTransaction - invalid sender address format', async () => {
-        const requestBody = {
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.invalidAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          mintActionsJson: JSON.stringify([{ assetUnit: "test", quantity: "100" }]),
-          mintingPolicyScript: "8200581c1234567890",
-        };
-
-        const response = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
+      }); 
     });
 
     // ============================================================================
@@ -934,7 +654,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
     describe('GetBuildDetails Action', () => {
       it('POST /GetBuildDetails - retrieve build details by buildId', async () => {
         const buildRequest = {
-          network: FIXTURE.network,
           senderAddress: FIXTURE.validSenderAddress,
           recipientAddress: FIXTURE.validRecipientAddress,
           lovelaceAmount: FIXTURE.lovelaceAmount,
@@ -951,18 +670,6 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(data.id).to.equal(buildId);
         expect(data).to.have.property('unsignedTxCbor');
         expect(data).to.have.property('txBodyHash');
-      });
-
-      it('POST /GetBuildDetails - missing buildId parameter', async () => {
-        const response = await test.post('/odata/v4/cardano-transaction/GetBuildDetails', {}).catch(err => err.response);
-        expect(response.status).to.equal(400);
-      });
-
-      it('POST /GetBuildDetails - non-existent buildId', async () => {
-        const response = await test.post('/odata/v4/cardano-transaction/GetBuildDetails', {
-          buildId: '00000000-0000-0000-0000-000000000000',
-        }).catch(err => err.response);
-        expect(response.status).to.equal(400);
       });
     });
 

@@ -61,7 +61,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
   });
 
   describe('Koios Backend - TX Submission Mock', () => {
-    it('SubmitSignedTransaction - successful submission via Koios', async () => {
+    it('SubmitSignedTransaction - successful submission without prior build', async () => {
       // Mock Koios TX Submit
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submit_tx', {
@@ -129,24 +129,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       expect(submitResponse.data).to.exist;
       expect(submitResponse.data.txHash).to.equal(FIXTURE.expectedTxHash);
       expect(submitResponse.data.build_id).to.equal(mockBuildId);
-      expect(scope.isDone()).to.be.true;
-    });
-
-    it('getLatestBlock - should throw NotFoundError when /tip returns null', async () => {
-      // Mock Koios /tip endpoint to return null data (empty array simulates no data)
-      const scope = nock('https://preview.koios.rest')
-        .get('/api/v1/tip')
-        .reply(200, []);
-
-      // Attempt to get the latest block via GetLatestBlock action
-      try {
-        await test.post('/odata/v4/cardano-odata/GetLatestBlock', {});
-        expect.fail('Should have thrown an error');
-      } catch (error: any) {
-        // Should receive a 404 error for not found
-        expect(error.response.status).to.equal(404);
-        expect(error.response.data.error.message).to.include('Latest Block not found');
-      }
       expect(scope.isDone()).to.be.true;
     });
   });

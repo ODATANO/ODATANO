@@ -94,12 +94,5 @@ export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
 				});
 			});
 		});
-
-		describe('ODATANO Milestone 2 - Error Handling Tests', () => {
-			// Error 400 bad request with invalid inputs
-			describe('Bad Request (invalid inputs)', () => {
-
-			});
-		});
 	});
 }

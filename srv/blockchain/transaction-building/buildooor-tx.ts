@@ -2,10 +2,11 @@ import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
-import { assertAdaOnly, getLovelace, selectUtxosForAsset } from "../../utils/tx-build-helper";
+import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
 import cds from "@sap/cds";
+import { InsufficientFundsError } from "../../utils/errors";
 import {
   defaultProtocolParameters,
   Address,
@@ -29,7 +30,28 @@ import { DataI } from "@harmoniclabs/plutus-data";
 
 const logger = cds.log('BuildooorTxBuilder');
 
-/** 
+/**
+ * Maps builder errors to typed BackendErrors
+ * @param err Error from builder
+ * @param assetUnit Asset unit that caused the error (default: 'lovelace')
+ * @throws {InsufficientFundsError} if error is related to insufficient funds
+ * @throws {Error} original error if not mappable
+ */
+function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+  const msg = err?.message?.toLowerCase() || '';
+
+  // Check for insufficient funds patterns
+  if (msg.includes('not enough') ||
+      msg.includes('insufficient') ||
+      msg.includes('balance')) {
+    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
+  }
+
+  // Re-throw original error if not mappable
+  throw err;
+}
+
+/**
  * BuildooorTxBuilder - Implementation of CardanoTxBuilder using Buildooor library
  */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
@@ -53,114 +75,121 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * @returns {Promise<TxBuildResult>} transaction build result
    */
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    try {
+      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
 
-    // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
-    const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
+      // and map to Buildooor TxIn objects for inputs
+      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
-    // and map to Buildooor TxIn objects for inputs
-    const inputs = ledgerUtxos.map(utxo => ({ utxo }));
+      // set Addresses
+      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
+      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      // set Amount
+      const amount = BigInt(String(req.lovelaceAmount));
 
-    // set Addresses
-    const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-    const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
-    // set Amount
-    const amount = BigInt(String(req.lovelaceAmount));
+      // build new outputs for recipient
+      const outputs = [
+        new TxOut({
+          address: recipientAddress,
+          value: Value.lovelaces(amount)
+        })
+      ];
+      // build the transaction
+      const tx = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+      });
 
-    // build new outputs for recipient
-    const outputs = [
-      new TxOut({
-        address: recipientAddress,
-        value: Value.lovelaces(amount)
-      })
-    ];
-    // build the transaction
-    const tx = await this.txBuilder.build({
-      inputs,
-      outputs,
-      changeAddress,
-    });
+      // full unsigned tx cbor (4-tuple, witness empty)
+      const unsignedTxBytes = tx.toCbor().toBuffer();
+      const unsignedTxCbor = toHex(unsignedTxBytes);
+      const txBodyHash = tx.hash.toString();
 
-    // full unsigned tx cbor (4-tuple, witness empty)
-    const unsignedTxBytes = tx.toCbor().toBuffer();
-    const unsignedTxCbor = toHex(unsignedTxBytes);
-    const txBodyHash = tx.hash.toString();
+      logger.debug(`Built unsigned transaction successfully.`);
 
-    logger.debug(`Built unsigned transaction successfully.`);
-
-    return {
-      unsignedTxCbor: unsignedTxCbor,
-      txBodyHash: txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace: tx.body.fee.toString(),
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString()
-      })),
-      outputs: tx.body.outputs.map((o: any) => ({
-        address: o.address?.toString?.() ?? "",
-        lovelace: o.value?.lovelaces?.toString?.() ?? "0"
-      })),
-      warnings: []
-    };
+      return {
+        unsignedTxCbor: unsignedTxCbor,
+        txBodyHash: txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace: tx.body.fee.toString(),
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString()
+        })),
+        outputs: tx.body.outputs.map((o: any) => ({
+          address: o.address?.toString?.() ?? "",
+          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
+        })),
+        warnings: []
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
+    }
   }
 
   public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
-    const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
+    try {
+      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
 
-    // Buildooor TxIn objects for inputs
-    const inputs = ledgerUtxos.map(utxo => ({ utxo }));
-    // Addresses
-    const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-    const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
-    // Amount
-    const amount = BigInt(String(req.lovelaceAmount));
+      // Buildooor TxIn objects for inputs
+      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
+      // Addresses
+      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
+      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      // Amount
+      const amount = BigInt(String(req.lovelaceAmount));
 
-    const metadata = this._mapOdatanoMetadataToLedgerMetadata(req.metadataJson);
+      const metadata = this._mapOdatanoMetadataToLedgerMetadata(req.metadataJson);
 
-    // build new outputs for recipient
-    const outputs = [
-      new TxOut({
-        address: recipientAddress,
-        value: Value.lovelaces(amount)
-      })
-    ];
-    // build the transaction
-    const tx = await this.txBuilder.build({
-      inputs,
-      outputs,
-      changeAddress,
-      metadata
-    });
+      // build new outputs for recipient
+      const outputs = [
+        new TxOut({
+          address: recipientAddress,
+          value: Value.lovelaces(amount)
+        })
+      ];
+      // build the transaction
+      const tx = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+        metadata
+      });
 
-    // full unsigned tx cbor (4-tuple, witness empty)
-    const unsignedTxBytes = tx.toCbor().toBuffer();
-    const unsignedTxCbor = toHex(unsignedTxBytes);
-    const txBodyHash = tx.hash.toString();
+      // full unsigned tx cbor (4-tuple, witness empty)
+      const unsignedTxBytes = tx.toCbor().toBuffer();
+      const unsignedTxCbor = toHex(unsignedTxBytes);
+      const txBodyHash = tx.hash.toString();
 
-    logger.debug(`Built unsigned transaction successfully.`);
+      logger.debug(`Built unsigned transaction successfully.`);
 
-    return {
-      unsignedTxCbor: unsignedTxCbor,
-      txBodyHash: txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace: tx.body.fee.toString(),
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString()
-      })),
-      outputs: tx.body.outputs.map((o: any) => ({
-        address: o.address?.toString?.() ?? "",
-        lovelace: o.value?.lovelaces?.toString?.() ?? "0"
-      })),
-      warnings: []
-    };
+      return {
+        unsignedTxCbor: unsignedTxCbor,
+        txBodyHash: txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace: tx.body.fee.toString(),
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString()
+        })),
+        outputs: tx.body.outputs.map((o: any) => ({
+          address: o.address?.toString?.() ?? "",
+          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
+        })),
+        warnings: []
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
+    }
   }
 
   public async buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
@@ -168,35 +197,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       throw new Error('[BuildooorTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
     }
 
-    // Select UTxOs for each required asset
-    const selectedUtxos: OdatanoUtxo[] = [];
-    const requiredAssets = new Map<string, bigint>();
-
-    // Add lovelace requirement
-    requiredAssets.set('lovelace', BigInt(req.lovelaceAmount));
-
-    // Add all asset requirements
-    for (const asset of req.assets) {
-      const existing = requiredAssets.get(asset.unit) ?? 0n;
-      requiredAssets.set(asset.unit, existing + BigInt(asset.quantity));
-    }
-
-    // Select UTxOs for each asset
-    for (const [assetUnit, targetAmount] of requiredAssets.entries()) {
-      const utxosForAsset = selectUtxosForAsset(ctx.utxos, assetUnit, targetAmount);
-
-      // Add new UTxOs that haven't been selected yet
-      for (const utxo of utxosForAsset) {
-        if (!selectedUtxos.some(u => u.txHash === utxo.txHash && u.outputIndex === utxo.outputIndex)) {
-          selectedUtxos.push(utxo);
-        }
-      }
-    }
-
-    logger.debug(`Selected ${selectedUtxos.length} UTxOs for multi-asset transaction`);
-
-    // Map to ledger UTxOs for Buildooor
-    const ledgerUtxos: LedgerUTxO[] = selectedUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
+    try {
+      // Map all available UTxOs to ledger UTxOs for Buildooor (let builder handle selection)
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
     // Buildooor TxIn objects for inputs
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
@@ -232,30 +235,36 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     });
 
     // Full unsigned tx cbor (4-tuple, witness empty)
-    const unsignedTxBytes = tx.toCbor().toBuffer();
-    const unsignedTxCbor = toHex(unsignedTxBytes);
-    const txBodyHash = tx.hash.toString();
+      const unsignedTxBytes = tx.toCbor().toBuffer();
+      const unsignedTxCbor = toHex(unsignedTxBytes);
+      const txBodyHash = tx.hash.toString();
 
-    logger.debug(`Built unsigned multi-asset transaction successfully.`);
+      logger.debug(`Built unsigned multi-asset transaction successfully.`);
 
-    return {
-      unsignedTxCbor: unsignedTxCbor,
-      txBodyHash: txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace: tx.body.fee.toString(),
-      inputs: selectedUtxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString()
-      })),
-      outputs: tx.body.outputs.map((o: any) => ({
-        address: o.address?.toString?.() ?? "",
-        lovelace: o.value?.lovelaces?.toString?.() ?? "0"
-      })),
-      warnings: []
-    };
+      return {
+        unsignedTxCbor: unsignedTxCbor,
+        txBodyHash: txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace: tx.body.fee.toString(),
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString()
+        })),
+        outputs: tx.body.outputs.map((o: any) => ({
+          address: o.address?.toString?.() ?? "",
+          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
+        })),
+        warnings: []
+      };
+    } catch (err: any) {
+      // Extract asset unit from error message if possible
+      const assetMatch = err?.message?.match(/not enough\s+([a-f0-9.]+)/i);
+      const assetUnit = assetMatch?.[1] || 'assets';
+      mapBuilderError(err, assetUnit);
+    }
   }
 
   public async buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
@@ -268,24 +277,18 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       throw new Error('[BuildooorTxBuilder] buildUnsignedMintTransaction requires mintingPolicyScript to be specified');
     }
 
-    const minLovelace = BigInt(req.lovelaceAmount || 3_000_000); // Minimum 3 ADA to ensure enough for Plutus fees
-    const plutusBuffer = 2_000_000n; // Extra 2 ADA buffer for Plutus fees + CBOR collateral overhead
-    const totalRequired = minLovelace + plutusBuffer;
+    try {
 
-    const selectedUtxos = selectUtxosForAsset(ctx.utxos, 'lovelace', totalRequired);
+      // Map all available UTxOs to ledger UTxOs (let builder handle selection)
+      // Use multi-asset mapper to support burn transactions
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
-    logger.debug(`Selected ${selectedUtxos.length} UTxOs for minting transaction (${totalRequired} lovelace required)`);
+      // Buildooor TxIn objects for inputs
+      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
-    // Map to ledger UTxOs - use multi-asset mapper to support burn transactions
-    // (burn transactions need to consume UTxOs with the tokens being burned)
-    const ledgerUtxos: LedgerUTxO[] = selectedUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-
-    // Buildooor TxIn objects for inputs
-    const inputs = ledgerUtxos.map(utxo => ({ utxo }));
-
-    // Addresses
-    const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-    const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      // Addresses
+      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
+      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
 
     // Build mint value and mints array
     const mints = [];
@@ -350,71 +353,72 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       })
     ];
 
-    // Find an ADA-only UTxO for collateral (Plutus scripts require ADA-only collateral)
-    // First try from selected UTxOs, then fall back to all available UTxOs
-    const adaOnlyUtxo = selectedUtxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'))
-      || ctx.utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
+      // Find an ADA-only UTxO for collateral (Plutus scripts require ADA-only collateral)
+      const adaOnlyUtxo = ctx.utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
 
-    if (!adaOnlyUtxo) {
-      throw new Error('[BuildooorTxBuilder] No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      if (!adaOnlyUtxo) {
+        throw new Error('[BuildooorTxBuilder] No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      }
+
+      // Use only 1 collateral to minimize tx size
+      const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
+
+      // First build to calculate base fee
+      const txFirstPass = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+        mints: mints,
+        collaterals: collateralUtxos
+      });
+
+      // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
+      // Auto-evaluation handles execution units accurately, but we still need to account
+      // for the CBOR size increase when the witness set is added during signing
+      const calculatedFee = BigInt(txFirstPass.body.fee.toString());
+      const witnessBuffer = BigInt(50); // Minimal buffer for witness overhead
+      const adjustedMinFee = calculatedFee + witnessBuffer;
+
+      logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
+
+      // Second build with adjusted minimum fee to account for witness overhead
+      const tx = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+        mints: mints,
+        collaterals: collateralUtxos,
+        fee: adjustedMinFee
+      });
+
+      // Full unsigned tx cbor (4-tuple, witness empty)
+      const unsignedTxBytes = tx.toCbor().toBuffer();
+      const unsignedTxCbor = toHex(unsignedTxBytes);
+      const txBodyHash = tx.hash.toString();
+
+      logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
+
+      return {
+        unsignedTxCbor: unsignedTxCbor,
+        txBodyHash: txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace: tx.body.fee.toString(),
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString()
+        })),
+        outputs: tx.body.outputs.map((o: any) => ({
+          address: o.address?.toString?.() ?? "",
+          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
+        })),
+        warnings: []
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
     }
-
-    // Use only 1 collateral to minimize tx size
-    const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
-
-    // First build to calculate base fee
-    const txFirstPass = await this.txBuilder.build({
-      inputs,
-      outputs,
-      changeAddress,
-      mints: mints,
-      collaterals: collateralUtxos
-    });
-
-    // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
-    // Auto-evaluation handles execution units accurately, but we still need to account
-    // for the CBOR size increase when the witness set is added during signing
-    const calculatedFee = BigInt(txFirstPass.body.fee.toString());
-    const witnessBuffer = BigInt(50); // Minimal buffer for witness overhead
-    const adjustedMinFee = calculatedFee + witnessBuffer;
-
-    logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
-
-    // Second build with adjusted minimum fee to account for witness overhead
-    const tx = await this.txBuilder.build({
-      inputs,
-      outputs,
-      changeAddress,
-      mints: mints,
-      collaterals: collateralUtxos,
-      fee: adjustedMinFee
-    });
-
-    // Full unsigned tx cbor (4-tuple, witness empty)
-    const unsignedTxBytes = tx.toCbor().toBuffer();
-    const unsignedTxCbor = toHex(unsignedTxBytes);
-    const txBodyHash = tx.hash.toString();
-
-    logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
-
-    return {
-      unsignedTxCbor: unsignedTxCbor,
-      txBodyHash: txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace: tx.body.fee.toString(),
-      inputs: selectedUtxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString()
-      })),
-      outputs: tx.body.outputs.map((o: any) => ({
-        address: o.address?.toString?.() ?? "",
-        lovelace: o.value?.lovelaces?.toString?.() ?? "0"
-      })),
-      warnings: []
-    };
   }
 
   //---------------------------------------------------------------------------
