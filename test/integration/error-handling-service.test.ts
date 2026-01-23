@@ -1,4 +1,3 @@
-import { assets } from '@blockfrost/blockfrost-js/lib/endpoints/api/assets';
 import cds from '@sap/cds';
 
 jest.setTimeout(20000);

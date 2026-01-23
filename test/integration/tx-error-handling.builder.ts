@@ -4,7 +4,6 @@ import { TxBuilderTestConfig } from './backend-test-helper';
 import { resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
 import { resetCardanoClient } from '../../srv/blockchain/cardano-client';
 
-const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(60000);
 
 /**
@@ -49,30 +48,6 @@ const mockUtxosAdaOnly = [
     value: '1000', // 0.001 ADA
     asset_list: [],
     block_hash: 'b2c3d4e5f6g7',
-    datum_hash: null
-  }
-];
-
-// Mock UTxOs with native assets (Koios /address_utxos response format)
-const mockUtxosWithAssets = [
-  {
-    tx_hash: '1939e853adca5ce67b101d46722d9a84861843f01d030e787c82bd060d294e33',
-    tx_index: 0,
-    value: '1000', // 0.001 ADA (lovelace)
-    asset_list: [
-      { policy_id: FIXTURE.policyId, asset_name: FIXTURE.assetName, quantity: '5' }
-    ],
-    block_hash: 'a1b2c3d4',
-    datum_hash: null
-  },
-  {
-    tx_hash: 'f2e3025deee1dbf12e1e762421bc019b0a8de86dbcf7cc27964334d6190a6696',
-    tx_index: 0,
-    value: '500', // 0.0005 ADA
-    asset_list: [
-      { policy_id: FIXTURE.policyId, asset_name: FIXTURE.assetName, quantity: '1' }
-    ],
-    block_hash: 'e5f6g7h8',
     datum_hash: null
   }
 ];

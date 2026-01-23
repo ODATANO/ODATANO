@@ -1,10 +1,8 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, rejectMissing, BackendError } from './utils/errors';
-import { ERROR_CODES } from './utils/error-codes';
+import { rejectInvalid, rejectMissing } from './utils/errors';
 import { isValidBech32Address, isValidCbor } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
-import { JSONValue } from './utils/types';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
 const { SELECT } = cds.ql;
@@ -120,7 +118,6 @@ module.exports = (srv: cds.Service) => {
    let parsedMetadata;
     try {
       parsedMetadata = JSON.parse(metadataJson);
-      console.log('Parsed Metadata:', parsedMetadata);
     } catch {
       return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
     }
