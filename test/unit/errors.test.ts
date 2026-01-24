@@ -9,8 +9,7 @@ import {
   AllBackendsInitFailedError,
   getErrorStatus,
   getErrorMessage,
-  normalizeBackendError,
-  TransactionValidationError,
+  normalizeBackendError
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
