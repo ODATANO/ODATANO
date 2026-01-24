@@ -5,12 +5,6 @@ describe('OData Query Features', () => {
 
   const { GET, expect } = cds.test(__dirname + '/../../');
 
-  afterAll(async () => {
-    // Shutdown all backend connections to allow Jest to exit
-    const { cardanoClient } = await import('../../srv/blockchain/cardano-client');
-    await cardanoClient.shutdown();
-  });
-
   describe('ODATANO Milestone 1', () => {
     // ============================================================================
     // $FILTER TESTS

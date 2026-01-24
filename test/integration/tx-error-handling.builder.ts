@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import nock from 'nock';
 import { TxBuilderTestConfig } from './backend-test-helper';
 import { resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
-import { resetCardanoClient, getCardanoClient } from '../../srv/blockchain/cardano-client';
+import { resetCardanoClient } from '../../srv/blockchain/cardano-client';
 
 jest.setTimeout(60000);
 
@@ -165,12 +165,10 @@ export function createTxErrorTestSuite(txBuilderConfig: TxBuilderTestConfig) {
       nock.restore();
     });
 
-    afterAll(async () => {
+    afterAll(() => {
       nock.cleanAll();
       nock.restore();
       nock.enableNetConnect();
-      // Shutdown all backend connections to allow Jest to exit
-      await getCardanoClient().shutdown();
     });
 
     // ============================================================================

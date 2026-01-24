@@ -409,7 +409,7 @@ export class CardanoClient {
     logger.info('CardanoClient shutdown complete');
   }
 
-  /** 
+  /**
    * Get latest block data with fallback between backends
    * @returns {Promise<BlockData>} latest block data
    */
