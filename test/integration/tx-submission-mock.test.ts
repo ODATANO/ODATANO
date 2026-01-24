@@ -50,14 +50,15 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     nock.cleanAll();
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     // final cleanup
     nock.cleanAll();
     nock.restore();
     nock.enableNetConnect(); // Re-enable normal network calls
 
-    // Give the test server time to shut down
-    return new Promise(resolve => setTimeout(resolve, 100));
+    // Shutdown all backend connections to allow Jest to exit
+    const { cardanoClient } = await import('../../srv/blockchain/cardano-client');
+    await cardanoClient.shutdown();
   });
 
   describe('Koios Backend - TX Submission Mock', () => {

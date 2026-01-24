@@ -376,6 +376,39 @@ export class CardanoClient {
     logger.debug('Protocol parameters cache cleared');
   }
 
+  /**
+   * Shutdown all backends (for cleanup in tests)
+   */
+  async shutdown(): Promise<void> {
+    logger.info('Shutting down CardanoClient backends...');
+
+    // Shutdown live backend if it has a shutdown method
+    if (this.liveBackend && 'shutdown' in this.liveBackend && typeof this.liveBackend.shutdown === 'function') {
+      try {
+        await this.liveBackend.shutdown();
+        logger.debug(`Live backend ${this.liveBackend.name} shut down`);
+      } catch (err) {
+        logger.error(`Error shutting down live backend: ${err}`);
+      }
+    }
+
+    // Shutdown historical backends
+    for (const backend of this.historicalBackends) {
+      if ('shutdown' in backend && typeof backend.shutdown === 'function') {
+        try {
+          await backend.shutdown();
+          logger.debug(`Historical backend ${backend.name} shut down`);
+        } catch (err) {
+          logger.error(`Error shutting down historical backend ${backend.name}: ${err}`);
+        }
+      }
+    }
+
+    this.initialized = false;
+    this.initPromise = null;
+    logger.info('CardanoClient shutdown complete');
+  }
+
   /** 
    * Get latest block data with fallback between backends
    * @returns {Promise<BlockData>} latest block data

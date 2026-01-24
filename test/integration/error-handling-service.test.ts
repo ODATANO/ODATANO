@@ -6,7 +6,12 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 	const test = cds.test(__dirname + '/../../');
 	const expect = test.expect;
 
-	
+	afterAll(async () => {
+		// Shutdown all backend connections to allow Jest to exit
+		const { cardanoClient } = await import('../../srv/blockchain/cardano-client');
+		await cardanoClient.shutdown();
+	});
+
 	describe('ODATANO Milestone 1 - Error Handling Tests', () => {
 	
 		// Transactions – invalid inputs handled by service

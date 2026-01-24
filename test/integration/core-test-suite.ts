@@ -4,6 +4,7 @@ import {
   BackendTestConfig,
   configureBackendForTest,
 } from './backend-test-helper';
+import { cardanoClient } from '../../srv/blockchain/cardano-client';
 
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(200000);
@@ -34,6 +35,11 @@ export function createBackendTestSuite(backendConfig: BackendTestConfig) {
     // Reset the database before each test to ensure a clean state
     beforeEach(async () => {
       await test.data.reset()
+    });
+
+    afterAll(async () => {
+      // Shutdown all backend connections to allow Jest to exit
+      await cardanoClient.shutdown();
     });
 
     describe('ODATANO Milestone 1 - CardanoService Tests', () => {

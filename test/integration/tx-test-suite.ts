@@ -190,11 +190,12 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
       nock.restore();
     });
 
-    afterAll(() => {
+    afterAll(async () => {
       nock.cleanAll();
       nock.restore();
       nock.enableNetConnect();
-      return new Promise(resolve => setTimeout(resolve, 100));
+      // Shutdown all backend connections to allow Jest to exit
+      await getCardanoClient().shutdown();
     });
 
     // ============================================================================

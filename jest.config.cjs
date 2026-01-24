@@ -24,7 +24,7 @@ module.exports = {
     //'!srv/blockchain/backends/ogmios-backend.ts'
   ],
   coverageThreshold: {
-    global: { branches: 65, functions: 75, lines: 75 },
+    global: { branches: 80, functions: 80, lines: 89 },
   },
 
   openHandlesTimeout: 0,

@@ -29,6 +29,12 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
   const { POST, expect } = cds.test(__dirname + '/../../');
 
+  afterAll(async () => {
+    // Shutdown all backend connections to allow Jest to exit
+    const { cardanoClient } = await import('../../srv/blockchain/cardano-client');
+    await cardanoClient.shutdown();
+  });
+
   describe('Ogmios Backend Action Tests', () => {
 
     it('POST /GetNetworkInformation - get network information', async () => {
