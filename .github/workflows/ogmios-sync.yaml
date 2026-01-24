@@ -8,7 +8,7 @@ on:
       synchronization-level:
         description: 'Desired % synchronization level. Between 0 and 1.'
         required: false
-        default: '1'
+        default: '0.99'
         type: number
 
 permissions:

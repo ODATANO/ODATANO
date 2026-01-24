@@ -97,52 +97,38 @@ jobs:
           sleep 10
           docker ps
 
-      - name: Wait for Cardano Node sync
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
-        run: |
-          echo "Waiting for node to sync to tip (max 15 minutes)..."
-          MAX_WAIT=900  # 15 minutes max
-          ELAPSED=0
-          
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
-            if docker logs cardano-node-preview 2>&1 | grep -q "Chain extended"; then
-              echo "Node is syncing..."
-              PROGRESS=$(docker logs --tail 50 cardano-node-preview 2>&1 | grep -oP 'Progress: \K[0-9.]+' | tail -1 || echo "0")
-              echo "Sync progress: ${PROGRESS}%"
-              
-              if (( $(echo "$PROGRESS > 99.9" | bc -l) )); then
-                echo "✅ Node synced to tip!"
-                break
-              fi
-            fi
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
-          done
-          
-          if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "⚠️ Sync timeout after ${MAX_WAIT}s, proceeding anyway..."
-          fi
-
-      - name: Check Ogmios availability
+      - name: Wait for Ogmios sync
         id: ogmios-ready
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          MAX_RETRIES=10
-          RETRY_DELAY=3
-          
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $i/$MAX_RETRIES: Checking Ogmios health..."
-            if curl -f http://localhost:1337/health > /dev/null 2>&1; then
-              echo "✅ Ogmios is ready!"
-              echo "ready=true" >> $GITHUB_OUTPUT
-              exit 0
+          echo "Waiting for Ogmios to sync (max 15 minutes)..."
+          MAX_WAIT=900
+          ELAPSED=0
+          THRESHOLD=0.999
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            HEALTH=$(curl -s http://localhost:1337/health 2>/dev/null || echo "{}")
+            SYNC=$(echo "$HEALTH" | sed 's/.*"networkSynchronization":\([0-9]\+\.\?[0-9]*\).*/\1/' || echo "0")
+
+            if [ "$SYNC" != "$HEALTH" ] && [ -n "$SYNC" ]; then
+              PERCENT=$(echo "$SYNC * 100" | bc -l 2>/dev/null | cut -c1-5 || echo "0")
+              echo "Sync progress: ${PERCENT}%"
+
+              if [ "$(echo "$SYNC >= $THRESHOLD" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
+                echo "✅ Ogmios synced to tip!"
+                echo "ready=true" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+            else
+              echo "Waiting for Ogmios to start..."
             fi
-            echo "Not ready yet, waiting ${RETRY_DELAY}s..."
-            sleep $RETRY_DELAY
+
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
           done
-          
-          echo "⚠️ Ogmios not available after $MAX_RETRIES attempts"
+
+          echo "⚠️ Sync timeout after ${MAX_WAIT}s"
           echo "ready=false" >> $GITHUB_OUTPUT
 
       - name: Cache Status Info
