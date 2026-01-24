@@ -42,6 +42,7 @@ jobs:
         network: ${{ matrix.network }}
         version: ${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}
         synchronization-level: ${{ inputs.synchronization-level || 1 }}
+        warm-up-timeout: 900
 
     - name: prune node db
       # Prune if sync is at or above 98% to keep cache size manageable

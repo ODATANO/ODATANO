@@ -21,6 +21,18 @@ export const ERROR_CODES = {
   INSUFFICIENT_FUNDS: 'ODATANO_INSUFFICIENT_FUNDS',
 
   /**
+   * 400 – Transaction validation failed
+   * Indicates that the transaction failed validation (wrong signature, tampered CBOR, etc.)
+   */
+  TX_VALIDATION_FAILED: 'ODATANO_TX_VALIDATION_FAILED',
+
+  /**
+   * 409 – Transaction already submitted
+   * Indicates that the transaction has already been submitted (duplicate/replay)
+   */
+  TX_ALREADY_SUBMITTED: 'ODATANO_TX_ALREADY_SUBMITTED',
+
+  /**
     * 429 – Rate limiting
     * indicates temporary unavailability
     */

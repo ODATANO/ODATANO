@@ -107,7 +107,7 @@ export class CardanoTransactionBuilder {
         return txBuildResult;
     }
 
-    /** 
+    /**
      * Build a minting transaction
      * @param req transaction build request
      * @param protocolParameters current protocol parameters
@@ -116,11 +116,24 @@ export class CardanoTransactionBuilder {
     async buildMintTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         await this.ensureInitialized();
 
+        const cardanoClient = getCardanoClient();
+
         // Prepare the transaction build context
         const txContext: TxBuildContext = {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
-            protocolParameters: protocolParameters
+            protocolParameters: protocolParameters,
+            // Pass evaluator if Ogmios is available for dynamic execution unit calculation
+            evaluateTransaction: cardanoClient.hasOgmiosBackend()
+                ? (cbor) => cardanoClient.evaluateTransaction(cbor)
+                : undefined
         };
+
+        if (txContext.evaluateTransaction) {
+            logger.info(`Ogmios available - will use dynamic script evaluation`);
+        } else {
+            logger.info(`Ogmios not available - using default execution units`);
+        }
+
         // Build the unsigned minting transaction
         const txBuildResult = await this.txBuilder.buildUnsignedMintTransaction(req, txContext);
 

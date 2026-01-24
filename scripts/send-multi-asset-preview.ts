@@ -19,7 +19,6 @@ const ASSETS = [
 ];
 
 const BUILD_BODY = {
-  network: "preview",
   // Sending FROM the address we control (payment.skey)
   senderAddress: "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
   // Sending TO the other address

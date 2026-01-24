@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import nock from 'nock';
 import { TxBuilderTestConfig } from './backend-test-helper';
 import { resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
-import { resetCardanoClient } from '../../srv/blockchain/cardano-client';
+import { resetCardanoClient, getCardanoClient } from '../../srv/blockchain/cardano-client';
 
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(60000);
@@ -644,7 +644,107 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
         expect(status).to.equal(200);
         expect(data).to.have.property('id');
         expect(data).to.have.property('unsignedTxCbor');
-      }); 
+      });
+
+      it('POST /BuildMintTransaction - uses evaluated execution units when Ogmios available', async () => {
+        // Mock evaluated execution units (much lower than defaults)
+        const MOCK_EVALUATED_BUDGET = {
+          memory: 200000,  // 200K - much lower than default 14M
+          cpu: 100000000   // 100M - much lower than default 10B
+        };
+
+        // Get the CardanoClient instance and mock the evaluator methods
+        const cardanoClient = getCardanoClient();
+
+        // Spy on hasOgmiosBackend to return true
+        const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+
+        // Spy on evaluateTransaction to return mock evaluation results
+        const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
+          {
+            validator: { purpose: 'mint', index: 0 },
+            budget: MOCK_EVALUATED_BUDGET
+          }
+        ]);
+
+        const MINT_ACTIONS = [
+          {
+            assetUnit: `${POLICY_ID}546f6b656e4d`,
+            quantity: "1000"
+          }
+        ];
+
+        const requestBody = {
+          senderAddress: FIXTURE.validSenderAddress,
+          recipientAddress: FIXTURE.validRecipientAddress,
+          lovelaceAmount: FIXTURE.lovelaceAmount,
+          changeAddress: FIXTURE.validSenderAddress,
+          mintActionsJson: JSON.stringify(MINT_ACTIONS),
+          mintingPolicyScript: VALID_PLUTUS_SCRIPT,
+        };
+
+        const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+        expect(status).to.equal(200);
+        expect(data).to.have.property('unsignedTxCbor');
+
+        // Verify the mocks were called (use global Jest expect for spy assertions)
+        const jestExpect = (global as any).expect;
+        jestExpect(hasOgmiosSpy).toHaveBeenCalled();
+        jestExpect(evaluateSpy).toHaveBeenCalled();
+
+        // The fee should be calculated based on evaluated units
+        // With lower execution units, the fee should be lower than with defaults
+        expect(data).to.have.property('fee');
+
+        // Cleanup spies
+        hasOgmiosSpy.mockRestore();
+        evaluateSpy.mockRestore();
+      });
+
+      it('POST /BuildMintTransaction - uses default execution units when evaluation fails', async () => {
+        // Get the CardanoClient instance and mock the evaluator methods
+        const cardanoClient = getCardanoClient();
+
+        // Spy on hasOgmiosBackend to return true (Ogmios is "available")
+        const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+
+        // Spy on evaluateTransaction to throw an error (evaluation fails)
+        const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
+          new Error('Evaluation failed: script execution error')
+        );
+
+        const MINT_ACTIONS = [
+          {
+            assetUnit: `${POLICY_ID}546f6b656e4d`,
+            quantity: "1000"
+          }
+        ];
+
+        const requestBody = {
+          senderAddress: FIXTURE.validSenderAddress,
+          recipientAddress: FIXTURE.validRecipientAddress,
+          lovelaceAmount: FIXTURE.lovelaceAmount,
+          changeAddress: FIXTURE.validSenderAddress,
+          mintActionsJson: JSON.stringify(MINT_ACTIONS),
+          mintingPolicyScript: VALID_PLUTUS_SCRIPT,
+        };
+
+        // Should still succeed - falls back to default execution units
+        const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+        expect(status).to.equal(200);
+        expect(data).to.have.property('unsignedTxCbor');
+
+        // Verify the mocks were called (use global Jest expect for spy assertions)
+        const jestExpect = (global as any).expect;
+        jestExpect(hasOgmiosSpy).toHaveBeenCalled();
+        jestExpect(evaluateSpy).toHaveBeenCalled();
+
+        // Cleanup spies
+        hasOgmiosSpy.mockRestore();
+        evaluateSpy.mockRestore();
+      });
     });
 
     // ============================================================================

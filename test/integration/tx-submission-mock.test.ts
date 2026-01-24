@@ -131,5 +131,126 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       expect(submitResponse.data.build_id).to.equal(mockBuildId);
       expect(scope.isDone()).to.be.true;
     });
+
+    // ============================================================================
+    // Error Scenario Tests
+    // ============================================================================
+
+    describe('Error Scenarios', () => {
+
+      it('SubmitSignedTransaction - should return 400 for invalid signature', async () => {
+        // Mock Koios TX Submit returning signature error
+        const scope = nock('https://preview.koios.rest')
+          .post('/api/v1/submit_tx')
+          .reply(400, {
+            error: 'Transaction validation failed: signature verification failed for input 0'
+          });
+
+        const { status, data } = await test.post(
+          '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+          {
+            signedTxCbor: FIXTURE.signedTxCbor,
+            network: FIXTURE.network,
+          }
+        ).catch(err => err.response);
+
+        expect(status).to.equal(400);
+        expect(data).to.have.property('error');
+        expect(data.error).to.have.property('message');
+        expect(data.error.message).to.match(/validation failed|signature/i);
+        expect(scope.isDone()).to.be.true;
+      });
+
+      it('SubmitSignedTransaction - should return 503 for network timeout', async () => {
+        // Mock Koios TX Submit with 503 response (simulating backend unavailability)
+        const scope = nock('https://preview.koios.rest')
+          .post('/api/v1/submit_tx')
+          .reply(503, {
+            error: 'Service temporarily unavailable: timeout exceeded'
+          });
+
+        const { status, data } = await test.post(
+          '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+          {
+            signedTxCbor: FIXTURE.signedTxCbor,
+            network: FIXTURE.network,
+          }
+        ).catch(err => err.response);
+
+        expect(status).to.equal(503);
+        expect(data).to.have.property('error');
+        expect(data.error).to.have.property('message');
+        expect(data.error.message).to.match(/timeout|unavailable|failed/i);
+        expect(scope.isDone()).to.be.true;
+      });
+
+      it('SubmitSignedTransaction - should return 409 for duplicate transaction', async () => {
+        // Mock Koios TX Submit returning already submitted error
+        const scope = nock('https://preview.koios.rest')
+          .post('/api/v1/submit_tx')
+          .reply(400, {
+            error: `Transaction ${FIXTURE.expectedTxHash} already exists in mempool`
+          });
+
+        const { status, data } = await test.post(
+          '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+          {
+            signedTxCbor: FIXTURE.signedTxCbor,
+            network: FIXTURE.network,
+          }
+        ).catch(err => err.response);
+
+        expect(status).to.equal(409);
+        expect(data).to.have.property('error');
+        expect(data.error).to.have.property('message');
+        expect(data.error.message).to.match(/already|exists|duplicate/i);
+        expect(scope.isDone()).to.be.true;
+      });
+
+      it('SubmitSignedTransaction - should return 503 for backend unavailable', async () => {
+        // Mock Koios TX Submit with 502 Bad Gateway (simulating backend connection issues)
+        const scope = nock('https://preview.koios.rest')
+          .post('/api/v1/submit_tx')
+          .reply(502, {
+            error: 'Bad Gateway: upstream connection refused'
+          });
+
+        const { status, data } = await test.post(
+          '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+          {
+            signedTxCbor: FIXTURE.signedTxCbor,
+            network: FIXTURE.network,
+          }
+        ).catch(err => err.response);
+
+        expect(status).to.equal(503);
+        expect(data).to.have.property('error');
+        expect(data.error).to.have.property('message');
+        expect(scope.isDone()).to.be.true;
+      });
+
+      it('SubmitSignedTransaction - should return 400 for malformed CBOR', async () => {
+        // Mock Koios TX Submit returning deserialization error
+        const scope = nock('https://preview.koios.rest')
+          .post('/api/v1/submit_tx')
+          .reply(400, {
+            error: 'Failed to deserialize transaction CBOR'
+          });
+
+        const { status, data } = await test.post(
+          '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+          {
+            signedTxCbor: FIXTURE.signedTxCbor,
+            network: FIXTURE.network,
+          }
+        ).catch(err => err.response);
+
+        expect(status).to.equal(400);
+        expect(data).to.have.property('error');
+        expect(data.error).to.have.property('message');
+        expect(data.error.message).to.match(/validation|deserialize|malformed/i);
+        expect(scope.isDone()).to.be.true;
+      });
+    });
   });
 });

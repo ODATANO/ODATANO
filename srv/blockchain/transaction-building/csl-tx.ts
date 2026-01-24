@@ -3,12 +3,24 @@ import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
-import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
+import { getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
 
 const logger = cds.log('CSLTxBuilder');
+
+// Default execution units - used when Ogmios evaluation is not available
+const DEFAULT_EXECUTION_UNITS = {
+  mem: '14000000',    // 14M memory units
+  cpu: '10000000000'  // 10B CPU steps
+};
+
+// High execution units for first pass when evaluation is available
+const EVALUATION_EXECUTION_UNITS = {
+  mem: '14000000',     // 14M memory units - same as default for initial build
+  cpu: '10000000000'   // 10B CPU steps - same as default for initial build
+};
 
 /**
  * Maps builder errors to typed BackendErrors
@@ -61,8 +73,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
       const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
-      const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
+      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support)
+      // This allows spending UTxOs that contain native assets - they will be returned in the change output
+      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
 
       // create Transaction Builder from stored config
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
@@ -128,8 +141,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
       const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs
-      const cslUtxos = this._mapOdatanoUtxosToCslUtxos(ctx.utxos);
+      // map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support)
+      // This allows spending UTxOs that contain native assets - they will be returned in the change output
+      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
 
       // create Transaction Builder from stored config
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
@@ -310,124 +324,43 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
 
     try {
-      // Prepare addresses
-      const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
-      const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+      // Determine execution units based on evaluator availability
+      let finalExUnits = { mem: DEFAULT_EXECUTION_UNITS.mem, cpu: DEFAULT_EXECUTION_UNITS.cpu };
 
-      // Map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support for burn transactions)
-      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
+      if (ctx.evaluateTransaction) {
+        // Build first pass with high execution units for evaluation
+        logger.debug(`[CSLTxBuilder] Building evaluation pass with high execution units`);
+        const evalTx = this._buildMintTx(req, ctx, EVALUATION_EXECUTION_UNITS);
+        const evalTxCbor = Buffer.from(evalTx.to_bytes()).toString('hex');
 
-      // Create Transaction Builder
-      const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+        try {
+          // Evaluate to get exact execution units
+          const evalResults = await ctx.evaluateTransaction(evalTxCbor);
+          logger.debug(`[CSLTxBuilder] Evaluation results: ${JSON.stringify(evalResults)}`);
 
-    // Parse the Plutus script from CBOR hex
-      const scriptBytes = Buffer.from(req.mintingPolicyScript, 'hex');
-      
-      // Create PlutusV3 script with language version
-      const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
-      const scriptHash = plutusScript.hash();
-      
-      // Create PlutusScriptSource - wrapper for the script
-      const scriptSource = CSL.PlutusScriptSource.new(plutusScript);
-      
-      // Create MintBuilder
-      const mintBuilder = CSL.MintBuilder.new();
-    
-      // Track total minted value for output
-      let totalMintedValue = CSL.Value.new(CSL.BigNum.from_str('0'));
-    
-      // Process each mint action
-      for (const mintAction of req.mintActions) {
-      const { assetName } = this._parseAssetUnit(mintAction.assetUnit);
-      
-      // Create asset name
-      const assetNameBytes = Buffer.from(assetName, 'hex');
-      const cslAssetName = CSL.AssetName.new(assetNameBytes);
-      
-      // Create mint quantity (can be negative for burning)
-      const mintQuantity = CSL.Int.new_i32(Number(mintAction.quantity));
-      
-      // Create redeemer - CSL Redeemer object with tag, index, data, and execution units
-      // Start with high conservative values - will be replaced by evaluation
-      const redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str('0'));
-      const redeemer = CSL.Redeemer.new(
-        CSL.RedeemerTag.new_mint(),
-        CSL.BigNum.from_str('0'),
-        redeemerData,
-        CSL.ExUnits.new(
-          CSL.BigNum.from_str('14000000'), // 14M mem units - high default for evaluation
-          CSL.BigNum.from_str('10000000000')  // 10B CPU steps - high default for evaluation
-        )
-      );
-      
-      // Create MintWitness directly from PlutusScriptSource + Redeemer
-      const mintWitness = CSL.MintWitness.new_plutus_script(
-        scriptSource,
-        redeemer
-      );
-      
-      // Add to mint builder
-      mintBuilder.add_asset(mintWitness, cslAssetName, mintQuantity);
-      
-      // Add to total minted value for output construction (only if quantity > 0)
-      if (Number(mintAction.quantity) > 0) {
-        const assetValue = CSL.Value.new(CSL.BigNum.from_str('0'));
-        const multiAsset = CSL.MultiAsset.new();
-        const assets = CSL.Assets.new();
-        assets.insert(cslAssetName, CSL.BigNum.from_str(String(mintAction.quantity)));
-        multiAsset.insert(scriptHash, assets);
-        assetValue.set_multiasset(multiAsset);
-        totalMintedValue = totalMintedValue.checked_add(assetValue);
-      }
-    }
-    
-      // Set the mint builder on transaction
-      txb.set_mint_builder(mintBuilder);
-      logger.debug(`[CSLTxBuilder] Mint builder set successfully`);
-    
-      // Create output with minted assets + minimum lovelace
-      const minLovelace = CSL.BigNum.from_str(String(req.lovelaceAmount));
-      const outputValue = CSL.Value.new(minLovelace);
-      const finalOutputValue = outputValue.checked_add(totalMintedValue);
-    
-      const recipientOutput = CSL.TransactionOutput.new(recipientAddress, finalOutputValue);
-  
-      txb.add_output(recipientOutput);
-    
-      // Add collateral for Plutus script execution
-      // CSL requires TxInputsBuilder for collateral
-      if (ctx.utxos.length > 0) {
-      const collateralUtxo = ctx.utxos[0];
-      const collateralBuilder = CSL.TxInputsBuilder.new();
-      
-      const txHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralUtxo.txHash, 'hex'));
-      const input = CSL.TransactionInput.new(txHash, collateralUtxo.outputIndex);
-      const address = CSL.Address.from_bech32(collateralUtxo.address);
-      const value = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralUtxo).toString()));
-      
-      collateralBuilder.add_regular_input(address, input, value);
-      logger.debug(`[CSLTxBuilder] Setting collateral...`);
-      txb.set_collateral(collateralBuilder);
-        
-      logger.debug(`[CSLTxBuilder] Added collateral: ${collateralUtxo.txHash}#${collateralUtxo.outputIndex}`);
+          if (evalResults && evalResults.length > 0) {
+            // Use the evaluated budget (take first result for single script)
+            const budget = evalResults[0].budget;
+            // Add 10% safety margin to evaluated units
+            finalExUnits = {
+              mem: Math.ceil(budget.memory * 1.1).toString(),
+              cpu: Math.ceil(budget.cpu * 1.1).toString()
+            };
+            logger.info(`[CSLTxBuilder] Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
+          }
+        } catch (evalError: any) {
+          logger.warn(`[CSLTxBuilder] Evaluation failed, using default units: ${evalError.message}`);
+          // Fall back to defaults on evaluation failure
+        }
+      } else {
+        logger.debug(`[CSLTxBuilder] No evaluator available, using default execution units`);
       }
 
-      // Add inputs via coin selection
-      txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
-    
-    // Calculate script data hash BEFORE add_change_if_needed
-    // This is required for correct fee calculation
-    const costModels = this._createCostModels('v3'); // All cost models (V1, V2, V3)
-    txb.calc_script_data_hash(costModels);
-  
-    // Now add change
-    txb.add_change_if_needed(changeAddress);
+      // Build final transaction with determined execution units
+      const unsignedTx = this._buildMintTx(req, ctx, finalExUnits);
 
-    // Build initial transaction for evaluation
-    let unsignedTx = txb.build_tx();
+      logger.debug(`[CSLTxBuilder] Transaction built successfully`);
 
-    logger.debug(`[CSLTxBuilder] Transaction built successfully`);
-    
       // Export as CBOR hex
       const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString('hex');
 
@@ -442,65 +375,157 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const outputs: Array<{ address: string; lovelace: string }> = [];
       const txOuts = body.outputs();
       for (let i = 0; i < txOuts.len(); i++) {
-      const o = txOuts.get(i);
-      outputs.push({
-        address: o.address().to_bech32(),
-        lovelace: o.amount().coin().to_str(),
-      });
+        const o = txOuts.get(i);
+        outputs.push({
+          address: o.address().to_bech32(),
+          lovelace: o.amount().coin().to_str(),
+        });
       }
 
       logger.info(`[CSLTxBuilder] Built unsigned minting transaction successfully. Fee: ${feeLovelace}`);
 
       return {
-      unsignedTxCbor,
-      txBodyHash,
-      senderAddress: req.senderAddress,
-      network: req.network,
-      builderEngine: this.name,
-      feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString(),
-      })),
-      outputs,
-      warnings: [],
+        unsignedTxCbor,
+        txBodyHash,
+        senderAddress: req.senderAddress,
+        network: req.network,
+        builderEngine: this.name,
+        feeLovelace,
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString(),
+        })),
+        outputs,
+        warnings: [],
       };
-      } catch (error: any) {
+    } catch (error: any) {
       logger.error(`Error toString: ${error}`);
       mapBuilderError(error, 'lovelace');
     }
+  }
+
+  /**
+   * Helper to build mint transaction with specified execution units
+   */
+  private _buildMintTx(
+    req: TxBuildRequest,
+    ctx: TxBuildContext,
+    exUnits: { mem: string; cpu: string }
+  ): CSL.Transaction {
+    // Prepare addresses
+    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+
+    // Map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support for burn transactions)
+    const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
+
+    // Create Transaction Builder
+    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+
+    // Parse the Plutus script from CBOR hex
+    const scriptBytes = Buffer.from(req.mintingPolicyScript!, 'hex');
+
+    // Create PlutusV3 script with language version
+    const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
+    const scriptHash = plutusScript.hash();
+
+    // Create PlutusScriptSource - wrapper for the script
+    const scriptSource = CSL.PlutusScriptSource.new(plutusScript);
+
+    // Create MintBuilder
+    const mintBuilder = CSL.MintBuilder.new();
+
+    // Track total minted value for output
+    let totalMintedValue = CSL.Value.new(CSL.BigNum.from_str('0'));
+
+    // Process each mint action
+    for (const mintAction of req.mintActions!) {
+      const { assetName } = this._parseAssetUnit(mintAction.assetUnit);
+
+      // Create asset name
+      const assetNameBytes = Buffer.from(assetName, 'hex');
+      const cslAssetName = CSL.AssetName.new(assetNameBytes);
+
+      // Create mint quantity (can be negative for burning)
+      const mintQuantity = CSL.Int.new_i32(Number(mintAction.quantity));
+
+      // Create redeemer with specified execution units
+      const redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str('0'));
+      const redeemer = CSL.Redeemer.new(
+        CSL.RedeemerTag.new_mint(),
+        CSL.BigNum.from_str('0'),
+        redeemerData,
+        CSL.ExUnits.new(
+          CSL.BigNum.from_str(exUnits.mem),
+          CSL.BigNum.from_str(exUnits.cpu)
+        )
+      );
+
+      // Create MintWitness directly from PlutusScriptSource + Redeemer
+      const mintWitness = CSL.MintWitness.new_plutus_script(
+        scriptSource,
+        redeemer
+      );
+
+      // Add to mint builder
+      mintBuilder.add_asset(mintWitness, cslAssetName, mintQuantity);
+
+      // Add to total minted value for output construction (only if quantity > 0)
+      if (Number(mintAction.quantity) > 0) {
+        const assetValue = CSL.Value.new(CSL.BigNum.from_str('0'));
+        const multiAsset = CSL.MultiAsset.new();
+        const assets = CSL.Assets.new();
+        assets.insert(cslAssetName, CSL.BigNum.from_str(String(mintAction.quantity)));
+        multiAsset.insert(scriptHash, assets);
+        assetValue.set_multiasset(multiAsset);
+        totalMintedValue = totalMintedValue.checked_add(assetValue);
+      }
+    }
+
+    // Set the mint builder on transaction
+    txb.set_mint_builder(mintBuilder);
+
+    // Create output with minted assets + minimum lovelace
+    const minLovelace = CSL.BigNum.from_str(String(req.lovelaceAmount));
+    const outputValue = CSL.Value.new(minLovelace);
+    const finalOutputValue = outputValue.checked_add(totalMintedValue);
+
+    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, finalOutputValue);
+    txb.add_output(recipientOutput);
+
+    // Add collateral for Plutus script execution
+    if (ctx.utxos.length > 0) {
+      const collateralUtxo = ctx.utxos[0];
+      const collateralBuilder = CSL.TxInputsBuilder.new();
+
+      const txHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralUtxo.txHash, 'hex'));
+      const input = CSL.TransactionInput.new(txHash, collateralUtxo.outputIndex);
+      const address = CSL.Address.from_bech32(collateralUtxo.address);
+      const value = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralUtxo).toString()));
+
+      collateralBuilder.add_regular_input(address, input, value);
+      txb.set_collateral(collateralBuilder);
+    }
+
+    // Add inputs via coin selection
+    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+
+    // Calculate script data hash BEFORE add_change_if_needed
+    const costModels = this._createCostModels('v3');
+    txb.calc_script_data_hash(costModels);
+
+    // Now add change
+    txb.add_change_if_needed(changeAddress);
+
+    // Build and return transaction
+    return txb.build_tx();
   }
 
   
   //---------------------------------------------------------------------------
   // Private Helper Methods
   //---------------------------------------------------------------------------
-
-  /**
-   * Map ODATANO UTxOs to CSL TransactionUnspentOutputs (ADA-only)
-   * @param utxos ODATANO UTxO array
-   * @returns CSL TransactionUnspentOutputs
-   */
-  private _mapOdatanoUtxosToCslUtxos(utxos: OdatanoUtxo[]): CSL.TransactionUnspentOutputs {
-    const outs = CSL.TransactionUnspentOutputs.new();
-
-    for (const u of utxos) {
-      assertAdaOnly(u);
-
-      const txHashBytes = Buffer.from(u.txHash, "hex");
-      const txHash = CSL.TransactionHash.from_bytes(txHashBytes);
-      const input = CSL.TransactionInput.new(txHash, u.outputIndex);
-
-      const addr = CSL.Address.from_bech32(u.address);
-      const value = CSL.Value.new(CSL.BigNum.from_str(getLovelace(u).toString()));
-      const output = CSL.TransactionOutput.new(addr, value);
-
-      outs.add(CSL.TransactionUnspentOutput.new(input, output));
-    }
-
-    return outs;
-  }
 
   /**
    * Map ODATANO UTxOs to CSL TransactionUnspentOutputs (with multi-asset support)

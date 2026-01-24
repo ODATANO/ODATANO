@@ -358,6 +358,14 @@ export class CardanoClient {
   }
 
   /**
+   * Check if Ogmios backend is available for transaction evaluation
+   * @returns {boolean} true if Ogmios is the live backend
+   */
+  hasOgmiosBackend(): boolean {
+    return this.liveBackend?.name === 'ogmios';
+  }
+
+  /**
    * Evaluate transaction script execution units (Ogmios only)
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
    * @returns {Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>>} evaluation results

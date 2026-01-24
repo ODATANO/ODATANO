@@ -10,6 +10,7 @@ import {
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError,
+  TransactionValidationError,
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
@@ -595,14 +596,6 @@ describe('Error Classes', () => {
     it('should detect "invalid address" as not found', () => {
       const error = { status: 400, message: 'Invalid address for network' };
       const result = normalizeBackendError(error, 'blockfrost');
-
-      expect(result.statusCode).toBe(404);
-      expect(result).toBeInstanceOf(NotFoundError);
-    });
-
-    it('should detect "malformed address" as not found', () => {
-      const error = { status: 503, message: 'Malformed address format' };
-      const result = normalizeBackendError(error, 'koios');
 
       expect(result.statusCode).toBe(404);
       expect(result).toBeInstanceOf(NotFoundError);

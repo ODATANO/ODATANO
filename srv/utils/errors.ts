@@ -53,7 +53,55 @@ export class NotFoundError extends BackendError {
   }
 }
 
-/** 
+/**
+ * TransactionValidationError - Transaction failed validation (400)
+ * Indicates that the transaction failed validation checks
+ * Examples: wrong signature, tampered CBOR, invalid witnesses
+ */
+export class TransactionValidationError extends BackendError {
+  /** Constructor
+   * @param message detailed validation failure message
+   * @param originalError original error object
+   */
+  constructor(
+    message: string,
+    originalError?: any
+  ) {
+    super(
+      message,
+      400,
+      ERROR_CODES.TX_VALIDATION_FAILED,
+      undefined,
+      originalError
+    );
+  }
+}
+
+/**
+ * TransactionAlreadySubmittedError - Transaction already exists (409)
+ * Indicates that the transaction has already been submitted (duplicate/replay)
+ * Examples: same txHash already in mempool or on chain
+ */
+export class TransactionAlreadySubmittedError extends BackendError {
+  /** Constructor
+   * @param txHash the transaction hash that was already submitted
+   * @param originalError original error object
+   */
+  constructor(
+    public readonly txHash: string,
+    originalError?: any
+  ) {
+    super(
+      `Transaction ${txHash} already exists in mempool or on chain`,
+      409,
+      ERROR_CODES.TX_ALREADY_SUBMITTED,
+      undefined,
+      originalError
+    );
+  }
+}
+
+/**
  * InsufficientFundsError - Not enough funds or assets available (400)
  * Indicates that the address does not have enough of a specific asset to complete the transaction
  * Examples: trying to send more ADA than available, not enough native tokens
@@ -213,7 +261,7 @@ export function getErrorStatus(err: HttpErrorLike | unknown): number {
   return e.status ?? e.response?.status ?? 500;
 }
 
-/** 
+/**
  * Utility functions to extract status and message from HttpErrorLike
  * @param err error object
  * @returns {string} error message
@@ -221,6 +269,10 @@ export function getErrorStatus(err: HttpErrorLike | unknown): number {
 export function getErrorMessage(err: HttpErrorLike | unknown): string {
   const e = (err ?? {}) as HttpErrorLike;
 
+  // Check Axios response.data.error (Koios format)
+  if (e.response?.data?.error) return e.response.data.error;
+
+  // Check direct message property
   if (e.message) return e.message;
 
   return 'Unknown error';
@@ -260,7 +312,40 @@ export function normalizeBackendError(
   const status = getErrorStatus(err);
   const messageLower = message.toLowerCase();
 
-  // Priority 1: Message indicates "not found" or equivalent → always 404
+  // Priority 1: TX Submission - Already submitted/duplicate → 409
+  const alreadySubmittedHints = [
+    'already exists',
+    'already submitted',
+    'already known',
+    'known transaction',
+    'duplicate',
+    'in mempool',
+  ];
+  if (alreadySubmittedHints.some(h => messageLower.includes(h))) {
+    // Try to extract txHash from message
+    const txHashMatch = message.match(/([a-f0-9]{64})/i);
+    return new TransactionAlreadySubmittedError(txHashMatch?.[1] || 'unknown', err);
+  }
+
+  // Priority 2: TX Submission - Validation/Signature errors → 400
+  const validationErrorHints = [
+    'signature',
+    'witness',
+    'verification failed',
+    'deserialize',
+    'malformed',
+    'invalid cbor',
+    'invalid transaction',
+    'script failure',
+  ];
+  if (validationErrorHints.some(h => messageLower.includes(h))) {
+    return new TransactionValidationError(
+      `Transaction validation failed: ${message}`,
+      err
+    );
+  }
+
+  // Priority 3: Message indicates "not found" or equivalent → always 404
   // This also handles providers returning wrong status codes for missing resources
   const notFoundHints = [
     'not found',

@@ -7,7 +7,6 @@ import { join } from 'path';
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 
 const BUILD_BODY = {
-  network: "preview",
   senderAddress: "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
   recipientAddress: "addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622",
   lovelaceAmount: 10000000

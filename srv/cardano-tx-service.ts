@@ -270,6 +270,7 @@ module.exports = (srv: cds.Service) => {
       const txHash = existing.txBodyHash;
 
       // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
+      // Error mapping happens in normalizeBackendError (called by handleBackendRequest)
       await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, 'Transaction submitted to blockchain');
 
@@ -310,6 +311,7 @@ module.exports = (srv: cds.Service) => {
       const txHash = getTxHashFromCbor(signedTxCbor);
 
       // submit to blockchain
+      // Error mapping happens in normalizeBackendError (called by handleBackendRequest)
       await cardanoClient.submitTransaction(signedTxCbor);
       logger.debug({ txHash }, 'External transaction submitted');
 

@@ -30,6 +30,18 @@ import { DataI } from "@harmoniclabs/plutus-data";
 
 const logger = cds.log('BuildooorTxBuilder');
 
+// Default execution units - used when Ogmios evaluation is not available
+const DEFAULT_EXECUTION_UNITS = {
+  mem: 1_000_000,   // 1M memory units
+  cpu: 500_000_000  // 500M CPU steps
+};
+
+// High execution units for first pass when evaluation is available
+const EVALUATION_EXECUTION_UNITS = {
+  mem: 14_000_000,     // 14M memory units - high for evaluation pass
+  cpu: 10_000_000_000  // 10B CPU steps - high for evaluation pass
+};
+
 /**
  * Maps builder errors to typed BackendErrors
  * @param err Error from builder
@@ -76,8 +88,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
-      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
+      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects (with multi-asset support)
+      // This allows spending UTxOs that contain native assets - they will be returned in the change output
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // and map to Buildooor TxIn objects for inputs
       const inputs = ledgerUtxos.map(utxo => ({ utxo }));
@@ -134,8 +147,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
-      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapOdatanoUtxoToLedgerUtxo(utxo));
+      // mapping of ODATANO UTxO Type to ledger-ts UTxO objects (with multi-asset support)
+      // This allows spending UTxOs that contain native assets - they will be returned in the change output
+      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // Buildooor TxIn objects for inputs
       const inputs = ledgerUtxos.map(utxo => ({ utxo }));
@@ -290,68 +304,61 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
       const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
 
-    // Build mint value and mints array
-    const mints = [];
-
-    for (const mintAction of req.mintActions) {
-      const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
-
-      // Create Hash28 for policy ID
-      const policyHash = new Hash28(policyId);
-
-      const assetValue = Value.singleAsset(
-        policyHash,
-        Buffer.from(assetName, 'hex'),
-        BigInt(mintAction.quantity) // Ensure BigInt conversion
-      );
-
-      // Parse the minting policy script from CBOR hex
+      // Parse the minting policy script once
       const scriptBytes = Buffer.from(req.mintingPolicyScript!, 'hex');
       const script = Script.fromCbor(scriptBytes);
 
-      mints.push({
-        value: assetValue,
-        script: {
-          inline: script,
-          redeemer: new DataI(0), // Simple redeemer - @TODO make it customizable / with parameters like the MintAction
-          // Explicitly set execution units budget for Plutus script
-          // This ensures Buildooor accounts for script execution costs in fee calculation
-          executionUnits: {
-            mem: 1_000_000,  // 1M memory units 
-            cpu: 500_000_000  // 500M CPU steps
-          }
+      // Helper to build mints array with specified execution units
+      const buildMints = (exUnits: { mem: number; cpu: number }) => {
+        const mints = [];
+        for (const mintAction of req.mintActions!) {
+          const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
+          const policyHash = new Hash28(policyId);
+          const assetValue = Value.singleAsset(
+            policyHash,
+            Buffer.from(assetName, 'hex'),
+            BigInt(mintAction.quantity)
+          );
+
+          mints.push({
+            value: assetValue,
+            script: {
+              inline: script,
+              redeemer: new DataI(0), // Simple redeemer - @TODO make it customizable
+              executionUnits: exUnits
+            }
+          });
         }
-      });
-    }
+        return mints;
+      };
 
-    // calculate total mint value for output (only positive quantities - mints, not burns)
-    let mintValue = Value.lovelaces(0n);
-    for (const mintAction of req.mintActions) {
-      const quantity = BigInt(mintAction.quantity);
-      // Only add to output if minting (positive quantity), not burning (negative)
-      if (quantity > 0n) {
-        const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
-        const policyHash = new Hash28(policyId);
-        const assetValue = Value.singleAsset(
-          policyHash,
-          Buffer.from(assetName, 'hex'),
-          quantity
-        );
-        mintValue = Value.add(mintValue, assetValue);
+      // Calculate total mint value for output (only positive quantities - mints, not burns)
+      let mintValue = Value.lovelaces(0n);
+      for (const mintAction of req.mintActions) {
+        const quantity = BigInt(mintAction.quantity);
+        if (quantity > 0n) {
+          const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
+          const policyHash = new Hash28(policyId);
+          const assetValue = Value.singleAsset(
+            policyHash,
+            Buffer.from(assetName, 'hex'),
+            quantity
+          );
+          mintValue = Value.add(mintValue, assetValue);
+        }
       }
-    }
 
-    // Build output value - recipient gets the minted assets + min ADA
-    let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 1_000_000));
-    outputValue = Value.add(outputValue, mintValue);
+      // Build output value - recipient gets the minted assets + min ADA
+      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 1_000_000));
+      outputValue = Value.add(outputValue, mintValue);
 
-    // Build output
-    const outputs = [
-      new TxOut({
-        address: recipientAddress,
-        value: outputValue
-      })
-    ];
+      // Build output
+      const outputs = [
+        new TxOut({
+          address: recipientAddress,
+          value: outputValue
+        })
+      ];
 
       // Find an ADA-only UTxO for collateral (Plutus scripts require ADA-only collateral)
       const adaOnlyUtxo = ctx.utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
@@ -363,6 +370,50 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Use only 1 collateral to minimize tx size
       const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
 
+      // Determine execution units based on evaluator availability
+      let finalExUnits = DEFAULT_EXECUTION_UNITS;
+
+      if (ctx.evaluateTransaction) {
+        // Build first pass with high execution units for evaluation
+        logger.debug(`Building evaluation pass with high execution units`);
+        const evalMints = buildMints(EVALUATION_EXECUTION_UNITS);
+
+        const evalTx = await this.txBuilder.build({
+          inputs,
+          outputs,
+          changeAddress,
+          mints: evalMints,
+          collaterals: collateralUtxos
+        });
+
+        const evalTxCbor = toHex(evalTx.toCbor().toBuffer());
+
+        try {
+          // Evaluate to get exact execution units
+          const evalResults = await ctx.evaluateTransaction(evalTxCbor);
+          logger.debug(`Evaluation results: ${JSON.stringify(evalResults)}`);
+
+          if (evalResults && evalResults.length > 0) {
+            // Use the evaluated budget (take first result for single script)
+            const budget = evalResults[0].budget;
+            // Add 10% safety margin to evaluated units
+            finalExUnits = {
+              mem: Math.ceil(budget.memory * 1.1),
+              cpu: Math.ceil(budget.cpu * 1.1)
+            };
+            logger.info(`Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
+          }
+        } catch (evalError: any) {
+          logger.warn(`Evaluation failed, using default units: ${evalError.message}`);
+          // Fall back to defaults on evaluation failure
+        }
+      } else {
+        logger.debug(`No evaluator available, using default execution units`);
+      }
+
+      // Build with final execution units
+      const mints = buildMints(finalExUnits);
+
       // First build to calculate base fee
       const txFirstPass = await this.txBuilder.build({
         inputs,
@@ -373,15 +424,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       });
 
       // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
-      // Auto-evaluation handles execution units accurately, but we still need to account
-      // for the CBOR size increase when the witness set is added during signing
       const calculatedFee = BigInt(txFirstPass.body.fee.toString());
       const witnessBuffer = BigInt(50); // Minimal buffer for witness overhead
       const adjustedMinFee = calculatedFee + witnessBuffer;
 
       logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
 
-      // Second build with adjusted minimum fee to account for witness overhead
+      // Final build with adjusted minimum fee to account for witness overhead
       const tx = await this.txBuilder.build({
         inputs,
         outputs,

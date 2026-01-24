@@ -22,7 +22,6 @@ const MINT_ACTIONS = [
 const MINTING_POLICY_SCRIPT = "585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009";
 
 const BUILD_BODY = {
-  network: "preview",
   senderAddress: "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
   recipientAddress: "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp", // Mint to same address (sender)
   lovelaceAmount: 2000000, // 2 ADA (min ADA with minted tokens)

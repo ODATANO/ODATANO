@@ -310,12 +310,35 @@ export type TxBuildRequest = {
   plutusScriptExecution?: PlutusScriptExecution;
 };
 
-/** 
+/**
+ * Execution Budget for Plutus scripts
+ */
+export type ExecutionBudget = {
+  memory: number;
+  cpu: number;
+};
+
+/**
+ * Script evaluation result from Ogmios
+ */
+export type ScriptEvaluationResult = {
+  validator: any;
+  budget: ExecutionBudget;
+};
+
+/**
+ * Transaction evaluator function type - evaluates script execution units
+ */
+export type TxEvaluator = (unsignedTxCbor: string) => Promise<ScriptEvaluationResult[]>;
+
+/**
  * Transaction Build Context Type - Context for building a transaction
  */
 export type TxBuildContext = {
   utxos: UTxO[];
   protocolParameters: LedgerProtocolParameter;
+  /** Optional evaluator for dynamic script execution unit calculation (requires Ogmios) */
+  evaluateTransaction?: TxEvaluator;
 };
 
 /**

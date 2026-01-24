@@ -245,7 +245,6 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
     Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace')
   );
   const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
-    if (!Array.isArray(utxo.amount)) return sum;
     const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity);
     return sum + lovelaceAmount;
   }, 0);
@@ -306,7 +305,6 @@ export function mapAddressUtxoAssets(
   const assets: UTxOAssetRow[] = [];
 
   addressUtxosData.forEach((utxo: UtxosProviderData) => {
-    if (!Array.isArray(utxo.amount)) return;
 
     for (const asset of utxo.amount) {
       if (!asset || !asset.unit || asset.unit === 'lovelace') continue;
@@ -492,17 +490,12 @@ export function mapAccount(providerAccountData: AccountProviderData): AccountRow
  * @param err error object
  * @param ctx context string for error message
  */
-export function mapError(req: Request, err: unknown, ctx: string) {
-  if (err instanceof BackendError) {
+export function mapError(req: Request, err: BackendError, ctx: string) {
     return req.reject(
       err.statusCode,
       fmt(err.code, ctx, err.message),
       err.target
     );
-  }
-  // Handle other errors
-  const errorMessage = err instanceof Error ? err.message : String(err);
-  return req.reject(500, fmt('ODATANO_INTERNAL_ERROR', ctx, errorMessage));
 }
 
 /** 
