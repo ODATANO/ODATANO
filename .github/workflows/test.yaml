@@ -87,10 +87,11 @@ jobs:
           docker run -d --name ogmios-preview \
             -p 1337:1337 \
             -v ${{ runner.temp }}/ipc:/ipc \
-            cardanosolutions/ogmios:v6.11.0-preview \
+            -v $CONFDIR:/config \
+            cardanosolutions/ogmios:v6.11.0 \
               --host 0.0.0.0 \
               --node-socket /ipc/node.socket \
-              --node-config $CONFDIR/cardano-node/config.json
+              --node-config /config/cardano-node/config.json
           
           echo "Waiting for containers to start..."
           sleep 10
