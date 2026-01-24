@@ -7,20 +7,9 @@ import { getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
+import { CONFIG } from "../../../config/config";
 
 const logger = cds.log('CSLTxBuilder');
-
-// Default execution units - used when Ogmios evaluation is not available
-const DEFAULT_EXECUTION_UNITS = {
-  mem: '14000000',    // 14M memory units
-  cpu: '10000000000'  // 10B CPU steps
-};
-
-// High execution units for first pass when evaluation is available
-const EVALUATION_EXECUTION_UNITS = {
-  mem: '14000000',     // 14M memory units - same as default for initial build
-  cpu: '10000000000'   // 10B CPU steps - same as default for initial build
-};
 
 /**
  * Maps builder errors to typed BackendErrors
@@ -29,7 +18,7 @@ const EVALUATION_EXECUTION_UNITS = {
  * @throws {InsufficientFundsError} if error is related to insufficient funds
  * @throws {Error} original error if not mappable
  */
-function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
   // CSL throws String errors, not Error objects - need to handle both
   const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
 
@@ -325,12 +314,18 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
     try {
       // Determine execution units based on evaluator availability
-      let finalExUnits = { mem: DEFAULT_EXECUTION_UNITS.mem, cpu: DEFAULT_EXECUTION_UNITS.cpu };
+      let finalExUnits = {
+        mem: String(CONFIG.DEFAULT_EXECUTION_UNITS.mem),
+        cpu: String(CONFIG.DEFAULT_EXECUTION_UNITS.cpu)
+      };
 
       if (ctx.evaluateTransaction) {
         // Build first pass with high execution units for evaluation
         logger.debug(`[CSLTxBuilder] Building evaluation pass with high execution units`);
-        const evalTx = this._buildMintTx(req, ctx, EVALUATION_EXECUTION_UNITS);
+        const evalTx = this._buildMintTx(req, ctx, {
+          mem: String(CONFIG.HIGH_EXECUTION_UNITS.mem),
+          cpu: String(CONFIG.HIGH_EXECUTION_UNITS.cpu)
+        });
         const evalTxCbor = Buffer.from(evalTx.to_bytes()).toString('hex');
 
         try {
@@ -341,10 +336,10 @@ export class CSLTxBuilder implements CardanoTxBuilder {
           if (evalResults && evalResults.length > 0) {
             // Use the evaluated budget (take first result for single script)
             const budget = evalResults[0].budget;
-            // Add 10% safety margin to evaluated units
+            // Add safety margin to evaluated units
             finalExUnits = {
-              mem: Math.ceil(budget.memory * 1.1).toString(),
-              cpu: Math.ceil(budget.cpu * 1.1).toString()
+              mem: Math.ceil(budget.memory * CONFIG.EXECUTION_UNIT_BUFFER).toString(),
+              cpu: Math.ceil(budget.cpu * CONFIG.EXECUTION_UNIT_BUFFER).toString()
             };
             logger.info(`[CSLTxBuilder] Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
           }

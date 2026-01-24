@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend } from './backends/cardano-backend';
 import { BackendRegistry } from './backends/backend-registry';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CONFIG } from '../../config/config';
@@ -45,9 +45,22 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   submitTransaction: { preferLive: true },
 };
 
-/** 
+/**
+ * Protocol parameters cache TTL (5 minutes - parameters rarely change)
+ */
+const PROTOCOL_PARAMS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Cached protocol parameters with timestamp
+ */
+interface CachedProtocolParams {
+  params: LedgerProtocolParameters;
+  fetchedAt: number;
+}
+
+/**
  * CardanoClient - Smart Multi-backend Cardano Client
- * 
+ *
  * Routes requests to appropriate backends:
  * - Live/State queries → Ogmios (if available)
  * - Historical queries → Blockfrost/Koios (if available)
@@ -58,6 +71,7 @@ export class CardanoClient {
   private historicalBackends: CardanoBackend[] = [];
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private protocolParamsCache: CachedProtocolParams | null = null;
 
   /** 
    * Constructor for CardanoClient
@@ -78,15 +92,14 @@ export class CardanoClient {
     logger.info('CardanoClient instance created.');
   }
 
-  /** 
+  /**
    * Ensure backends are initialized
    * @returns {Promise<void>}
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
-    if (!this.initPromise) {
-      this.initPromise = this.initBackends();
-    }
+    // Use nullish coalescing assignment for atomic operation to prevent race conditions
+    this.initPromise ??= this.initBackends();
     await this.initPromise;
   }
 
@@ -144,15 +157,18 @@ export class CardanoClient {
     ms: number,
     backendName: string
   ): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) =>
-        setTimeout(
-          () => reject(new ProviderUnavailableError('Backend timeout', backendName, ms)),
-          ms
-        )
-      ),
-    ]);
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new ProviderUnavailableError('Backend timeout', backendName, ms)),
+        ms
+      );
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      clearTimeout(timeoutId);
+    });
   }
 
   /** 
@@ -324,12 +340,40 @@ export class CardanoClient {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
   }
 
-  /** 
-   * Get protocol parameters with fallback between backends
+  /**
+   * Get protocol parameters with caching (5 minute TTL)
+   * Protocol parameters rarely change (once per epoch at most), so caching improves performance
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
    */
-  getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    return this.route('getProtocolParameters', b => b.getProtocolParameters());
+  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
+    const now = Date.now();
+
+    // Return cached value if still valid
+    if (this.protocolParamsCache &&
+        (now - this.protocolParamsCache.fetchedAt) < PROTOCOL_PARAMS_CACHE_TTL_MS) {
+      logger.debug('Returning cached protocol parameters');
+      return this.protocolParamsCache.params;
+    }
+
+    // Fetch fresh parameters
+    logger.debug('Fetching fresh protocol parameters');
+    const params = await this.route('getProtocolParameters', b => b.getProtocolParameters());
+
+    // Cache the result
+    this.protocolParamsCache = {
+      params,
+      fetchedAt: now
+    };
+
+    return params;
+  }
+
+  /**
+   * Clear the protocol parameters cache (useful for testing or forced refresh)
+   */
+  clearProtocolParamsCache(): void {
+    this.protocolParamsCache = null;
+    logger.debug('Protocol parameters cache cleared');
   }
 
   /** 
@@ -368,23 +412,17 @@ export class CardanoClient {
   /**
    * Evaluate transaction script execution units (Ogmios only)
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns {Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>>} evaluation results
+   * @returns {Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>>} evaluation results
    */
-  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>> {
+  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
     await this.ensureInitialized();
 
-    // Evaluation requires Ogmios live backend
-    if (!this.liveBackend || this.liveBackend.name !== 'ogmios') {
-      throw new Error('Transaction evaluation requires Ogmios backend');
+    // Evaluation requires an EvaluatingBackend (typically Ogmios)
+    if (!this.liveBackend || !isEvaluatingBackend(this.liveBackend)) {
+      throw new Error('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
     }
 
-    // Cast to any to access evaluateTransaction method (it's not in the CardanoBackend interface)
-    const ogmiosBackend = this.liveBackend as any;
-    if (typeof ogmiosBackend.evaluateTransaction !== 'function') {
-      throw new Error('Ogmios backend does not support transaction evaluation');
-    }
-
-    return ogmiosBackend.evaluateTransaction(unsignedTxCbor);
+    return this.liveBackend.evaluateTransaction(unsignedTxCbor);
   }
 }
 

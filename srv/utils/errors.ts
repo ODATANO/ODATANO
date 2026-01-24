@@ -452,7 +452,7 @@ export class BackendInitError extends BackendError {
 export class AllBackendsInitFailedError extends Error {
   constructor(public readonly errors: BackendInitError[]) {
     const summary = errors
-      .map(e => `${e.backendName}: ${String((e.originalError as any)?.message ?? e.originalError)}`)
+      .map(e => `${e.backendName}: ${e.originalError instanceof Error ? e.originalError.message : String(e.originalError)}`)
       .join(' | ');
     super(`CardanoClient startup failed: all backends failed to initialize. ${summary}`);
     this.name = 'AllBackendsInitFailedError';
@@ -478,7 +478,7 @@ export function rejectInvalid(req: Request, ctx: string, message: string, target
   );
 }
 
-/** 
+/**
  * Function to reject requests for missing required fields
  * @param req - The incoming request
  * @param ctx - Context string for the error
@@ -494,4 +494,31 @@ export function rejectMissing(req: Request, ctx: string, field: string): never {
     undefined,
     field
   );
+}
+
+/**
+ * Validation error from validators.ts
+ */
+interface ValidationError {
+  type: 'missing' | 'invalid';
+  field: string;
+  message: string;
+}
+
+/**
+ * Throw BackendError for the first validation error in the list
+ * @param req - The incoming request
+ * @param ctx - Context string for the error
+ * @param errors - Array of validation errors from validateTransactionInputs
+ * @throws {BackendError} if errors array is not empty
+ */
+export function throwIfValidationErrors(req: Request, ctx: string, errors: ValidationError[]): void {
+  if (errors.length === 0) return;
+
+  const firstError = errors[0];
+  if (firstError.type === 'missing') {
+    rejectMissing(req, ctx, firstError.field);
+  } else {
+    rejectInvalid(req, ctx, firstError.message, firstError.field);
+  }
 }

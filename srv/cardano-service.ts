@@ -84,7 +84,7 @@ module.exports = (srv: cds.Service) => {
     const hash = (req.data as { hash?: string })?.hash;
 
     // validate input before business logic
-    if (hash && !isBlockHash(hash)) return rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
+    if (hash && !isBlockHash(hash)) rejectInvalid(req, 'Blocks', 'Invalid hash format', 'hash');
 
 
     // handle the request / indexing if needed
@@ -112,8 +112,8 @@ module.exports = (srv: cds.Service) => {
     const hash = (req.data?.hash as string | undefined) ?? undefined;
 
     // validate input before business logic
-    if (!hash) return rejectMissing(req, 'Blocks', 'hash');
-    if (!isTxHash(hash)) return rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
+    if (!hash) rejectMissing(req, 'Blocks', 'hash');
+    if (!isTxHash(hash)) rejectInvalid(req, 'Blocks', 'hash has invalid format', 'hash');
 
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
@@ -151,7 +151,7 @@ module.exports = (srv: cds.Service) => {
 
     // validate input before business logic
     if (epochNumber && !isEpochNumber(epochNumber))
-      return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
+      rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -178,10 +178,10 @@ module.exports = (srv: cds.Service) => {
     const epochNumber = req.data?.epochNumber as Number | undefined;
 
     // validate input before business logic
-    if (epochNumber == null) return rejectMissing(req, 'Epochs', 'epochNumber');
+    if (epochNumber == null) rejectMissing(req, 'Epochs', 'epochNumber');
 
     if (!isEpochNumber(epochNumber))
-      return rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
+      rejectInvalid(req, 'Epochs', `epochNumber has invalid format (${String(epochNumber)})`, 'epochNumber');
 
     // handle the action request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -213,11 +213,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {Pools} The pool data for the requested pool or all fitting pools for general read
    */
   srv.on('READ', Pools, async (req: Request) => {
-    logger.debug('3Pools READ handler called');
+    logger.debug('Pools READ handler called');
     const poolId = (req.data as { poolId?: string })?.poolId;
     
     // validate pool_id format before business logic
-    if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
+    if (poolId && !isValidPoolId(poolId)) rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -242,9 +242,9 @@ module.exports = (srv: cds.Service) => {
     const { poolId } = req.data as { poolId?: string };
 
     // validate input before business logic
-    if (!poolId) return rejectMissing(req, 'Pools', 'poolId');
+    if (!poolId) rejectMissing(req, 'Pools', 'poolId');
 
-    if (poolId && !isValidPoolId(poolId)) return rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
+    if (poolId && !isValidPoolId(poolId)) rejectInvalid(req, 'Pools', 'Invalid poolId format', 'poolId');
 
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
@@ -269,7 +269,7 @@ module.exports = (srv: cds.Service) => {
 
     // validate stake address format before business logic
     if (stakeAddress && !isValidBech32StakeAddress(stakeAddress))
-      return rejectInvalid(req, 'Accounts', 'Invalid stakeAddress format', 'stakeAddress');
+      rejectInvalid(req, 'Accounts', 'Invalid stakeAddress format', 'stakeAddress');
 
     // proceed with handling the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -296,10 +296,10 @@ module.exports = (srv: cds.Service) => {
     const { stakeAddress } = req.data as { stakeAddress?: string };
 
     // validate input before business logic
-    if (!stakeAddress) return rejectMissing(req, 'GetAccountByStakeAddress', 'stakeAddress');
+    if (!stakeAddress) rejectMissing(req, 'GetAccountByStakeAddress', 'stakeAddress');
 
     if (!isValidBech32StakeAddress(stakeAddress))
-      return rejectInvalid(req, 'GetAccountByStakeAddress', 'Invalid stakeAddress format', 'stakeAddress');
+      rejectInvalid(req, 'GetAccountByStakeAddress', 'Invalid stakeAddress format', 'stakeAddress');
 
     // proceed with handling the request / indexing result if needed
     return handleRequest(req, async (db) => {
@@ -323,7 +323,7 @@ module.exports = (srv: cds.Service) => {
     const drepId = (req.data as { drepId?: string })?.drepId;
 
     // validate drepID format before business logic
-    if (drepId && !isValidDrepId(drepId)) return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
+    if (drepId && !isValidDrepId(drepId)) rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
 
     // proceed with handling the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -350,10 +350,10 @@ module.exports = (srv: cds.Service) => {
     const drepId = (req.data as { drepId?: string }).drepId;
 
     // validate input before business logic
-    if (!drepId) return rejectMissing(req, 'Dreps', 'drepId');
+    if (!drepId) rejectMissing(req, 'Dreps', 'drepId');
 
     if (!isValidDrepId(drepId))
-      return rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
+      rejectInvalid(req, 'Dreps', 'Invalid drepId format', 'drepId');
 
     // proceed with handling the request
     return handleRequest(req, async (db) => {
@@ -376,7 +376,7 @@ module.exports = (srv: cds.Service) => {
     const addr = (req.data as { address?: string })?.address;
 
     // Validate address format before business logic
-    if (addr && !isValidBech32Address(addr)) return rejectInvalid(req, 'Addresses', 'Invalid bech32 address format', 'address');
+    if (addr && !isValidBech32Address(addr)) rejectInvalid(req, 'Addresses', 'Invalid bech32 address format', 'address');
 
     // Proceed with handling the request
     return handleRequest(req, async (db) => {
@@ -403,9 +403,9 @@ module.exports = (srv: cds.Service) => {
     const { address } = req.data as { address?: string };
 
     // validate input before business logic
-    if (!address) return rejectMissing(req, 'GetAddressByBech32', 'address');
+    if (!address) rejectMissing(req, 'GetAddressByBech32', 'address');
 
-    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAddressByBech32', 'Invalid bech32 address format', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAddressByBech32', 'Invalid bech32 address format', 'address');
 
     // proceed with handling the request / indexing result if needed
     return handleRequest(req, async (db) => {
@@ -440,9 +440,9 @@ module.exports = (srv: cds.Service) => {
     const { address } = req.data as { address?: string };
 
     // Validate input before business logic
-    if (!address) return rejectMissing(req, 'GetAssetsByAddress', 'address');
+    if (!address) rejectMissing(req, 'GetAssetsByAddress', 'address');
 
-    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressAssets).where({ address }));
@@ -476,9 +476,9 @@ module.exports = (srv: cds.Service) => {
     const { address } = req.data as { address?: string };
 
     // validate input before business logic
-    if (!address) return rejectMissing(req, 'GetUTxOsByAddress', 'address');
+    if (!address) rejectMissing(req, 'GetUTxOsByAddress', 'address');
 
-    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
@@ -506,7 +506,7 @@ module.exports = (srv: cds.Service) => {
 
     // validate input before business logic
     if (txHash && !isTxHash(txHash))
-      return rejectInvalid(req, 'Transactions', 'Invalid transaction hash format', 'hash');
+      rejectInvalid(req, 'Transactions', 'Invalid transaction hash format', 'hash');
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -533,10 +533,10 @@ module.exports = (srv: cds.Service) => {
     const { hash } = req.data as { hash?: string };
 
     // validate input before business logic
-    if (!hash) return rejectMissing(req, 'GetTransactionByHash', 'hash');
+    if (!hash) rejectMissing(req, 'GetTransactionByHash', 'hash');
 
     if (!isTxHash(hash))
-      return rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
+      rejectInvalid(req, 'GetTransactionByHash', 'Invalid transaction hash format', 'hash');
 
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {
@@ -601,7 +601,7 @@ module.exports = (srv: cds.Service) => {
 
     // validate input before business logic
     if (tx_hash && !isTxHash(tx_hash))
-      return rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
+      rejectInvalid(req, 'TransactionMetadata', 'Invalid transaction hash format', 'hash');
 
     // handle the request / indexing if needed
     return handleRequest(req, async (db) => {
@@ -628,9 +628,9 @@ module.exports = (srv: cds.Service) => {
     const { tx_hash } = req.data as { tx_hash?: string };
 
     // validate input before business logic
-    if (!tx_hash) return rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
+    if (!tx_hash) rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
 
-    if (!isTxHash(tx_hash)) return rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
+    if (!isTxHash(tx_hash)) rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
 
     // handle the action request / indexing result if needed
     return handleRequest(req, async (db) => {

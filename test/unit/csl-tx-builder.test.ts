@@ -6,7 +6,9 @@
  * transaction building, so we don't need to mock the cardano client.
  */
 
-import { CSLTxBuilder } from '../../srv/blockchain/transaction-building/csl-tx';
+import { CSLTxBuilder, mapBuilderError } from '../../srv/blockchain/transaction-building/csl-tx';
+import { mapBuilderError as mapBuildooorError } from '../../srv/blockchain/transaction-building/buildooor-tx';
+import { InsufficientFundsError } from '../../srv/utils/errors';
 import type { TxBuildRequest, TxBuildContext } from '../../srv/utils/types';
 
 // Mock cds.log
@@ -135,6 +137,82 @@ describe('CSLTxBuilder', () => {
 
       await expect(builder.buildUnsignedMultiAssetTransaction(req, validCtx))
         .rejects.toThrow('[CSLTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
+    });
+  });
+
+  describe('mapBuilderError (CSL)', () => {
+    it('should throw InsufficientFundsError for "not enough" error message', () => {
+      const err = new Error('Not enough ADA in wallet');
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should throw InsufficientFundsError for "insufficient" error message', () => {
+      const err = new Error('Insufficient funds to complete transaction');
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should throw InsufficientFundsError for "balance" error message', () => {
+      const err = new Error('Negative balance after transaction');
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should include custom asset unit in InsufficientFundsError', () => {
+      const err = new Error('not enough tokens');
+      try {
+        mapBuilderError(err, 'customAssetUnit');
+      } catch (e) {
+        expect(e).toBeInstanceOf(InsufficientFundsError);
+        expect((e as InsufficientFundsError).assetUnit).toBe('customAssetUnit');
+      }
+    });
+
+    it('should re-throw original error for unrecognized error patterns', () => {
+      const err = new Error('Some other error');
+      expect(() => mapBuilderError(err)).toThrow('Some other error');
+    });
+
+    it('should handle string errors (CSL throws strings)', () => {
+      // CSL sometimes throws strings directly instead of Error objects
+      const stringErr = 'not enough inputs';
+      expect(() => mapBuilderError(stringErr)).toThrow(InsufficientFundsError);
+    });
+
+    it('should handle errors without message property', () => {
+      const err = { toString: () => 'insufficient funds' };
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should use default assetUnit "lovelace" when not specified', () => {
+      const err = new Error('not enough');
+      try {
+        mapBuilderError(err);
+      } catch (e) {
+        expect(e).toBeInstanceOf(InsufficientFundsError);
+        expect((e as InsufficientFundsError).assetUnit).toBe('lovelace');
+      }
+    });
+  });
+
+  describe('mapBuilderError (Buildooor)', () => {
+    it('should throw InsufficientFundsError for "not enough" error message', () => {
+      const err = new Error('Not enough ADA');
+      expect(() => mapBuildooorError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should throw InsufficientFundsError for "insufficient" error message', () => {
+      const err = new Error('Insufficient balance');
+      expect(() => mapBuildooorError(err)).toThrow(InsufficientFundsError);
+    });
+
+    it('should re-throw original error for unrecognized error patterns', () => {
+      const err = new Error('Transaction too large');
+      expect(() => mapBuildooorError(err)).toThrow('Transaction too large');
+    });
+
+    it('should handle errors without message (returns empty string)', () => {
+      // Buildooor version uses err?.message?.toLowerCase() || ''
+      const err = {};
+      expect(() => mapBuildooorError(err)).toThrow();
     });
   });
 });

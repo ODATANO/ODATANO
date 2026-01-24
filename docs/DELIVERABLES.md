@@ -250,4 +250,235 @@ Comprehensive documentation package covering all aspects of the project includin
 **Demo & Release**
 
 - Milestone Release v0.1-milestone1: https://github.com/ODATANO/ODATANO/releases/tag/v0.1-milestone1  
-- Demo Video (M1 Walkthrough – ~5 min): https://www.youtube.com/watch?v=jDw6MXgbfR0  
+- Demo Video (M1 Walkthrough – ~5 min): https://www.youtube.com/watch?v=jDw6MXgbfR0
+
+---
+---
+
+# Proof of Achievement – Milestone 2
+
+---
+
+## A. Output: Transaction Builder Module
+
+Implementation of a server-side module within the CAP service that constructs raw Cardano transactions from API inputs. The builder supports ADA transfers, metadata transactions, multi-asset transfers, and token minting. It handles UTXO selection and fee calculation using established Cardano libraries. Two builder engines are implemented (CSL and Buildooor) with a registry pattern for runtime selection.
+
+### Acceptance criteria
+
+- Transaction construction from specified input parameters (destination address, ADA amount, optional metadata)
+- Well-formed unsigned transactions with correct inputs, outputs, and valid fees
+- UTXO selection implemented (LargestFirstMultiAsset strategy)
+- Fee calculation based on current protocol parameters
+- CBOR serialized output ready for external signing
+- Support for multiple transaction types (ADA transfer, metadata, multi-asset, minting)
+- Protocol compliance: sum of inputs covers outputs + fees, valid CBOR format
+- Transactions pass Cardano protocol validation when signed and submitted
+
+### Evidence
+
+**Transaction Builder Implementations**
+
+- CSL Transaction Builder: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/transaction-building/csl-tx.ts
+- Buildooor Transaction Builder: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/transaction-building/buildooor-tx.ts
+- TX Builder Registry (Factory Pattern): https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/transaction-building/tx-builder-registry.ts
+- TX Builder Interface: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/transaction-building/tx-builder.ts
+
+**Transaction Service (OData Actions)**
+
+- Transaction Service Definition: https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-tx-service.cds
+- Transaction Service Implementation: https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-tx-service.ts
+
+**Data Model**
+
+- Transaction Build Entities (Schema): https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
+
+**Libraries Used**
+
+- Cardano Serialization Lib (CSL): `@emurgo/cardano-serialization-lib-nodejs` v15.0.3
+- Buildooor: `@harmoniclabs/buildooor` v0.1.21
+- Ogmios Client: `@cardano-ogmios/client` v6.14.0
+
+---
+
+## B. Output: Transaction Submission Functionality
+
+Integration with multiple Cardano backends to submit signed transactions. Using a hybrid backend architecture with Ogmios (primary), Blockfrost, and Koios as fallback providers, the service can broadcast signed transactions to the Cardano network. The implementation includes automatic failover, transaction ID tracking, and submission status monitoring.
+
+### Acceptance criteria
+
+- Signed transaction submission to Cardano preview testnet
+- Transaction ID (txHash) extraction and tracking
+- Multi-backend support with automatic failover (Ogmios → Blockfrost → Koios)
+- Submission status tracking (submitted, confirmed, failed)
+- Network response handling and error reporting
+- Support for both build-referenced and externally-built transactions
+
+### Evidence
+
+**Backend Implementations**
+
+- Ogmios Backend: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/backends/ogmios-backend.ts
+- Blockfrost Backend: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/backends/blockfrost-backend.ts
+- Koios Backend: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/backends/koios-backend.ts
+- Backend Registry: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/backends/backend-registry.ts
+- Backend Interface: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/backends/cardano-backend.ts
+
+**Submission Logic**
+
+- Transaction Service (Submit Actions): https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-tx-service.ts
+- Cardano Client (Multi-Provider Orchestration): https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/cardano-client.ts
+
+**Documentation**
+
+- Hybrid Backend Architecture: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/HYBRID_BACKEND.md
+
+---
+
+## C. Output: End-to-End Example Scripts
+
+Reference implementations and scripts demonstrating the full build–sign–submit flow. Scripts call the OData API to build transactions, invoke external signing (Cardano CLI via Docker), and submit the signed transaction through the API.
+
+### Acceptance criteria
+
+- Complete build → sign → submit workflow demonstrated
+- External signing integration (Cardano CLI)
+- Scripts executable against preview testnet
+- Postman collection for API testing
+
+### Evidence
+
+**Example Scripts**
+
+- Send ADA Script (Build → Sign → Submit): https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-preview.ts
+- Send ADA with Metadata Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-with-metadata-preview.ts
+- Mint Token Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts
+
+**Postman Collection**
+
+- M2 Full Service Catalog: https://github.com/ODATANO/ODATANO/blob/main/scripts/ODATANO%20M2%20-%20Full%20Service%20Catalog.postman_collection.json
+
+---
+
+## D. Output: Extended Documentation
+
+Updates to the documentation focusing on transaction handling, including Transaction Schema Specification, Signing Workflow Guide with examples using Cardano CLI and browser wallets, and Troubleshooting & Error Codes section for common issues.
+
+### Acceptance criteria
+
+- Transaction Schema Specification documented
+- Signing Workflow Guide with multiple signing methods (CLI, Browser Wallet, Hardware Wallet)
+- Troubleshooting & Error Codes section for transaction-related issues
+- API reference for all transaction actions
+- Architecture diagrams for transaction flow
+
+### Evidence
+
+**Transaction Documentation**
+
+- Transaction Workflow Guide (685 lines): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/TRANSACTION_WORKFLOW.md
+- Error Handling Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/ERROR_HANDLING.md
+- Hybrid Backend Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/HYBRID_BACKEND.md
+- Indexing Documentation (Updated for TX Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/INDEXING.md
+- Data Model Documentation (Updated): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/MM_DATAMODEL.md
+
+**Release Preparation**
+
+- M2 Release Checklist: https://github.com/ODATANO/ODATANO/blob/main/docs/releases/M2_RELEASE_CHECKLIST.md
+
+---
+
+## E. Output: Test Cases for Build/Submit
+
+Additional automated tests validating the transaction builder logic, submission flow, and error handling. Unit tests verify transaction construction with known inputs, and integration tests simulate the submission workflow.
+
+### Acceptance criteria
+
+- Unit tests for transaction builder (CSL and Buildooor engines)
+- Integration tests for submission flow
+- Error scenario tests for all five required error cases:
+  - (1) Insufficient funds
+  - (2) Invalid input data
+  - (3) Invalid signature
+  - (4) Network failure
+  - (5) Duplicate/Replay transaction
+- Tests pass in continuous integration
+
+### Evidence
+
+**Integration Tests**
+
+- CSL Builder Integration Test: https://github.com/ODATANO/ODATANO/blob/main/test/integration/tx.csl.test.ts
+- Buildooor Builder Integration Test: https://github.com/ODATANO/ODATANO/blob/main/test/integration/tx.buildooor.test.ts
+- Transaction Submission Mock Test: https://github.com/ODATANO/ODATANO/blob/main/test/integration/tx-submission-mock.test.ts
+- Transaction Test Suite: https://github.com/ODATANO/ODATANO/blob/main/test/integration/tx-test-suite.ts
+- Error Handling Builder Tests: https://github.com/ODATANO/ODATANO/blob/main/test/integration/tx-error-handling.builder.ts
+
+**Unit Tests**
+
+- CSL TX Builder Unit Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/csl-tx-builder.test.ts
+- TX Builder Registry Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/tx-builder-registry.test.ts
+- TX Build Helper Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/tx-build-helper.test.ts
+- Error Classes Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/errors.test.ts
+- Validators Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/validators.test.ts
+
+**Error Handling Implementation**
+
+- Error Classes (8 specialized): https://github.com/ODATANO/ODATANO/blob/main/srv/utils/errors.ts
+- Error Codes Definition: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/error-codes.ts
+- Input Validators: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/validators.ts
+
+**CI/CD**
+
+- Test Pipeline: https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml
+- Code Coverage: https://codecov.io/gh/ODATANO/ODATANO
+
+---
+
+## F. Output: Error Handling (Transaction Flow)
+
+Implementation of comprehensive error handling for transaction-related operations with five distinct error scenarios as specified in the milestone requirements.
+
+### Acceptance criteria
+
+- (1) **Insufficient funds:** Build fails with clear error when UTXOs cannot cover amount + fees
+- (2) **Invalid input data:** Malformed address or invalid parameters yield 400 error
+- (3) **Invalid signature:** Wrong signing key or tampered CBOR returns validation failure
+- (4) **Network failure:** Timeout or unreachable endpoint returns 503 error (with failover)
+- (5) **Duplicate/Replay:** Already-submitted transaction handled gracefully (409 or idempotent success)
+- All error conditions have corresponding error codes documented
+
+### Evidence
+
+**Error Classes Implemented**
+
+| Error Scenario | Error Code | HTTP Status | Class |
+|----------------|------------|-------------|-------|
+| Insufficient Funds | `ODATANO_INSUFFICIENT_FUNDS` | 400 | `InsufficientFundsError` |
+| Invalid Input | `ODATANO_INVALID_INPUT` | 400 | `InvalidInputError` |
+| Invalid Signature | `ODATANO_TX_VALIDATION_FAILED` | 400 | `TransactionValidationError` |
+| Network Failure | `ODATANO_PROVIDER_UNAVAILABLE` | 503 | `ProviderUnavailableError` |
+| Duplicate TX | `ODATANO_TX_ALREADY_SUBMITTED` | 409 | `TransactionAlreadySubmittedError` |
+
+**Implementation Files**
+
+- Error Classes: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/errors.ts
+- Error Codes: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/error-codes.ts
+- Error Handling Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/ERROR_HANDLING.md
+
+---
+
+## Summary: Milestone 2 Deliverables
+
+| Deliverable | Status |
+|-------------|--------|
+| Transaction Builder Module (CSL + Buildooor) | ✅ Complete |
+| Transaction Submission (Multi-Backend) | ✅ Complete |
+| End-to-End Scripts | ✅ Complete |
+| Postman Collection M2 | ✅ Complete |
+| Extended Documentation | ✅ Complete |
+| Test Cases (Unit + Integration) | ✅ Complete |
+| Error Handling (5 Scenarios) | ✅ Complete |
+| Milestone Release v0.2-milestone2 | ⏳ Pending |
+| Demo Video | ⏳ Pending |
+| Transaction Confirmation (Explorer Link) | ⏳ Pending |
+

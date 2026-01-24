@@ -123,3 +123,24 @@ export interface CardanoBackend {
    */
   submitTransaction(signedTxCbor: string): Promise<string>;
 }
+
+/**
+ * Extended backend interface for backends that support transaction evaluation (e.g., Ogmios)
+ */
+export interface EvaluatingBackend extends CardanoBackend {
+  /**
+   * Evaluate transaction script execution units
+   * @param unsignedTxCbor unsigned transaction in CBOR hex format
+   * @returns evaluation results with validator and budget
+   */
+  evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>>;
+}
+
+/**
+ * Type guard to check if a backend supports transaction evaluation
+ * @param backend - The backend to check
+ * @returns true if the backend supports evaluateTransaction
+ */
+export function isEvaluatingBackend(backend: CardanoBackend): backend is EvaluatingBackend {
+  return typeof (backend as EvaluatingBackend).evaluateTransaction === 'function';
+}

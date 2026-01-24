@@ -27,7 +27,69 @@ const VALIDITY_VARIANTS = {
   BECH32_MAX_LENGTH: 2000, // maximum bech32 string length to prevent DoS
   MAX_EPOCH: 100_000, // maximum reasonable epoch number
   POOL_ID_BYTES: 28, // standard pool ID payload length
-}
+};
+
+/**
+ * JSON input validation limits to prevent DoS attacks
+ */
+const JSON_LIMITS = {
+  /** Maximum JSON string length in bytes (1MB) */
+  MAX_JSON_SIZE: 1_048_576,
+  /** Maximum nesting depth for JSON objects/arrays */
+  MAX_DEPTH: 10,
+  /** Maximum number of keys in a JSON object */
+  MAX_KEYS: 100,
+  /** Maximum number of elements in a JSON array */
+  MAX_ARRAY_LENGTH: 1000,
+  /** Maximum length of a single string value */
+  MAX_STRING_LENGTH: 65536,
+};
+
+/**
+ * Cardano protocol constants
+ */
+const CARDANO_PROTOCOL = {
+  /** Maximum ADA supply in lovelace (45 billion ADA) */
+  MAX_LOVELACE_SUPPLY: '45000000000000000',
+  /** Slots per epoch (mainnet/testnets) */
+  SLOTS_PER_EPOCH: 432_000,
+  /** Milliseconds per slot */
+  MS_PER_SLOT: 1000,
+};
+
+/**
+ * Default execution units for Plutus scripts
+ * Used when dynamic evaluation is not available
+ */
+const DEFAULT_EXECUTION_UNITS = {
+  /** Memory units for script execution */
+  mem: 14_000_000,
+  /** CPU steps for script execution */
+  cpu: 10_000_000_000,
+};
+
+/**
+ * High execution units for initial transaction build (before evaluation)
+ */
+const HIGH_EXECUTION_UNITS = {
+  /** Memory units - high for evaluation pass */
+  mem: 14_000_000,
+  /** CPU steps - high for evaluation pass */
+  cpu: 10_000_000_000,
+};
+
+/**
+ * Execution unit buffer multiplier (10% safety margin)
+ */
+const EXECUTION_UNIT_BUFFER = 1.1;
+
+/**
+ * Transaction building constants
+ */
+const TX_BUILDING = {
+  /** Buffer for witness set CBOR overhead when signing adds ~44 bytes */
+  WITNESS_BUFFER_BYTES: 50,
+};
 /**
  * Parse available backends from BACKENDS environment variable
  * 
@@ -62,7 +124,8 @@ function parseAvailableTransactionBuilders(): string[] {
 export const CONFIG = {
   network: NETWORK,
   hrp: HRP[NETWORK],
-  VALIDITY_VARIANTS: VALIDITY_VARIANTS,
+  VALIDITY_VARIANTS,
+  JSON_LIMITS,
   blockfrostApiKey: process.env.BLOCKFROST_KEY ?? '',
   blockfrostApiUrl: BLOCKFROST_URLS[NETWORK],
   koiosApiUrl: KOIOS_URLS[NETWORK],
@@ -76,5 +139,13 @@ export const CONFIG = {
   backends: parseAvailableBackends(),
   // transaction builders
   transactionBuilders: parseAvailableTransactionBuilders(),
+  // Cardano protocol constants
+  CARDANO_PROTOCOL,
+  // Plutus execution unit defaults
+  DEFAULT_EXECUTION_UNITS,
+  HIGH_EXECUTION_UNITS,
+  EXECUTION_UNIT_BUFFER,
+  // Transaction building constants
+  TX_BUILDING,
 };
 

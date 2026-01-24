@@ -7,6 +7,7 @@ import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
 import cds from "@sap/cds";
 import { InsufficientFundsError } from "../../utils/errors";
+import { CONFIG } from "../../../config/config";
 import {
   defaultProtocolParameters,
   Address,
@@ -30,18 +31,6 @@ import { DataI } from "@harmoniclabs/plutus-data";
 
 const logger = cds.log('BuildooorTxBuilder');
 
-// Default execution units - used when Ogmios evaluation is not available
-const DEFAULT_EXECUTION_UNITS = {
-  mem: 1_000_000,   // 1M memory units
-  cpu: 500_000_000  // 500M CPU steps
-};
-
-// High execution units for first pass when evaluation is available
-const EVALUATION_EXECUTION_UNITS = {
-  mem: 14_000_000,     // 14M memory units - high for evaluation pass
-  cpu: 10_000_000_000  // 10B CPU steps - high for evaluation pass
-};
-
 /**
  * Maps builder errors to typed BackendErrors
  * @param err Error from builder
@@ -49,7 +38,7 @@ const EVALUATION_EXECUTION_UNITS = {
  * @throws {InsufficientFundsError} if error is related to insufficient funds
  * @throws {Error} original error if not mappable
  */
-function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
   const msg = err?.message?.toLowerCase() || '';
 
   // Check for insufficient funds patterns
@@ -96,8 +85,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       // set Addresses
-      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      const recipientAddress = Address.fromString(req.recipientAddress);
+      const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
       // set Amount
       const amount = BigInt(String(req.lovelaceAmount));
 
@@ -154,8 +143,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Buildooor TxIn objects for inputs
       const inputs = ledgerUtxos.map(utxo => ({ utxo }));
       // Addresses
-      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      const recipientAddress = Address.fromString(req.recipientAddress);
+      const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
       // Amount
       const amount = BigInt(String(req.lovelaceAmount));
 
@@ -219,8 +208,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
     // Addresses
-    const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-    const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+    const recipientAddress = Address.fromString(req.recipientAddress);
+    const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
 
     // Build output value with ADA + assets
     let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount));
@@ -301,8 +290,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       // Addresses
-      const recipientAddress = (Address as any).fromBech32(req.recipientAddress);
-      const changeAddress = (Address as any).fromBech32(req.changeAddress ?? req.senderAddress);
+      const recipientAddress = Address.fromString(req.recipientAddress);
+      const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
 
       // Parse the minting policy script once
       const scriptBytes = Buffer.from(req.mintingPolicyScript!, 'hex');
@@ -371,12 +360,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
 
       // Determine execution units based on evaluator availability
-      let finalExUnits = DEFAULT_EXECUTION_UNITS;
+      let finalExUnits = CONFIG.DEFAULT_EXECUTION_UNITS;
 
       if (ctx.evaluateTransaction) {
         // Build first pass with high execution units for evaluation
         logger.debug(`Building evaluation pass with high execution units`);
-        const evalMints = buildMints(EVALUATION_EXECUTION_UNITS);
+        const evalMints = buildMints(CONFIG.HIGH_EXECUTION_UNITS);
 
         const evalTx = await this.txBuilder.build({
           inputs,
@@ -396,10 +385,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           if (evalResults && evalResults.length > 0) {
             // Use the evaluated budget (take first result for single script)
             const budget = evalResults[0].budget;
-            // Add 10% safety margin to evaluated units
+            // Add safety margin to evaluated units
             finalExUnits = {
-              mem: Math.ceil(budget.memory * 1.1),
-              cpu: Math.ceil(budget.cpu * 1.1)
+              mem: Math.ceil(budget.memory * CONFIG.EXECUTION_UNIT_BUFFER),
+              cpu: Math.ceil(budget.cpu * CONFIG.EXECUTION_UNIT_BUFFER)
             };
             logger.info(`Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
           }
@@ -425,7 +414,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
       const calculatedFee = BigInt(txFirstPass.body.fee.toString());
-      const witnessBuffer = BigInt(50); // Minimal buffer for witness overhead
+      const witnessBuffer = BigInt(CONFIG.TX_BUILDING.WITNESS_BUFFER_BYTES);
       const adjustedMinFee = calculatedFee + witnessBuffer;
 
       logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
@@ -496,44 +485,41 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  /** 
+  /**
    * Map ODATANO UTxO to Ledger UTxO (ADA-only)
    * @param utxos ODATANO UTxO
    * @returns mapped Ledger UTxO
    */
-  private _mapOdatanoUtxoToLedgerUtxo(utxos: OdatanoUtxo): any {
+  private _mapOdatanoUtxoToLedgerUtxo(utxos: OdatanoUtxo): LedgerUTxO {
     assertAdaOnly(utxos);
-    const txId = utxos.txHash;
 
     const outRef = new TxOutRef({
-      id: txId as any,
+      id: utxos.txHash,
       index: utxos.outputIndex
     });
 
-    const addr = Address.fromString(utxos.address)
+    const addr = Address.fromString(utxos.address);
     const value = Value.lovelaces(getLovelace(utxos));
 
-    return new (LedgerUTxO as any)({
+    return new LedgerUTxO({
       utxoRef: outRef,
-      resolved: {
+      resolved: new TxOut({
         address: addr,
         value,
         datum: undefined,
         refScript: undefined
-      }
+      })
     });
   }
 
-  /** 
+  /**
    * Map ODATANO UTxO to Ledger UTxO (with multi-asset support)
    * @param utxo ODATANO UTxO
    * @returns mapped Ledger UTxO
    */
-  private _mapMultiAssetUtxoToLedgerUtxo(utxo: OdatanoUtxo): any {
-    const txId = utxo.txHash;
-
+  private _mapMultiAssetUtxoToLedgerUtxo(utxo: OdatanoUtxo): LedgerUTxO {
     const outRef = new TxOutRef({
-      id: txId as any,
+      id: utxo.txHash,
       index: utxo.outputIndex
     });
 
@@ -551,14 +537,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
     }
 
-    return new (LedgerUTxO as any)({
+    return new LedgerUTxO({
       utxoRef: outRef,
-      resolved: {
+      resolved: new TxOut({
         address: addr,
         value,
         datum: undefined,
         refScript: undefined
-      }
+      })
     });
   }
 

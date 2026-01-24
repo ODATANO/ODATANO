@@ -283,7 +283,7 @@ export class KoiosBackend implements CardanoBackend {
           const latest = totalsData[0];
           return {
             supply: {
-              max: '45000000000000000',
+              max: CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
               total: latest.supply || '0',
               circulating: latest.circulation || '0',
               locked: '0', // Not available in /totals
@@ -304,7 +304,7 @@ export class KoiosBackend implements CardanoBackend {
         
         return {
           supply: {
-            max: genesis.maxlovelacesupply || '45000000000000000',
+            max: genesis.maxlovelacesupply || CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
             total: '0', // Not available without /totals
             circulating: '0', // Not available without /totals
             locked: '0',
@@ -565,7 +565,7 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  /** 
+  /**
    * Get Latest Epoch Data
    * @returns {Promise<EpochData>} latest epoch data
    */
@@ -573,7 +573,8 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
-        return this.getEpoch(data.epoch_no);
+        // /tip returns an array, access first element
+        return this.getEpoch(data[0].epoch_no);
       },
       this.name
     );

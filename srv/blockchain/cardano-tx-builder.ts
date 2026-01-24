@@ -13,7 +13,7 @@ const logger = cds.log('CardanoTransactionBuilder');
  * to build various types of Cardano transactions.
  */
 export class CardanoTransactionBuilder {
-    private txBuilder!: CardanoTxBuilder;
+    private txBuilder: CardanoTxBuilder | undefined;
     private initialized = false;
 
     async init(): Promise<void> {
@@ -26,21 +26,36 @@ export class CardanoTransactionBuilder {
     }
 
     /**
-     * Ensure the builder is initialized (lazy init)
+     * Ensure the builder is initialized and return it (lazy init)
+     * @returns {Promise<CardanoTxBuilder>} initialized builder
+     * @throws {Error} if builder cannot be initialized
      */
-    private async ensureInitialized(): Promise<void> {
+    private async ensureInitialized(): Promise<CardanoTxBuilder> {
         if (!this.initialized || !this.txBuilder) {
             await this.init();
         }
+        if (!this.txBuilder) {
+            throw new Error('Transaction builder failed to initialize');
+        }
+        return this.txBuilder;
     }
 
     /**
      * Reset the transaction builder (useful for testing)
      */
     reset(): void {
-        this.txBuilder = undefined as any;
+        this.txBuilder = undefined;
         this.initialized = false;
         logger.debug(`Builder reset`);
+    }
+
+    /**
+     * Set the transaction builder directly (for testing)
+     * @param builder - The builder to set
+     */
+    setBuilder(builder: CardanoTxBuilder): void {
+        this.txBuilder = builder;
+        this.initialized = true;
     }
 
     /**
@@ -50,7 +65,7 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildSimpleAdaTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        await this.ensureInitialized();
+        const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
         const txContext: TxBuildContext = {
@@ -58,7 +73,7 @@ export class CardanoTransactionBuilder {
             protocolParameters: protocolParameters
         };
         // Build the unsigned ADA transfer transaction
-        const txBuildResult = await this.txBuilder.buildUnsignedAdaTransfer(req, txContext);
+        const txBuildResult = await builder.buildUnsignedAdaTransfer(req, txContext);
 
         logger.info(`Built simple ADA transaction successfully.`);
         // Return the transaction build result
@@ -66,7 +81,7 @@ export class CardanoTransactionBuilder {
     }
 
     async buildTransactionWithMetadata(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        await this.ensureInitialized();
+        const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
         const txContext: TxBuildContext = {
@@ -74,7 +89,7 @@ export class CardanoTransactionBuilder {
             protocolParameters: protocolParameters
         };
         // Build the unsigned transaction with metadata
-        const txBuildResult = await this.txBuilder.buildUnsignedTransactionWithMetadata(req, txContext);
+        const txBuildResult = await builder.buildUnsignedTransactionWithMetadata(req, txContext);
         logger.info(`Built transaction with metadata successfully.`);
         // Return the transaction build result
         return txBuildResult;
@@ -87,7 +102,7 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildMultiAssetTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        await this.ensureInitialized();
+        const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
         const utxos = await this._fetchUtxosForAddress(req.senderAddress);
@@ -100,7 +115,7 @@ export class CardanoTransactionBuilder {
             protocolParameters: protocolParameters
         };
         // Build the unsigned multi-asset transaction
-        const txBuildResult = await this.txBuilder.buildUnsignedMultiAssetTransaction(req, txContext);
+        const txBuildResult = await builder.buildUnsignedMultiAssetTransaction(req, txContext);
 
         logger.info(`Built multi-asset transaction successfully.`);
         // Return the transaction build result
@@ -114,7 +129,7 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildMintTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        await this.ensureInitialized();
+        const builder = await this.ensureInitialized();
 
         const cardanoClient = getCardanoClient();
 
@@ -135,7 +150,7 @@ export class CardanoTransactionBuilder {
         }
 
         // Build the unsigned minting transaction
-        const txBuildResult = await this.txBuilder.buildUnsignedMintTransaction(req, txContext);
+        const txBuildResult = await builder.buildUnsignedMintTransaction(req, txContext);
 
         logger.info(`Built minting transaction successfully.`);
         // Return the transaction build result
@@ -170,8 +185,8 @@ export async function resetTransactionBuilder(builderName: string): Promise<void
     // Directly create and initialize the specified builder
     const txBuilder = TxBuilderRegistry.create(builderName);
     await txBuilder.init();
-    // Set it directly on the instance
-    (cardanoTransactionBuilder as any).txBuilder = txBuilder;
+    // Set it using the public method
+    cardanoTransactionBuilder.setBuilder(txBuilder);
     logger.info(`Transaction builder reset to: ${builderName}`);
 }
 

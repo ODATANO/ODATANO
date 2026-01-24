@@ -31,11 +31,32 @@ export function assertAdaOnly(u: OdatanoUtxo): void {
 /**
  * Extract transaction hash from signed CBOR without submitting
  * @param signedTxCbor signed transaction in CBOR hex format
- * @returns {string} transaction hash (hex)
+ * @returns {string} transaction hash (64 character hex string)
+ * @throws {Error} if CBOR is invalid or transaction hash cannot be extracted
  */
 export function getTxHashFromCbor(signedTxCbor: string): string {
-    // Try with harmoniclabs library first
+  if (!signedTxCbor || typeof signedTxCbor !== 'string') {
+    throw new Error('Invalid input: signedTxCbor must be a non-empty string');
+  }
+
+  // Validate hex format
+  if (!/^[a-fA-F0-9]+$/.test(signedTxCbor)) {
+    throw new Error('Invalid input: signedTxCbor must be a valid hex string');
+  }
+
+  try {
     const txBytes = fromHex(signedTxCbor);
     const tx = Tx.fromCbor(txBytes);
+
+    if (!tx?.hash) {
+      throw new Error('Failed to extract transaction hash from CBOR');
+    }
+
     return tx.hash.toString();
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Invalid input:')) {
+      throw err;
+    }
+    throw new Error(`Failed to parse transaction CBOR: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
+}

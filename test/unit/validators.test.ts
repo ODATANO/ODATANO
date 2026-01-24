@@ -8,6 +8,7 @@ import {
   isValidBech32StakeAddress,
   isEpochNumber,
   isValidCbor,
+  validateTransactionInputs,
 } from '../../srv/utils/validators';
 
 describe('Validator Helper Methods and Type Guards', () => {
@@ -332,7 +333,7 @@ describe('Validator Helper Methods and Type Guards', () => {
       const invalidCbor = 'g1h2i3j4';
       expect(isValidCbor(invalidCbor)).toBe(false);
     });
-    
+
     it('should return false for empty string', () => {
       expect(isValidCbor('')).toBe(false);
       expect(isValidCbor('   ')).toBe(false);
@@ -343,5 +344,457 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isValidCbor(null)).toBe(false);
       expect(isValidCbor(undefined)).toBe(false);
     });
-  }); 
+  });
+
+  // ==========================================================================
+  // validateTransactionInputs
+  // ==========================================================================
+  describe('validateTransactionInputs', () => {
+    // Valid test addresses (testnet)
+    const validSenderAddress = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
+    const validRecipientAddress = 'addr_test1qpu5vlrf4xkxv2qpwngf6cjhtw542ayty80v8dyr49rf5ewvxwdrt70qlcpeeagscasafhffqsxy36t90ldv06wqrk2qum8x5w';
+    const validCborHex = 'a1b2c3d4e5f6';
+
+    describe('required fields validation', () => {
+      it('should return errors for missing required fields', () => {
+        const errors = validateTransactionInputs(
+          {},
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+        );
+
+        expect(errors).toHaveLength(3);
+        expect(errors[0]).toEqual({
+          type: 'missing',
+          field: 'senderAddress',
+          message: 'senderAddress is required'
+        });
+        expect(errors[1]).toEqual({
+          type: 'missing',
+          field: 'recipientAddress',
+          message: 'recipientAddress is required'
+        });
+        expect(errors[2]).toEqual({
+          type: 'missing',
+          field: 'lovelaceAmount',
+          message: 'lovelaceAmount is required'
+        });
+      });
+
+      it('should return no errors when all required fields are present and valid', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should treat empty string as missing', () => {
+        const errors = validateTransactionInputs(
+          { senderAddress: '' },
+          ['senderAddress']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('missing');
+      });
+    });
+
+    describe('address validation', () => {
+      it('should return error for invalid sender address format', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: 'invalid_address',
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'senderAddress',
+          message: 'Invalid sender address format'
+        });
+      });
+
+      it('should return error for invalid recipient address format', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: 'not_a_valid_bech32',
+            lovelaceAmount: 1000000n
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'recipientAddress',
+          message: 'Invalid recipient address format'
+        });
+      });
+
+      it('should return error for invalid change address format', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            changeAddress: 'bad_change_address'
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'changeAddress',
+          message: 'Invalid change address format'
+        });
+      });
+    });
+
+    describe('CBOR validation', () => {
+      it('should return error for invalid signedTxCbor format', () => {
+        const errors = validateTransactionInputs(
+          { signedTxCbor: 'not_hex!' },
+          ['signedTxCbor']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'signedTxCbor',
+          message: 'Invalid signedTxCbor format'
+        });
+      });
+
+      it('should return error for odd-length signedTxCbor', () => {
+        const errors = validateTransactionInputs(
+          { signedTxCbor: 'abc' },
+          ['signedTxCbor']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('signedTxCbor');
+      });
+
+      it('should accept valid signedTxCbor', () => {
+        const errors = validateTransactionInputs(
+          { signedTxCbor: validCborHex },
+          ['signedTxCbor']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should return error for invalid mintingPolicyScript format', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            mintingPolicyScript: 'invalid_cbor!'
+          },
+          ['senderAddress', 'recipientAddress', 'mintingPolicyScript']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'mintingPolicyScript',
+          message: 'Invalid mintingPolicyScript format'
+        });
+      });
+    });
+
+    describe('JSON validation', () => {
+      it('should return error for invalid metadataJson', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: 'not valid json {'
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'metadataJson',
+          message: 'Invalid JSON in metadataJson'
+        });
+      });
+
+      it('should accept valid metadataJson', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: '{"key": "value"}'
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should return error for invalid assetsJson', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            assetsJson: '[invalid'
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'assetsJson',
+          message: 'Invalid JSON in assetsJson'
+        });
+      });
+
+      it('should return error for invalid mintActionsJson', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            mintActionsJson: '{broken json'
+          },
+          ['senderAddress', 'recipientAddress', 'mintActionsJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'mintActionsJson',
+          message: 'Invalid JSON in mintActionsJson'
+        });
+      });
+
+      it('should return error for JSON exceeding max size (1MB)', () => {
+        // Create JSON string > 1MB
+        const largeJson = JSON.stringify({ data: 'x'.repeat(1_100_000) });
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: largeJson
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('metadataJson');
+        expect(errors[0].message).toContain('exceeds maximum size');
+      });
+
+      it('should return error for JSON exceeding max nesting depth', () => {
+        // Create deeply nested object (11 levels, limit is 10)
+        let nested = { value: 'deep' };
+        for (let i = 0; i < 11; i++) {
+          nested = { nested } as any;
+        }
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: JSON.stringify(nested)
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('metadataJson');
+        expect(errors[0].message).toContain('nesting depth');
+      });
+
+      it('should return error for JSON object with too many keys', () => {
+        // Create object with 101 keys (limit is 100)
+        const manyKeys: Record<string, number> = {};
+        for (let i = 0; i < 101; i++) {
+          manyKeys[`key${i}`] = i;
+        }
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: JSON.stringify(manyKeys)
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('metadataJson');
+        expect(errors[0].message).toContain('maximum key count');
+      });
+
+      it('should return error for JSON array exceeding max length', () => {
+        // Create array with 1001 elements (limit is 1000)
+        const largeArray = Array.from({ length: 1001 }, (_, i) => i);
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            assetsJson: JSON.stringify(largeArray)
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('assetsJson');
+        expect(errors[0].message).toContain('maximum length');
+      });
+
+      it('should return error for JSON string value exceeding max length', () => {
+        // Create object with string value > 65536 chars
+        const longString = 'x'.repeat(70000);
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: JSON.stringify({ text: longString })
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('metadataJson');
+        expect(errors[0].message).toContain('String value exceeds maximum length');
+      });
+
+      it('should accept valid JSON within all limits', () => {
+        const validJson = JSON.stringify({
+          label1: { nested: { value: 'test' } },
+          label2: [1, 2, 3, 4, 5],
+          label3: 'short string'
+        });
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 1000000n,
+            metadataJson: validJson
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+    });
+
+    describe('multiple errors', () => {
+      it('should return only missing errors when required fields are missing (early return)', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: 'invalid_address' // invalid but also missing recipientAddress
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        // Should return early with missing field error, not validate format
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('missing');
+        expect(errors[0].field).toBe('recipientAddress');
+      });
+
+      it('should return multiple validation errors when all required fields present', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: 'invalid_sender',
+            recipientAddress: 'invalid_recipient',
+            lovelaceAmount: 1000000n
+          },
+          ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+        );
+
+        expect(errors).toHaveLength(2);
+        expect(errors.map(e => e.field)).toContain('senderAddress');
+        expect(errors.map(e => e.field)).toContain('recipientAddress');
+      });
+    });
+
+    describe('optional fields', () => {
+      it('should not validate optional fields that are not provided', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should validate optional changeAddress when provided', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            changeAddress: validSenderAddress
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+    });
+
+    describe('buildId and submissionId', () => {
+      it('should return error for missing buildId when required', () => {
+        const errors = validateTransactionInputs(
+          {},
+          ['buildId']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'missing',
+          field: 'buildId',
+          message: 'buildId is required'
+        });
+      });
+
+      it('should return error for missing submissionId when required', () => {
+        const errors = validateTransactionInputs(
+          {},
+          ['submissionId']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'missing',
+          field: 'submissionId',
+          message: 'submissionId is required'
+        });
+      });
+
+      it('should accept valid buildId', () => {
+        const errors = validateTransactionInputs(
+          { buildId: 'some-uuid-value' },
+          ['buildId']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+    });
+  });
 });

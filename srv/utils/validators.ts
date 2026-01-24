@@ -1,10 +1,11 @@
 import { CONFIG } from "../../config/config";
 import { bech32 } from "bech32";
 
-/** 
- * Configuration constants 
+/**
+ * Configuration constants
  */
 const { BECH32_MAX_LENGTH, MAX_EPOCH, POOL_ID_BYTES } = CONFIG.VALIDITY_VARIANTS;
+const { MAX_JSON_SIZE, MAX_DEPTH, MAX_KEYS, MAX_ARRAY_LENGTH, MAX_STRING_LENGTH } = CONFIG.JSON_LIMITS;
 
 /** 
  * Transaction hash Regex - 64-character hexadecimal string
@@ -62,7 +63,7 @@ function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: 
 }
 
 
-/** 
+/**
  * Convert bech32 words to byte length
  * @param words - bech32 decoded words
  * @returns { number } byte length of decoded words
@@ -70,6 +71,90 @@ function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: 
 function wordsToBytesLen(words: number[]): number {
   // bech32.fromWords validates word range and converts 5-bit words -> bytes
   return Buffer.from(bech32.fromWords(words)).length;
+}
+
+/**
+ * Result of JSON validation with limits
+ */
+interface JsonValidationResult {
+  valid: boolean;
+  error?: string;
+  parsed?: unknown;
+}
+
+/**
+ * Validate JSON string with size and complexity limits to prevent DoS
+ * @param jsonString - The JSON string to validate
+ * @param fieldName - Name of the field (for error messages)
+ * @returns JsonValidationResult with parsed value or error message
+ */
+function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
+  // Check size limit first (before parsing)
+  if (jsonString.length > MAX_JSON_SIZE) {
+    return { valid: false, error: `${fieldName} exceeds maximum size of ${MAX_JSON_SIZE} bytes` };
+  }
+
+  // Parse JSON
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonString);
+  } catch {
+    return { valid: false, error: `Invalid JSON in ${fieldName}` };
+  }
+
+  // Validate complexity recursively
+  const complexityError = checkJsonComplexity(parsed, 0);
+  if (complexityError) {
+    return { valid: false, error: `${fieldName}: ${complexityError}` };
+  }
+
+  return { valid: true, parsed };
+}
+
+/**
+ * Recursively check JSON complexity (depth, keys, array length, string length)
+ * @param value - The parsed JSON value
+ * @param depth - Current nesting depth
+ * @returns Error message if limits exceeded, null otherwise
+ */
+function checkJsonComplexity(value: unknown, depth: number): string | null {
+  // Check depth limit
+  if (depth > MAX_DEPTH) {
+    return `Maximum nesting depth of ${MAX_DEPTH} exceeded`;
+  }
+
+  if (value === null || typeof value !== 'object') {
+    // Check string length for primitive strings
+    if (typeof value === 'string' && value.length > MAX_STRING_LENGTH) {
+      return `String value exceeds maximum length of ${MAX_STRING_LENGTH}`;
+    }
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    // Check array length
+    if (value.length > MAX_ARRAY_LENGTH) {
+      return `Array exceeds maximum length of ${MAX_ARRAY_LENGTH}`;
+    }
+    // Recursively check array elements
+    for (const item of value) {
+      const error = checkJsonComplexity(item, depth + 1);
+      if (error) return error;
+    }
+  } else {
+    // Check object key count
+    const keys = Object.keys(value);
+    if (keys.length > MAX_KEYS) {
+      return `Object exceeds maximum key count of ${MAX_KEYS}`;
+    }
+    // Recursively check object values
+    for (const key of keys) {
+      const error = checkJsonComplexity((value as Record<string, unknown>)[key], depth + 1);
+      if (error) return error;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -187,7 +272,7 @@ export function isEpochNumber(s: unknown): s is number {
   return typeof s === "number" && s >= 0 && s <= MAX_EPOCH && Number.isInteger(s);
 }
 
-/** 
+/**
  * Validate CBOR string: must be a non-empty even-length hexadecimal string
  * @param cborRaw - The raw value to validate against CBOR format
  * @returns { boolean } true if valid CBOR false otherwise
@@ -197,4 +282,135 @@ export function isValidCbor(cborRaw: unknown): cborRaw is string {
   if (!cbor) return false;
   // basic validation: must be even-length hex string
   return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
+}
+
+/**
+ * Validation error details for transaction input validation
+ */
+export interface ValidationError {
+  type: 'missing' | 'invalid';
+  field: string;
+  message: string;
+}
+
+/**
+ * Transaction input fields for validation
+ */
+export interface TransactionInputs {
+  senderAddress?: string;
+  recipientAddress?: string;
+  changeAddress?: string;
+  lovelaceAmount?: number | bigint;
+  signedTxCbor?: string;
+  metadataJson?: string;
+  assetsJson?: string;
+  mintActionsJson?: string;
+  mintingPolicyScript?: string;
+  buildId?: string;
+  submissionId?: string;
+}
+
+/**
+ * Validate transaction build inputs and return validation errors if any
+ * @param inputs - Transaction input fields to validate
+ * @param requiredFields - List of required field names
+ * @returns Array of validation errors, empty if all valid
+ */
+export function validateTransactionInputs(
+  inputs: TransactionInputs,
+  requiredFields: (keyof TransactionInputs)[]
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  // Check required fields
+  for (const field of requiredFields) {
+    if (inputs[field] === undefined || inputs[field] === null || inputs[field] === '') {
+      errors.push({
+        type: 'missing',
+        field,
+        message: `${field} is required`
+      });
+    }
+  }
+
+  // If required fields are missing, return early
+  if (errors.length > 0) return errors;
+
+  // Validate address formats
+  if (inputs.senderAddress && !isValidBech32Address(inputs.senderAddress)) {
+    errors.push({
+      type: 'invalid',
+      field: 'senderAddress',
+      message: 'Invalid sender address format'
+    });
+  }
+
+  if (inputs.recipientAddress && !isValidBech32Address(inputs.recipientAddress)) {
+    errors.push({
+      type: 'invalid',
+      field: 'recipientAddress',
+      message: 'Invalid recipient address format'
+    });
+  }
+
+  if (inputs.changeAddress && !isValidBech32Address(inputs.changeAddress)) {
+    errors.push({
+      type: 'invalid',
+      field: 'changeAddress',
+      message: 'Invalid change address format'
+    });
+  }
+
+  // Validate CBOR format
+  if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
+    errors.push({
+      type: 'invalid',
+      field: 'signedTxCbor',
+      message: 'Invalid signedTxCbor format'
+    });
+  }
+
+  if (inputs.mintingPolicyScript && !isValidCbor(inputs.mintingPolicyScript)) {
+    errors.push({
+      type: 'invalid',
+      field: 'mintingPolicyScript',
+      message: 'Invalid mintingPolicyScript format'
+    });
+  }
+
+  // Validate JSON fields with size and complexity limits
+  if (inputs.metadataJson) {
+    const result = validateJsonWithLimits(inputs.metadataJson, 'metadataJson');
+    if (!result.valid) {
+      errors.push({
+        type: 'invalid',
+        field: 'metadataJson',
+        message: result.error!
+      });
+    }
+  }
+
+  if (inputs.assetsJson) {
+    const result = validateJsonWithLimits(inputs.assetsJson, 'assetsJson');
+    if (!result.valid) {
+      errors.push({
+        type: 'invalid',
+        field: 'assetsJson',
+        message: result.error!
+      });
+    }
+  }
+
+  if (inputs.mintActionsJson) {
+    const result = validateJsonWithLimits(inputs.mintActionsJson, 'mintActionsJson');
+    if (!result.valid) {
+      errors.push({
+        type: 'invalid',
+        field: 'mintActionsJson',
+        message: result.error!
+      });
+    }
+  }
+
+  return errors;
 }

@@ -22,15 +22,38 @@ import {
   LedgerProtocolParameters
 } from '../../utils/types';
 
-import { CardanoBackend } from './cardano-backend';
+import { EvaluatingBackend } from './cardano-backend';
 
 const logger = cds.log('OgmiosBackend');
+
+/**
+ * Type definitions for Ogmios API responses (not fully typed in @cardano-ogmios/client)
+ */
+interface OgmiosStakePool {
+  vrf?: string;
+  vrfKeyHash?: string;
+  stake?: { ada?: { lovelace?: number | bigint } };
+  pledge?: number | bigint | string;
+  margin?: number;
+  cost?: number | bigint | string;
+  rewardAccount?: string;
+}
+
+interface OgmiosRewardAccountSummary {
+  controlledAmount?: number | bigint | string;
+  rewards?: number | bigint | string;
+  withdrawals?: number | bigint | string;
+  delegate?: { id?: string };
+  delegation?: { poolId?: string };
+  vote?: { id?: string };
+  drep?: { id?: string };
+}
 
 /**
  * Ogmios Backend Implementation for Cardano Backend Interface
  * Implements the CardanoBackend interface using Ogmios WebSocket client for local node interaction
  */
-export class OgmiosBackend implements CardanoBackend {
+export class OgmiosBackend implements EvaluatingBackend {
   public readonly name = 'ogmios';
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
@@ -133,14 +156,13 @@ export class OgmiosBackend implements CardanoBackend {
     }, this.name);
   }
 
-  /** 
+  /**
    * Get specific Network Information
    * @returns {Promise<Network>} network information
    */
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(async () => {
-      // Using hardcoded max supply for Cardano mainnet
-      const maxSupply = '45000000000000000';
+      const maxSupply = CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY;
 
       return {
         supply: {
@@ -238,7 +260,7 @@ export class OgmiosBackend implements CardanoBackend {
       this.ensureNotShutdown();
             
       // Query from tip (no acquire needed) with stake included
-      const pools = await this.stateQueryClient!.stakePools([{ id: poolId }], true) as any;
+      const pools = await this.stateQueryClient!.stakePools([{ id: poolId }], true) as Record<string, OgmiosStakePool>;
 
       // Extract pool from response - stakePools returns object keyed by poolId
       const pool = pools[poolId];
@@ -254,9 +276,9 @@ export class OgmiosBackend implements CardanoBackend {
         liveSaturation: 0,
         activeStake: Number(pool.pledge || 0),
         activeSize: 0,
-        pledge: pool.pledge?.toString() || '0',
+        pledge: Number(pool.pledge || 0),
         margin: Number(pool.margin || 0),
-        fixedCost: pool.cost?.toString() || '0',
+        fixedCost: Number(pool.cost || 0),
         rewardAccount: pool.rewardAccount || ''
       };
     }, this.name);
@@ -275,7 +297,8 @@ export class OgmiosBackend implements CardanoBackend {
       const keyHash = stakeAddress.startsWith('stake') ? stakeAddress : stakeAddress;
       
       // Query from tip (no acquire needed)
-      const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [keyHash] }) as any;
+      // Cast through unknown as Ogmios types are complex and don't match our simplified interface
+      const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [keyHash] }) as unknown as OgmiosRewardAccountSummary[];
 
       // Ogmios API returns array of account summaries
       const account = summaries && summaries.length > 0 ? summaries[0] : null;
@@ -400,8 +423,7 @@ export class OgmiosBackend implements CardanoBackend {
       const slot = tip === 'origin' ? 0 : (tip.slot || 0);
 
       // Calculate epoch boundaries using era start as reference
-      // Each epoch has 432000 slots, each slot is ~1 second
-      const SLOTS_PER_EPOCH = 432000;
+      const SLOTS_PER_EPOCH = CONFIG.CARDANO_PROTOCOL.SLOTS_PER_EPOCH;
       const epochStartSlot = currentEpoch * SLOTS_PER_EPOCH;
       const epochEndSlot = (currentEpoch + 1) * SLOTS_PER_EPOCH;
       
@@ -459,8 +481,7 @@ export class OgmiosBackend implements CardanoBackend {
       const blockTime = eraStartTime + (slotsSinceEraStart * 1000); // Each slot = 1 second
 
       // Calculate slot within epoch
-      const SLOTS_PER_EPOCH = 432000; // Standard for mainnet and most testnets
-      const epochSlot = slot % SLOTS_PER_EPOCH;
+      const epochSlot = slot % CONFIG.CARDANO_PROTOCOL.SLOTS_PER_EPOCH;
 
       return {
         time: blockTime, // Already in milliseconds

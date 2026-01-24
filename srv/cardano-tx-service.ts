@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, rejectMissing } from './utils/errors';
-import { isValidBech32Address, isValidCbor } from './utils/validators';
+import { rejectInvalid, throwIfValidationErrors } from './utils/errors';
+import { validateTransactionInputs } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
@@ -76,52 +76,42 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a simple ADA-only transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, changeAddress)
-   * @returns Transaction build details 
+   * @returns Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const {senderAddress, recipientAddress, lovelaceAmount } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount } = req.data;
 
     // validate inputs
-    if (!senderAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'senderAddress');
-    if (!recipientAddress) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'recipientAddress');
-    if (!lovelaceAmount) return rejectMissing(req, 'BuildSimpleAdaTransaction', 'lovelaceAmount');
-    if (!isValidBech32Address(senderAddress))
-      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid sender address format', 'senderAddress');
-    if (!isValidBech32Address(recipientAddress))
-      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid recipient address format', 'recipientAddress');
+    const errors = validateTransactionInputs(
+      { senderAddress, recipientAddress, lovelaceAmount },
+      ['senderAddress', 'recipientAddress', 'lovelaceAmount']
+    );
+    throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
+      logger.info({ senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
       return await indexer.indexSimpleBuildResult(db, req.data);
     });
   });
   /**
    * Build a transaction with metadata
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
-   * @returns Transaction build details 
+   * @returns Transaction build details
    */
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
-    // validate inputs
-    if (!senderAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'senderAddress');
-    if (!recipientAddress) return rejectMissing(req, 'BuildTransactionWithMetadata', 'recipientAddress');
-    if (!lovelaceAmount) return rejectMissing(req, 'BuildTransactionWithMetadata', 'lovelaceAmount');
-    if (!metadataJson) return rejectMissing(req, 'BuildTransactionWithMetadata', 'metadataJson');
 
-     if (!isValidBech32Address(senderAddress))
-      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid sender address format', 'senderAddress');
-     if (!isValidBech32Address(recipientAddress))
-      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid recipient address format', 'recipientAddress');
+    // validate inputs (includes JSON parsing validation)
+    const errors = validateTransactionInputs(
+      { senderAddress, recipientAddress, lovelaceAmount, metadataJson },
+      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
+    );
+    throwIfValidationErrors(req, 'BuildTransactionWithMetadata', errors);
 
-    // Parse metadataJson if it's a string
-   let parsedMetadata;
-    try {
-      parsedMetadata = JSON.parse(metadataJson);
-    } catch {
-      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid JSON in metadataJson', 'metadataJson');
-    }
-    
+    // Parse metadataJson (already validated as valid JSON)
+    const parsedMetadata = JSON.parse(metadataJson);
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
@@ -135,28 +125,20 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a multi-asset transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
-   * @returns Transaction build details 
+   * @returns Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
 
-    // validate inputs
-    if (!senderAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'senderAddress');
-    if (!recipientAddress) return rejectMissing(req, 'BuildMultiAssetTransaction', 'recipientAddress');
-    if (!lovelaceAmount) return rejectMissing(req, 'BuildMultiAssetTransaction', 'lovelaceAmount');
-    if (!assetsJson) return rejectMissing(req, 'BuildMultiAssetTransaction', 'assetsJson');
-    if (!isValidBech32Address(senderAddress))
-      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid sender address format', 'senderAddress');
-    if (!isValidBech32Address(recipientAddress))
-      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid recipient address format', 'recipientAddress');
+    // validate inputs (includes JSON parsing validation)
+    const errors = validateTransactionInputs(
+      { senderAddress, recipientAddress, lovelaceAmount, assetsJson },
+      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
+    );
+    throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
 
-    // Parse assetsJson
-    let parsedAssets;
-    try {
-      parsedAssets = JSON.parse(assetsJson);
-    } catch {
-      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid JSON in assetsJson', 'assetsJson');
-    }
+    // Parse assetsJson (already validated as valid JSON)
+    const parsedAssets = JSON.parse(assetsJson);
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
@@ -177,35 +159,23 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a minting transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
-   * @returns Transaction build details 
+   * @returns Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
 
-    // validate inputs
-    if (!senderAddress) return rejectMissing(req, 'BuildMintTransaction', 'senderAddress');
-    if (!recipientAddress) return rejectMissing(req, 'BuildMintTransaction', 'recipientAddress');
-    if (!mintActionsJson) return rejectMissing(req, 'BuildMintTransaction', 'mintActionsJson');
-    if (!mintingPolicyScript) return rejectMissing(req, 'BuildMintTransaction', 'mintingPolicyScript');
-    if (!isValidBech32Address(senderAddress))
-      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid sender address format', 'senderAddress');
-    if (!isValidBech32Address(recipientAddress))
-      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid recipient address format', 'recipientAddress');
-    if (!isValidCbor(mintingPolicyScript))
-      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid mintingPolicyScript format', 'mintingPolicyScript');
+    // validate inputs (includes JSON and CBOR validation)
+    const errors = validateTransactionInputs(
+      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript },
+      ['senderAddress', 'recipientAddress', 'mintActionsJson', 'mintingPolicyScript']
+    );
+    throwIfValidationErrors(req, 'BuildMintTransaction', errors);
 
-    // Parse mintActionsJson
-    let parsedMintActions;
-    try {
-      parsedMintActions = JSON.parse(mintActionsJson);
-      // Convert quantity strings to bigint
-      parsedMintActions = parsedMintActions.map((action: any) => ({
-        ...action,
-        quantity: BigInt(action.quantity)
-      }));
-    } catch {
-      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid JSON in mintActionsJson', 'mintActionsJson');
-    }
+    // Parse mintActionsJson and convert quantity strings to bigint
+    const parsedMintActions = JSON.parse(mintActionsJson).map((action: { assetName: string; quantity: string }) => ({
+      ...action,
+      quantity: BigInt(action.quantity)
+    }));
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
@@ -232,18 +202,20 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
+
     // Validate inputs
-    if (!buildId) return rejectMissing(req, 'GetBuildDetails', 'buildId');
+    const errors = validateTransactionInputs({ buildId }, ['buildId']);
+    throwIfValidationErrors(req, 'GetBuildDetails', errors);
 
     // handle the request / fetching the build details
     const existing = await cds.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
 
-    if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+    if (!existing) rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
 
     return existing;
   });
 
-  /** 
+  /**
    * Submit signed transaction built previously
    * @param req - CDS request object (with buildId, signedTxCbor)
    * @returns Transaction submission details
@@ -252,11 +224,9 @@ module.exports = (srv: cds.Service) => {
     logger.debug('SubmitTransaction Action handler called');
     const { buildId, signedTxCbor } = req.data;
 
-    // Validate inputs
-    if (!buildId) return rejectMissing(req, 'SubmitTransaction', 'buildId');
-    if (!signedTxCbor) return rejectMissing(req, 'SubmitTransaction', 'signedTxCbor');
-    if (!isValidCbor(signedTxCbor))
-      return rejectInvalid(req, 'SubmitTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
+    // Validate inputs (includes CBOR format validation)
+    const errors = validateTransactionInputs({ buildId, signedTxCbor }, ['buildId', 'signedTxCbor']);
+    throwIfValidationErrors(req, 'SubmitTransaction', errors);
 
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
@@ -264,7 +234,7 @@ module.exports = (srv: cds.Service) => {
 
       // Validate build exists
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+      if (!existing) rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
 
       // Use txBodyHash from build instead of parsing signed CBOR
       const txHash = existing.txBodyHash;
@@ -301,10 +271,10 @@ module.exports = (srv: cds.Service) => {
     logger.info('SubmitSignedTransaction Action handler called');
     const { signedTxCbor } = req.data;
 
-    // validate inputs
-    if (!signedTxCbor) return rejectMissing(req, 'SubmitSignedTransaction', 'signedTxCbor');
-    if (!isValidCbor(signedTxCbor))
-      return rejectInvalid(req, 'SubmitSignedTransaction', 'Invalid signedTxCbor format', 'signedTxCbor');
+    // validate inputs (includes CBOR format validation)
+    const errors = validateTransactionInputs({ signedTxCbor }, ['signedTxCbor']);
+    throwIfValidationErrors(req, 'SubmitSignedTransaction', errors);
+
     // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
       // extract txHash from signed CBOR (before submission)
@@ -342,7 +312,8 @@ module.exports = (srv: cds.Service) => {
     const { submissionId } = req.data;
 
     // validate inputs
-    if (!submissionId) return rejectMissing(req, 'CheckSubmissionStatus', 'submissionId');
+    const errors = validateTransactionInputs({ submissionId }, ['submissionId']);
+    throwIfValidationErrors(req, 'CheckSubmissionStatus', errors);
 
     // handle the request / checking submission status
     return handleRequest(req, async (db) => {
