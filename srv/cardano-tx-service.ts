@@ -239,7 +239,7 @@ module.exports = (srv: cds.Service) => {
       // Use txBodyHash from build instead of parsing signed CBOR
       const txHash = existing.txBodyHash;
 
-      // submit to blockchain via backend (Hybrid → Ogmios/Blockfrost)
+      // submit to blockchain via configured backends (Ogmios/Blockfrost/Koios)
       // Error mapping happens in normalizeBackendError (called by handleBackendRequest)
       await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, 'Transaction submitted to blockchain');

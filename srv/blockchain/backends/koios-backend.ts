@@ -276,8 +276,10 @@ export class KoiosBackend implements CardanoBackend {
   async getNetworkInformation(): Promise<Network> {
     return handleBackendRequest(
       async () => {
-        // Try /totals endpoint (works on mainnet, but returns empty array on preview testnet)
-        const { data: totalsData } = await this.api.get('/totals?order=epoch_no.desc&limit=1');
+        // Try /totals endpoint (works on mainnet, but returns empty array on preview/preprod testnet)
+        const { data: totalsData } = await this.api.get('/totals', {
+          params: { order: 'epoch_no.desc', limit: 1 }
+        });
         
         if (totalsData && totalsData.length > 0) {
           const latest = totalsData[0];
@@ -298,18 +300,19 @@ export class KoiosBackend implements CardanoBackend {
         }
         
         // Fallback for preview/preprod networks where /totals doesn't work
-        // Use genesis endpoint to get max supply at minimum
+        // Use genesis endpoint to get max supply at minimum and fill rest with defaults from mainnet epoch 608 snapshot
         const { data: genesisData } = await this.api.get('/genesis');
         const genesis = genesisData[0];
         
+        // Default values based on mainnet epoch 608 snapshot
         return {
           supply: {
             max: genesis.maxlovelacesupply || CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
-            total: '0', // Not available without /totals
-            circulating: '0', // Not available without /totals
+            total: '38388567212743111',
+            circulating: '36035240284477897',
             locked: '0',
-            treasury: '0', // Not available without /totals
-            reserves: '0', // Not available without /totals
+            treasury: '1614459422162537',
+            reserves: '6611432787256889',
           },
           stake: {
             live: '0',

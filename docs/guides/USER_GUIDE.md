@@ -1,8 +1,8 @@
 # ODATANO User Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.1.0 (Milestone 1 Complete)\
-**Last Updated:** December 2025
+**Version:** 0.2.0 (Milestone 2 Complete)\
+**Last Updated:** January 2026
 
 ---
 
@@ -20,14 +20,16 @@
 
 ### What is ODATANO?
 
-ODATANO is an **OData V4 service** that provides read-only access to Cardano blockchain data through a standard REST API.
+ODATANO is an **OData V4 service** that provides access to Cardano blockchain data and transaction building through a standard REST API.
 
 **Key Features:**
 
 - ✅ Query transactions, blocks, epochs, pools, accounts, DReps
 - ✅ Fetch address balances, UTxOs, and native assets
 - ✅ Access transaction metadata
-- ✅ Automatic failover (Blockfrost → Koios)
+- ✅ **Build unsigned transactions** (ADA transfers, token minting, multi-asset) - M2
+- ✅ **Submit signed transactions** to Cardano network - M2
+- ✅ Automatic failover (Ogmios → Blockfrost → Koios)
 - ✅ Intelligent caching (configurable TTL)
 - ✅ Full OData V4 support ($filter, $select, $expand, $top, $skip, $count, $orderby)
 - ✅ Multi-network support (mainnet, preview, preprod)
@@ -368,10 +370,74 @@ const response = await fetch(
 
 ---
 
+---
+
+## Transaction Building (M2)
+
+### Build & Submit Transactions
+
+ODATANO M2 adds transaction building and submission capabilities.
+
+**Transaction Service Base URL:**
+```
+http://localhost:4004/odata/v4/cardano-transaction
+```
+
+### Build Simple ADA Transfer
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "senderAddress": "addr_test1...",
+    "recipientAddress": "addr_test1...",
+    "lovelaceAmount": 10000000
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": "uuid-here",
+  "unsignedTxCbor": "84a50081825820...",
+  "txBodyHash": "abc123...",
+  "fee": 170000
+}
+```
+
+### Submit Signed Transaction
+
+After signing externally (cardano-cli, browser wallet):
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buildId": "uuid-from-build",
+    "signedTxCbor": "84a5008182..."
+  }'
+```
+
+### Available Transaction Actions
+
+| Action | Description |
+|--------|-------------|
+| `BuildSimpleAdaTransaction` | Build ADA-only transfer |
+| `BuildTransactionWithMetadata` | Build ADA transfer with metadata |
+| `BuildMultiAssetTransaction` | Build multi-asset transfer |
+| `BuildMintTransaction` | Build token minting transaction |
+| `SubmitTransaction` | Submit previously built transaction |
+| `SubmitSignedTransaction` | Submit externally built transaction |
+
+See [Transaction Workflow Guide](../concepts%20&%20architecture/TRANSACTION_WORKFLOW.md) for complete documentation.
+
+---
+
 ## Support & Resources
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
-- **Test Docs:** [test/README.md](../../test/README.md) - 340 tests, 96.28% coverage
+- **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
+- **Test Docs:** [test/README.md](../../test/README.md) - 635 tests, 96.28% coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -380,5 +446,5 @@ const response = await fetch(
 
 ---
 
-**Version:** 0.1.0 (Milestone 1 Complete)\
-**Status:** Production-Ready — OData V4 read service with lazy indexing and multi-provider failover
+**Version:** 0.2.0 (Milestone 2 Complete)\
+**Status:** Production-Ready — OData V4 read service + transaction building with multi-provider failover

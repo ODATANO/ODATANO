@@ -44,8 +44,8 @@ export class BackendRegistry {
   static createLiveBackend(): CardanoBackend | undefined {
     const configuredBackends = CONFIG.backends;
     
-    // Check if we should use Ogmios (either explicitly or via 'hybrid')
-    if (configuredBackends.includes('ogmios') || configuredBackends.includes('hybrid')) {
+    // Check if Ogmios is configured
+    if (configuredBackends.includes('ogmios')) {
       logger.info('Creating Ogmios as live backend');
       return this.create('ogmios');
     }
@@ -61,18 +61,14 @@ export class BackendRegistry {
     const configuredBackends = CONFIG.backends;
     const backends: CardanoBackend[] = [];
 
-    // check for Blockfrost
-    if (configuredBackends.includes('blockfrost') || 
-        (configuredBackends.includes('hybrid') && CONFIG.blockfrostApiKey)) {
-      if (CONFIG.blockfrostApiKey) {
-        logger.info('Adding Blockfrost as historical backend');
-        backends.push(this.create('blockfrost'));
-      }
+    // Check for Blockfrost
+    if (configuredBackends.includes('blockfrost') && CONFIG.blockfrostApiKey) {
+      logger.info('Adding Blockfrost as historical backend');
+      backends.push(this.create('blockfrost'));
     }
 
     // Check for Koios (API key is optional)
-    if (configuredBackends.includes('koios') || 
-        (configuredBackends.includes('hybrid') && !CONFIG.blockfrostApiKey)) {
+    if (configuredBackends.includes('koios')) {
       logger.info('Adding Koios as historical backend');
       backends.push(this.create('koios'));
     }

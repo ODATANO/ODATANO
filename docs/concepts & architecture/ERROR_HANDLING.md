@@ -5,7 +5,7 @@ errors are normalized and propagated to the client.
 
 ## Error Classes Overview
 
-ODATANO uses **8 specialized error classes** for comprehensive error handling:
+ODATANO uses **11 specialized error classes** for comprehensive error handling:
 
 ### Backend Communication Errors
 
@@ -63,6 +63,29 @@ Single backend failed to initialize.
 All backends failed during initialization.
 - **Contains**: Array of BackendInitError instances
 - **Result**: Service startup fails (no backends available)
+
+### Transaction Errors (M2)
+
+#### 9. `InsufficientFundsError` (400)
+
+Sender address doesn't have enough UTxOs to cover amount + fees.
+- **Error Code**: `ODATANO_INSUFFICIENT_FUNDS`
+- **Example**: Address has 5 ADA but needs 10 ADA + fees
+- **Fix**: Top up sender address or reduce amount
+
+#### 10. `TransactionValidationError` (400)
+
+Transaction failed Cardano protocol validation.
+- **Error Code**: `ODATANO_TX_VALIDATION_FAILED`
+- **Example**: Invalid signature, malformed CBOR, wrong signing key
+- **Fix**: Verify signing key matches sender address
+
+#### 11. `TransactionAlreadySubmittedError` (409)
+
+Transaction with same hash already exists on chain or in mempool.
+- **Error Code**: `ODATANO_TX_ALREADY_SUBMITTED`
+- **Example**: Duplicate submission of same transaction
+- **Result**: Idempotent - transaction already processed
 
 ## Normalization Rules
 
@@ -168,6 +191,12 @@ return handleRequest(req, async (db) => {
 ### Input Validation (Service Layer)
 
 8. **400 = rejectInvalid/rejectMissing** – Invalid or missing parameters
+
+### Transaction Errors (M2)
+
+9. **400 = InsufficientFundsError** – Not enough UTxOs for amount + fees
+10. **400 = TransactionValidationError** – Invalid signature or CBOR
+11. **409 = TransactionAlreadySubmittedError** – Duplicate transaction
 
 ### Key Principles
 

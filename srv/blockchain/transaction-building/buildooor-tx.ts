@@ -1,5 +1,5 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
@@ -270,16 +270,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  public async buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-
-    if (!req.mintActions || req.mintActions.length === 0) {
-      throw new Error('[BuildooorTxBuilder] buildUnsignedMintTransaction requires mintActions to be specified');
-    }
-
-    if (!req.mintingPolicyScript) {
-      throw new Error('[BuildooorTxBuilder] buildUnsignedMintTransaction requires mintingPolicyScript to be specified');
-    }
-
+  public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
 
       // Map all available UTxOs to ledger UTxOs (let builder handle selection)
@@ -294,13 +285,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
 
       // Parse the minting policy script once
-      const scriptBytes = Buffer.from(req.mintingPolicyScript!, 'hex');
+      const scriptBytes = Buffer.from(req.mintingPolicyScript, 'hex');
       const script = Script.fromCbor(scriptBytes);
 
       // Helper to build mints array with specified execution units
       const buildMints = (exUnits: { mem: number; cpu: number }) => {
         const mints = [];
-        for (const mintAction of req.mintActions!) {
+        for (const mintAction of req.mintActions) {
           const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
           const policyHash = new Hash28(policyId);
           const assetValue = Value.singleAsset(

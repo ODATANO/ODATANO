@@ -311,6 +311,14 @@ export type TxBuildRequest = {
 };
 
 /**
+ * Transaction Build Request for Mint/Burn operations - requires mintActions and mintingPolicyScript
+ */
+export type TxBuildMintRequest = TxBuildRequest & {
+  mintActions: MintAction[];
+  mintingPolicyScript: string;
+};
+
+/**
  * Execution Budget for Plutus scripts
  */
 export type ExecutionBudget = {

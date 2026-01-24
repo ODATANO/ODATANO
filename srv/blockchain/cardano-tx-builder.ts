@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 import { getCardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
-import type { TxBuildRequest, TxBuildContext, TxBuildResult } from '../utils/types';
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult } from '../utils/types';
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
@@ -129,8 +129,18 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildMintTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
-        const builder = await this.ensureInitialized();
+        // Validate mint-specific required fields
+        if (!req.mintActions || req.mintActions.length === 0) {
+            throw new Error('[CardanoTransactionBuilder] buildMintTransaction requires mintActions to be specified');
+        }
+        if (!req.mintingPolicyScript) {
+            throw new Error('[CardanoTransactionBuilder] buildMintTransaction requires mintingPolicyScript to be specified');
+        }
 
+        // Type is now narrowed to TxBuildMintRequest
+        const mintReq: TxBuildMintRequest = req as TxBuildMintRequest;
+
+        const builder = await this.ensureInitialized();
         const cardanoClient = getCardanoClient();
 
         // Prepare the transaction build context
@@ -150,7 +160,7 @@ export class CardanoTransactionBuilder {
         }
 
         // Build the unsigned minting transaction
-        const txBuildResult = await builder.buildUnsignedMintTransaction(req, txContext);
+        const txBuildResult = await builder.buildUnsignedMintTransaction(mintReq, txContext);
 
         logger.info(`Built minting transaction successfully.`);
         // Return the transaction build result

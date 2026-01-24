@@ -1,5 +1,5 @@
 import { CardanoClient, createCardanoClientForBackends } from '../../srv/blockchain/cardano-client';  
-import { CardanoBackend } from '../../srv/blockchain/backends/cardano-backend';
+import { CardanoBackend, EvaluatingBackend, isEvaluatingBackend } from '../../srv/blockchain/backends/cardano-backend';
 import { ConfigError, AllBackendsInitFailedError } from '../../srv/utils/errors';
 import {
   Transaction,
@@ -333,6 +333,81 @@ describe('CardanoClient Configuration', () => {
       // If unknown backend returns PRIMARY_TIMEOUT_MS, the operation should succeed
       const result = await client.getTransaction('test-hash');
       expect(result.hash).toBe('test');
+    });
+  });
+
+  // ============================================================================
+  // evaluateTransaction Tests
+  // ============================================================================
+  describe('evaluateTransaction', () => {
+    it('should throw error when no live backend is configured', async () => {
+      const histBackend = new MockBackend('blockfrost');
+      const client = new CardanoClient(undefined, [histBackend]);
+
+      await expect(client.evaluateTransaction('test-cbor'))
+        .rejects.toThrow('Transaction evaluation requires an evaluating backend');
+    });
+
+    it('should throw error when live backend is not an EvaluatingBackend', async () => {
+      // MockBackend does NOT have evaluateTransaction method
+      const nonEvaluatingBackend = new MockBackend('ogmios');
+      const client = new CardanoClient(nonEvaluatingBackend, []);
+
+      await expect(client.evaluateTransaction('test-cbor'))
+        .rejects.toThrow('Transaction evaluation requires an evaluating backend');
+    });
+
+    it('should call evaluateTransaction on EvaluatingBackend', async () => {
+      const mockEvaluationResult = [
+        { validator: { index: 0 }, budget: { memory: 1000000, cpu: 500000 } }
+      ];
+
+      class MockEvaluatingBackend extends MockBackend implements EvaluatingBackend {
+        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
+          return mockEvaluationResult;
+        }
+      }
+
+      const evaluatingBackend = new MockEvaluatingBackend('ogmios');
+      const client = new CardanoClient(evaluatingBackend, []);
+
+      const result = await client.evaluateTransaction('test-cbor');
+      expect(result).toEqual(mockEvaluationResult);
+    });
+
+    it('should propagate errors from backend evaluateTransaction', async () => {
+      class FailingEvaluatingBackend extends MockBackend implements EvaluatingBackend {
+        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
+          throw new Error('Evaluation failed: script execution error');
+        }
+      }
+
+      const failingBackend = new FailingEvaluatingBackend('ogmios');
+      const client = new CardanoClient(failingBackend, []);
+
+      await expect(client.evaluateTransaction('invalid-cbor'))
+        .rejects.toThrow('Evaluation failed: script execution error');
+    });
+  });
+
+  // ============================================================================
+  // isEvaluatingBackend Type Guard Tests
+  // ============================================================================
+  describe('isEvaluatingBackend', () => {
+    it('should return false for regular CardanoBackend', () => {
+      const regularBackend = new MockBackend('blockfrost');
+      expect(isEvaluatingBackend(regularBackend)).toBe(false);
+    });
+
+    it('should return true for EvaluatingBackend', () => {
+      class MockEvaluatingBackend extends MockBackend implements EvaluatingBackend {
+        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
+          return [];
+        }
+      }
+
+      const evaluatingBackend = new MockEvaluatingBackend('ogmios');
+      expect(isEvaluatingBackend(evaluatingBackend)).toBe(true);
     });
   });
 });

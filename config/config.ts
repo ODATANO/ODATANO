@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
-export type BackendName = 'blockfrost' | 'koios' | 'ogmios' | 'hybrid';
+export type BackendName = 'blockfrost' | 'koios' | 'ogmios';
 
 const NETWORK: Network = (process.env.NETWORK ?? 'preview') as Network;
 
@@ -108,7 +108,7 @@ function parseAvailableBackends(): BackendName[] {
     .map(b => b.trim().toLowerCase() as BackendName)
     .filter((b): b is BackendName => ['ogmios','blockfrost', 'koios'].includes(b));
   
-  // default to hybrid (Ogmios + historical fallback) if no valid backends found
+  // default to koios if no valid backends found
   return available.length > 0 ? available : ['koios'];
 }
 

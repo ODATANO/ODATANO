@@ -295,6 +295,27 @@ describe('OgmiosBackend', () => {
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
     });
+
+    it('should be idempotent - calling shutdown twice should not throw', async () => {
+      const mockStateQueryClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+      const mockTxSubmissionClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).isShutdown = false;
+
+      await backend.shutdown();
+      await backend.shutdown(); // second call should early-return
+
+      // shutdown methods should only be called once
+      expect(mockStateQueryClient.shutdown).toHaveBeenCalledTimes(1);
+      expect(mockTxSubmissionClient.shutdown).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('isConnected', () => {

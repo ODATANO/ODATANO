@@ -292,13 +292,9 @@ export class OgmiosBackend implements EvaluatingBackend {
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
- 
-      // Extract key hash if bech32 address provided, otherwise use as-is
-      const keyHash = stakeAddress.startsWith('stake') ? stakeAddress : stakeAddress;
-      
-      // Query from tip (no acquire needed)
+
       // Cast through unknown as Ogmios types are complex and don't match our simplified interface
-      const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [keyHash] }) as unknown as OgmiosRewardAccountSummary[];
+      const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] }) as unknown as OgmiosRewardAccountSummary[];
 
       // Ogmios API returns array of account summaries
       const account = summaries && summaries.length > 0 ? summaries[0] : null;
@@ -420,15 +416,15 @@ export class OgmiosBackend implements EvaluatingBackend {
         this.stateQueryClient!.ledgerTip()
       ]);
       
-      const slot = tip === 'origin' ? 0 : (tip.slot || 0);
+      const slot = tip === 'origin' ? 0 : tip.slot;
 
       // Calculate epoch boundaries using era start as reference
       const SLOTS_PER_EPOCH = CONFIG.CARDANO_PROTOCOL.SLOTS_PER_EPOCH;
       const epochStartSlot = currentEpoch * SLOTS_PER_EPOCH;
       const epochEndSlot = (currentEpoch + 1) * SLOTS_PER_EPOCH;
-      
-      // Use eraStart.time as accurate reference point (RelativeTime is in milliseconds)
-      const eraStartTime = typeof eraStart.time === 'number' ? eraStart.time : Date.now();
+
+      // eraStart.time is RelativeTime { seconds: bigint }
+      const eraStartTime = Number(eraStart.time.seconds) * 1000;
       const slotsSinceEraStart = slot - eraStart.slot;
       const currentTime = eraStartTime + (slotsSinceEraStart * 1000);
       
@@ -469,14 +465,12 @@ export class OgmiosBackend implements EvaluatingBackend {
       ]);
 
       // TypeScript requires 'origin' checks (genesis block), though practically never occurs
-      // Ogmios returns 'origin' | Point for genesis compatibility
-      const slot = tip === 'origin' ? 0 : (tip.slot || 0);
-      const hash = tip === 'origin' ? '' : (tip.id || '');
-      const height = blockHeight === 'origin' ? 0 : (blockHeight || 0);
+      const slot = tip === 'origin' ? 0 : tip.slot;
+      const hash = tip === 'origin' ? '' : tip.id;
+      const height = blockHeight === 'origin' ? 0 : blockHeight;
 
-      // Calculate block time: eraStart.time is RelativeTime (ms since Unix epoch, not Date object)
-      // Reference: current era start time + elapsed slots since era start
-      const eraStartTime = typeof eraStart.time === 'number' ? eraStart.time : Date.now();
+      // eraStart.time is RelativeTime { seconds: bigint }
+      const eraStartTime = Number(eraStart.time.seconds) * 1000;
       const slotsSinceEraStart = slot - eraStart.slot;
       const blockTime = eraStartTime + (slotsSinceEraStart * 1000); // Each slot = 1 second
 

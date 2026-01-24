@@ -54,9 +54,6 @@ The `.env` file configures the service. Copy `.env.example` as a starting point:
 # Required: Blockfrost API Key (get from https://blockfrost.io)
 BLOCKFROST_KEY=your-blockfrost-api-key-here
 
-# Optional: Koios API Key (get from https://koios.rest)
-KOIOS_API_KEY=
-
 # Network: mainnet, preview, preprod (default: preview)
 NETWORK=preview
 

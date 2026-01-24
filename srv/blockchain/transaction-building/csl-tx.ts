@@ -2,7 +2,7 @@ import cds from '@sap/cds'
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
 import { getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cardano from "../cardano-client";
@@ -303,15 +303,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  public async buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    if (!req.mintActions || req.mintActions.length === 0) {
-      throw new Error('[CSLTxBuilder] buildUnsignedMintTransaction requires mintActions to be specified');
-    }
-
-    if (!req.mintingPolicyScript) {
-      throw new Error('[CSLTxBuilder] buildUnsignedMintTransaction requires mintingPolicyScript to be specified');
-    }
-
+  public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       // Determine execution units based on evaluator availability
       let finalExUnits = {
@@ -404,7 +396,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    * Helper to build mint transaction with specified execution units
    */
   private _buildMintTx(
-    req: TxBuildRequest,
+    req: TxBuildMintRequest,
     ctx: TxBuildContext,
     exUnits: { mem: string; cpu: string }
   ): CSL.Transaction {
@@ -419,7 +411,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
     // Parse the Plutus script from CBOR hex
-    const scriptBytes = Buffer.from(req.mintingPolicyScript!, 'hex');
+    const scriptBytes = Buffer.from(req.mintingPolicyScript, 'hex');
 
     // Create PlutusV3 script with language version
     const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
@@ -435,7 +427,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     let totalMintedValue = CSL.Value.new(CSL.BigNum.from_str('0'));
 
     // Process each mint action
-    for (const mintAction of req.mintActions!) {
+    for (const mintAction of req.mintActions) {
       const { assetName } = this._parseAssetUnit(mintAction.assetUnit);
 
       // Create asset name

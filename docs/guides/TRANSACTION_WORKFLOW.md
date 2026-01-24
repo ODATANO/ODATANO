@@ -123,7 +123,6 @@ User/Application
 **Request:**
 ```json
 {
-  "network": "preview",
   "senderAddress": "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
   "recipientAddress": "addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622",
   "lovelaceAmount": 10000000
@@ -134,7 +133,6 @@ User/Application
 ```json
 {
   "id": "a8f4c3b2-1e5d-4f9a-b7c6-2d8e9f1a3b4c",
-  "network": "preview",
   "senderAddress": "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
   "recipientAddress": "addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622",
   "lovelaceAmount": 10000000,
@@ -251,7 +249,7 @@ const signedTx = await yoroi.signTx(unsignedTxCbor, true);
   "txHash": "71f3d8c1b2a3e4f5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9",
   "status": "submitted",
   "submittedAt": 1735862410,
-  "submittedToBackend": "hybrid",
+  "submittedToBackend": "ogmios",
   "backendResponse": "Submitted successfully",
   "confirmations": 0,
   "hasErrors": false
@@ -379,7 +377,6 @@ Both builders available, CSL used as primary.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| network | String(10) | Yes | Target network: 'preview', 'preprod', 'mainnet' |
 | senderAddress | bech32 | Yes | Source address (must have sufficient UTxOs) |
 | recipientAddress | bech32 | Yes | Recipient address |
 | lovelaceAmount | Integer | Yes | Amount in lovelace (1 ADA = 1,000,000 lovelace) |
@@ -416,11 +413,11 @@ Both builders available, CSL used as primary.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| network | String(10) | Yes | Target network |
 | senderAddress | bech32 | Yes | Source address |
 | recipientAddress | bech32 | Yes | Recipient address |
 | lovelaceAmount | Integer | Yes | Amount in lovelace |
-| metadata | JSON | Yes | Transaction metadata (CIP-20 format) |
+| changeAddress | bech32 | No | Change address (defaults to sender) |
+| metadataJson | String | Yes | Transaction metadata as JSON string |
 
 **Returns:** `TransactionBuild` entity
 
@@ -436,10 +433,11 @@ Both builders available, CSL used as primary.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| network | String(10) | Yes | Target network |
 | senderAddress | bech32 | Yes | Source address |
 | recipientAddress | bech32 | Yes | Recipient address |
-| assets | Array | Yes | Array of assets: `[{policyId, assetName, quantity}]` |
+| lovelaceAmount | Integer | Yes | Amount in lovelace |
+| assetsJson | String | Yes | JSON array of assets: `[{"unit":"policyId+assetName","quantity":"amount"}]` |
+| changeAddress | bech32 | No | Change address (defaults to sender) |
 
 **Returns:** `TransactionBuild` entity
 
@@ -455,12 +453,12 @@ Both builders available, CSL used as primary.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| network | String(10) | Yes | Target network |
-| senderAddress | bech32 | Yes | Minting address (must have policy keys) |
-| policyId | String | Yes | Policy ID (blake2b-224 hash) |
-| assetName | String | Yes | Asset name (hex or UTF-8) |
-| quantity | Integer | Yes | Amount to mint (negative to burn) |
-| metadata | JSON | No | Optional metadata (CIP-25 for NFTs) |
+| senderAddress | bech32 | Yes | Sender address (pays fees) |
+| recipientAddress | bech32 | Yes | Recipient address for minted assets |
+| lovelaceAmount | Integer | Yes | Amount in lovelace to send with minted assets |
+| mintActionsJson | String | Yes | JSON array of mint actions: `[{"assetUnit":"policyId+assetName","quantity":"amount"}]` |
+| mintingPolicyScript | String | Yes | Minting policy script in CBOR hex format |
+| changeAddress | bech32 | No | Change address (defaults to sender) |
 
 **Returns:** `TransactionBuild` entity
 

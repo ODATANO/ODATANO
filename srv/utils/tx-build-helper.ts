@@ -44,19 +44,17 @@ export function getTxHashFromCbor(signedTxCbor: string): string {
     throw new Error('Invalid input: signedTxCbor must be a valid hex string');
   }
 
+  let tx;
   try {
     const txBytes = fromHex(signedTxCbor);
-    const tx = Tx.fromCbor(txBytes);
-
-    if (!tx?.hash) {
-      throw new Error('Failed to extract transaction hash from CBOR');
-    }
-
-    return tx.hash.toString();
-  } catch (err) {
-    if (err instanceof Error && err.message.startsWith('Invalid input:')) {
-      throw err;
-    }
-    throw new Error(`Failed to parse transaction CBOR: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    tx = Tx.fromCbor(txBytes);
+  } catch {
+    throw new Error('Failed to parse transaction CBOR');
   }
+
+  if (!tx?.hash) {
+    throw new Error('Failed to extract transaction hash from CBOR');
+  }
+
+  return tx.hash.toString();
 }

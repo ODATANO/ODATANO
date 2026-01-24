@@ -34,66 +34,8 @@ describe('CSLTxBuilder', () => {
     builder = new CSLTxBuilder();
   });
 
-  describe('buildUnsignedMintTransaction validation', () => {
-    const validCtx: TxBuildContext = {
-      utxos: [],
-      protocolParameters: {
-        minFeeA: 44,
-        minFeeB: 155381,
-        maxTxSize: 16384,
-        keyDeposit: '2000000',
-        poolDeposit: '500000000',
-        coinsPerUtxoByte: '4310',
-        maxValSize: '5000',
-        collateralPercentage: 150,
-        maxCollateralInputs: 3,
-        priceMem: 0.0577,
-        priceStep: 0.0000721,
-      } as any,
-    };
-
-    it('should throw error when mintActions is undefined', async () => {
-      const req: TxBuildRequest = {
-        network: 'preview',
-        senderAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        recipientAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        lovelaceAmount: 1000000,
-        mintingPolicyScript: '8200581c1234567890abcdef1234567890abcdef1234567890abcdef12345678',
-        // mintActions is undefined
-      };
-
-      await expect(builder.buildUnsignedMintTransaction(req, validCtx))
-        .rejects.toThrow('[CSLTxBuilder] buildUnsignedMintTransaction requires mintActions to be specified');
-    });
-
-    it('should throw error when mintActions is empty array', async () => {
-      const req: TxBuildRequest = {
-        network: 'preview',
-        senderAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        recipientAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        lovelaceAmount: 1000000,
-        mintingPolicyScript: '8200581c1234567890abcdef1234567890abcdef1234567890abcdef12345678',
-        mintActions: [],
-      };
-
-      await expect(builder.buildUnsignedMintTransaction(req, validCtx))
-        .rejects.toThrow('[CSLTxBuilder] buildUnsignedMintTransaction requires mintActions to be specified');
-    });
-
-    it('should throw error when mintingPolicyScript is undefined', async () => {
-      const req: TxBuildRequest = {
-        network: 'preview',
-        senderAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        recipientAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        lovelaceAmount: 1000000,
-        mintActions: [{ assetUnit: 'test', quantity: BigInt(100) }],
-        // mintingPolicyScript is undefined
-      };
-
-      await expect(builder.buildUnsignedMintTransaction(req, validCtx))
-        .rejects.toThrow('[CSLTxBuilder] buildUnsignedMintTransaction requires mintingPolicyScript to be specified');
-    });
-  });
+  // Note: buildUnsignedMintTransaction validation tests moved to cardano-tx-builder.test.ts
+  // The CSLTxBuilder now expects TxBuildMintRequest with required mintActions and mintingPolicyScript
 
   describe('buildUnsignedMultiAssetTransaction validation', () => {
     const validCtx: TxBuildContext = {

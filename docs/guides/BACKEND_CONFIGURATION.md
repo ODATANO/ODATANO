@@ -1,8 +1,8 @@
-# Hybrid Backend Configuration Guide
+# Backend Configuration Guide
 
 ## Architecture Overview
 
-The **Hybrid Backend** intelligently routes requests between:
+ODATANO uses a **Multi-Backend Architecture** that intelligently routes requests between providers:
 
 ```
 ┌────────────────────────────────────────────┐
@@ -10,7 +10,8 @@ The **Hybrid Backend** intelligently routes requests between:
 └────────────────────────────────────────────┘
                   │
          ┌────────┴─────────┐
-         │  HybridBackend   │
+         │  CardanoClient   │
+         │ (Orchestrator)   │
          └────────┬─────────┘
                   │
       ┌───────────┴──────────┐
@@ -33,6 +34,26 @@ The **Hybrid Backend** intelligently routes requests between:
 └────────────┘    └──────────────────┘
 ```
 
+## How Backend Selection Works
+
+The `BACKENDS` environment variable specifies which backends are **available**. The CardanoClient then automatically assigns them based on their capabilities:
+
+| Backend | Role | Used For |
+|---------|------|----------|
+| **Ogmios** | Live Backend | UTxOs, Protocol Params, TX Submit |
+| **Blockfrost** | Historical Backend | Blocks, Transactions, Metadata |
+| **Koios** | Historical Backend (Fallback) | Same as Blockfrost |
+
+**Important:** This is NOT a simple failover chain. The CardanoClient routes requests to the appropriate backend type:
+
+```
+BACKENDS=ogmios,blockfrost,koios
+         │       │          │
+         │       └──────────┴─── historicalBackends[] (Blockfrost primary, Koios fallback)
+         │
+         └─── liveBackend (Ogmios)
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -44,12 +65,15 @@ Add to your `.env` file:
 NETWORK=preview
 
 # Backend Selection
-# Options: ogmios, blockfrost, koios, or combinations (comma-separated)
+# Specifies AVAILABLE backends - CardanoClient assigns roles automatically:
+#   - ogmios → liveBackend (if present)
+#   - blockfrost, koios → historicalBackends[] (in order listed)
+#
 # Examples:
-#   - "ogmios,blockfrost" (recommended: live + historical with fallback)
-#   - "blockfrost,koios" (historical with fallback, no node needed)
-#   - "blockfrost" (Blockfrost only)
-#   - "koios" (Koios only, default)
+#   - "ogmios,blockfrost" → Ogmios for live, Blockfrost for historical
+#   - "ogmios,blockfrost,koios" → Ogmios for live, Blockfrost+Koios for historical
+#   - "blockfrost,koios" → No live backend, Blockfrost primary + Koios fallback
+#   - "koios" → Koios only (default)
 BACKENDS=ogmios,blockfrost
 
 # Ogmios Configuration (required if using Ogmios)
@@ -68,12 +92,12 @@ PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=8000
 ```
 
-## Routing Logic (Multi-Backend Strategy)
+## Routing Logic
 
-ODATANO uses intelligent routing based on backend availability and operation type:
+The CardanoClient routes each operation to the appropriate backend type:
 
-### Priority 1: Ogmios (When Available)
-Preferred for **live data** and **transaction submission**:
+### Live Backend (Ogmios)
+Used for **current state** and **transaction submission**:
 - `getProtocolParameters()` - Current protocol parameters (M2)
 - `getAddressUtxos(address)` - Current UTxO set (M2 transaction building)
 - `submitTransaction(cbor)` - Transaction submission (M2)
@@ -82,28 +106,29 @@ Preferred for **live data** and **transaction submission**:
 - `getPool(poolId)` - Live pool state
 - `getNetworkInformation()` - Network constants
 
-### Priority 2: Blockfrost/Koios (Fallback or Historical)
-Used for **historical data** or when Ogmios unavailable:
-- `getBlock(hash)` - Historical block data
-- `getTransaction(hash)` - Historical transaction
+### Historical Backends (Blockfrost/Koios)
+Used for **indexed/historical data**:
+- `getBlock(hash)` - Block data
+- `getTransaction(hash)` - Transaction details
 - `getTransactionMetadata(hash)` - Transaction metadata
 - `getDrep(drepId)` - DRep information
-- `getAddress(address)` - Fallback if Ogmios fails
-- `getProtocolParameters()` - Fallback if Ogmios fails (M2)
 
-### Automatic Failover
-- If Ogmios times out or fails, automatically falls back to Blockfrost/Koios
+If multiple historical backends are configured, they are tried in order with automatic failover.
+
+### Fallback Behavior
+- If Ogmios is unavailable, historical backends handle live queries too
+- Historical backends failover: Blockfrost → Koios (in configured order)
 - If Blockfrost fails, falls back to Koios (if both configured)
 - Timeout settings: Primary 8s, Fallback 10s
 
 ## Benefits
- 
-✅ **Self-Hosted Critical Operations** - TX submission via your node  
-✅ **Fast Live Queries** - 10-50ms via Ogmios  
-✅ **Complete History** - Via Blockfrost/Koios  
-✅ **Automatic Failover** - CardanoClient handles retries  
 
-## Alternative Configurations
+- **Self-Hosted Critical Operations** - TX submission via your node
+- **Fast Live Queries** - 10-50ms via Ogmios
+- **Complete History** - Via Blockfrost/Koios
+- **Automatic Failover** - CardanoClient handles retries
+
+## Configuration Examples
 
 ### Recommended: Ogmios + Blockfrost (M2 Optimal)
 ```bash
@@ -112,11 +137,11 @@ OGMIOS_URL=ws://localhost:1337
 BLOCKFROST_KEY=your_key_here
 TX_BUILDERS=csl,buildooor
 ```
-✅ **Best for M2 transaction building**
-✅ Live protocol parameters via Ogmios
-✅ Fast UTxO queries for transaction construction
-✅ Self-hosted transaction submission
-✅ Historical data fallback via Blockfrost
+- **Best for M2 transaction building**
+- Live protocol parameters via Ogmios
+- Fast UTxO queries for transaction construction
+- Self-hosted transaction submission
+- Historical data fallback via Blockfrost
 
 ### Ogmios Only (Limited Historical Data)
 ```bash
@@ -124,10 +149,10 @@ BACKENDS=ogmios
 OGMIOS_URL=ws://localhost:1337
 TX_BUILDERS=csl,buildooor
 ```
-✅ Transaction building works
-✅ Transaction submission works
-❌ Block/Transaction history queries may fail
-❌ No fallback if Ogmios is down
+- Transaction building works
+- Transaction submission works
+- Block/Transaction history queries may fail
+- No fallback if Ogmios is down
 
 ### Blockfrost Only (No Self-Hosted Node)
 ```bash
@@ -135,22 +160,22 @@ BACKENDS=blockfrost
 BLOCKFROST_KEY=your_key_here
 TX_BUILDERS=csl,buildooor
 ```
-✅ All queries work
-✅ Transaction building works
-✅ No local node needed (simplest setup)
-❌ Transaction submission via external API
-❌ Higher API costs
+- All queries work
+- Transaction building works
+- No local node needed (simplest setup)
+- Transaction submission via external API
+- Higher API costs
 
 ### Koios Only (Free, No API Key)
 ```bash
 BACKENDS=koios
 TX_BUILDERS=csl,buildooor
 ```
-✅ All queries work
-✅ Transaction building works
-✅ Free (no API key needed)
-❌ Rate limits apply (10 req/sec)
-❌ Transaction submission via external API
+- All queries work
+- Transaction building works
+- Free (no API key needed)
+- Rate limits apply (10 req/sec)
+- Transaction submission via external API
 
 ### Multi-Backend Fallback Chain
 ```bash
@@ -159,10 +184,10 @@ OGMIOS_URL=ws://localhost:1337
 BLOCKFROST_KEY=your_key_here
 TX_BUILDERS=csl,buildooor
 ```
-✅ Maximum redundancy
-✅ Ogmios → Blockfrost → Koios failover
-✅ Best uptime guarantee
-⚠️ More complex configuration
+- Maximum redundancy
+- Ogmios -> Blockfrost -> Koios failover
+- Best uptime guarantee
+- More complex configuration
 
 ## Docker Compose Example
 
@@ -237,34 +262,34 @@ services:
 
 4. Restart ODATANO - no code changes needed!
 
-### Cost Comparison
+## Cost Comparison
 
 | Setup | Storage | API Costs | TX Submit | M2 Transaction Building |
 |-------|---------|-----------|-----------|------------------------|
-| Ogmios + Blockfrost | ~15GB | Blockfrost fallback only | Self-hosted ✅ | Optimal ⚡ |
-| Blockfrost Only | 0GB | All queries | External API ✅ | Good ✅ |
-| Koios Only | 0GB | None (free) | External API ✅ | Good ✅ |
-| Ogmios Only | ~15GB | None | Self-hosted ✅ | Good ✅ (no history queries support) |
+| Ogmios + Blockfrost | ~15GB | Blockfrost fallback only | Self-hosted | Optimal |
+| Blockfrost Only | 0GB | All queries | External API | Good |
+| Koios Only | 0GB | None (free) | External API | Good |
+| Ogmios Only | ~15GB | None | Self-hosted | Good (no history queries) |
 
 **Recommendation:** `BACKENDS=ogmios,blockfrost` offers the best balance
 
 ### Benefits Breakdown
 
 **Ogmios + Blockfrost (Recommended):**
-- ⚡ Fast transaction building (50-200ms protocol params from Ogmios)
-- ✅ Self-hosted transaction submission (full control)
-- 📊 Complete historical data (via Blockfrost fallback)
-- 🔄 Automatic failover (Blockfrost if Ogmios down)
-- 💰 Lower Blockfrost costs (only used for historical queries)
+- Fast transaction building (50-200ms protocol params from Ogmios)
+- Self-hosted transaction submission (full control)
+- Complete historical data (via Blockfrost fallback)
+- Automatic failover (Blockfrost if Ogmios down)
+- Lower Blockfrost costs (only used for historical queries)
 
 **Blockfrost Only (Simple Setup):**
-- 🚀 Quick setup (no node required)
-- ✅ Transaction building
-- ✅ External transaction submission
-- 💰 Higher API costs (all queries to Blockfrost)
+- Quick setup (no node required)
+- Transaction building works
+- External transaction submission
+- Higher API costs (all queries to Blockfrost)
 
 **Koios Only (Zero Cost):**
-- 🆓 Completely free
-- ✅ Transaction building
-- ⏱️ Rate limits (10 req/sec)
-- ✅ External transaction submission
+- Completely free
+- Transaction building works
+- Rate limits (10 req/sec)
+- External transaction submission

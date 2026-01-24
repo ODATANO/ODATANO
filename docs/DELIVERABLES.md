@@ -302,7 +302,7 @@ Implementation of a server-side module within the CAP service that constructs ra
 
 ## B. Output: Transaction Submission Functionality
 
-Integration with multiple Cardano backends to submit signed transactions. Using a hybrid backend architecture with Ogmios (primary), Blockfrost, and Koios as fallback providers, the service can broadcast signed transactions to the Cardano network. The implementation includes automatic failover, transaction ID tracking, and submission status monitoring.
+Integration with multiple Cardano backends to submit signed transactions. Using a multi-backend architecture with Ogmios (primary), Blockfrost, and Koios as fallback providers, the service can broadcast signed transactions to the Cardano network. The implementation includes automatic failover, transaction ID tracking, and submission status monitoring.
 
 ### Acceptance criteria
 
@@ -330,7 +330,7 @@ Integration with multiple Cardano backends to submit signed transactions. Using 
 
 **Documentation**
 
-- Hybrid Backend Architecture: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/HYBRID_BACKEND.md
+- Backend Configuration Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/BACKEND_CONFIGURATION.md
 
 ---
 
@@ -377,13 +377,9 @@ Updates to the documentation focusing on transaction handling, including Transac
 
 - Transaction Workflow Guide (685 lines): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/TRANSACTION_WORKFLOW.md
 - Error Handling Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/ERROR_HANDLING.md
-- Hybrid Backend Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/HYBRID_BACKEND.md
+- Backend Configuration Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/BACKEND_CONFIGURATION.md
 - Indexing Documentation (Updated for TX Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/INDEXING.md
 - Data Model Documentation (Updated): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/MM_DATAMODEL.md
-
-**Release Preparation**
-
-- M2 Release Checklist: https://github.com/ODATANO/ODATANO/blob/main/docs/releases/M2_RELEASE_CHECKLIST.md
 
 ---
 

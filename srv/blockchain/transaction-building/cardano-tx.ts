@@ -1,4 +1,4 @@
-import { TxBuildRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
+import { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
 
 /** 
  * CardanoTxBuilder - Interface Definition for multiple Cardano transaction builders (Buildooor, CSL, etc.)
@@ -44,5 +44,5 @@ export interface CardanoTxBuilder {
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
-  buildUnsignedMintTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
+  buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 }

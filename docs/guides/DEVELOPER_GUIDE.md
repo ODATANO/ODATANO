@@ -1,9 +1,9 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.1.0 (Milestone 1 Complete)\
-**Status:** Production-Ready - 340 tests, 96.28% coverage\
-**Last Updated:** December 2025
+**Version:** 0.2.0 (Milestone 2 Complete)\
+**Status:** Production-Ready - 635 tests, 96.28% coverage\
+**Last Updated:** January 2026
 
 ---
 
@@ -22,20 +22,24 @@
 
 ### Service Surface
 
-**16 Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets
+**16+ Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, TransactionBuilds, TransactionSubmissions (M2)
 
-**11 Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress
+**11 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress
+
+**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
 
 ### Layered Architecture
 
 ```
-HTTP Client → OData Service (cardano-service.ts)
+HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts)
     ↓
 Validation & Mapping (validators.ts, mappers.ts)
     ↓
 Blockchain Client (cardano-client.ts)
     ↓
-Backends: Blockfrost (8s) → Koios Fallback (10s)
+Backends: Ogmios (live) + Blockfrost (8s) → Koios Fallback (10s)
+    ↓
+Transaction Builders: CSL / Buildooor (M2)
     ↓
 Indexer Cache (SQLite temporal entities)
 ```
@@ -85,23 +89,32 @@ npm run test:coverage # Coverage report
 
 ```
 srv/
-  cardano-service.cds    # Entity/action definitions
-  cardano-service.ts     # Handler implementations
+  cardano-service.cds    # Read entity/action definitions
+  cardano-service.ts     # Read handler implementations
+  cardano-tx-service.cds # Transaction service definitions (M2)
+  cardano-tx-service.ts  # Transaction handler implementations (M2)
   blockchain/
     cardano-client.ts    # Multi-backend orchestrator
     cardano-indexer.ts   # Lazy indexing & caching
+    cardano-tx-builder.ts # Transaction builder coordinator (M2)
     backends/
-      blockfrost-backend.ts  # Primary provider
+      blockfrost-backend.ts  # Historical provider
       koios-backend.ts       # Fallback provider
+      ogmios-backend.ts      # Live WebSocket provider (M2)
+    transaction-building/    # M2 Transaction Builders
+      csl-tx.ts              # Cardano Serialization Lib builder
+      buildooor-tx.ts        # Buildooor builder
+      tx-builder-registry.ts # Builder factory
   utils/
-    validators.ts        # Input validation (8 functions)
-    errors.ts            # Error hierarchy (8 classes)
-    mappers.ts           # API → OData transformations (14 mappers)
+    validators.ts        # Input validation (10+ functions)
+    errors.ts            # Error hierarchy (11 classes)
+    mappers.ts           # API → OData transformations
+    tx-build-helper.ts   # Transaction utilities (M2)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds          # 16 entities with temporal support
-config/config.ts       # Timeouts, network, TTL
-test/                  # 340 tests (135 integration, 205 unit)
+db/schema.cds          # 16+ entities with temporal support
+config/config.ts       # Timeouts, network, TTL, builders
+test/                  # 635 tests (integration + unit)
 ```
 
 ---
@@ -176,7 +189,10 @@ BackendError              // Base class (500)
 ├── ConfigError           // Configuration error (500)
 ├── BackendInitError      // Init failed (500)
 ├── AllBackendsFailedError    // All backends failed (503)
-└── AllBackendsInitFailedError // All init failed (500)
+├── AllBackendsInitFailedError // All init failed (500)
+├── InsufficientFundsError    // Not enough UTxOs (400) - M2
+├── TransactionValidationError // Invalid signature/CBOR (400) - M2
+└── TransactionAlreadySubmittedError // Duplicate TX (409) - M2
 
 // Helper functions
 rejectMissing(req, entity, field)       // Missing parameter (400)
@@ -274,20 +290,28 @@ return handleRequest(req, async (db) => {
 
 ```
 test/
-├── integration/        # 135 tests (live backend)
-│   ├── core-test-suite.ts          # 71 tests (shared)
-│   ├── core.blockfrost.test.ts     # Blockfrost execution
-│   ├── core.koios.test.ts          # Koios execution
-│   ├── error-handling-service.test.ts  # 34 tests
-│   └── odata_features.test.ts      # 28 tests (OData V4)
-└── unit/               # 205 tests (isolated)
-    ├── validators.test.ts          # 48 tests
-    ├── errors.test.ts              # 52 tests
-    ├── cardano-client.test.ts      # 15 tests
-    └── blockfrost-backend.test.ts  # 1 test
+├── integration/                        # Integration tests (live backend)
+│   ├── core-test-suite.ts              # 71 shared read tests
+│   ├── core.blockfrost.test.ts         # Blockfrost execution
+│   ├── core.koios.test.ts              # Koios execution
+│   ├── core-ogmios.test.ts             # Ogmios execution (M2)
+│   ├── error-handling-service.test.ts  # 34 error tests
+│   ├── odata_features.test.ts          # 28 OData V4 tests
+│   ├── tx-test-suite.ts                # Transaction builder tests (M2)
+│   ├── tx.csl.test.ts                  # CSL builder tests (M2)
+│   ├── tx.buildooor.test.ts            # Buildooor builder tests (M2)
+│   └── tx-submission-mock.test.ts      # Submission tests (M2)
+└── unit/                               # Unit tests (isolated)
+    ├── validators.test.ts              # Validator tests
+    ├── errors.test.ts                  # Error class tests
+    ├── cardano-client.test.ts          # Client tests
+    ├── ogmios-backend.test.ts          # Ogmios tests (M2)
+    ├── csl-tx-builder.test.ts          # CSL builder tests (M2)
+    ├── tx-builder-registry.test.ts     # Registry tests (M2)
+    └── tx-build-helper.test.ts         # Helper tests (M2)
 ```
 
-**Current Status:** 340 tests, 96.28% coverage
+**Current Status:** 635 tests, 96.28% coverage
 
 ### Running Tests
 
@@ -434,6 +458,7 @@ npm test           # Terminal 2 (wait 3s)
 
 **Additional Resources:**
 - [User Guide](USER_GUIDE.md) - API documentation
+- [Transaction Workflow](TRANSACTION_WORKFLOW.md) - Build, sign & submit transactions (M2)
 - [Test Documentation](../../test/README.md) - Complete test reference
 - [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) - Error architecture
 - [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) - Caching strategy

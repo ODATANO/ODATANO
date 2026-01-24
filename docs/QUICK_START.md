@@ -38,8 +38,14 @@ BLOCKFROST_KEY=your_api_key_here
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 
-# Enabled Backends (comma-separated)
-BACKENDS=blockfrost,koios
+# Enabled Backends (comma-separated): koios, blockfrost, ogmios
+BACKENDS=koios
+
+# Ogmios WebSocket URL (optional, for live data)
+OGMIOS_URL=ws://localhost:1337
+
+# Transaction Builders (M2): csl, buildooor
+TX_BUILDERS=csl
 
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
 INDEX_TTL_MS=60000
@@ -178,10 +184,27 @@ Import the [ODATANO M1 - Full Service Catalog](../scripts/ODATANO%20M1%20-%20Ful
 - See detailed descriptions for each endpoint
 - Modify parameters and experiment with the API
 
+## Transaction Building (M2)
+
+Build and submit transactions via the transaction service:
+
+```bash
+# Build simple ADA transfer
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "senderAddress": "addr_test1...",
+    "recipientAddress": "addr_test1...",
+    "lovelaceAmount": 10000000
+  }'
+```
+
+See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for signing and submission.
+
 ## Testing
 
 ```bash
-# All tests
+# All tests (635 tests)
 npm test
 
 # Coverage report
