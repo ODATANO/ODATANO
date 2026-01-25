@@ -8,7 +8,6 @@ import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { getCardanoClient } from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
 import { CONFIG } from "../../../config/config";
-import { config } from 'dotenv';
 
 const logger = cds.log('CSLTxBuilder');
 
