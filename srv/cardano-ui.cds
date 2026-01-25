@@ -2224,6 +2224,11 @@ annotate txsrv.TransactionBuilds with @(
       $Type : 'UI.DataFieldForAction',
       Action: 'CardanoTransactionService.EntityContainer/BuildSimpleAdaTransaction',
       Label : 'Build Simple ADA Tx'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/BuildTransactionWithMetadata',
+      Label : 'Build Tx with Metadata'
     }
   ],
 
@@ -2723,10 +2728,7 @@ annotate txsrv.TransactionSubmissions with @(
     Description   : {Value: status}
   },
 
-  UI.SelectionFields              : [
-    status,
-    submittedToBackend
-  ],
+  UI.SelectionFields              : [status],
 
   UI.LineItem                     : [
     {
@@ -2740,18 +2742,6 @@ annotate txsrv.TransactionSubmissions with @(
     {
       Value: status,
       Label: 'Status'
-    },
-    {
-      Value: submittedToBackend,
-      Label: 'Backend'
-    },
-    {
-      Value: submittedAt,
-      Label: 'Submitted At'
-    },
-    {
-      Value: confirmations,
-      Label: 'Confirmations'
     },
     {
       Value: hasErrors,
@@ -2787,11 +2777,6 @@ annotate txsrv.TransactionSubmissions with @(
       $Type : 'UI.ReferenceFacet',
       Label : 'Status',
       Target: '@UI.DataPoint#Status'
-    },
-    {
-      $Type : 'UI.ReferenceFacet',
-      Label : 'Confirmations',
-      Target: '@UI.DataPoint#Confirmations'
     }
   ],
 
@@ -2800,21 +2785,12 @@ annotate txsrv.TransactionSubmissions with @(
     Title      : 'Submission Status',
     Criticality: status
   },
-  UI.DataPoint #Confirmations     : {
-    Value: confirmations,
-    Title: 'Confirmations'
-  },
 
   UI.Facets                       : [
     {
       $Type : 'UI.ReferenceFacet',
       Label : 'Submission Details',
       Target: '@UI.FieldGroup#SubmissionDetails'
-    },
-    {
-      $Type : 'UI.ReferenceFacet',
-      Label : 'Block Info',
-      Target: '@UI.FieldGroup#BlockInfo'
     },
     {
       $Type        : 'UI.ReferenceFacet',
@@ -2848,51 +2824,8 @@ annotate txsrv.TransactionSubmissions with @(
     },
     {
       $Type: 'UI.DataField',
-      Value: submittedToBackend,
-      Label: 'Submitted To Backend'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: submittedAt,
-      Label: 'Submitted At'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: lastCheckedAt,
-      Label: 'Last Checked At'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: retryCount,
-      Label: 'Retry Count'
-    },
-    {
-      $Type: 'UI.DataField',
       Value: signedTxCbor,
       Label: 'Signed Tx CBOR'
-    }
-  ]},
-
-  UI.FieldGroup #BlockInfo        : {Data: [
-    {
-      $Type: 'UI.DataField',
-      Value: confirmations,
-      Label: 'Confirmations'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: firstSeenBlock,
-      Label: 'First Seen Block'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: firstSeenSlot,
-      Label: 'First Seen Slot'
-    },
-    {
-      $Type: 'UI.DataField',
-      Value: backendResponse,
-      Label: 'Backend Response'
     }
   ]},
 

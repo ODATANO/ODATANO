@@ -627,13 +627,9 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
  */
 export function mapTransactionSubmission(signedTxCbor: string, txHash: string): TransactionSubmissionRow {
   const now = Math.floor(Date.now() / 1000);
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
   return {
     signedTxCbor: signedTxCbor,
     txHash: txHash,
-    validFrom: validFrom,
-    validTo: validTo,
     submittedAt: now,
   };
 }

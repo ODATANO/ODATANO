@@ -1017,7 +1017,7 @@ entity TransactionBuildOutputAssets {
 
 @title      : 'Transaction Submissions'
 @description: 'Entity for storing transaction submission attempts and status'
-entity TransactionSubmissions : temporal {
+entity TransactionSubmissions {
 
         @title      : 'Submission ID (key)'
         @description: 'Unique identifier for the transaction submission'
@@ -1039,33 +1039,9 @@ entity TransactionSubmissions : temporal {
         @description: 'Submission time as unix timestamp'
         submittedAt        : Integer64;
 
-        @title      : 'Submission Backend'
-        @description: 'Backend used for submission (e.g., blockfrost, koios)'
-        submittedToBackend : String(20);
-
         @title      : 'Submission Status'
         @description: 'Current status of the transaction submission (pending, submitted, confirmed, failed, rejected)'
         status             : String(20);
-
-        @title      : 'Confirmations'
-        @description: 'Number of confirmations (0 when pending)'
-        confirmations      : Integer;
-
-        @title      : 'First Seen Block'
-        @description: 'Block hash where transaction first appeared'
-        firstSeenBlock     : Blake2b256;
-
-        @title      : 'First Seen Slot'
-        @description: 'Slot number where transaction first appeared'
-        firstSeenSlot      : Integer64;
-
-        @title      : 'Backend Response'
-        @description: 'Raw response from submission backend'
-        backendResponse    : LargeString;
-
-        @title      : 'Last Checked At'
-        @description: 'Last status check time as unix timestamp'
-        lastCheckedAt      : Integer64;
 
         @title      : 'Error Code'
         @description: 'Error code if failed'

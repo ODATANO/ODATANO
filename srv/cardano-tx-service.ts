@@ -4,7 +4,8 @@ import { rejectInvalid, throwIfValidationErrors } from './utils/errors';
 import { validateTransactionInputs } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
-import cardanoClient from './blockchain/cardano-client';
+import cardanoClient, { getCardanoClient } from './blockchain/cardano-client';
+import { CONFIG } from '../config/config';
 const { SELECT } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -253,6 +254,7 @@ module.exports = (srv: cds.Service) => {
         ...indexSubmission,
         build_id: buildId,
         backendResponse: `Submitted successfully`,
+        status: 'submitted',
       };
 
       await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
