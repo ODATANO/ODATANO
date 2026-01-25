@@ -1,4 +1,5 @@
 using {CardanoODataService as srv} from './cardano-service';
+using {CardanoTransactionService as txsrv} from './cardano-tx-service';
 
 // ============================================================================
 // Annotations for SAP Fiori Elements UI
@@ -1926,6 +1927,1090 @@ annotate srv.Accounts with @(
       $Type: 'UI.DataField',
       Value: withdrawableAmount,
       Label: 'Withdrawable Amount'
+    }
+  ]}
+);
+
+// ============================================================================
+// M2 - Transaction Building & Submission UI Annotations
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// LedgerProtocolParameters
+// ----------------------------------------------------------------------------
+annotate srv.LedgerProtocolParameters with @(
+  UI.HeaderInfo              : {
+    TypeName      : 'Protocol Parameters',
+    TypeNamePlural: 'Protocol Parameters',
+    Title         : {Value: network},
+    Description   : {Value: epoch}
+  },
+
+  UI.SelectionFields         : [
+    network,
+    epoch
+  ],
+
+  UI.LineItem                : [
+    {
+      Value: network,
+      Label: 'Network'
+    },
+    {
+      Value: epoch,
+      Label: 'Epoch'
+    },
+    {
+      Value: minFeeA,
+      Label: 'Min Fee A'
+    },
+    {
+      Value: minFeeB,
+      Label: 'Min Fee B'
+    },
+    {
+      Value: maxTxSize,
+      Label: 'Max Tx Size'
+    },
+    {
+      Value: protocolMajorVer,
+      Label: 'Protocol Major'
+    },
+    {
+      Value: protocolMinorVer,
+      Label: 'Protocol Minor'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoODataService.EntityContainer/GetLedgerProtocolParameters',
+      Label : 'Refresh Protocol Parameters'
+    }
+  ],
+
+  UI.Identification          : [{
+    $Type : 'UI.DataFieldForAction',
+    Action: 'CardanoODataService.EntityContainer/GetLedgerProtocolParameters',
+    Label : 'Refresh Protocol Parameters'
+  }],
+
+  UI.HeaderFacets            : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Protocol Version',
+      Target: '@UI.DataPoint#ProtocolVersion'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Max Tx Size',
+      Target: '@UI.DataPoint#MaxTxSize'
+    }
+  ],
+
+  UI.DataPoint #ProtocolVersion: {
+    Value: protocolMajorVer,
+    Title: 'Protocol Major Version'
+  },
+  UI.DataPoint #MaxTxSize    : {
+    Value: maxTxSize,
+    Title: 'Max Transaction Size'
+  },
+
+  UI.Facets                  : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Fee Parameters',
+      Target: '@UI.FieldGroup#FeeParams'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Size Limits',
+      Target: '@UI.FieldGroup#SizeLimits'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Deposits',
+      Target: '@UI.FieldGroup#Deposits'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Execution Units',
+      Target: '@UI.FieldGroup#ExecUnits'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Pool Parameters',
+      Target: '@UI.FieldGroup#PoolParams'
+    }
+  ],
+
+  UI.FieldGroup #FeeParams   : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: minFeeA,
+      Label: 'Min Fee A (per byte)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: minFeeB,
+      Label: 'Min Fee B (constant)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: priceMem,
+      Label: 'Price Memory'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: priceStep,
+      Label: 'Price Step'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: coinsPerUtxoSize,
+      Label: 'Coins per UTxO Size'
+    }
+  ]},
+
+  UI.FieldGroup #SizeLimits  : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: maxBlockSize,
+      Label: 'Max Block Size'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxTxSize,
+      Label: 'Max Transaction Size'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxBlockHeaderSize,
+      Label: 'Max Block Header Size'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxValSize,
+      Label: 'Max Value Size'
+    }
+  ]},
+
+  UI.FieldGroup #Deposits    : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: keyDeposit,
+      Label: 'Key Deposit'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: poolDeposit,
+      Label: 'Pool Deposit'
+    }
+  ]},
+
+  UI.FieldGroup #ExecUnits   : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: maxTxExMem,
+      Label: 'Max Tx Execution Memory'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxTxExSteps,
+      Label: 'Max Tx Execution Steps'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxBlockExMem,
+      Label: 'Max Block Execution Memory'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxBlockExSteps,
+      Label: 'Max Block Execution Steps'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: collateralPercent,
+      Label: 'Collateral Percent'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: maxCollateralInputs,
+      Label: 'Max Collateral Inputs'
+    }
+  ]},
+
+  UI.FieldGroup #PoolParams  : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: nOpt,
+      Label: 'Target Pool Count (nOpt)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: a0,
+      Label: 'Pledge Influence (a0)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: rho,
+      Label: 'Monetary Expansion (rho)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: tau,
+      Label: 'Treasury Cut (tau)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: minPoolCost,
+      Label: 'Min Pool Cost'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: eMax,
+      Label: 'Pool Retirement Epochs'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionBuilds
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionBuilds with @(
+  UI.HeaderInfo            : {
+    TypeName      : 'Transaction Build',
+    TypeNamePlural: 'Transaction Builds',
+    Title         : {Value: id},
+    Description   : {Value: network}
+  },
+
+  UI.SelectionFields       : [
+    network,
+    senderAddress,
+    wasSubmitted
+  ],
+
+  UI.LineItem              : [
+    {
+      Value: id,
+      Label: 'Build ID'
+    },
+    {
+      Value: network,
+      Label: 'Network'
+    },
+    {
+      Value: builderEngine,
+      Label: 'Builder Engine'
+    },
+    {
+      Value: senderAddress,
+      Label: 'Sender Address'
+    },
+    {
+      Value: fee,
+      Label: 'Estimated Fee'
+    },
+    {
+      Value: size,
+      Label: 'Size (bytes)'
+    },
+    {
+      Value: wasSubmitted,
+      Label: 'Submitted'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/BuildSimpleAdaTransaction',
+      Label : 'Build Simple ADA Tx'
+    }
+  ],
+
+  UI.Identification        : [
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/BuildSimpleAdaTransaction',
+      Label : 'Build Simple ADA Tx'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/BuildTransactionWithMetadata',
+      Label : 'Build Tx with Metadata'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/BuildMultiAssetTransaction',
+      Label : 'Build Multi-Asset Tx'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/SubmitTransaction',
+      Label : 'Submit Transaction'
+    }
+  ],
+
+  UI.HeaderFacets          : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Fee',
+      Target: '@UI.DataPoint#Fee'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Size',
+      Target: '@UI.DataPoint#Size'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Status',
+      Target: '@UI.DataPoint#Submitted'
+    }
+  ],
+
+  UI.DataPoint #Fee        : {
+    Value: fee,
+    Title: 'Estimated Fee'
+  },
+  UI.DataPoint #Size       : {
+    Value: size,
+    Title: 'Transaction Size'
+  },
+  UI.DataPoint #Submitted  : {
+    Value: wasSubmitted,
+    Title: 'Was Submitted'
+  },
+
+  UI.Facets                : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Overview',
+      Target: '@UI.FieldGroup#Overview'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Transaction Data',
+      Target: '@UI.FieldGroup#TxData'
+    },
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Inputs',
+      Target       : 'inputs/@UI.LineItem',
+      ![@UI.Hidden]: (not hasInputs)
+    },
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Outputs',
+      Target       : 'outputs/@UI.LineItem',
+      ![@UI.Hidden]: (not hasOutputs)
+    },
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Submission',
+      Target       : 'submission/@UI.FieldGroup#SubmissionDetails',
+      ![@UI.Hidden]: (not wasSubmitted)
+    }
+  ],
+
+  UI.FieldGroup #Overview  : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: id,
+      Label: 'Build ID'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: network,
+      Label: 'Network'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: builderEngine,
+      Label: 'Builder Engine'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: senderAddress,
+      Label: 'Sender Address'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: changeAddress,
+      Label: 'Change Address'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: createdAt,
+      Label: 'Created At'
+    }
+  ]},
+
+  UI.FieldGroup #TxData    : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: txBodyHash,
+      Label: 'Tx Body Hash'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: fee,
+      Label: 'Estimated Fee'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: size,
+      Label: 'Size (bytes)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: unsignedTxCbor,
+      Label: 'Unsigned Tx CBOR'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionBuildInputs
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionBuildInputs with @(
+  UI.HeaderInfo           : {
+    TypeName      : 'Build Input',
+    TypeNamePlural: 'Build Inputs',
+    Title         : {Value: inputIndex},
+    Description   : {Value: address}
+  },
+
+  UI.LineItem             : [
+    {
+      Value: inputIndex,
+      Label: 'Input Index'
+    },
+    {
+      Value: txHash,
+      Label: 'UTxO Tx Hash'
+    },
+    {
+      Value: outputIndex,
+      Label: 'UTxO Output Index'
+    },
+    {
+      Value: address,
+      Label: 'Address'
+    },
+    {
+      Value: lovelace,
+      Label: 'Lovelace'
+    },
+    {
+      Value: hasAssets,
+      Label: 'Has Assets'
+    }
+  ],
+
+  UI.HeaderFacets         : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Lovelace',
+      Target: '@UI.DataPoint#Lovelace'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Has Assets',
+      Target: '@UI.DataPoint#HasAssets'
+    }
+  ],
+
+  UI.DataPoint #Lovelace  : {
+    Value: lovelace,
+    Title: 'Lovelace Amount'
+  },
+  UI.DataPoint #HasAssets : {
+    Value: hasAssets,
+    Title: 'Has Assets'
+  },
+
+  UI.Facets               : [
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Assets',
+      Target       : 'assets/@UI.LineItem',
+      ![@UI.Hidden]: (not hasAssets)
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'UTxO Details',
+      Target: '@UI.FieldGroup#UTxODetails'
+    }
+  ],
+
+  UI.FieldGroup #UTxODetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: inputIndex,
+      Label: 'Input Index'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: txHash,
+      Label: 'UTxO Tx Hash'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: outputIndex,
+      Label: 'UTxO Output Index'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: address,
+      Label: 'Address'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: lovelace,
+      Label: 'Lovelace'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionBuildInputAssets
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionBuildInputAssets with @(
+  UI.HeaderInfo              : {
+    TypeName      : 'Build Input Asset',
+    TypeNamePlural: 'Build Input Assets',
+    Title         : {Value: unit}
+  },
+
+  UI.LineItem                : [
+    {
+      Value: unit,
+      Label: 'Unit'
+    },
+    {
+      Value: asset_quantity,
+      Label: 'Quantity'
+    },
+    {
+      Value: asset_policyId,
+      Label: 'Policy ID'
+    },
+    {
+      Value: asset_assetName,
+      Label: 'Asset Name'
+    },
+    {
+      Value: asset_fingerprint,
+      Label: 'Fingerprint'
+    }
+  ],
+
+  UI.Facets                  : [{
+    $Type : 'UI.ReferenceFacet',
+    Label : 'Asset Details',
+    Target: '@UI.FieldGroup#AssetDetails'
+  }],
+
+  UI.FieldGroup #AssetDetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: unit,
+      Label: 'Unit'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_quantity,
+      Label: 'Quantity'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_policyId,
+      Label: 'Policy ID'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_assetNameHex,
+      Label: 'Asset Name (Hex)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_assetName,
+      Label: 'Asset Name'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_fingerprint,
+      Label: 'Fingerprint'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionBuildOutputs
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionBuildOutputs with @(
+  UI.HeaderInfo           : {
+    TypeName      : 'Build Output',
+    TypeNamePlural: 'Build Outputs',
+    Title         : {Value: outputIndex},
+    Description   : {Value: address}
+  },
+
+  UI.LineItem             : [
+    {
+      Value: outputIndex,
+      Label: 'Output Index'
+    },
+    {
+      Value: address,
+      Label: 'Recipient Address'
+    },
+    {
+      Value: lovelace,
+      Label: 'Lovelace'
+    },
+    {
+      Value: isChange,
+      Label: 'Is Change'
+    },
+    {
+      Value: hasAssets,
+      Label: 'Has Assets'
+    }
+  ],
+
+  UI.HeaderFacets         : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Lovelace',
+      Target: '@UI.DataPoint#Lovelace'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Is Change',
+      Target: '@UI.DataPoint#IsChange'
+    }
+  ],
+
+  UI.DataPoint #Lovelace  : {
+    Value: lovelace,
+    Title: 'Lovelace Amount'
+  },
+  UI.DataPoint #IsChange  : {
+    Value: isChange,
+    Title: 'Change Output'
+  },
+
+  UI.Facets               : [
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Assets',
+      Target       : 'assets/@UI.LineItem',
+      ![@UI.Hidden]: (not hasAssets)
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Output Details',
+      Target: '@UI.FieldGroup#OutputDetails'
+    }
+  ],
+
+  UI.FieldGroup #OutputDetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: outputIndex,
+      Label: 'Output Index'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: address,
+      Label: 'Recipient Address'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: lovelace,
+      Label: 'Lovelace'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: isChange,
+      Label: 'Is Change Output'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionBuildOutputAssets
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionBuildOutputAssets with @(
+  UI.HeaderInfo              : {
+    TypeName      : 'Build Output Asset',
+    TypeNamePlural: 'Build Output Assets',
+    Title         : {Value: unit}
+  },
+
+  UI.LineItem                : [
+    {
+      Value: unit,
+      Label: 'Unit'
+    },
+    {
+      Value: asset_quantity,
+      Label: 'Quantity'
+    },
+    {
+      Value: asset_policyId,
+      Label: 'Policy ID'
+    },
+    {
+      Value: asset_assetName,
+      Label: 'Asset Name'
+    },
+    {
+      Value: asset_fingerprint,
+      Label: 'Fingerprint'
+    }
+  ],
+
+  UI.Facets                  : [{
+    $Type : 'UI.ReferenceFacet',
+    Label : 'Asset Details',
+    Target: '@UI.FieldGroup#AssetDetails'
+  }],
+
+  UI.FieldGroup #AssetDetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: unit,
+      Label: 'Unit'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_quantity,
+      Label: 'Quantity'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_policyId,
+      Label: 'Policy ID'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_assetNameHex,
+      Label: 'Asset Name (Hex)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_assetName,
+      Label: 'Asset Name'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: asset_fingerprint,
+      Label: 'Fingerprint'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionSubmissions
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionSubmissions with @(
+  UI.HeaderInfo                   : {
+    TypeName      : 'Transaction Submission',
+    TypeNamePlural: 'Transaction Submissions',
+    Title         : {Value: id},
+    Description   : {Value: status}
+  },
+
+  UI.SelectionFields              : [
+    status,
+    submittedToBackend
+  ],
+
+  UI.LineItem                     : [
+    {
+      Value: id,
+      Label: 'Submission ID'
+    },
+    {
+      Value: txHash,
+      Label: 'Tx Hash'
+    },
+    {
+      Value: status,
+      Label: 'Status'
+    },
+    {
+      Value: submittedToBackend,
+      Label: 'Backend'
+    },
+    {
+      Value: submittedAt,
+      Label: 'Submitted At'
+    },
+    {
+      Value: confirmations,
+      Label: 'Confirmations'
+    },
+    {
+      Value: hasErrors,
+      Label: 'Has Errors'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/SubmitTransaction',
+      Label : 'Submit Transaction'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/CheckSubmissionStatus',
+      Label : 'Check Status'
+    }
+  ],
+
+  UI.Identification               : [
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/CheckSubmissionStatus',
+      Label : 'Check Status'
+    },
+    {
+      $Type : 'UI.DataFieldForAction',
+      Action: 'CardanoTransactionService.EntityContainer/SubmitSignedTransaction',
+      Label : 'Submit Signed Tx'
+    }
+  ],
+
+  UI.HeaderFacets                 : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Status',
+      Target: '@UI.DataPoint#Status'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Confirmations',
+      Target: '@UI.DataPoint#Confirmations'
+    }
+  ],
+
+  UI.DataPoint #Status            : {
+    Value      : status,
+    Title      : 'Submission Status',
+    Criticality: status
+  },
+  UI.DataPoint #Confirmations     : {
+    Value: confirmations,
+    Title: 'Confirmations'
+  },
+
+  UI.Facets                       : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Submission Details',
+      Target: '@UI.FieldGroup#SubmissionDetails'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Block Info',
+      Target: '@UI.FieldGroup#BlockInfo'
+    },
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Error Details',
+      Target       : '@UI.FieldGroup#ErrorDetails',
+      ![@UI.Hidden]: (not hasErrors)
+    },
+    {
+      $Type        : 'UI.ReferenceFacet',
+      Label        : 'Errors',
+      Target       : 'errors/@UI.LineItem',
+      ![@UI.Hidden]: (not hasErrors)
+    }
+  ],
+
+  UI.FieldGroup #SubmissionDetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: id,
+      Label: 'Submission ID'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: txHash,
+      Label: 'Transaction Hash'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: status,
+      Label: 'Status'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: submittedToBackend,
+      Label: 'Submitted To Backend'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: submittedAt,
+      Label: 'Submitted At'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: lastCheckedAt,
+      Label: 'Last Checked At'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: retryCount,
+      Label: 'Retry Count'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: signedTxCbor,
+      Label: 'Signed Tx CBOR'
+    }
+  ]},
+
+  UI.FieldGroup #BlockInfo        : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: confirmations,
+      Label: 'Confirmations'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: firstSeenBlock,
+      Label: 'First Seen Block'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: firstSeenSlot,
+      Label: 'First Seen Slot'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: backendResponse,
+      Label: 'Backend Response'
+    }
+  ]},
+
+  UI.FieldGroup #ErrorDetails     : {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: errorCode,
+      Label: 'Error Code'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: errorMessage,
+      Label: 'Error Message'
+    }
+  ]}
+);
+
+// ----------------------------------------------------------------------------
+// TransactionSubmissionErrors
+// ----------------------------------------------------------------------------
+annotate txsrv.TransactionSubmissionErrors with @(
+  UI.HeaderInfo            : {
+    TypeName      : 'Submission Error',
+    TypeNamePlural: 'Submission Errors',
+    Title         : {Value: errorType},
+    Description   : {Value: errorCode}
+  },
+
+  UI.LineItem              : [
+    {
+      Value: id,
+      Label: 'Error ID'
+    },
+    {
+      Value: errorType,
+      Label: 'Error Type'
+    },
+    {
+      Value: errorCode,
+      Label: 'Error Code'
+    },
+    {
+      Value: errorMessage,
+      Label: 'Error Message'
+    },
+    {
+      Value: occurredAt,
+      Label: 'Occurred At'
+    },
+    {
+      Value: isRecoverable,
+      Label: 'Recoverable'
+    }
+  ],
+
+  UI.HeaderFacets          : [
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Error Type',
+      Target: '@UI.DataPoint#ErrorType'
+    },
+    {
+      $Type : 'UI.ReferenceFacet',
+      Label : 'Recoverable',
+      Target: '@UI.DataPoint#Recoverable'
+    }
+  ],
+
+  UI.DataPoint #ErrorType  : {
+    Value: errorType,
+    Title: 'Error Type'
+  },
+  UI.DataPoint #Recoverable: {
+    Value: isRecoverable,
+    Title: 'Is Recoverable'
+  },
+
+  UI.Facets                : [{
+    $Type : 'UI.ReferenceFacet',
+    Label : 'Error Details',
+    Target: '@UI.FieldGroup#ErrorDetails'
+  }],
+
+  UI.FieldGroup #ErrorDetails: {Data: [
+    {
+      $Type: 'UI.DataField',
+      Value: id,
+      Label: 'Error ID'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: errorType,
+      Label: 'Error Type'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: errorCode,
+      Label: 'Error Code'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: errorMessage,
+      Label: 'Error Message'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: errorDetails,
+      Label: 'Error Details (JSON)'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: occurredAt,
+      Label: 'Occurred At'
+    },
+    {
+      $Type: 'UI.DataField',
+      Value: isRecoverable,
+      Label: 'Is Recoverable'
     }
   ]}
 );

@@ -5,7 +5,7 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] - 2025-01-25 - Milestone 2: Transaction Building & Submission
+## [v0.2-milestone2] - 2025-01-25 - Milestone 2: Transaction Building & Submission
 
 ### Added
 
@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Invalid signature (`ODATANO_TX_VALIDATION_FAILED`)
   - Network failure (`ODATANO_PROVIDER_UNAVAILABLE`)
   - Duplicate transaction (`ODATANO_TX_ALREADY_SUBMITTED`)
-- **327 new tests** (6 new test suites): Transaction builder tests (CSL, Buildooor), submission tests, error handling tests
+- **327 new tests** (6 new test suites): Ogmios Tests, Transaction builder tests (CSL, Buildooor), mocked submission tests, error handling tests
 - **Transaction Workflow Documentation**: Build → Sign → Submit flow guide
 
 ### Changed
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2024-12-29 - Milestone 1: OData Read Service
+## [v0.1-milestone1] - 2024-12-29 - Milestone 1: OData Read Service
 
 ### Added
 
@@ -141,7 +141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Node.js v20.x / v22.x
 - SQLite (persistent caching via @cap-js/sqlite)
 - Jest v29.x (testing)
-- Pino (structured logging)
 
 ---
 

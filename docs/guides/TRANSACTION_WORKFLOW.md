@@ -51,17 +51,17 @@ ODATANO follows a **3-step workflow** for transaction handling with complete **p
 │  │                                                       │  │
 │  │  BuildSimpleAdaTransaction ──> Unsigned TX (CBOR)     │  │
 │  │  BuildTransactionWithMetadata ──> Unsigned TX         │  │
-│  │  BuildMultiAssetTransaction ──> Unsigned TX           │  │<──────────────┐
-│  │  BuildMintTransaction ──> Unsigned TX (M2)            │  │               │
+│  │  BuildMultiAssetTransaction ──> Unsigned TX           │<─│───────────────┐
+│  │  BuildMintTransaction ──> Unsigned TX                 │  │               │
 │  │  SubmitTransaction ──> Blockchain Submit              │  │               │
 │  │  SubmitSignedTransaction ──> External TX Submit       │  │               │
 │  └───────────────────────────────────────────────────────┘  │               │
 │                          ↓                                  │               │
 │  ┌───────────────────────────────────────────────────────┐  │               │
-│  │ Transaction Builder Registry (M2)                     │  │               │
+│  │ Transaction Builder Registry                          │  │               │
 │  │                                                       │  │               │
 │  │  CSL Builder (Cardano Serialization Lib)              │  │               │
-│  │  Buildooor Builder                                    │  │               │
+│  │  Buildooor Builder (HarmonicLabs)                     │  │               │
 │  └───────────────────────────────────────────────────────┘  │               │
 │                          ↓                                  │               │
 │  ┌───────────────────────────────────────────────────────┐  │               │
@@ -114,7 +114,7 @@ User/Application
 
 ---
 
-## Workflow Steps
+## Workflow Steps (simplyfied)
 
 ### Step 1: Build Unsigned Transaction
 
@@ -263,7 +263,7 @@ const signedTx = await yoroi.signTx(unsignedTxCbor, true);
 4. Submits to Cardano network via multi-backend client:
    - **Primary:** Ogmios (local node, 10-100ms) if available
    - **Fallback:** Blockfrost API (if Ogmios unavailable)
-   - **Fallback:** Koios API (if both above fail)
+   - **Fallback:** Koios API (if both above are unavailable)
 5. Stores submission record in database (TransactionSubmissions entity)
 6. Records submission timestamp and backend used
 7. Returns transaction hash for tracking on blockchain explorer
@@ -281,27 +281,9 @@ const signedTx = await yoroi.signTx(unsignedTxCbor, true);
 | **Hardware Wallet** | Slow (5-10s) | Maximum | High-value transactions | Hardware device |
 | **Custom Signer** | Varies | Depends | Enterprise key management | HSM, Vault, etc. |
 
-### Security Best Practices
+## Transaction Types
 
-✅ **DO:**
-- Store private keys encrypted at rest
-- Use hardware wallets for high-value operations
-- Implement multi-signature for critical transactions
-- Log all signing attempts (who, when, what)
-- Use separate keys for different purposes (hot/cold)
-
-❌ **DON'T:**
-- Store private keys in environment variables
-- Commit .skey files to git
-- Share private keys between services
-- Skip key backup procedures
-- Use test keys on mainnet
-
----
-
-## Transaction Types (M2)
-
-ODATANO M2 supports four types of transactions:
+ODATANO supports four types of transactions at the moment:
 
 ### 1. Simple ADA Transfer
 **Action:** `BuildSimpleAdaTransaction`
@@ -326,20 +308,18 @@ ADA transfer with attached metadata (CIP-20).
 Transfer ADA + native tokens in a single transaction.
 
 **Use cases:**
-- NFT transfers
 - Token distributions
-- Complex asset swaps
+- Token transfers with ADA fees
 
 ### 4. Token Minting
 **Action:** `BuildMintTransaction`
 Create new native tokens.
 
 **Use cases:**
-- NFT minting
 - Token creation
 - Asset issuance
 
-## Transaction Builders (M2)
+## Transaction Builders
 
 ODATANO supports two transaction builder implementations:
 
@@ -383,23 +363,6 @@ Both builders available, CSL used as primary.
 | changeAddress | bech32 | No | Change address (defaults to sender) |
 
 **Returns:** `TransactionBuild` entity
-
----
-
-### SubmitTransaction
-
-**Action:** `SubmitTransaction`  
-**Method:** POST  
-**Path:** `/odata/v4/cardano-transaction/SubmitTransaction`
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| buildId | UUID | Yes | ID of the original build from BuildSimpleAdaTransaction |
-| signedTxCbor | String | Yes | Fully signed transaction in CBOR hex format |
-
-**Returns:** `TransactionSubmission` entity
 
 ---
 
@@ -461,6 +424,24 @@ Both builders available, CSL used as primary.
 | changeAddress | bech32 | No | Change address (defaults to sender) |
 
 **Returns:** `TransactionBuild` entity
+
+---
+
+
+### SubmitTransaction
+
+**Action:** `SubmitTransaction`  
+**Method:** POST  
+**Path:** `/odata/v4/cardano-transaction/SubmitTransaction`
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| buildId | UUID | Yes | ID of the original build from BuildSimpleAdaTransaction |
+| signedTxCbor | String | Yes | Fully signed transaction in CBOR hex format |
+
+**Returns:** `TransactionSubmission` entity
 
 ---
 
@@ -619,6 +600,10 @@ Both builders available, CSL used as primary.
 - [Build + Sign + Submit Minting Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts)
 - [Build + Sign + Submit Multi-Asset Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-multi-asset-preview.ts)
 
+### Real Preview Examples
+
+- Simple ADA Transfer:  
+  ![M2 Preview Testing Results](https://github.com/ODATANO/ODATANO/blob/main/docs/requirments%20%26%20milestones/ODATANO-M2%20Testing%20Screenshots%20Postman%20%26%20Scripts.pdf)
 ---
 
 ## Troubleshooting
@@ -629,8 +614,8 @@ Both builders available, CSL used as primary.
 
 **Solution:**
 ```bash
-curl http://localhost:1337/health | jq .networkSynchronization
-# Wait until > 0.95 (95% synced)
+curl http://localhost:1337/health
+# Wait until > 0.99 (99% synced)
 ```
 
 ---
@@ -656,14 +641,20 @@ curl http://localhost:1337/health | jq .networkSynchronization
 
 ---
 
+### 'No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.' for minting transaction
+**Cause:** Minting transactions require a collateral UTxO
+**Solution:**
+- Ensure sender address has at least one UTxO with minimum 5 ADA
+- send yourself some ADA to create a collateral UTxO
+
+---
+
 ## References
 
 - [Cardano Transaction Specification](https://github.com/IntersectMBO/cardano-ledger)
 - [Ogmios Documentation](https://ogmios.dev/)
 - [Cardano CLI Reference](https://github.com/IntersectMBO/cardano-cli)
 - [Buildooor TX Library](https://github.com/HarmonicLabs/buildooor)
-
----
 
 ---
 
@@ -681,5 +672,5 @@ ODATANO M2 provides a complete transaction workflow with:
 ---
 
 **Document Version:** 1.0
-**Last Updated:** January 22, 2026
+**Last Updated:** January 25, 2026
 **Milestone:** M2 - Transaction Build & Submit

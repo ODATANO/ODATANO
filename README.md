@@ -2,13 +2,15 @@
 
 **OData Service for Cardano Blockchain Data**
 
-ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData V4 access to Cardano blockchain data. It features intelligent caching, multi-provider fallback, and comprehensive blockchain data exposure through a standardized REST API.
+ODATANO is a SAP CAP service providing standardized OData V4 access to Cardano blockchain data and native transaction execution capabilities, enabling enterprise-grade read/write blockchain integration via a unified REST/OData interface.
 
 **Funded by Cardano Catalyst Fund 14** ([Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
 
 **Milestone Status:**
-- [Milestone 1: Final Release](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862543) - Completed
-- [Milestone 2: Transaction Building & Submission](https://milestones.projectcatalyst.io/projects/1400109/milestones/1862544) - Pending Completion
+- [Milestone 1: Final Release](https://milestones.projectcatalyst.io/projects/1400109/milestones/1) - Completed
+- [Milestone 2: Transaction Building & Submission](https://milestones.projectcatalyst.io/projects/1400109/milestones/2) - Completed / Pending Approval
+- [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3) - Upcoming
+- [Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4) - Upcoming
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
@@ -21,7 +23,7 @@ ODATANO is a SAP Cloud Application Programming (CAP) service that provides OData
 ### Milestone 1 (Completed)
 Cardano read operations with multi-provider failover (Blockfrost → Koios), 17 Entities defining Cardano Core Components & 11 Blockchain Read Actions with comprehensive input validation, full OData V4 query support, lazy on-demand indexing with TTL-based refresh, 340 tests across 11 test suites, CI/CD with Codecov integration
 
-### Milestone 2 (Pending Completion)
+### Milestone 2 (Completed / Pending Approval)
 Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4 transaction types (simple transfers, token minting, multi-asset transfers, metadata), Ogmios live backend for protocol parameters & UTxO queries, 6 Transaction Actions with external signing workflow, full Build → Sign → Submit flow, 327 new tests & 6 new test suites, end-to-end Preview testnet examples & Postman collection
 
 ## Key Features
@@ -52,7 +54,7 @@ git clone https://github.com/ODATANO/ODATANO && cd ODATANO
 npm ci
 cp .env.example .env  # Add your BLOCKFROST_KEY
 cds deploy --to sqlite
-npm run cds:watch
+npm run cds:watch / npm cds:serve
 ```
 
 See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.

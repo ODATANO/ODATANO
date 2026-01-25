@@ -115,7 +115,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxBytes.length,
         builderEngine: this.name,
         feeLovelace: tx.body.fee.toString(),
         inputs: ctx.utxos.map(u => ({
@@ -176,8 +177,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
         builderEngine: this.name,
+        sizeBytes: unsignedTxBytes.length,
         feeLovelace: tx.body.fee.toString(),
         inputs: ctx.utxos.map(u => ({
           txHash: u.txHash,
@@ -248,7 +250,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxBytes.length,
         builderEngine: this.name,
         feeLovelace: tx.body.fee.toString(),
         inputs: ctx.utxos.map(u => ({
@@ -431,8 +434,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
         builderEngine: this.name,
+        sizeBytes: unsignedTxBytes.length,
         feeLovelace: tx.body.fee.toString(),
         inputs: ctx.utxos.map(u => ({
           txHash: u.txHash,

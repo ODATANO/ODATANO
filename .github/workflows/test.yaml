@@ -152,7 +152,7 @@ jobs:
           CDS_ENV: test
           LOG_LEVEL: 'error'
           NETWORK: 'preview'
-          BACKENDS: 'koios,blockfrost'
+          BACKENDS: 'koios,blockfrost'  #Ogmios excluded here (tests will skip Ogmios tests)
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
           TX_BUILDERS: 'buildooor,csl'
           PRIMARY_TIMEOUT_MS: 8000
@@ -167,9 +167,9 @@ jobs:
           CDS_ENV: test
           LOG_LEVEL: 'error'
           NETWORK: 'preview'
-          BACKENDS: 'koios,blockfrost'
+          BACKENDS: 'koios,blockfrost'  #Ogmios (excluded here too but tests will create own instance automatically)
           BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
-          OGMIOS_WS_URL: 'ws://localhost:1337'
+          OGMIOS_URL: 'ws://localhost:1337' # Ogmios endpoint
           TX_BUILDERS: 'buildooor,csl'
           PRIMARY_TIMEOUT_MS: 8000
           FALLBACK_TIMEOUT_MS: 8000

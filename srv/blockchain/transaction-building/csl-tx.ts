@@ -8,6 +8,7 @@ import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { getCardanoClient } from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
 import { CONFIG } from "../../../config/config";
+import { config } from 'dotenv';
 
 const logger = cds.log('CSLTxBuilder');
 
@@ -108,9 +109,10 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
-        feeLovelace,
+        feeLovelace: feeLovelace,
         inputs: ctx.utxos.map(u => ({
           txHash: u.txHash,
           index: u.outputIndex,
@@ -182,7 +184,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
         inputs: ctx.utxos.map(u => ({
@@ -284,7 +287,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
         inputs: ctx.utxos.map(u => ({
@@ -375,7 +379,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: req.network,
+        network: CONFIG.network,
+        sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
         inputs: ctx.utxos.map(u => ({
