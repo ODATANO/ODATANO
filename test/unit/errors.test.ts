@@ -7,6 +7,7 @@ import {
   ConfigError,
   BackendInitError,
   AllBackendsInitFailedError,
+  TransactionAlreadySubmittedError,
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError
@@ -598,6 +599,91 @@ describe('Error Classes', () => {
 
       expect(result.statusCode).toBe(404);
       expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    // ============================================================================
+    // TypeError handling for uninitialized backend (lines 300-306)
+    // ============================================================================
+    it('should convert TypeError "Cannot read properties of null" to BackendInitError', () => {
+      const error = new TypeError('Cannot read properties of null (reading "query")');
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result).toBeInstanceOf(BackendInitError);
+      expect(result.backendName).toBe('koios');
+      expect((result as BackendInitError).originalError?.message).toContain('not initialized');
+    });
+
+    it('should convert TypeError "Cannot read properties of undefined" to BackendInitError', () => {
+      const error = new TypeError('Cannot read properties of undefined (reading "fetch")');
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result).toBeInstanceOf(BackendInitError);
+      expect(result.backendName).toBe('blockfrost');
+    });
+
+    it('should convert TypeError "null is not an object" to BackendInitError', () => {
+      const error = new TypeError('null is not an object (evaluating "this.client.request")');
+      const result = normalizeBackendError(error, 'ogmios');
+
+      expect(result).toBeInstanceOf(BackendInitError);
+      expect(result.backendName).toBe('ogmios');
+    });
+
+    it('should convert TypeError "undefined is not an object" to BackendInitError', () => {
+      const error = new TypeError('undefined is not an object (evaluating "api.get")');
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result).toBeInstanceOf(BackendInitError);
+      expect(result.backendName).toBe('koios');
+    });
+
+    it('should use "unknown" as backend name when not provided for TypeError', () => {
+      const error = new TypeError('Cannot read properties of null (reading "test")');
+      const result = normalizeBackendError(error);
+
+      expect(result).toBeInstanceOf(BackendInitError);
+      expect(result.backendName).toBe('unknown');
+    });
+
+    // ============================================================================
+    // TransactionAlreadySubmittedError (line 327)
+    // ============================================================================
+    it('should convert "already exists" message to TransactionAlreadySubmittedError', () => {
+      const error = { status: 400, message: 'Transaction abc123def456 already exists in mempool' };
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result).toBeInstanceOf(TransactionAlreadySubmittedError);
+      expect(result.statusCode).toBe(409);
+    });
+
+    it('should convert "already submitted" message to TransactionAlreadySubmittedError', () => {
+      const error = { status: 500, message: 'Transaction already submitted' };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result).toBeInstanceOf(TransactionAlreadySubmittedError);
+    });
+
+    it('should extract txHash from TransactionAlreadySubmittedError message', () => {
+      const txHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+      const error = { message: `Transaction ${txHash} already known` };
+      const result = normalizeBackendError(error, 'ogmios');
+
+      expect(result).toBeInstanceOf(TransactionAlreadySubmittedError);
+      expect((result as any).message).toContain(txHash);
+    });
+
+    it('should convert "duplicate" message to TransactionAlreadySubmittedError', () => {
+      const error = { message: 'Duplicate transaction detected' };
+      const result = normalizeBackendError(error, 'blockfrost');
+
+      expect(result).toBeInstanceOf(TransactionAlreadySubmittedError);
+    });
+
+    it('should convert "in mempool" message to TransactionAlreadySubmittedError', () => {
+      const error = { message: 'Transaction is already in mempool' };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result).toBeInstanceOf(TransactionAlreadySubmittedError);
     });
   });
 

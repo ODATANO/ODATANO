@@ -7,7 +7,8 @@
  * Uses Koios backend with nock mocking for deterministic test results.
  */
 
-// Configure environment to use only Buildooor transaction builder
+// Configure environment BEFORE any imports to ensure correct backend initialization
+process.env.BACKENDS = 'koios';
 process.env.TX_BUILDERS = 'buildooor';
 
 // Import and run the transaction service test suite

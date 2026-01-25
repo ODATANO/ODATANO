@@ -415,4 +415,131 @@ describe('OgmiosBackend', () => {
       await expect(backend.getProtocolParameters()).rejects.toThrow('Ogmios client has been shutdown');
     });
   });
+
+  describe('submitTransaction', () => {
+    it('should submit a transaction and return the transaction hash', async () => {
+      const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+      const mockTxSubmissionClient = {
+        submitTransaction: jest.fn().mockResolvedValue(mockTxHash)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).isShutdown = false;
+
+      const signedTxCbor = '84a300818258201234567890abcdef';
+      const result = await backend.submitTransaction(signedTxCbor);
+
+      expect(result).toBe(mockTxHash);
+      expect(mockTxSubmissionClient.submitTransaction).toHaveBeenCalledWith(signedTxCbor);
+    });
+
+    it('should throw error when backend is shutdown', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).isShutdown = true;
+
+      await expect(backend.submitTransaction('84a300818258201234567890abcdef'))
+        .rejects.toThrow('Ogmios client has been shutdown');
+    });
+
+    it('should throw error when txSubmissionClient is not initialized', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = null;
+      (backend as any).isShutdown = false;
+
+      await expect(backend.submitTransaction('84a300818258201234567890abcdef'))
+        .rejects.toThrow();
+    });
+  });
+
+  describe('shutdown error handling', () => {
+    it('should handle error when stateQueryClient.shutdown fails', async () => {
+      const mockStateQueryClient = {
+        shutdown: jest.fn().mockRejectedValue(new Error('Shutdown failed'))
+      };
+      const mockTxSubmissionClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).context = null;
+      (backend as any).isShutdown = false;
+
+      // Should not throw - error is logged
+      await expect(backend.shutdown()).resolves.not.toThrow();
+      expect((backend as any).isShutdown).toBe(true);
+    });
+
+    it('should handle error when txSubmissionClient.shutdown fails', async () => {
+      const mockStateQueryClient = {
+        shutdown: jest.fn().mockResolvedValue(undefined)
+      };
+      const mockTxSubmissionClient = {
+        shutdown: jest.fn().mockRejectedValue(new Error('TX client shutdown failed'))
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).context = null;
+      (backend as any).isShutdown = false;
+
+      // Should not throw - error is logged
+      await expect(backend.shutdown()).resolves.not.toThrow();
+      expect((backend as any).isShutdown).toBe(true);
+    });
+
+    it('should handle error when socket.close fails', async () => {
+      const mockSocket = {
+        close: jest.fn().mockImplementation(() => {
+          throw new Error('Socket close failed');
+        })
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = null;
+      (backend as any).txSubmissionClient = null;
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = false;
+
+      // Should not throw - error is logged
+      await expect(backend.shutdown()).resolves.not.toThrow();
+      expect((backend as any).isShutdown).toBe(true);
+    });
+
+    it('should handle all shutdown errors simultaneously', async () => {
+      const mockStateQueryClient = {
+        shutdown: jest.fn().mockRejectedValue(new Error('State query shutdown failed'))
+      };
+      const mockTxSubmissionClient = {
+        shutdown: jest.fn().mockRejectedValue(new Error('TX submission shutdown failed'))
+      };
+      const mockSocket = {
+        close: jest.fn().mockImplementation(() => {
+          throw new Error('Socket close failed');
+        })
+      };
+      const mockContext = {
+        socket: mockSocket
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).context = mockContext;
+      (backend as any).isShutdown = false;
+
+      // Should not throw even when all shutdown operations fail
+      await expect(backend.shutdown()).resolves.not.toThrow();
+      expect((backend as any).isShutdown).toBe(true);
+      expect((backend as any).stateQueryClient).toBe(null);
+      expect((backend as any).txSubmissionClient).toBe(null);
+      expect((backend as any).context).toBe(null);
+    });
+  });
 });
