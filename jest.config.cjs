@@ -3,7 +3,10 @@ module.exports = {
   testEnvironment: 'node',
 
   // better than setupFiles in many setups
-  setupFilesAfterEnv: ['ts-node/register/transpile-only'],
+  setupFilesAfterEnv: [
+    'ts-node/register/transpile-only',
+    '<rootDir>/test/jest.setup.ts'
+  ],
 
   testMatch: ['**/test/**/*.test.ts', '**/test/**/*.spec.ts'],
   moduleFileExtensions: ['ts', 'js', 'json'],

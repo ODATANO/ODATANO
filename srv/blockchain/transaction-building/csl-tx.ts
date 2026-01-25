@@ -5,7 +5,7 @@ import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
 import { getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
-import cardano from "../cardano-client";
+import { getCardanoClient } from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
 import { CONFIG } from "../../../config/config";
 
@@ -45,7 +45,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    * Initialize the builder
    */
   public async init(): Promise<void> {
-    this.protocolParameters = await cardano.getProtocolParameters();
+    this.protocolParameters = await getCardanoClient().getProtocolParameters();
     this.txBuilderConfig = this._createTxBuilderConfig(this.protocolParameters);
     logger.info(`Initialized with protocol parameters.`);
   }

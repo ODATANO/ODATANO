@@ -4,7 +4,7 @@ import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
-import cardano from "../cardano-client";
+import { getCardanoClient } from "../cardano-client";
 import cds from "@sap/cds";
 import { InsufficientFundsError } from "../../utils/errors";
 import { CONFIG } from "../../../config/config";
@@ -63,7 +63,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Initialize the builder
    */
   public async init(): Promise<void> {
-    const protocolParams = await cardano.getProtocolParameters();
+    const protocolParams = await getCardanoClient().getProtocolParameters();
     const txbParameters = this._mapLedgerParametersToBuildooorParams(protocolParams);
     this.txBuilder = new TxBuilder(txbParameters);
     logger.debug(`TxBuilder initialized with protocol parameters`);
