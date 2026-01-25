@@ -4,8 +4,7 @@ import { rejectInvalid, throwIfValidationErrors } from './utils/errors';
 import { validateTransactionInputs } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
-import cardanoClient, { getCardanoClient } from './blockchain/cardano-client';
-import { CONFIG } from '../config/config';
+import cardanoClient from './blockchain/cardano-client';
 const { SELECT } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
