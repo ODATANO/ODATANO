@@ -452,6 +452,84 @@ describe('OgmiosBackend', () => {
     });
   });
 
+  describe('evaluateTransaction', () => {
+    it('should evaluate a transaction and return execution budgets', async () => {
+      const mockEvaluationResult = [
+        {
+          validator: { purpose: 'spend', index: 0 },
+          budget: { memory: 500000, cpu: 200000000 }
+        }
+      ];
+
+      const mockTxSubmissionClient = {
+        evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).isShutdown = false;
+
+      const unsignedTxCbor = '84a400818258201234567890abcdef';
+      const result = await backend.evaluateTransaction(unsignedTxCbor);
+
+      expect(result).toEqual(mockEvaluationResult);
+      expect(mockTxSubmissionClient.evaluateTransaction).toHaveBeenCalledWith(unsignedTxCbor);
+    });
+
+    it('should return multiple validator budgets for multi-script tx', async () => {
+      const mockEvaluationResult = [
+        { validator: { purpose: 'spend', index: 0 }, budget: { memory: 500000, cpu: 200000000 } },
+        { validator: { purpose: 'mint', index: 0 }, budget: { memory: 300000, cpu: 150000000 } }
+      ];
+
+      const mockTxSubmissionClient = {
+        evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.evaluateTransaction('84a400818258201234567890abcdef');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].budget.memory).toBe(500000);
+      expect(result[1].validator.purpose).toBe('mint');
+    });
+
+    it('should throw error when backend is shutdown', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).isShutdown = true;
+
+      await expect(backend.evaluateTransaction('84a400818258201234567890abcdef'))
+        .rejects.toThrow('Ogmios client has been shutdown');
+    });
+
+    it('should throw error when txSubmissionClient is not initialized', async () => {
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = null;
+      (backend as any).isShutdown = false;
+
+      await expect(backend.evaluateTransaction('84a400818258201234567890abcdef'))
+        .rejects.toThrow();
+    });
+
+    it('should propagate evaluation errors from ogmios', async () => {
+      const mockTxSubmissionClient = {
+        evaluateTransaction: jest.fn().mockRejectedValue(
+          new Error('Script execution failed: validation error')
+        )
+      };
+
+      const backend = new OgmiosBackend();
+      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).isShutdown = false;
+
+      await expect(backend.evaluateTransaction('84a400818258201234567890abcdef'))
+        .rejects.toThrow('Script execution failed');
+    });
+  });
+
   describe('shutdown error handling', () => {
     it('should handle error when stateQueryClient.shutdown fails', async () => {
       const mockStateQueryClient = {

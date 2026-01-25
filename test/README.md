@@ -6,7 +6,7 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 667 tests across 17 test suites
+- **Total Tests**: 692 tests across 19 test suites
 - **Statement Coverage**: 96.28%
 - **Branch Coverage**: 81.97%
 - **Networks**: Cardano Preview testnet

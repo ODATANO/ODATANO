@@ -31,7 +31,7 @@ Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4
 - **Multi-Provider Architecture**: Blockfrost + Koios + Ogmios with automatic failover
 - **Transaction Building**: CSL & Buildooor for minting, transfers, and metadata transactions
 - **Lazy On-Demand Indexing**: TTL-based refresh, no background jobs
-- **Comprehensive Testing**: 667 tests across 17 test suites, 96%+ statement coverage
+- **Comprehensive Testing**: 692 tests across 19 test suites, 96%+ statement coverage
 
 ## Quick Start
 
@@ -89,7 +89,7 @@ See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
 ## Testing
 
 ```bash
-npm test                    # Run all 667 tests
+npm test                    # Run all 692 tests
 npm run test:coverage       # With coverage report
 npm run test:integration    # Integration tests only
 npm run test:unit           # Unit tests only
@@ -108,7 +108,7 @@ See [Test Documentation](test/README.md) for details.
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
-| [Test Documentation](test/README.md) | Test suite overview (667 tests) |
+| [Test Documentation](test/README.md) | Test suite overview (692 tests) |
 
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)

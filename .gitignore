@@ -12,6 +12,7 @@ target/
 # Web IDE, App Studio
 .che/
 .gen/
+.claude/
 
 # MTA
 *_mta_build_tmp
@@ -55,23 +56,7 @@ test/**/*.js.map
 db.sqlite-shm
 db.sqlite-wal
 
-docker-compose.preview.yml
-docker-compose.preprod.yml
-docker-compose.mainnet.yml
-
-DOCKER_COMPOSE_GUIDE.md
-
-# Preview config should be in git for GitHub Actions and local development
-# /config/preview 
-
-logs.ps1
-start-stack.ps1
-stop-stack.ps1
 payment.addr
 payment.skey
 payment.vkey
 
-general_dev_notes.txt
-.claude
-ogmios-tests.yaml
-test.txt

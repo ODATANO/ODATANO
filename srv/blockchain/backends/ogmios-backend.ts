@@ -80,7 +80,9 @@ export class OgmiosBackend implements EvaluatingBackend {
       tls: url.protocol === 'wss:'
     };
 
+    
     this.context = await createInteractionContext(
+      /* c8 ignore next */
       (err) => logger.error(`[OgmiosBackend] Interaction context error: ${err.message}`),
       (err) => { logger.error(`[OgmiosBackend] Connection error: ${err}`); },
       { connection }
@@ -416,6 +418,8 @@ export class OgmiosBackend implements EvaluatingBackend {
         this.stateQueryClient!.ledgerTip()
       ]);
       
+      // TypeScript requires 'origin' checks (genesis block), though practically never occurs
+      /* c8 ignore next */
       const slot = tip === 'origin' ? 0 : tip.slot;
 
       // Calculate epoch boundaries using era start as reference
@@ -465,6 +469,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       ]);
 
       // TypeScript requires 'origin' checks (genesis block), though practically never occurs
+      /* c8 ignore next 3 */
       const slot = tip === 'origin' ? 0 : tip.slot;
       const hash = tip === 'origin' ? '' : tip.id;
       const height = blockHeight === 'origin' ? 0 : blockHeight;

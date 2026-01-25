@@ -463,6 +463,8 @@ Implementation of comprehensive error handling for transaction-related operation
 
 ---
 
+
+
 ## Summary: Milestone 2 Deliverables
 
 | Deliverable | Status |
@@ -476,5 +478,5 @@ Implementation of comprehensive error handling for transaction-related operation
 | Error Handling (5 Scenarios) | ✅ Complete |
 | Milestone Release v0.2-milestone2 | ⏳ Pending |
 | Demo Video | ⏳ Pending |
-| Transaction Confirmation (Explorer Link) | ⏳ Pending |
+| Transaction Confirmation (Explorer Link) | ✅ Complete|
 

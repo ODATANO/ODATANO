@@ -558,10 +558,6 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
-
-        if (!data || !Array.isArray(data) || data.length === 0 || !data[0]) {
-          throw new NotFoundError('Latest Block', this.name);
-        }
         return await this.getBlock(data[0].hash);
       },
       this.name

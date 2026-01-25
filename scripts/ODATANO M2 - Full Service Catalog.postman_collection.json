@@ -128,7 +128,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n    \"network\":\"preview\",\n    \"senderAddress\":\"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\n    \"recipientAddress\":\"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\n    \"lovelaceAmount\":10000000\n}",
+          "raw": "{\n    \"senderAddress\":\"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\n    \"recipientAddress\":\"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\n    \"lovelaceAmount\":10000000\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -160,7 +160,7 @@
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"network\": \"preview\",\r\n    \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n    \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n    \"lovelaceAmount\": 10000000,\r\n    \"metadataJson\": \"{\\\"674\\\":{\\\"msg\\\":[\\\"Hello\\\",\\\"from\\\",\\\"ODATANO\\\"]}}\"\r\n}",
+          "raw": "{\r\n    \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n    \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n    \"lovelaceAmount\": 10000000,\r\n    \"metadataJson\": \"{\\\"674\\\":{\\\"msg\\\":[\\\"Hello\\\",\\\"from\\\",\\\"ODATANO\\\"]}}\"\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -192,7 +192,7 @@
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n  \"network\": \"preview\",\r\n  \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n  \"lovelaceAmount\": 2000000,\r\n  \"assetsJson\": \"[{\\\"unit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"500\\\"}]\"\r\n}",
+          "raw": "{\r\n  \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"recipientAddress\": \"addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622\",\r\n  \"lovelaceAmount\": 2000000,\r\n  \"assetsJson\": \"[{\\\"unit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"500\\\"}]\"\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -224,7 +224,7 @@
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n  \"network\": \"preview\",\r\n  \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"recipientAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n  \"lovelaceAmount\": 2000000,\r\n  \"mintActionsJson\": \"[{\\\"assetUnit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"1000\\\"}]\",\r\n  \"mintingPolicyScript\": \"585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009\"\r\n}",
+          "raw": "{\r\n    \"senderAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n    \"recipientAddress\": \"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\",\r\n    \"lovelaceAmount\": 2000000,\r\n    \"mintActionsJson\": \"[{\\\"assetUnit\\\":\\\"def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d\\\",\\\"quantity\\\":\\\"1000\\\"}]\",\r\n    \"mintingPolicyScript\": \"585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009\"\r\n}",
           "options": {
             "raw": {
               "language": "json"

@@ -437,7 +437,7 @@ See [Transaction Workflow Guide](../concepts%20&%20architecture/TRANSACTION_WORK
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
-- **Test Docs:** [test/README.md](../../test/README.md) - 635 tests, 96.28% coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 692 tests, 96%+ coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/

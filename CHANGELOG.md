@@ -5,7 +5,7 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] - 2025-01-24 - Milestone 2: Transaction Building & Submission
+## [0.1.1] - 2025-01-25 - Milestone 2: Transaction Building & Submission
 
 ### Added
 
@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Extended multi-provider architecture: Ogmios (live) + Blockfrost (primary historical) + Koios (fallback)
-- Updated test suite: 667 tests across 17 test suites (from 340 tests / 11 suites)
+- Updated test suite: 692 tests across 19 test suites (from 340 tests / 11 suites)
 - Enhanced error handling with 8 specialized error classes
 
 ### Technical Details
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2024-12-XX - Milestone 1: OData Read Service
+## [0.1.0] - 2024-12-29 - Milestone 1: OData Read Service
 
 ### Added
 
@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Public GitHub repository with Apache 2.0 license
   - SAP CAP project structure with complete scaffolding
   - CI/CD pipeline with automated tests on Node.js 20.x and 22.x
-  - Code coverage reporting via Codecov (96.28% statement, 81.97% branch)
+  - Code coverage reporting via Codecov (96%+ statement, 81%+ branch)
   - Docker deployment support
 
 - **OData V4 Service** (`/odata/v4/cardano-odata`)

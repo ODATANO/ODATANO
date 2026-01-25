@@ -1,8 +1,8 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.2.0 (Milestone 2 Complete)\
-**Status:** Production-Ready - 635 tests, 96.28% coverage\
+**Version:** 0.2.0 (Milestone 2)\
+**Status:** Production-Ready - 692 tests, 96%+ coverage\
 **Last Updated:** January 2026
 
 ---
@@ -114,7 +114,7 @@ srv/
 
 db/schema.cds          # 16+ entities with temporal support
 config/config.ts       # Timeouts, network, TTL, builders
-test/                  # 635 tests (integration + unit)
+test/                  # 692 tests (integration + unit)
 ```
 
 ---
@@ -311,7 +311,7 @@ test/
     └── tx-build-helper.test.ts         # Helper tests (M2)
 ```
 
-**Current Status:** 635 tests, 96.28% coverage
+**Current Status:** 692 tests, 96%+ coverage
 
 ### Running Tests
 

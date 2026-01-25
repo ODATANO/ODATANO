@@ -204,7 +204,7 @@ See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for signing and
 ## Testing
 
 ```bash
-# All tests (635 tests)
+# All tests (692 tests)
 npm test
 
 # Coverage report
