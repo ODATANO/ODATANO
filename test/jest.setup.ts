@@ -3,6 +3,8 @@
  * Suppress console output during tests
  */
 
+/* eslint-disable no-console */
+
 // Store original console methods
 const originalConsoleLog = console.log;
 const originalConsoleInfo = console.info;
