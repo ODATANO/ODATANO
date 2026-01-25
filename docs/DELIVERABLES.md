@@ -331,6 +331,7 @@ Integration with multiple Cardano backends to submit signed transactions. Using 
 **Documentation**
 
 - Backend Configuration Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/BACKEND_CONFIGURATION.md
+- Example Build–Sign–Submit Workflows: https://github.com/ODATANO/ODATANO/blob/main/docs/requirments%20%26%20milestones/ODATANO-M2%20Testing%20Screenshots%20Postman%20%26%20Scripts.pdf
 
 ---
 
@@ -341,7 +342,7 @@ Reference implementations and scripts demonstrating the full build–sign–subm
 ### Acceptance criteria
 
 - Complete build → sign → submit workflow demonstrated
-- External signing integration (Cardano CLI)
+- External signing with (Cardano CLI)
 - Scripts executable against preview testnet
 - Postman collection for API testing
 
@@ -352,6 +353,7 @@ Reference implementations and scripts demonstrating the full build–sign–subm
 - Send ADA Script (Build → Sign → Submit): https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-preview.ts
 - Send ADA with Metadata Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-with-metadata-preview.ts
 - Mint Token Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts
+- Send Multi-Asset Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/send-multi-asset-preview.ts
 
 **Postman Collection**
 
@@ -427,6 +429,7 @@ Additional automated tests validating the transaction builder logic, submission 
 
 - Test Pipeline: https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml
 - Code Coverage: https://codecov.io/gh/ODATANO/ODATANO
+- Ogimos Sync Action for Tests: https://github.com/ODATANO/ODATANO/actions/workflows/ogmios-sync.yaml
 
 ---
 
@@ -463,20 +466,10 @@ Implementation of comprehensive error handling for transaction-related operation
 
 ---
 
+**Demo & Release**
 
+- Milestone Release v0.2-milestone2: https://github.com/ODATANO/ODATANO/releases/tag/v0.2-milestone2
+- Testing Output summary: https://github.com/ODATANO/ODATANO/blob/main/docs/requirments%20%26%20milestones/ODATANO-M2%20Testing%20Screenshots%20Postman%20%26%20Scripts.pdf
+- Demo Video (M2 Walkthrough – ~5 min): https://www.youtube.com/watch?v=oFUJ-tN1QCE
 
-## Summary: Milestone 2 Deliverables
-
-| Deliverable | Status |
-|-------------|--------|
-| Transaction Builder Module (CSL + Buildooor) | ✅ Complete |
-| Transaction Submission (Multi-Backend) | ✅ Complete |
-| End-to-End Scripts | ✅ Complete |
-| Postman Collection M2 | ✅ Complete |
-| Extended Documentation | ✅ Complete |
-| Test Cases (Unit + Integration) | ✅ Complete |
-| Error Handling (5 Scenarios) | ✅ Complete |
-| Milestone Release v0.2-milestone2 | ⏳ Pending |
-| Demo Video | ⏳ Pending |
-| Transaction Confirmation (Explorer Link) | ✅ Complete|
 

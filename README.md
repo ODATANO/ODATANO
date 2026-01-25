@@ -7,8 +7,8 @@ ODATANO is a SAP CAP service providing standardized OData V4 access to Cardano b
 **Funded by Cardano Catalyst Fund 14** ([Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
 
 **Milestone Status:**
-- [Milestone 1: Final Release](https://milestones.projectcatalyst.io/projects/1400109/milestones/1) - Completed
-- [Milestone 2: Transaction Building & Submission](https://milestones.projectcatalyst.io/projects/1400109/milestones/2) - Completed / Pending Approval
+- [Milestone 1: OData Service Foundation & Blockchain Read Access](https://milestones.projectcatalyst.io/projects/1400109/milestones/1) - Completed
+- [Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2) - Completed / Pending Approval
 - [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3) - Upcoming
 - [Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4) - Upcoming
 
