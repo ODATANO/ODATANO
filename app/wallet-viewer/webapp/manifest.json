@@ -1,0 +1,132 @@
+{
+  "_version": "1.81.0",
+  "sap.app": {
+    "id": "odatanoview.walletviewer",
+    "type": "application",
+    "i18n": "i18n/i18n.properties",
+    "applicationVersion": {
+      "version": "0.0.1"
+    },
+    "title": "{{appTitle}}",
+    "description": "{{appDescription}}",
+    "resources": "resources.json",
+    "sourceTemplate": {
+      "id": "@sap/generator-fiori:basic",
+      "version": "1.20.1",
+      "toolsId": "92e2cee0-5499-466f-83b5-8222489d94b3"
+    },
+    "dataSources": {
+      "mainService": {
+        "uri": "/odata/v4/cardano-odata/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      },
+      "txService": {
+        "uri": "/odata/v4/cardano-transaction/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      }
+    }
+  },
+  "sap.ui": {
+    "technology": "UI5",
+    "icons": {
+      "icon": "",
+      "favIcon": "",
+      "phone": "",
+      "phone@2": "",
+      "tablet": "",
+      "tablet@2": ""
+    },
+    "deviceTypes": {
+      "desktop": true,
+      "tablet": true,
+      "phone": true
+    }
+  },
+  "sap.ui5": {
+    "flexEnabled": false,
+    "dependencies": {
+      "minUI5Version": "1.144.0",
+      "libs": {
+        "sap.m": {},
+        "sap.ui.core": {},
+        "sap.ui.layout": {}
+      }
+    },
+    "contentDensities": {
+      "compact": true,
+      "cozy": true
+    },
+    "models": {
+      "i18n": {
+        "type": "sap.ui.model.resource.ResourceModel",
+        "settings": {
+          "bundleName": "odatanoview.walletviewer.i18n.i18n"
+        }
+      },
+      "": {
+        "dataSource": "mainService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": true
+        }
+      },
+      "tx": {
+        "dataSource": "txService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": false
+        }
+      }
+    },
+    "resources": {
+      "css": [
+        {
+          "uri": "css/style.css"
+        }
+      ]
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "controlAggregation": "pages",
+        "controlId": "app",
+        "type": "View",
+        "viewType": "XML",
+        "path": "odatanoview.walletviewer.view",
+        "async": true
+      },
+      "routes": [
+        {
+          "name": "wallet",
+          "pattern": "",
+          "target": ["walletDashboard"]
+        }
+      ],
+      "targets": {
+        "walletDashboard": {
+          "id": "walletDashboard",
+          "name": "WalletDashboard",
+          "level": 0
+        }
+      }
+    },
+    "rootView": {
+      "viewName": "odatanoview.walletviewer.view.App",
+      "type": "XML",
+      "id": "App",
+      "async": true
+    }
+  }
+}

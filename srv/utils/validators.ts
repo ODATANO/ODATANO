@@ -308,6 +308,10 @@ export interface TransactionInputs {
   mintingPolicyScript?: string;
   buildId?: string;
   submissionId?: string;
+  // M3 - External Signing Workflow
+  signingRequestId?: string;
+  signerType?: string;
+  signerInfo?: string;
 }
 
 /**

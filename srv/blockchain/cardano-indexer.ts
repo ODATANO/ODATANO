@@ -30,9 +30,13 @@ import {
 
 import {
   TransactionBuild,
+  TransactionBuilds,
   TransactionBuildInputs,
   TransactionBuildOutputs,
-  TransactionSubmission
+  TransactionSubmission,
+  TransactionSubmissions,
+  SigningRequests,
+  SignatureVerifications
 } from '#cds-models/CardanoTransactionService';
 
 import {
@@ -61,7 +65,7 @@ import {
 
 import { Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
 
-const { UPSERT } = cds.ql;
+const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
 const logger = cds.log('CardanoIndexer');
 
@@ -153,7 +157,9 @@ export class CardanoIndexer {
 
     const AddrEntity = mapAddress(addr, addrData);
 
-    await tx.run(UPSERT.into(Addresses).entries(AddrEntity))
+    // Delete old entries for this address first (temporal creates duplicates otherwise)
+    await tx.run(DELETE.from(Addresses).where({ address: addr }));
+    await tx.run(INSERT.into(Addresses).entries(AddrEntity));
 
     const assetEntities = mapAddressAssets(
       addr,
@@ -169,6 +175,8 @@ export class CardanoIndexer {
     }
 
     const utxoData = await cardano.getAddressUtxos(addr);
+    console.log('UTxO Data:', utxoData);
+    logger.debug({ utxoData }, 'indexAddress: utxo data');
 
     const utxoEntities = mapAddressUtxos(
       addr,
@@ -449,16 +457,250 @@ export class CardanoIndexer {
     return protocolParams;
   }
 
-  /** 
-   * Index & return the transaction submission record
+  /**
+   * Index & return the transaction submission record (without persistence)
    * @param signedTxCbor signed transaction in CBOR format (hex)
    * @param txHash transaction hash (hex)
    * @returns {Promise<TransactionSubmissionRow>} transaction submission entity data
+   * @deprecated Use persistTransactionSubmission instead
    */
   async indexTransactionSubmission(signedTxCbor: string, txHash: string): Promise<TransactionSubmission> {
     const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
-    // return submission record without persisting (caller will persist it)
     return transactionSubmission;
+  }
+
+  /**
+   * Persist a transaction submission with optional build association
+   * Handles: TransactionSubmission insert, optional Build status update
+   * @param tx CAP transaction object
+   * @param params submission parameters
+   * @returns {Promise<TransactionSubmission>} persisted transaction submission entity
+   */
+  async persistTransactionSubmission(
+    tx: CapTransaction,
+    params: {
+      signedTxCbor: string;
+      txHash: string;
+      buildId?: string | null;
+    }
+  ): Promise<TransactionSubmission> {
+    const { signedTxCbor, txHash, buildId } = params;
+
+    // Map submission data
+    const indexSubmission = mapTransactionSubmission(signedTxCbor, txHash);
+
+    // Create submission record
+    const submissionRecord = {
+      ...indexSubmission,
+      build_id: buildId || null,
+      backendResponse: 'Submitted successfully',
+      status: 'submitted',
+    };
+
+    // Persist submission
+    await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
+    logger.debug({ submissionId: submissionRecord.id, txHash }, 'Persisted submission record');
+
+    // Update build status if buildId provided
+    if (buildId) {
+      await tx.run(
+        UPDATE.entity(TransactionBuilds)
+          .set({ wasSubmitted: true })
+          .where({ id: buildId })
+      );
+      logger.debug({ buildId }, 'Updated build wasSubmitted flag');
+    }
+
+    return submissionRecord;
+  }
+
+  /**
+   * Persist a new signing request
+   * @param tx CAP transaction object
+   * @param params signing request parameters from external signer module
+   * @returns persisted signing request record
+   */
+  async persistSigningRequest(
+    tx: CapTransaction,
+    params: {
+      buildId: string;
+      signingPayload: {
+        signingRequestId: string;
+        txBodyHash: string;
+        unsignedTxCbor: string;
+        network: string;
+        createdAt: string;
+        expiresAt: string;
+        signingInstructions: {
+          cardanoCliCommand?: string;
+          cip30SigningRequest?: { txCbor: string };
+        };
+      };
+    }
+  ) {
+    const { buildId, signingPayload } = params;
+
+    // Create signing request record
+    const signingRequestRecord = {
+      id: signingPayload.signingRequestId,
+      build_id: buildId,
+      txBodyHash: signingPayload.txBodyHash,
+      unsignedTxCbor: signingPayload.unsignedTxCbor,
+      network: signingPayload.network,
+      status: 'pending' as const,
+      createdAt: signingPayload.createdAt,
+      expiresAt: signingPayload.expiresAt,
+      cardanoCliCommand: signingPayload.signingInstructions.cardanoCliCommand,
+      cip30TxCbor: signingPayload.signingInstructions.cip30SigningRequest?.txCbor,
+    };
+
+    // Persist to database
+    await tx.run(INSERT.into(SigningRequests).entries(signingRequestRecord));
+    logger.debug({ signingRequestId: signingRequestRecord.id, buildId }, 'Persisted signing request');
+
+    return signingRequestRecord;
+  }
+
+  /**
+   * Persist a signature verification with signing request status update
+   * Handles: SignatureVerification insert, SigningRequest status update
+   * @param tx CAP transaction object
+   * @param params verification parameters
+   * @returns persisted signature verification record
+   */
+  async persistSignatureVerification(
+    tx: CapTransaction,
+    params: {
+      signingRequestId: string;
+      signedTxCbor: string;
+      verificationResult: {
+        isValid: boolean;
+        txBodyHash: string;
+        witnessCount: number;
+        signerKeyHashes: string[];
+        errorMessage?: string | null;
+        warnings: string[];
+      };
+      signerType?: string;
+      signerInfo?: string;
+    }
+  ) {
+    const { signingRequestId, signedTxCbor, verificationResult, signerType, signerInfo } = params;
+
+    // Create verification record
+    const verificationRecord = {
+      id: cds.utils.uuid(),
+      signingRequest_id: signingRequestId,
+      signedTxCbor: signedTxCbor,
+      isValid: verificationResult.isValid,
+      txBodyHash: verificationResult.txBodyHash,
+      witnessCount: verificationResult.witnessCount,
+      signerKeyHashes: JSON.stringify(verificationResult.signerKeyHashes),
+      errorMessage: verificationResult.errorMessage || null,
+      warnings: JSON.stringify(verificationResult.warnings),
+      verifiedAt: new Date().toISOString(),
+    };
+
+    // Persist verification
+    await tx.run(INSERT.into(SignatureVerifications).entries(verificationRecord));
+    logger.debug({ verificationId: verificationRecord.id }, 'Persisted signature verification record');
+
+    // Update signing request status
+    const newStatus = verificationResult.isValid ? 'verified' : 'failed';
+    await tx.run(
+      UPDATE.entity(SigningRequests)
+        .set({
+          status: newStatus,
+          signerType: signerType || 'custom',
+          signerInfo: signerInfo || null,
+          signedAt: verificationResult.isValid ? new Date().toISOString() : null,
+          errorMessage: verificationResult.isValid ? null : verificationResult.errorMessage,
+        })
+        .where({ id: signingRequestId })
+    );
+    logger.debug({ signingRequestId, newStatus }, 'Updated signing request status');
+
+    return verificationRecord;
+  }
+
+  /**
+   * Index a verified transaction submission with all related records
+   * Handles persistence of: SignatureVerification, TransactionSubmission, SigningRequest update, Build update
+   * @param tx CAP transaction object
+   * @param params submission parameters
+   * @returns {Promise<TransactionSubmission>} transaction submission entity data
+   */
+  async indexVerifiedTransactionSubmission(
+    tx: CapTransaction,
+    params: {
+      signingRequestId: string;
+      buildId: string;
+      fullSignedTxCbor: string;
+      txHash: string;
+      verificationResult: {
+        txBodyHash: string;
+        witnessCount: number;
+        signerKeyHashes: string[];
+        warnings: string[];
+      };
+      signerType?: string;
+      signerInfo?: string;
+    }
+  ): Promise<TransactionSubmission> {
+    const { signingRequestId, buildId, fullSignedTxCbor, txHash, verificationResult, signerType, signerInfo } = params;
+
+    // Step 1: Create and persist verification record
+    const verificationRecord = {
+      id: cds.utils.uuid(),
+      signingRequest_id: signingRequestId,
+      signedTxCbor: fullSignedTxCbor,
+      isValid: true,
+      txBodyHash: verificationResult.txBodyHash,
+      witnessCount: verificationResult.witnessCount,
+      signerKeyHashes: JSON.stringify(verificationResult.signerKeyHashes),
+      errorMessage: null,
+      warnings: JSON.stringify(verificationResult.warnings),
+      verifiedAt: new Date().toISOString(),
+    };
+    await tx.run(INSERT.into(SignatureVerifications).entries(verificationRecord));
+    logger.debug({ verificationId: verificationRecord.id }, 'Persisted signature verification record');
+
+    // Step 2: Create and persist submission record
+    const indexSubmission = mapTransactionSubmission(fullSignedTxCbor, txHash);
+    const submissionRecord = {
+      ...indexSubmission,
+      build_id: buildId,
+      backendResponse: `Submitted successfully (verified: ${verificationResult.witnessCount} witness(es))`,
+      status: 'submitted',
+    };
+    await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
+    logger.debug({ submissionId: submissionRecord.id }, 'Persisted submission record');
+
+    // Step 3: Update signing request status
+    const now = new Date().toISOString();
+    await tx.run(
+      UPDATE.entity(SigningRequests)
+        .set({
+          status: 'submitted',
+          signerType: signerType || 'custom',
+          signerInfo: signerInfo || null,
+          signedAt: now,
+          submittedAt: now,
+          submission_id: submissionRecord.id,
+        })
+        .where({ id: signingRequestId })
+    );
+    logger.debug({ signingRequestId }, 'Updated signing request status to submitted');
+
+    // Step 4: Update build status
+    await tx.run(
+      UPDATE.entity(TransactionBuilds)
+        .set({ wasSubmitted: true })
+        .where({ id: buildId })
+    );
+    logger.debug({ buildId }, 'Updated build wasSubmitted flag');
+
+    return submissionRecord;
   }
 
   /** 

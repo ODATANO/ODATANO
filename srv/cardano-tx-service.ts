@@ -5,7 +5,8 @@ import { validateTransactionInputs } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
-const { SELECT } = cds.ql;
+import { getExternalSignerModule, combineTransactionWithWitnesses } from './blockchain/signing/external-signer';
+const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
 
@@ -22,6 +23,8 @@ module.exports = (srv: cds.Service) => {
     TransactionBuildOutputs,
     TransactionSubmissions,
     TransactionSubmissionErrors,
+    SigningRequests,
+    SignatureVerifications,
   } = require('#cds-models/CardanoTransactionService');
 
   /**
@@ -217,6 +220,7 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Submit signed transaction built previously
+   * Handler validates, checks build exists, submits to blockchain, delegates persistence to indexer
    * @param req - CDS request object (with buildId, signedTxCbor)
    * @returns Transaction submission details
    */
@@ -228,7 +232,6 @@ module.exports = (srv: cds.Service) => {
     const errors = validateTransactionInputs({ buildId, signedTxCbor }, ['buildId', 'signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitTransaction', errors);
 
-    // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
       logger.debug({ buildId }, 'Submitting signed transaction');
 
@@ -236,28 +239,19 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
 
-      // Use txBodyHash from build instead of parsing signed CBOR
+      // Use txBodyHash from build
       const txHash = existing.txBodyHash;
 
-      // submit to blockchain via configured backends (Ogmios/Blockfrost/Koios)
-      // Error mapping happens in normalizeBackendError (called by handleBackendRequest)
+      // Submit to blockchain
       await cardanoClient.submitTransaction(signedTxCbor);
       logger.info({ txHash }, 'Transaction submitted to blockchain');
 
-      // index submission record
-      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
-      logger.debug('Transaction indexed');
-
-      // store submission record with txHash
-      const submissionRecord = {
-        ...indexSubmission,
-        build_id: buildId,
-        backendResponse: `Submitted successfully`,
-        status: 'submitted',
-      };
-
-      await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
-      await db.run(UPDATE.entity(TransactionBuilds).set({ wasSubmitted: true }).where({ id: buildId }));
+      // Delegate persistence to indexer
+      const submissionRecord = await indexer.persistTransactionSubmission(db, {
+        signedTxCbor,
+        txHash,
+        buildId,
+      });
 
       return submissionRecord;
     });
@@ -265,6 +259,7 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Submit signed transaction without prior build
+   * Handler validates, submits to blockchain, delegates persistence to indexer
    * @param req - CDS request object (with signedTxCbor, network)
    * @returns Transaction submission details
    */
@@ -272,32 +267,24 @@ module.exports = (srv: cds.Service) => {
     logger.info('SubmitSignedTransaction Action handler called');
     const { signedTxCbor } = req.data;
 
-    // validate inputs (includes CBOR format validation)
+    // Validate inputs (includes CBOR format validation)
     const errors = validateTransactionInputs({ signedTxCbor }, ['signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitSignedTransaction', errors);
 
-    // handle the request / submitting the transaction / indexing the submission / returning submission details
     return handleRequest(req, async (db) => {
-      // extract txHash from signed CBOR (before submission)
+      // Extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
 
-      // submit to blockchain
-      // Error mapping happens in normalizeBackendError (called by handleBackendRequest)
+      // Submit to blockchain
       await cardanoClient.submitTransaction(signedTxCbor);
-      logger.debug({ txHash }, 'External transaction submitted');
+      logger.info({ txHash }, 'External transaction submitted');
 
-      // index submission record
-      const indexSubmission = await indexer.indexTransactionSubmission(signedTxCbor, txHash);
-      logger.debug('External transaction indexed');
-
-      // store submission record with null buildId
-      const submissionRecord = {
-        ...indexSubmission,
-        build_id: null,
-        backendResponse: `Submitted successfully`,
-      };
-
-      await db.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
+      // Delegate persistence to indexer (no build association)
+      const submissionRecord = await indexer.persistTransactionSubmission(db, {
+        signedTxCbor,
+        txHash,
+        buildId: null,
+      });
 
       return submissionRecord;
     });
@@ -323,6 +310,230 @@ module.exports = (srv: cds.Service) => {
       if (!submission) rejectInvalid(req, 'CheckSubmissionStatus', 'Submission not found', 'submissionId');
 
       return submission;
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // M3 - External Signing Workflow Actions
+  // ---------------------------------------------------------------------------
+
+  /**
+   * READ handler for SigningRequests entity
+   */
+  srv.on('READ', SigningRequests, async (req: Request) => {
+    logger.debug('SigningRequests READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * READ handler for SignatureVerifications entity
+   */
+  srv.on('READ', SignatureVerifications, async (req: Request) => {
+    logger.debug('SignatureVerifications READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /**
+   * Create a new signing request for external signing
+   * Persists the request for audit trail and workflow tracking
+   * @param req - CDS request object (with buildId)
+   * @returns Persisted signing request entity
+   */
+  srv.on('CreateSigningRequest', async (req: Request) => {
+    logger.debug('CreateSigningRequest Action handler called');
+    const { buildId } = req.data;
+
+    // Validate inputs
+    const errors = validateTransactionInputs({ buildId }, ['buildId']);
+    throwIfValidationErrors(req, 'CreateSigningRequest', errors);
+
+    return handleRequest(req, async (db) => {
+      // Fetch the build
+      const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+      if (!build) rejectInvalid(req, 'CreateSigningRequest', 'Build not found', 'buildId');
+
+      // Check if signing request already exists for this build
+      const existingRequest = await db.run(
+        SELECT.one.from(SigningRequests).where({ build_id: buildId, status: 'pending' })
+      );
+      if (existingRequest) {
+        logger.info({ buildId, signingRequestId: existingRequest.id }, 'Returning existing signing request');
+        return existingRequest;
+      }
+
+      // Create signing request using external signer module
+      const signerModule = getExternalSignerModule();
+      const signingPayload = signerModule.createSigningRequest(
+        build.id,
+        build.unsignedTxCbor,
+        build.txBodyHash,
+        build.network
+      );
+
+      // Delegate persistence to indexer
+      const signingRequestRecord = await indexer.persistSigningRequest(db, {
+        buildId,
+        signingPayload,
+      });
+
+      logger.info({ buildId, signingRequestId: signingRequestRecord.id }, 'Created signing request');
+
+      return signingRequestRecord;
+    });
+  });
+
+  /**
+   * Get an existing signing request by ID
+   * @param req - CDS request object (with signingRequestId)
+   * @returns Signing request entity
+   */
+  srv.on('GetSigningRequest', async (req: Request) => {
+    logger.debug('GetSigningRequest Action handler called');
+    const { signingRequestId } = req.data;
+
+    // Validate inputs
+    const errors = validateTransactionInputs({ signingRequestId }, ['signingRequestId']);
+    throwIfValidationErrors(req, 'GetSigningRequest', errors);
+
+    // Fetch the signing request
+    const signingRequest = await cds.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+    if (!signingRequest) rejectInvalid(req, 'GetSigningRequest', 'Signing request not found', 'signingRequestId');
+
+    // Check if expired and update status if needed
+    if (signingRequest.status === 'pending' && new Date(signingRequest.expiresAt) < new Date()) {
+      await cds.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+      signingRequest.status = 'expired';
+    }
+
+    return signingRequest;
+  });
+
+  /**
+   * Verify signature of a signed transaction
+   * Handler validates, verifies signature, delegates persistence to indexer
+   * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
+   * @returns Persisted signature verification entity
+   */
+  srv.on('VerifySignature', async (req: Request) => {
+    logger.debug('VerifySignature Action handler called');
+    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
+
+    // Validate inputs
+    const errors = validateTransactionInputs(
+      { signingRequestId, signedTxCbor },
+      ['signingRequestId', 'signedTxCbor']
+    );
+    throwIfValidationErrors(req, 'VerifySignature', errors);
+
+    return handleRequest(req, async (db) => {
+      // Fetch the signing request
+      const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+      if (!signingRequest) rejectInvalid(req, 'VerifySignature', 'Signing request not found', 'signingRequestId');
+
+      // Check if expired
+      if (new Date(signingRequest.expiresAt) < new Date()) {
+        await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+        rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
+      }
+
+      // Verify the signature
+      const signerModule = getExternalSignerModule();
+      const result = signerModule.verifySignedTransaction(signedTxCbor, signingRequest.txBodyHash);
+
+      // Delegate persistence to indexer
+      const verificationRecord = await indexer.persistSignatureVerification(db, {
+        signingRequestId,
+        signedTxCbor,
+        verificationResult: result,
+        signerType,
+        signerInfo,
+      });
+
+      logger.info({
+        signingRequestId,
+        verificationId: verificationRecord.id,
+        isValid: result.isValid,
+        witnessCount: result.witnessCount,
+      }, 'Signature verification completed');
+
+      return verificationRecord;
+    });
+  });
+
+  /**
+   * Verify and submit a signed transaction in one step
+   * Handler validates, checks preconditions, and delegates persistence to indexer
+   * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
+   * @returns Transaction submission details
+   */
+  srv.on('SubmitVerifiedTransaction', async (req: Request) => {
+    logger.debug('SubmitVerifiedTransaction Action handler called');
+    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
+
+    // Validate inputs
+    const errors = validateTransactionInputs(
+      { signingRequestId, signedTxCbor },
+      ['signingRequestId', 'signedTxCbor']
+    );
+    throwIfValidationErrors(req, 'SubmitVerifiedTransaction', errors);
+
+    return handleRequest(req, async (db) => {
+      // Fetch the signing request
+      const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+      if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
+
+      // Check if expired
+      if (new Date(signingRequest.expiresAt) < new Date()) {
+        await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
+      }
+
+      // Check if already submitted
+      if (signingRequest.status === 'submitted') {
+        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Transaction already submitted', 'signingRequestId');
+      }
+
+      // Check if build association exists
+      if (!signingRequest.build_id) {
+        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has no associated build', 'signingRequestId');
+      }
+
+      // Combine witness set with unsigned transaction
+      const fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
+
+      // Verify signature (throws on failure)
+      const signerModule = getExternalSignerModule();
+      const verificationResult = signerModule.verifyOrThrow(fullSignedTxCbor, signingRequest.txBodyHash);
+
+      logger.info({
+        signingRequestId,
+        witnessCount: verificationResult.witnessCount,
+        signers: verificationResult.signerKeyHashes,
+      }, 'Signature verified, proceeding with submission');
+
+      // Submit to blockchain
+      const txHash = signingRequest.txBodyHash;
+      await cardanoClient.submitTransaction(fullSignedTxCbor);
+      logger.info({ txHash }, 'Verified transaction submitted to blockchain');
+
+      // Delegate all persistence to indexer
+      const submissionRecord = await indexer.indexVerifiedTransactionSubmission(db, {
+        signingRequestId,
+        buildId: signingRequest.build_id,
+        fullSignedTxCbor,
+        txHash,
+        verificationResult,
+        signerType,
+        signerInfo,
+      });
+
+      logger.info({
+        signingRequestId,
+        submissionId: submissionRecord.id,
+        txHash,
+      }, 'Transaction submitted and all records updated');
+
+      return submissionRecord;
     });
   });
 };

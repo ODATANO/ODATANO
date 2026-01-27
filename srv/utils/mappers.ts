@@ -241,27 +241,24 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
  */
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
-  const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) =>
-    Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace')
-  );
-  const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
-    const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity);
-    return sum + lovelaceAmount;
-  }, 0);
+  return addressUtxosData.map((utxo: UtxosProviderData) => {
+    const lovelace = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity ?? 0);
+    const hasAssets = Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace');
 
-  return addressUtxosData.map((utxo: UtxosProviderData) => ({
-    address_address: addr,
-    hash: utxo.txHash,
-    index: utxo.outputIndex,
-    blockHash: utxo.blockHash,
-    utxodata_dataHash: utxo.datumHash,
-    utxodata_inlineDatum: null,
-    utxodata_referenceScriptHash: utxo.scriptRef,
-    totalLovelace: totalLovelace,
-    validFrom: validFrom,
-    validTo: validTo,
-    hasAssets: hasAssets,
-  }));
+    return {
+      address_address: addr,
+      hash: utxo.txHash,
+      index: utxo.outputIndex,
+      blockHash: utxo.blockHash,
+      utxodata_dataHash: utxo.datumHash,
+      utxodata_inlineDatum: null,
+      utxodata_referenceScriptHash: utxo.scriptRef,
+      lovelace: lovelace,
+      validFrom: validFrom,
+      validTo: validTo,
+      hasAssets: hasAssets,
+    };
+  });
 }
 
 /** 

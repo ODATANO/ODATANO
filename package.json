@@ -69,7 +69,8 @@
     "test:integration:ogmios": "npm test -- --testPathPattern=core-ogmios.test.ts",
     "test:integration:both": "npm run test:integration:blockfrost && npm run test:integration:koios",
     "test:unit": "npm test -- --testPathPattern=unit",
-    "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false"
+    "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
+    "watch-wallet-viewer": "cds watch --open odatanoview.walletviewer/index.html?sap-ui-xx-viewCache=false --livereload false"
   },
   "workspaces": [
     "app/*"

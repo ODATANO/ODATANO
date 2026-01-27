@@ -1,0 +1,182 @@
+<mvc:View
+    controllerName="odatanoview.walletviewer.controller.WalletDashboard"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <Page
+        id="walletDashboardPage"
+        title="Cardano Wallet"
+        showNavButton="false">
+
+        <customHeader>
+            <Bar>
+                <contentMiddle>
+                    <Title text="Cardano Wallet"/>
+                </contentMiddle>
+                <contentRight>
+                    <Button
+                        text="Disconnect"
+                        type="Transparent"
+                        press=".onDisconnect"
+                        visible="{wallet>/isConnected}"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+            <!-- Not Connected State -->
+            <VBox
+                id="notConnectedBox"
+                alignItems="Center"
+                justifyContent="Center"
+                class="sapUiLargeMargin">
+
+                <core:Icon
+                    src="sap-icon://card"
+                    size="5rem"
+                    color="#0854a0"
+                    class="sapUiMediumMarginBottom"
+                    visible="{= !${wallet>/isConnected}}"/>
+
+                <Title
+                    text="Connect Your Wallet"
+                    level="H1"
+                    class="sapUiSmallMarginBottom"
+                    visible="{= !${wallet>/isConnected}}"/>
+
+                <Text
+                    text="Connect a Cardano browser wallet to view your balance and send ADA"
+                    textAlign="Center"
+                    class="sapUiMediumMarginBottom"
+                    visible="{= !${wallet>/isConnected}}"/>
+
+                <!-- Wallet List -->
+                <List
+                    id="walletList"
+                    items="{wallet>/availableWallets}"
+                    mode="SingleSelectMaster"
+                    selectionChange=".onWalletSelect"
+                    noDataText="No Cardano wallets detected. Install Nami, Eternl or Lace."
+                    width="350px"
+                    visible="{= !${wallet>/isConnected}}">
+                    <CustomListItem type="Active">
+                        <HBox alignItems="Center" class="sapUiSmallMargin">
+                            <Image
+                                src="{wallet>icon}"
+                                width="40px"
+                                height="40px"
+                                class="sapUiSmallMarginEnd"/>
+                            <VBox>
+                                <Text text="{wallet>name}" class="sapMTextBold"/>
+                                <Text text="v{wallet>apiVersion}"/>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+
+                <!-- Connecting indicator -->
+                <BusyIndicator
+                    text="Connecting to wallet..."
+                    visible="{wallet>/isConnecting}"
+                    class="sapUiLargeMarginTop"/>
+
+                <!-- Error display -->
+                <MessageStrip
+                    text="{wallet>/error}"
+                    type="Error"
+                    showIcon="true"
+                    visible="{= !!${wallet>/error}}"
+                    class="sapUiMediumMarginTop"/>
+            </VBox>
+
+            <!-- Connected State - Wallet Dashboard -->
+            <VBox
+                id="connectedBox"
+                visible="{wallet>/isConnected}"
+                class="sapUiSmallMargin">
+
+                <!-- Wallet Info Header -->
+                <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                    <Image
+                        src="{wallet>/walletIcon}"
+                        width="48px"
+                        height="48px"
+                        class="sapUiSmallMarginEnd"/>
+                    <VBox>
+                        <Title text="{wallet>/walletName}" level="H2"/>
+                        <ObjectStatus
+                            text="{wallet>/networkName}"
+                            state="{= ${wallet>/networkId} === 1 ? 'Success' : 'Warning'}"/>
+                    </VBox>
+                    <ToolbarSpacer/>
+                    <Button
+                        icon="sap-icon://refresh"
+                        type="Transparent"
+                        press=".onRefreshWallet"
+                        tooltip="Refresh"/>
+                </HBox>
+
+                <!-- Balance Card -->
+                <Panel headerText="Balance" expandable="false" class="sapUiTinyMarginTop">
+                    <content>
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+                            <VBox>
+                                <ObjectNumber
+                                    number="{= Math.floor(Number(${wallet>/balance/lovelace} || 0) / 1000000 * 100) / 100 }"
+                                    unit="ADA"
+                                    emphasized="true"
+                                    state="Information"/>
+                                <Text text="{= (${wallet>/balance/lovelace} || '0') + ' lovelace'}"/>
+                            </VBox>
+                            <Button
+                                text="Send ADA"
+                                icon="sap-icon://initiative"
+                                type="Emphasized"
+                                press=".onSendAda"/>
+                        </HBox>
+                    </content>
+                </Panel>
+
+                <!-- Primary Address -->
+                <Panel headerText="Your Address" expandable="false" class="sapUiTinyMarginTop">
+                    <content>
+                        <HBox alignItems="Center" class="sapUiSmallMargin">
+                            <Text text="{= ${wallet>/addresses/0/bech32} ? ${wallet>/addresses/0/bech32}.substring(0, 25) + '...' + ${wallet>/addresses/0/bech32}.slice(-10) : 'Loading...'}"/>
+                            <ToolbarSpacer/>
+                            <Button
+                                icon="sap-icon://copy"
+                                type="Transparent"
+                                press=".onAddressPress"
+                                tooltip="Copy address"/>
+                        </HBox>
+                    </content>
+                </Panel>
+
+                <!-- All Addresses -->
+                <Panel headerText="All Addresses" expandable="true" expanded="false" class="sapUiTinyMarginTop">
+                    <content>
+                        <List items="{wallet>/addresses}" noDataText="No addresses">
+                            <StandardListItem
+                                title="{wallet>bech32}"
+                                description="{= ${wallet>isUsed} ? 'Used' : 'Unused'}"
+                                type="Active"
+                                press=".onAddressItemPress"
+                                wrapping="true"/>
+                        </List>
+                    </content>
+                </Panel>
+            </VBox>
+        </content>
+
+        <footer>
+            <Bar visible="{wallet>/isConnected}">
+                <contentMiddle>
+                    <Text text="Connected via CIP-30"/>
+                </contentMiddle>
+            </Bar>
+        </footer>
+
+    </Page>
+
+</mvc:View>

@@ -409,10 +409,12 @@ module.exports = (srv: cds.Service) => {
 
     // proceed with handling the request / indexing result if needed
     return handleRequest(req, async (db) => {
+      // Check if address exists (CAP filters to valid entries automatically)
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
-        return await indexer.indexAddress(db, address);
+        await indexer.indexAddress(db, address);
+        return db.run(SELECT.one.from(Addresses).where({ address }));
       }
       return existing;
     });
@@ -445,13 +447,13 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressAssets).where({ address }));
-      if (!existing || existing.length === 0) {
+      // Check if address exists (CAP filters to valid entries automatically)
+      const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
+      if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
         await indexer.indexAddress(db, address);
-        return db.run(SELECT.from(AddressAssets).where({ address }));
       }
-      return existing;
+      return db.run(SELECT.from(AddressAssets).where({ address_address: address }));
     });
   });
 
@@ -481,16 +483,13 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressUTxOs).where({ address }));
-      if (!existing || existing.length === 0) {
+      // Check if address exists (CAP filters to valid entries automatically)
+      const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
+      if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
         await indexer.indexAddress(db, address);
-        // After indexing, fetch and return the UTxOs
-        const utxos = await db.run(SELECT.from(AddressUTxOs).where({ address }));
-        logger.debug({ utxos, count: utxos?.length }, 'UTxOs after indexing');
-        return utxos;
       }
-      return existing;
+      return db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
     });
   });
 

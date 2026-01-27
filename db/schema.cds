@@ -358,6 +358,8 @@ entity Addresses : temporal {
         @title      : 'Address Has UTxOs'
         @description: 'Indicates if address has UTxOs'
         hasUTxOs      : Boolean;
+
+
 }
 
 @title      : 'Address Assets'
@@ -1100,4 +1102,138 @@ entity TransactionSubmissionErrors {
         @title      : 'Is Recoverable'
         @description: 'Indicates if error is recoverable via retry'
         isRecoverable : Boolean;
+}
+
+//-----------------------------------------------------
+// M3 - External Signing Workflow Entities
+//-----------------------------------------------------
+
+@title      : 'Signing Request Status'
+@description: 'Enum type for signing request status'
+type SigningStatus : String(20) enum {
+    pending   = 'pending';
+    signed    = 'signed';
+    verified  = 'verified';
+    submitted = 'submitted';
+    expired   = 'expired';
+    failed    = 'failed';
+}
+
+@title      : 'Signing Requests'
+@description: 'Entity for tracking external signing requests and their workflow state'
+entity SigningRequests {
+
+        @title      : 'Signing Request ID (key)'
+        @description: 'Unique identifier for the signing request'
+    key id               : UUID;
+
+        @title      : 'Associated Build'
+        @description: 'Association to the transaction build being signed'
+        build            : Association to TransactionBuilds;
+
+        @title      : 'Transaction Body Hash'
+        @description: 'The hash of the transaction body (data to be signed)'
+        txBodyHash       : Blake2b256;
+
+        @title      : 'Unsigned Transaction CBOR'
+        @description: 'The unsigned transaction in CBOR hex format'
+        unsignedTxCbor   : LargeString;
+
+        @title      : 'Network'
+        @description: 'Cardano network (mainnet | preprod | preview)'
+        network          : String(10);
+
+        @title      : 'Status'
+        @description: 'Current status of the signing request'
+        status           : SigningStatus default 'pending';
+
+        @title      : 'Created At'
+        @description: 'Timestamp when the signing request was created'
+        createdAt        : Timestamp;
+
+        @title      : 'Expires At'
+        @description: 'Timestamp when the signing request expires'
+        expiresAt        : Timestamp;
+
+        @title      : 'Signed At'
+        @description: 'Timestamp when the transaction was signed'
+        signedAt         : Timestamp;
+
+        @title      : 'Submitted At'
+        @description: 'Timestamp when the transaction was submitted'
+        submittedAt      : Timestamp;
+
+        @title      : 'Cardano CLI Command'
+        @description: 'Example command to sign with Cardano CLI'
+        cardanoCliCommand : LargeString;
+
+        @title      : 'CIP-30 CBOR'
+        @description: 'Transaction CBOR for browser wallet signing (CIP-30)'
+        cip30TxCbor      : LargeString;
+
+        @title      : 'Signer Type'
+        @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
+        signerType       : String(20);
+
+        @title      : 'Signer Info'
+        @description: 'Additional information about the signer (wallet name, etc.)'
+        signerInfo       : String(100);
+
+        @title      : 'Signature Verifications'
+        @description: 'Composition of signature verification attempts'
+        verifications    : Composition of many SignatureVerifications
+                              on verifications.signingRequest = $self;
+
+        @title      : 'Associated Submission'
+        @description: 'Association to the transaction submission (if submitted)'
+        submission       : Association to TransactionSubmissions;
+
+        @title      : 'Error Message'
+        @description: 'Error message if signing or verification failed'
+        errorMessage     : LargeString;
+}
+
+@title      : 'Signature Verifications'
+@description: 'Entity for storing signature verification results'
+entity SignatureVerifications {
+
+        @title      : 'Verification ID (key)'
+        @description: 'Unique identifier for the verification attempt'
+    key id               : UUID;
+
+        @title      : 'Associated Signing Request'
+        @description: 'Association to the parent signing request'
+        signingRequest   : Association to SigningRequests;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The signed transaction CBOR that was verified'
+        signedTxCbor     : LargeString;
+
+        @title      : 'Is Valid'
+        @description: 'Whether the signature is valid'
+        isValid          : Boolean;
+
+        @title      : 'Transaction Body Hash'
+        @description: 'The verified transaction body hash'
+        txBodyHash       : Blake2b256;
+
+        @title      : 'Witness Count'
+        @description: 'Number of signatures found'
+        witnessCount     : Integer;
+
+        @title      : 'Signer Key Hashes'
+        @description: 'JSON array of public key hashes that signed the transaction'
+        signerKeyHashes  : LargeString;
+
+        @title      : 'Error Message'
+        @description: 'Error message if verification failed'
+        errorMessage     : LargeString;
+
+        @title      : 'Warnings'
+        @description: 'JSON array of warning messages'
+        warnings         : LargeString;
+
+        @title      : 'Verified At'
+        @description: 'Timestamp when the verification was performed'
+        verifiedAt       : Timestamp;
 }
