@@ -413,8 +413,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
-        await indexer.indexAddress(db, address);
-        return db.run(SELECT.one.from(Addresses).where({ address }));
+        return await indexer.indexAddress(db, address);
       }
       return existing;
     });

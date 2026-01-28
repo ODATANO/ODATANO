@@ -157,51 +157,48 @@ export class CardanoIndexer {
 
     const AddrEntity = mapAddress(addr, addrData);
 
-    // Delete old entries for this address first (temporal creates duplicates otherwise)
-    await tx.run(DELETE.from(Addresses).where({ address: addr }));
-    await tx.run(INSERT.into(Addresses).entries(AddrEntity));
+      await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
-    const assetEntities = mapAddressAssets(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      addrData.amount
-    );
+      // Also insert child entities for new address
+      const assetEntities = mapAddressAssets(
+        addr,
+        AddrEntity.validFrom ?? new Date().toISOString(),
+        AddrEntity.validTo ?? new Date().toISOString(),
+        addrData.amount
+      );
 
-    logger.debug({ assetEntities }, 'indexAddress: asset entities');
+      logger.debug({ assetEntities }, 'indexAddress: asset entities');
 
-    if (assetEntities.length > 0) {
-      await tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
-    }
+      if (assetEntities.length > 0) {
+        await tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
+      }
 
-    const utxoData = await cardano.getAddressUtxos(addr);
-    console.log('UTxO Data:', utxoData);
-    logger.debug({ utxoData }, 'indexAddress: utxo data');
+      const utxoData = await cardano.getAddressUtxos(addr);
+      logger.debug({ utxoData }, 'indexAddress: utxo data');
 
-    const utxoEntities = mapAddressUtxos(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      utxoData
-    );
+      const utxoEntities = mapAddressUtxos(
+        addr,
+        AddrEntity.validFrom ?? new Date().toISOString(),
+        AddrEntity.validTo ?? new Date().toISOString(),
+        utxoData
+      );
 
-    logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
+      logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
-    if (utxoEntities.length) {
-      await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
-    }
+      if (utxoEntities.length) {
+        await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
+      }
 
-    const utxoAssetEntities = mapAddressUtxoAssets(
-      utxoData,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString()
-    );
-    logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
+      const utxoAssetEntities = mapAddressUtxoAssets(
+        utxoData,
+        AddrEntity.validFrom ?? new Date().toISOString(),
+        AddrEntity.validTo ?? new Date().toISOString()
+      );
+      logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
-    if (utxoAssetEntities.length) {
-      await tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
-    }
-
+      if (utxoAssetEntities.length) {
+        await tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
+      }
     return AddrEntity;
   }
 
