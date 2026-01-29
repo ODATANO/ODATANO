@@ -78,7 +78,7 @@ export default {
     },
 
     /**
-     * Truncate long hashes/addresses for display
+     * Truncate long hashes for display
      */
     truncateHash(hash: string | null | undefined, prefixLength: number = 8, suffixLength: number = 8): string {
         if (!hash) return "";

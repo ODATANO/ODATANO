@@ -92,8 +92,9 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
  */
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
-    // determine input index, defaulting to array index if not provided
-    const inputIndex = input.outputIndex ?? idx;
+    // Use array index as the input index (position in this transaction's inputs)
+    // Note: input.outputIndex is the output index from the ORIGINAL UTxO being spent, not for keying here
+    const inputIndex = idx;
     // check presence of address and amount arrays
     const hasAddress = !!input.address?.length;
     const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
@@ -125,8 +126,8 @@ export function mapTransactionInputAssets(
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
   return inputs.flatMap((input, idx) => {
-
-    const inputIndex = input.outputIndex ?? idx;
+    // Use array index as the input index (must match mapTransactionInputs)
+    const inputIndex = idx;
 
     if (!Array.isArray(input.amount)) return [];
 
@@ -236,23 +237,107 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 }
 
 /**
+ * Net asset change structure
+ */
+interface NetAsset {
+  unit: string;
+  policyId: string;
+  assetName: string;
+  assetNameHex: string;
+  quantity: string;
+}
+
+/**
  * Map Address Transactions
  * Converts provider address transaction data into AddressTransactionRow format
  * @param addr address string
- * @param addressTxsData address transactions data from provider 
- * @returns {AddressTransactionRow[]} mapped address transaction rows 
+ * @param addressTxsData address transactions data from provider
+ * @returns {AddressTransactionRow[]} mapped address transaction rows
  *  */
 export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[],validFrom: string, validTo: string): AddressTransactionRow[] {
 
   return addressTxsData.map((tx: TransactionProviderData) => {
-    
+    // Calculate net amounts for this address in this transaction
+    const { netLovelace, netAssets } = calculateNetAmounts(addr, tx);
+
     return {
       address_address: addr,
       tx_hash: tx.hash,
+      netAmount: netLovelace,
+      blockTime: tx.blockTime,
+      netAssets: netAssets.length > 0 ? JSON.stringify(netAssets) : null,
+      hasAssets: netAssets.length > 0,
       validFrom: validFrom,
       validTo: validTo,
     };
   });
+}
+
+/**
+ * Calculate net lovelace and asset changes for an address in a transaction
+ * @param addr the address to calculate for
+ * @param tx the transaction data
+ * @returns object with netLovelace and netAssets array
+ */
+function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLovelace: number; netAssets: NetAsset[] } {
+  let inputLovelace = 0;
+  let outputLovelace = 0;
+  const assetBalances = new Map<string, bigint>(); // unit -> net quantity
+
+  // Process inputs belonging to this address (subtract)
+  for (const input of tx.inputs || []) {
+    if (input.address === addr) {
+      for (const amount of input.amount || []) {
+        if (amount.unit === 'lovelace') {
+          inputLovelace += parseInt(amount.quantity, 10) || 0;
+        } else {
+          // Native asset
+          const current = assetBalances.get(amount.unit) || BigInt(0);
+          assetBalances.set(amount.unit, current - BigInt(amount.quantity));
+        }
+      }
+    }
+  }
+
+  // Process outputs going to this address (add)
+  for (const output of tx.outputs || []) {
+    if (output.address === addr) {
+      for (const amount of output.amount || []) {
+        if (amount.unit === 'lovelace') {
+          outputLovelace += parseInt(amount.quantity, 10) || 0;
+        } else {
+          // Native asset
+          const current = assetBalances.get(amount.unit) || BigInt(0);
+          assetBalances.set(amount.unit, current + BigInt(amount.quantity));
+        }
+      }
+    }
+  }
+
+  // Convert asset map to array, filtering out zero balances
+  const netAssets: NetAsset[] = [];
+  for (const [unit, quantity] of assetBalances) {
+    if (quantity !== BigInt(0)) {
+      // Parse unit into policyId and assetName
+      // Format: policyId (56 chars) + assetNameHex
+      const policyId = unit.substring(0, 56);
+      const assetNameHex = unit.substring(56);
+      const assetName = hexToUtf8(assetNameHex);
+
+      netAssets.push({
+        unit,
+        policyId,
+        assetName,
+        assetNameHex,
+        quantity: quantity.toString()
+      });
+    }
+  }
+
+  return {
+    netLovelace: outputLovelace - inputLovelace,
+    netAssets
+  };
 }
 
 

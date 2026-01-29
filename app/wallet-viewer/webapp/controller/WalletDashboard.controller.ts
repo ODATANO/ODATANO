@@ -7,12 +7,14 @@ import Dialog from "sap/m/Dialog";
 import Fragment from "sap/ui/core/Fragment";
 import { getWalletService, WalletService } from "../wallet/WalletService";
 import type { SigningRequest } from "../wallet/types/cip30";
+import formatter from "../model/formatter";
 
 /**
  * Wallet Dashboard Controller
  * @namespace odatanoview.walletviewer.controller
  */
 export default class WalletDashboard extends Controller {
+    public formatter = formatter;
     private walletService!: WalletService;
     private sendModel!: JSONModel;
     private signingModel!: JSONModel;
@@ -69,7 +71,10 @@ export default class WalletDashboard extends Controller {
         const walletId = item?.getBindingContext("wallet")?.getProperty("id") as string;
 
         if (walletId) {
-            await this.walletService.connect(walletId);
+            const connected = await this.walletService.connect(walletId);
+            if (connected) {
+                await this.loadTransactions();
+            }
         }
     }
 
@@ -85,6 +90,66 @@ export default class WalletDashboard extends Controller {
      */
     public async onRefreshWallet(): Promise<void> {
         await this.walletService.refresh();
+        await this.loadTransactions();
+    }
+
+    /**
+     * Load transactions for the connected wallet address from OData service
+     */
+    private async loadTransactions(): Promise<void> {
+        const primaryAddress = this.walletService.getPrimaryAddress();
+        if (!primaryAddress) {
+            return;
+        }
+
+        try {
+            const oDataModel = this.getView()?.getModel() as ODataModel;
+            if (!oDataModel) {
+                return;
+            }
+
+            // First, ensure address is indexed via GetAddressByBech32 action
+            const indexAction = oDataModel.bindContext("/GetAddressByBech32(...)");
+            indexAction.setParameter("address", primaryAddress);
+            await indexAction.execute();
+
+            // Query transactions with netAmount and blockTime (now stored directly)
+            const listBinding = oDataModel.bindList(
+                `/Addresses('${primaryAddress}')/transactions`,
+                undefined,
+                undefined,
+                undefined,
+                {
+                    $orderby: "blockTime desc"
+                }
+            );
+
+            const contexts = await listBinding.requestContexts(0, 20);
+
+            const transactions = contexts.map((ctx) => {
+                const data = ctx.getObject() as any;
+                // Parse assets from JSON string
+                let assets: any[] = [];
+                if (data.netAssets) {
+                    try {
+                        assets = JSON.parse(data.netAssets);
+                    } catch {
+                        assets = [];
+                    }
+                }
+                return {
+                    txHash: data.tx_hash || "",
+                    timestamp: data.blockTime || 0,
+                    amount: String(data.netAmount || 0),
+                    hasAssets: data.hasAssets || false,
+                    assets: assets
+                };
+            });
+
+            this.walletService.getModel().setProperty("/transactions", transactions);
+        } catch (error) {
+            console.warn("Failed to load transactions:", error);
+        }
     }
 
     // --- Address Actions ---

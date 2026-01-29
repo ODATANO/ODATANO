@@ -15,7 +15,7 @@ type Blake2b256    : String(64);
 
 @title      : 'HexBytes'
 @description: 'CBOR / bytes as hex string'
-type HexBytes      : String(8192);
+type HexBytes      : String(5000);
 
 @title      : 'Lovelace'
 @description: 'Amount of ADA in lovelace (1 ADA = 1_000_000 lovelace)'
@@ -84,7 +84,7 @@ type UTxODataSlice {
 
     @title      : 'Inline Datum'
     @description: 'The inline datum associated with the UTxO as hex CBOR'
-    inlineDatum         : HexBytes;
+    inlineDatum         : LargeString;
 
     @title      : 'Reference Script Hash'
     @description: 'The reference script hash associated with the UTxO'
@@ -453,6 +453,22 @@ entity AddressTransactions : temporal {
         @title      : 'Transaction (key)'
         @description: 'The associated transaction'
     key tx      : Association to Transactions;
+
+        @title      : 'Net Amount (Lovelace)'
+        @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
+        netAmount   : Int64;
+
+        @title      : 'Block Time'
+        @description: 'Block time of the transaction (denormalized for sorting)'
+        blockTime   : Integer64;
+
+        @title      : 'Net Assets'
+        @description: 'JSON array of net asset changes [{unit, policyId, assetName, quantity}] (positive = received, negative = sent)'
+        netAssets   : LargeString;
+
+        @title      : 'Has Assets'
+        @description: 'Indicates if this transaction involves native assets for this address'
+        hasAssets   : Boolean default false;
 }
 
 @title      : 'Accounts Entity'

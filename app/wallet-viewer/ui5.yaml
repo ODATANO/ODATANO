@@ -46,3 +46,17 @@ builder:
         debug: true
         transformModulesToUI5:
           overridesToOverride: true
+    - name: ui5-task-zipper
+      afterTask: generateComponentPreload
+      configuration:
+        archiveName: wallet-viewer
+        includeDependencies: false
+        additionalFiles:
+          - xs-app.json
+  resources:
+    excludes:
+      - "/test/**"
+      - "/localService/**"
+resources:
+  configuration:
+    propertiesFileSourceEncoding: UTF-8

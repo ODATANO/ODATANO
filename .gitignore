@@ -60,3 +60,7 @@ payment.addr
 payment.skey
 payment.vkey
 
+mtx/
+app/router/default-env.json
+app/router/package-lock.json
+build-ubuntu.sh

@@ -7,11 +7,14 @@
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
+    "@cap-js/hana": "^2",
     "@cap-js/sqlite": "^2",
     "@cardano-ogmios/client": "^6.14.0",
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.21",
     "@sap/cds": "^9",
+    "@sap/cds-mtxs": "^3",
+    "@sap/xssec": "^4",
     "axios": "^1.13.2",
     "bech32": "^2.0.0",
     "dotenv": "^16.3.1",
@@ -41,10 +44,10 @@
   "cds": {
     "requires": {
       "db": {
-        "kind": "sqlite",
-        "credentials": {
-          "url": "db.sqlite"
-        }
+        "kind": "hana"
+      },
+      "[production]": {
+        "auth": "xsuaa"
       }
     }
   },
@@ -53,8 +56,8 @@
     "start": "cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
-    "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
-    "lint": "eslint \"**/*.ts\"",
+    "cds:types": "cds-typer * --outputDirectory @cds-models",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
     "pretest": "npm run cds:types && npm run db:deploy",
@@ -70,7 +73,7 @@
     "test:unit": "npm test -- --testPathPattern=unit",
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
     "watch-wallet-viewer": "cds watch --open odatanoview.walletviewer/index.html?sap-ui-xx-viewCache=false --livereload false",
-    "dev:wallet-viewer": "start cmd /c \"cds watch\" && npm run start --workspace=wallet-viewer"
+    "dev:wallet-viewer": "npm run cds:watch"
   },
   "workspaces": [
     "app/*"

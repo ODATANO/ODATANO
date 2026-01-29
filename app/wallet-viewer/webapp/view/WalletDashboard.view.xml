@@ -153,6 +153,43 @@
                     </content>
                 </Panel>
 
+                <Panel headerText="Wallet Transactions" expandable="true" expanded="false" class="sapUiTinyMarginTop"
+                    visible="{= ${wallet>/transactions}.length > 0 }">
+                    <content>
+                        <List items="{wallet>/transactions}" noDataText="No transactions">
+                            <CustomListItem type="Active" press=".onTransactionItemPress">
+                                <VBox class="sapUiSmallMargin">
+                                    <!-- Main Row: Hash and Amount -->
+                                    <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiTinyMarginBottom">
+                                        <VBox>
+                                            <Title level="H5" text="{= ${wallet>txHash} ? ${wallet>txHash}.substring(0, 12) + '...' + ${wallet>txHash}.slice(-8) : 'N/A'}"/>
+                                            <Label text="{parts: ['wallet>timestamp'], formatter: '.formatter.formatBlockTime'}" class="sapUiTinyMarginTop"/>
+                                        </VBox>
+                                        <VBox alignItems="End">
+                                            <ObjectNumber
+                                                number="{= (${wallet>amount} >= 0 ? '+' : '') + (Math.floor(Number(${wallet>amount} || 0) / 1000000 * 100) / 100)}"
+                                                unit="ADA"
+                                                state="{= ${wallet>amount} >= 0 ? 'Success' : 'Error'}"
+                                                emphasized="true"/>
+                                        </VBox>
+                                    </HBox>
+                                    <!-- Native Assets -->
+                                    <VBox visible="{wallet>hasAssets}" class="sapUiSmallMarginTop">
+                                        <Title level="H6" text="Native Assets"/>
+                                        <HBox items="{wallet>assets}" wrap="Wrap" class="sapUiTinyMarginTop">
+                                            <ObjectStatus
+                                                text="{= (Number(${wallet>quantity}) >= 0 ? '+' : '') + ${wallet>quantity} + ' ' + (${wallet>assetName} || ${wallet>policyId}.substring(0, 8) + '...')}"
+                                                state="{= Number(${wallet>quantity}) >= 0 ? 'Success' : 'Error'}"
+                                                icon="{= Number(${wallet>quantity}) >= 0 ? 'sap-icon://arrow-top' : 'sap-icon://arrow-bottom'}"
+                                                class="sapUiSmallMarginEnd sapUiTinyMarginBottom"/>
+                                        </HBox>
+                                    </VBox>
+                                </VBox>
+                            </CustomListItem>
+                        </List>
+                    </content>
+                </Panel>
+
                 <!-- All Addresses -->
                 <Panel headerText="All Addresses" expandable="true" expanded="false" class="sapUiTinyMarginTop">
                     <content>

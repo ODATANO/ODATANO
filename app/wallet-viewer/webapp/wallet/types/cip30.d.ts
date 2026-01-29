@@ -98,6 +98,38 @@ export interface WalletConnectionState {
     error: string | null;
     /** List of detected available wallets */
     availableWallets: AvailableWallet[];
+    /** Transactions for the wallet addresses */
+    transactions: WalletTransaction[];
+}
+
+/**
+ * Transaction info for wallet display
+ */
+export interface WalletTransaction {
+    /** Transaction hash */
+    txHash: string;
+    /** Block time as Unix timestamp */
+    timestamp: number;
+    /** Net ADA amount for this address (positive = received, negative = sent) */
+    amount: string;
+    /** Whether this transaction has native assets */
+    hasAssets: boolean;
+    /** Net asset changes for this address */
+    assets: WalletTransactionAsset[];
+}
+
+/**
+ * Asset change in a transaction
+ */
+export interface WalletTransactionAsset {
+    /** Full unit identifier (policyId + assetName hex) */
+    unit: string;
+    /** Policy ID (56 hex chars) */
+    policyId: string;
+    /** Asset name decoded as UTF-8 */
+    assetName: string;
+    /** Net quantity change (positive = received, negative = sent) */
+    quantity: string;
 }
 
 /**

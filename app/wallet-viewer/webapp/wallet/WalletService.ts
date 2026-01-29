@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import JSONModel from "sap/ui/model/json/JSONModel";
 import MessageToast from "sap/m/MessageToast";
 
@@ -58,7 +59,8 @@ const INITIAL_STATE: WalletConnectionState = {
     stakeAddresses: [],
     balance: null,
     error: null,
-    availableWallets: []
+    availableWallets: [],
+    transactions: []
 };
 
 /**
@@ -181,16 +183,17 @@ export class WalletService {
             this.connectedWalletId = walletId;
 
             // Get network info
-            const networkId = await this.enabledWallet.getNetworkId();
+            const enabledApi = this.enabledWallet!;
+            const networkId = await enabledApi.getNetworkId();
 
             // Get addresses
-            const usedAddresses = await this.enabledWallet.getUsedAddresses();
-            const unusedAddresses = await this.enabledWallet.getUnusedAddresses();
-            const changeAddress = await this.enabledWallet.getChangeAddress();
-            const stakeAddresses = await this.enabledWallet.getRewardAddresses();
+            const usedAddresses = await enabledApi.getUsedAddresses();
+            const unusedAddresses = await enabledApi.getUnusedAddresses();
+            const changeAddress = await enabledApi.getChangeAddress();
+            const stakeAddresses = await enabledApi.getRewardAddresses();
 
             // Parse balance
-            const balanceCbor = await this.enabledWallet.getBalance();
+            const balanceCbor = await enabledApi.getBalance();
             const balance = this.parseBalance(balanceCbor);
 
             // Build address list

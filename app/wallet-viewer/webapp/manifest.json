@@ -111,7 +111,9 @@
         {
           "name": "wallet",
           "pattern": "",
-          "target": ["walletDashboard"]
+          "target": [
+            "walletDashboard"
+          ]
         }
       ],
       "targets": {
