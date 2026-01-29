@@ -341,6 +341,11 @@ entity Addresses : temporal {
         @description: 'Total lovelace on this address'
         totalLovelace : Lovelace;
 
+        @title : 'Address Transactions'
+        @description : 'Composition of all transactions involving this address'
+        transactions : Composition of many AddressTransactions
+                            on transactions.address = $self;
+
         @title      : 'Address Assets'
         @description: 'Composition of all assets on this address'
         assets        : Composition of many AddressAssets
@@ -350,6 +355,10 @@ entity Addresses : temporal {
         @description: 'Composition of all UTxOs on this address'
         utxos         : Composition of many AddressUTxOs
                             on utxos.address = $self;
+
+        @title : 'Address Has Transactions'
+        @description : 'Indicates if address has transactions'
+        hasTransactions : Boolean;
 
         @title      : 'Address Has Assets'
         @description: 'Indicates if address has native assets'
@@ -431,6 +440,19 @@ entity UTxOAssets : temporal {
         @title      : 'Asset Details'
         @description: 'Structural slice for asset details'
         asset : AssetSlice; // asset details
+}
+
+@title : 'Address Transactions'
+@description : 'Association entity for transactions involving an address'
+entity AddressTransactions : temporal {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the transaction'
+    key address : Association to Addresses;
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx      : Association to Transactions;
 }
 
 @title      : 'Accounts Entity'

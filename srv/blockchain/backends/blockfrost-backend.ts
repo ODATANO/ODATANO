@@ -201,6 +201,12 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const address_data = await this.api.addresses(address);
         const address_utxos = await this.api.addressesUtxos(address);
+        const address_txs = await this.api.addressesTransactions(address, { order: 'desc' });
+
+        const transactions = await Promise.all(address_txs.map(async (tx) => {
+          const addressesTransactions = await this.getTransaction(tx.tx_hash);
+          return addressesTransactions;
+        }));
 
         return {
           address: address_data.address,
@@ -217,6 +223,7 @@ export class BlockfrostBackend implements CardanoBackend {
             datumHash: utxo.data_hash,
             scriptRef: utxo.reference_script_hash,
           })),
+          transactions: transactions,
         };
       },
       this.name

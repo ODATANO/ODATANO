@@ -220,7 +220,8 @@ export class OgmiosBackend implements EvaluatingBackend {
             datumHash: u.datumHash,
             scriptRef: u.script?.hash
           };
-        })
+        }),
+        transactions: []  // Historic transaction queries not supported
       };
     }, this.name);
   }

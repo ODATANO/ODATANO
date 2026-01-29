@@ -15,6 +15,9 @@ server:
             - /resources
             - /test-resources
           url: https://sapui5.hana.ondemand.com
+        backend:
+          - path: /odata
+            url: http://localhost:4004
     - name: fiori-tools-appreload
       afterMiddleware: compression
       configuration:

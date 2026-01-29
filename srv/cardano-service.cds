@@ -62,6 +62,10 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
     @description: 'Projection for Address UTxOs'
     entity AddressUTxOs             as projection on db.AddressUTxOs;
 
+    @title : 'Address Transactions'
+    @description: 'Projection for Address Transactions'
+    entity AddressTransactions     as projection on db.AddressTransactions;
+
     @title      : 'UTxO Assets'
     @description: 'Projection for UTxO Assets'
     entity UTxOAssets               as projection on db.UTxOAssets;

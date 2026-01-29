@@ -512,7 +512,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
         if (!existing) {
           logger.debug({ txHash }, 'Indexing transaction via indexer');
-          return await indexer.indexTransaction(db, txHash);
+          return await indexer.indexTransaction(db, txHash, true);
         }
         return existing;
       }
@@ -541,7 +541,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
       if (!existing) {
         logger.debug({ hash }, 'Indexing transaction via indexer');
-        return await indexer.indexTransaction(db, hash);
+        return await indexer.indexTransaction(db, hash, true);
       }
       return existing;
     });

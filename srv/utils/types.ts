@@ -81,6 +81,7 @@ export interface Address {
   isScript: boolean;
   amount: Amount[];
   utxos: UTxO[];
+  transactions: Transaction[];
 }
 
 /** 

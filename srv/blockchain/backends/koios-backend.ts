@@ -215,6 +215,14 @@ export class KoiosBackend implements CardanoBackend {
             quantity: quantity.toString(),
           })
         );
+
+        const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
+
+       const transactions = await Promise.all(addressTxs.map(async (tx: { tx_hash: string; }) => {
+          const addressesTransactions = await this.getTransaction(tx.tx_hash);
+          return addressesTransactions;
+       }));
+
         return {
           address: address,
           stakeAddress: addressData.stake_address || null,
@@ -222,6 +230,7 @@ export class KoiosBackend implements CardanoBackend {
           isScript: addressData.is_script,
           amount: amount,
           utxos: addressUtxos,
+          transactions: transactions,
         };
       },
       this.name

@@ -26,6 +26,7 @@ import {
   Pool,
   Address,
   LedgerProtocolParameter,
+  AddressTransactions,
 } from '#cds-models/CardanoODataService';
 
 import {
@@ -60,7 +61,8 @@ import {
   mapBuildInputs,
   mapBuildOutputs,
   mapProtocolParameters,
-  mapTransactionSubmission
+  mapTransactionSubmission,
+  mapAddressTransactions
 } from '../utils/mappers';
 
 import { Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
@@ -90,7 +92,7 @@ export class CardanoIndexer {
    * @param txHash  Cardano transaction hash (hex)
    * @returns {Promise<CardanoTransaction>} transaction entity data
    */
-  async indexTransaction(tx: CapTransaction, txHash: string,): Promise<CardanoTransaction> {
+  async indexTransaction(tx: CapTransaction, txHash: string, ensureAddr: boolean): Promise<CardanoTransaction> {
     // getting data from cardano data provider
     const providerTx = await cardano.getTransaction(txHash);
     const txRow = mapTransaction(providerTx);
@@ -101,7 +103,7 @@ export class CardanoIndexer {
 
     if (providerTx.inputs) {
       const addresses = this._collectAddressesFromUtxos(providerTx);
-      if (addresses.length) {
+      if (ensureAddr) {
         await this._ensureAddresses(tx, addresses);
       }
 
@@ -171,6 +173,25 @@ export class CardanoIndexer {
 
       if (assetEntities.length > 0) {
         await tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
+      }
+
+      // make sure we have transactions for this address indexed
+      const transactions = addrData.transactions || [];
+
+      for (const txData of transactions) {
+        await this.indexTransaction(tx, txData.hash, false);
+      }
+
+      const transactionsEntities = mapAddressTransactions(
+        addr,
+        transactions,
+        AddrEntity.validFrom ?? new Date().toISOString(),
+        AddrEntity.validTo ?? new Date().toISOString()
+      );
+      logger.debug({ transactionsEntities }, 'indexAddress: transaction entities');
+
+      if (transactionsEntities.length) {
+        await tx.run(UPSERT.into(AddressTransactions).entries(transactionsEntities))
       }
 
       const utxoData = await cardano.getAddressUtxos(addr);

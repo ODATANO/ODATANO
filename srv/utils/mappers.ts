@@ -34,6 +34,7 @@ import {
   Drep as DrepRow,
   Account as AccountRow,
   LedgerProtocolParameter as ProtocolParameterRow,
+  AddressTransaction as AddressTransactionRow
 } from '#cds-models/CardanoODataService';
 
 import type {
@@ -218,6 +219,8 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
+  const hasTransactions = Array.isArray(addressData.transactions) &&  addressData.transactions.length > 0;
+
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
@@ -228,8 +231,31 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
     validTo: validToIso,
     hasAssets: hasAssets,
     hasUTxOs: hasUtxos,
+    hasTransactions: hasTransactions,
   };
 }
+
+/**
+ * Map Address Transactions
+ * Converts provider address transaction data into AddressTransactionRow format
+ * @param addr address string
+ * @param addressTxsData address transactions data from provider 
+ * @returns {AddressTransactionRow[]} mapped address transaction rows 
+ *  */
+export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[],validFrom: string, validTo: string): AddressTransactionRow[] {
+
+  return addressTxsData.map((tx: TransactionProviderData) => {
+    
+    return {
+      address_address: addr,
+      tx_hash: tx.hash,
+      validFrom: validFrom,
+      validTo: validTo,
+    };
+  });
+}
+
+
 
 /** 
  * Map Address UTxOs
