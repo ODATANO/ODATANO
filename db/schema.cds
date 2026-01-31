@@ -433,9 +433,9 @@ entity UTxOAssets : temporal {
         @title: 'UTxO (key)'
     key utxo  : Association to AddressUTxOs; // utxo association
 
-        @title      : 'Asset Unit'
+        @title      : 'Asset Unit (key)'
         @description: 'The unique identifier for the asset unit'
-        unit  : AssetUnit; // asset unit
+    key unit  : AssetUnit; // asset unit - must be key since one UTxO can hold multiple assets
 
         @title      : 'Asset Details'
         @description: 'Structural slice for asset details'

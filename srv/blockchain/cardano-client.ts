@@ -32,6 +32,7 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
   getAddress: { preferLive: true },
   getAddressUtxos: { preferLive: true },
+  getAddressTransactions: { preferLive: false }, // Historical data - prefer indexers
   getNetworkInformation: { preferLive: true },
   getTransactionMetadata: { preferLive: false },
   getBlock: { preferLive: false },
@@ -269,7 +270,7 @@ export class CardanoClient {
     return this.route('getAddress', b => b.getAddress(address));
   }
 
-  /** 
+  /**
    * Get address UTxOs with fallback between backends
    * @param address bech32 address
    * @returns {Promise<UTxO[]>} list of UTxOs
@@ -278,7 +279,16 @@ export class CardanoClient {
     return this.route('getAddressUtxos', b => b.getAddressUtxos(address));
   }
 
-  /** 
+  /**
+   * Get address transactions with fallback between backends
+   * @param address bech32 address
+   * @returns {Promise<Transaction[]>} list of transactions for this address
+   */
+  getAddressTransactions(address: string): Promise<Transaction[]> {
+    return this.route('getAddressTransactions', b => b.getAddressTransactions(address));
+  }
+
+  /**
    * Get network information with fallback between backends
    * @returns {Promise<Network>} network information
    */

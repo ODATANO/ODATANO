@@ -92,14 +92,51 @@ export class KoiosBackend implements CardanoBackend {
           fee: parseInt(tx.tx_fee || '0', 10),
           deposit: parseInt(tx.deposit || '0', 10),
           size: tx.tx_size,
-          inputs: tx.inputs.map((input: any) => ({
-            address: input.address,
-            txHash: input.tx_hash,
-          })),
-          outputs: tx.outputs.map((output: any) => ({
-            address: output.address,
-            amount: output.amount,
-          })),
+          inputs: tx.inputs.map((input: any) => {
+            const amount: Amount[] = [
+              { unit: 'lovelace', quantity: input.value }
+            ];
+            if (input.asset_list && Array.isArray(input.asset_list)) {
+              for (const asset of input.asset_list) {
+                amount.push({
+                  unit: `${asset.policy_id}${asset.asset_name}`,
+                  quantity: asset.quantity
+                });
+              }
+            }
+            return {
+              address: input.payment_addr?.bech32 || input.address,
+              txHash: input.tx_hash,
+              outputIndex: input.tx_index,
+              amount: amount,
+              dataHash: input.datum_hash || null,
+              inlineDatum: input.inline_datum || null,
+              referenceScriptHash: input.reference_script || null,
+            };
+          }),
+          outputs: tx.outputs.map((output: any) => {
+            const amount: Amount[] = [
+              { unit: 'lovelace', quantity: output.value }
+            ];
+            if (output.asset_list && Array.isArray(output.asset_list)) {
+              for (const asset of output.asset_list) {
+                amount.push({
+                  unit: `${asset.policy_id}${asset.asset_name}`,
+                  quantity: asset.quantity
+                });
+              }
+            }
+            return {
+              address: output.payment_addr?.bech32 || output.address,
+              amount: amount,
+              txHash: tx.tx_hash,
+              outputIndex: output.tx_index,
+              dataHash: output.datum_hash || null,
+              inlineDatum: output.inline_datum || null,
+              isCollateral: false,
+              referenceScriptHash: output.reference_script || null,
+            };
+          }),
           metadata: labels
         };
       },
@@ -173,15 +210,14 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  /** 
-   * Get Address Data for specified address
+  /**
+   * Get Address Data (without transactions - use getAddressTransactions() separately)
    * @param address bech32 address
    * @returns {Promise<Address>} address data
    */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
-
         const { data } = await this.api.post('/address_info', { _addresses: [address] });
 
         if (!data || !Array.isArray(data) || data.length === 0) {
@@ -189,7 +225,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const addressData = data[0];
-        const addressUtxos = await this.getAddressUtxos(address)
+        const addressUtxos = await this.getAddressUtxos(address);
         const totals = new Map<string, bigint>();
 
         for (const u of addressData.utxo_set) {
@@ -216,13 +252,6 @@ export class KoiosBackend implements CardanoBackend {
           })
         );
 
-        const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
-
-       const transactions = await Promise.all(addressTxs.map(async (tx: { tx_hash: string; }) => {
-          const addressesTransactions = await this.getTransaction(tx.tx_hash);
-          return addressesTransactions;
-       }));
-
         return {
           address: address,
           stakeAddress: addressData.stake_address || null,
@@ -230,8 +259,27 @@ export class KoiosBackend implements CardanoBackend {
           isScript: addressData.is_script,
           amount: amount,
           utxos: addressUtxos,
-          transactions: transactions,
         };
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get Address Transactions
+   * @param address bech32 address
+   * @returns {Promise<Transaction[]>} list of transactions for this address
+   */
+  async getAddressTransactions(address: string): Promise<Transaction[]> {
+    return handleBackendRequest(
+      async () => {
+        const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
+
+        const transactions = await Promise.all(addressTxs.map(async (tx: { tx_hash: string }) => {
+          return this.getTransaction(tx.tx_hash);
+        }));
+
+        return transactions;
       },
       this.name
     );

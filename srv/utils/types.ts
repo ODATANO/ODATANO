@@ -81,7 +81,7 @@ export interface Address {
   isScript: boolean;
   amount: Amount[];
   utxos: UTxO[];
-  transactions: Transaction[];
+  transactions?: Transaction[]; // Optional - loaded separately via getAddressTransactions()
 }
 
 /** 

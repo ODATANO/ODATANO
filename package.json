@@ -13,8 +13,7 @@
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.21",
     "@sap/cds": "^9",
-    "@sap/cds-mtxs": "^3",
-    "@sap/xssec": "^4",
+        "@sap/xssec": "^4",
     "axios": "^1.13.2",
     "bech32": "^2.0.0",
     "dotenv": "^16.3.1",
@@ -44,9 +43,20 @@
   "cds": {
     "requires": {
       "db": {
-        "kind": "hana"
+        "kind": "sqlite",
+        "credentials": {
+          "url": "db.sqlite"
+        }
       },
       "[production]": {
+        "db": {
+          "kind": "hana",
+          "pool": {
+            "acquireTimeoutMillis": 30000,
+            "min": 0,
+            "max": 10
+          }
+        },
         "auth": "xsuaa"
       }
     }

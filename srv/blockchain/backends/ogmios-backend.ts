@@ -253,7 +253,20 @@ export class OgmiosBackend implements EvaluatingBackend {
     }, this.name);
   }
 
-  /** 
+  /**
+   * Get Address Transactions (not supported by Ogmios - use historical backend)
+   * Ogmios is a live state query backend and does not provide historical transaction data
+   * @param _address bech32 address
+   * @returns {Promise<Transaction[]>} always throws - use historical backend instead
+   */
+  async getAddressTransactions(_address: string): Promise<Transaction[]> {
+    throw new NotFoundError(
+      'Address transactions not available via Ogmios - use historical backend (Blockfrost/Koios)',
+      this.name
+    );
+  }
+
+  /**
    * Get current specific Pool Data
    * @param poolId pool id
    * @returns {Promise<PoolData>} pool data

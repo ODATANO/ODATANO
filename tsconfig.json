@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "lib": ["ES2022"],
     "module": "commonjs",
     "moduleResolution": "node",
@@ -9,13 +9,14 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "outDir": ".",
+    "outDir": "./dist",
     "rootDir": ".",
     "isolatedModules": false,
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true,
     "allowJs": true,
     "types": ["node", "jest"],
+    "baseUrl": ".",
     "paths": {
       "@sap/cds": [
         "./node_modules/@cap-js/cds-types"

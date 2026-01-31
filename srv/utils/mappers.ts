@@ -220,7 +220,9 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
-  const hasTransactions = Array.isArray(addressData.transactions) &&  addressData.transactions.length > 0;
+  // Transactions are loaded separately via getAddressTransactions() - set to false initially
+  // Will be updated when transactions are indexed
+  const hasTransactions = false;
 
   return {
     address,

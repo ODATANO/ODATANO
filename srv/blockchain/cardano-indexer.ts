@@ -145,8 +145,9 @@ export class CardanoIndexer {
     return txRow;
   }
 
-  /** 
-   * Index & return address data with assets and UTxOs
+  /**
+   * Index & return address data with assets and UTxOs (without transactions)
+   * Transactions are loaded separately via indexAddressTransactions() for better performance
    * @param tx       CAP transaction
    * @param addr     bech32 address
    * @return {Promise<Address>} address entity data
@@ -159,68 +160,98 @@ export class CardanoIndexer {
 
     const AddrEntity = mapAddress(addr, addrData);
 
-      await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
+    await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
-      // Also insert child entities for new address
-      const assetEntities = mapAddressAssets(
-        addr,
-        AddrEntity.validFrom ?? new Date().toISOString(),
-        AddrEntity.validTo ?? new Date().toISOString(),
-        addrData.amount
-      );
+    // Also insert child entities for new address
+    const assetEntities = mapAddressAssets(
+      addr,
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString(),
+      addrData.amount
+    );
 
-      logger.debug({ assetEntities }, 'indexAddress: asset entities');
+    logger.debug({ assetEntities }, 'indexAddress: asset entities');
 
-      if (assetEntities.length > 0) {
-        await tx.run(UPSERT.into(AddressAssets).entries(assetEntities))
-      }
+    if (assetEntities.length > 0) {
+      await tx.run(UPSERT.into(AddressAssets).entries(assetEntities));
+    }
 
-      // make sure we have transactions for this address indexed
-      const transactions = addrData.transactions || [];
+    // UTxOs are included in getAddress response
+    const utxoEntities = mapAddressUtxos(
+      addr,
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString(),
+      addrData.utxos
+    );
 
-      for (const txData of transactions) {
-        await this.indexTransaction(tx, txData.hash, false);
-      }
+    logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
-      const transactionsEntities = mapAddressTransactions(
-        addr,
-        transactions,
-        AddrEntity.validFrom ?? new Date().toISOString(),
-        AddrEntity.validTo ?? new Date().toISOString()
-      );
-      logger.debug({ transactionsEntities }, 'indexAddress: transaction entities');
+    if (utxoEntities.length) {
+      await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
+    }
 
-      if (transactionsEntities.length) {
-        await tx.run(UPSERT.into(AddressTransactions).entries(transactionsEntities))
-      }
+    const utxoAssetEntities = mapAddressUtxoAssets(
+      addrData.utxos,
+      AddrEntity.validFrom ?? new Date().toISOString(),
+      AddrEntity.validTo ?? new Date().toISOString()
+    );
+    logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
-      const utxoData = await cardano.getAddressUtxos(addr);
-      logger.debug({ utxoData }, 'indexAddress: utxo data');
+    if (utxoAssetEntities.length) {
+      // Deduplicate by composite key (remove duplicates within the batch)
+      const seen = new Set<string>();
+      const uniqueAssets = utxoAssetEntities.filter(asset => {
+        const key = `${asset.utxo_address_address}|${asset.utxo_hash}|${asset.utxo_index}|${asset.unit}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
 
-      const utxoEntities = mapAddressUtxos(
-        addr,
-        AddrEntity.validFrom ?? new Date().toISOString(),
-        AddrEntity.validTo ?? new Date().toISOString(),
-        utxoData
-      );
+      logger.debug(`indexAddress: ${utxoAssetEntities.length} assets, ${uniqueAssets.length} unique (removed ${utxoAssetEntities.length - uniqueAssets.length} duplicates)`);
+      await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
+    }
 
-      logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
-
-      if (utxoEntities.length) {
-        await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities))
-      }
-
-      const utxoAssetEntities = mapAddressUtxoAssets(
-        utxoData,
-        AddrEntity.validFrom ?? new Date().toISOString(),
-        AddrEntity.validTo ?? new Date().toISOString()
-      );
-      logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
-
-      if (utxoAssetEntities.length) {
-        await tx.run(UPSERT.into(UTxOAssets).entries(utxoAssetEntities))
-      }
     return AddrEntity;
+  }
+
+  /**
+   * Index & return address transactions (separate from indexAddress for lazy loading)
+   * This method is expensive as it fetches full transaction data for each tx
+   * @param tx       CAP transaction
+   * @param addr     bech32 address
+   * @return {Promise<AddressTransactions[]>} address transaction entities
+   */
+  async indexAddressTransactions(tx: CapTransaction, addr: string): Promise<AddressTransactions[]> {
+    logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
+
+    // Fetch transactions for this address
+    const transactions = await cardano.getAddressTransactions(addr);
+
+    logger.debug(`indexAddressTransactions: found ${transactions.length} transactions for ${addr}`);
+
+    // Index each transaction
+    for (const txData of transactions) {
+      await this.indexTransaction(tx, txData.hash, false);
+    }
+
+    // Create address-transaction mapping entries
+    const now = new Date().toISOString();
+    const validTo = new Date(Date.now() + 600000).toISOString(); // 10 min TTL
+
+    const transactionsEntities = mapAddressTransactions(
+      addr,
+      transactions,
+      now,
+      validTo
+    );
+
+    logger.debug({ count: transactionsEntities.length }, 'indexAddressTransactions: transaction entities');
+
+    if (transactionsEntities.length) {
+      await tx.run(UPSERT.into(AddressTransactions).entries(transactionsEntities));
+    }
+
+    return transactionsEntities as AddressTransactions[];
   }
 
   /** 
