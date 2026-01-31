@@ -55,7 +55,7 @@ export interface CardanoBackend {
    * @param address bech32 address
    * @returns {Promise<Transaction[]>} list of transactions involving this address
    */
-  getAddressTransactions(address: string): Promise<Transaction[]>;
+  getAddressTransactions(address: string, limit: number): Promise<Transaction[]>;
 
   /**
    * Get Network Information

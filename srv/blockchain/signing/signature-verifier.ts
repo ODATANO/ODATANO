@@ -1,42 +1,12 @@
 import cds from '@sap/cds';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import blake2b from 'blake2b';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
 import { BackendError, TransactionValidationError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
+import { SignatureVerificationResult, VerificationOptions } from '../../utils/types';
 
 const logger = cds.log('SignatureVerifier');
-
-/**
- * Result of signature verification
- */
-export interface SignatureVerificationResult {
-  /** Whether the signature is valid */
-  isValid: boolean;
-  /** Transaction body hash from the signed transaction */
-  txBodyHash: string;
-  /** Number of witnesses (signatures) found */
-  witnessCount: number;
-  /** List of public key hashes that signed the transaction */
-  signerKeyHashes: string[];
-  /** Any warnings during verification */
-  warnings: string[];
-  /** Error message if verification failed */
-  errorMessage?: string;
-}
-
-/**
- * Options for signature verification
- */
-export interface VerificationOptions {
-  /** Expected transaction body hash (from the build) */
-  expectedTxBodyHash?: string;
-  /** Whether to require at least one signature */
-  requireSignature?: boolean;
-  /** List of required signer key hashes (public key hashes) */
-  requiredSigners?: string[];
-}
 
 /**
  * SignatureVerifier - Verifies transaction signatures without accessing private keys

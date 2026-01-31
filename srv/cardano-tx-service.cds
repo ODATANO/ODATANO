@@ -171,7 +171,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     action CreateSigningRequest(
                                 @title: 'Build ID'
                                 @description: 'The unique identifier of the transaction build'
-                                buildId: UUID)               returns SigningRequests;
+                                buildId: UUID,
+                                @title: 'Message to Signer'
+                                @description: 'A message to include for the signer'
+                                message: String)             returns SigningRequests;
 
     @title      : 'Get Signing Request'
     @description: 'Retrieve an existing signing request by ID'

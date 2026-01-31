@@ -228,10 +228,10 @@ export class BlockfrostBackend implements CardanoBackend {
    * @param address bech32 address string
    * @returns {Promise<Transaction[]>} list of transactions for this address
    */
-  async getAddressTransactions(address: string): Promise<Transaction[]> {
+  async getAddressTransactions(address: string, limit?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
-        const address_txs = await this.api.addressesTransactions(address, { order: 'desc' });
+        const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
 
         const transactions = await Promise.all(address_txs.map(async (tx) => {
           return this.getTransaction(tx.tx_hash);

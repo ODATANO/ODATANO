@@ -270,12 +270,15 @@ export class KoiosBackend implements CardanoBackend {
    * @param address bech32 address
    * @returns {Promise<Transaction[]>} list of transactions for this address
    */
-  async getAddressTransactions(address: string): Promise<Transaction[]> {
+  async getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
         const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
 
-        const transactions = await Promise.all(addressTxs.map(async (tx: { tx_hash: string }) => {
+        // Limit before fetching individual transactions to save API calls
+        const limitedTxs = addressTxs.slice(0, limit);
+
+        const transactions = await Promise.all(limitedTxs.map(async (tx: { tx_hash: string }) => {
           return this.getTransaction(tx.tx_hash);
         }));
 

@@ -1,223 +1,18 @@
 import cds from '@sap/cds';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import * as cbor from 'cbor';
-import { SignatureVerifier, SignatureVerificationResult, VerificationOptions, getSignatureVerifier } from './signature-verifier';
+import { SignatureVerifier, getSignatureVerifier } from './signature-verifier';
 import { TransactionValidationError } from '../../utils/errors';
+import {
+  ExternalSignerType,
+  SigningStatus,
+  SigningInstructions,
+  UnsignedTxExportPayload,
+  SignedTxPayload,
+  SigningWorkflowState,
+  SignatureVerificationResult,
+  VerificationOptions,
+} from '../../utils/types';
+
 const logger = cds.log('ExternalSigner');
-
-/**
- * Combine an unsigned transaction with a witness set from CIP-30 wallet signing
- *
- * CIP-30 signTx() returns only the witness set, not a complete signed transaction.
- * This function combines the original unsigned transaction with the witness set
- * to create a complete signed transaction that can be submitted to the network.
- *
- * IMPORTANT: We use raw CBOR manipulation to preserve exact body bytes.
- * CSL's parse/re-serialize round-trip changes CBOR encoding, which invalidates the body hash.
- *
- * Cardano transaction structure: [body, witness_set, is_valid, auxiliary_data]
- *
- * @param unsignedTxCbor - The unsigned transaction CBOR (hex)
- * @param witnessSetCbor - The witness set CBOR from CIP-30 signTx() (hex)
- * @returns Complete signed transaction CBOR (hex)
- */
-export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessSetCbor: string): string {
-  try {
-    // Decode the unsigned transaction CBOR (array of 4 elements)
-    const unsignedTxBytes = Buffer.from(unsignedTxCbor, 'hex');
-    const txArray = cbor.decodeFirstSync(unsignedTxBytes);
-
-    if (!Array.isArray(txArray) || txArray.length < 2) {
-      throw new Error('Invalid transaction CBOR structure');
-    }
-
-    // Decode the wallet's witness set
-    const witnessSetBytes = Buffer.from(witnessSetCbor, 'hex');
-    const walletWitnessSet = cbor.decodeFirstSync(witnessSetBytes);
-
-    // txArray[0] = body (preserved exactly as-is)
-    // txArray[1] = witness_set (will be replaced with wallet's witness set)
-    // txArray[2] = is_valid (boolean, usually true)
-    // txArray[3] = auxiliary_data (preserved as-is)
-
-    // Replace the witness set with the wallet's witness set
-    txArray[1] = walletWitnessSet;
-
-    // Re-encode to CBOR
-    const signedTxBytes = cbor.encodeOne(txArray);
-    const signedTxCbor = signedTxBytes.toString('hex');
-
-    // Count witnesses for logging
-    let witnessCount = 0;
-    if (walletWitnessSet instanceof Map) {
-      const vkeys = walletWitnessSet.get(0);
-      witnessCount = Array.isArray(vkeys) ? vkeys.length : 0;
-    }
-
-    logger.info({
-      unsignedTxLength: unsignedTxCbor.length,
-      witnessSetLength: witnessSetCbor.length,
-      signedTxLength: signedTxCbor.length,
-      witnessCount,
-    }, 'Combined transaction with witness set (raw CBOR)');
-
-    return signedTxCbor;
-  } catch (error: any) {
-    logger.error({ error: error.message }, 'Failed to combine transaction with witnesses');
-    throw new TransactionValidationError(
-      `Failed to combine transaction with witnesses: ${error.message}`
-    );
-  }
-}
-
-/**
- * Check if a CBOR string is a witness set (vs a full transaction)
- *
- * CIP-30 returns witness sets, not full transactions.
- * This helps detect when we need to call combineTransactionWithWitnesses.
- *
- * @param cbor - CBOR hex string
- * @returns true if it's a witness set, false if it's a full transaction
- */
-export function isWitnessSetCbor(cbor: string): boolean {
-  try {
-    const bytes = Buffer.from(cbor, 'hex');
-    // Try to parse as transaction first
-    try {
-      const tx = CSL.Transaction.from_bytes(bytes);
-      // If successful and has a body, it's a full transaction
-      tx.body();
-      return false;
-    } catch {
-      // Not a transaction, try as witness set
-      CSL.TransactionWitnessSet.from_bytes(bytes);
-      return true;
-    }
-  } catch {
-    // Neither - could be invalid CBOR
-    return false;
-  }
-}
-
-/**
- * Supported external signer types
- */
-export enum ExternalSignerType {
-  /** Cardano CLI - Reference implementation for signing */
-  CARDANO_CLI = 'cardano-cli',
-  /** Browser wallets (Nami, Eternl, Flint, etc.) */
-  BROWSER_WALLET = 'browser-wallet',
-  /** Hardware wallets (Ledger, Trezor) */
-  HARDWARE_WALLET = 'hardware-wallet',
-  /** Custom/Unknown signer */
-  CUSTOM = 'custom',
-}
-
-/**
- * Signing request status
- */
-export enum SigningStatus {
-  /** Request created, awaiting signing */
-  PENDING = 'pending',
-  /** Transaction has been signed */
-  SIGNED = 'signed',
-  /** Signature verified, ready for submission */
-  VERIFIED = 'verified',
-  /** Transaction submitted to network */
-  SUBMITTED = 'submitted',
-  /** Signing or verification failed */
-  FAILED = 'failed',
-  /** Request expired (not signed within TTL) */
-  EXPIRED = 'expired',
-}
-
-/**
- * Unsigned transaction export payload for external signers
- *
- * This is the standardized format returned by BuildTransaction actions.
- * External signers use this payload to sign the transaction.
- */
-export interface UnsignedTxExportPayload {
-  /** Unique identifier for this signing request */
-  signingRequestId: string;
-  /** Deterministic reference ID linking to the build */
-  buildId: string;
-  /** Transaction body hash (the data to be signed) */
-  txBodyHash: string;
-  /** Unsigned transaction CBOR in hex format */
-  unsignedTxCbor: string;
-  /** Cardano network (mainnet | preprod | preview) */
-  network: string;
-  /** Timestamp when the request was created (ISO 8601) */
-  createdAt: string;
-  /** Timestamp when the request expires (ISO 8601) */
-  expiresAt: string;
-  /** Required signers (public key hashes) if known */
-  requiredSigners?: string[];
-  /** Signing instructions for the external signer */
-  signingInstructions: SigningInstructions;
-}
-
-/**
- * Instructions for external signers
- */
-export interface SigningInstructions {
-  /** Signer type hint (which tool/wallet to use) */
-  signerTypeHint: ExternalSignerType;
-  /** Human-readable message to display */
-  message: string;
-  /** Cardano CLI command example */
-  cardanoCliCommand?: string;
-  /** CIP-30 signing request format (for browser wallets) */
-  cip30SigningRequest?: {
-    /** Transaction CBOR to sign */
-    txCbor: string;
-    /** Whether to include partial witnesses */
-    partialSign: boolean;
-  };
-}
-
-/**
- * Signed transaction submission payload
- */
-export interface SignedTxPayload {
-  /** Original signing request ID */
-  signingRequestId: string;
-  /** Build ID from the original build */
-  buildId: string;
-  /** Signed transaction CBOR */
-  signedTxCbor: string;
-  /** Signer type used */
-  signerType: ExternalSignerType;
-  /** Optional: Signer identification (wallet name, etc.) */
-  signerInfo?: string;
-}
-
-/**
- * Signing workflow state
- */
-export interface SigningWorkflowState {
-  /** Current status of the signing workflow */
-  status: SigningStatus;
-  /** Signing request details */
-  request: UnsignedTxExportPayload;
-  /** Signed transaction (if available) */
-  signedTxCbor?: string;
-  /** Verification result (if verified) */
-  verificationResult?: SignatureVerificationResult;
-  /** Transaction hash after submission */
-  txHash?: string;
-  /** Error message if failed */
-  errorMessage?: string;
-  /** Timestamps for tracking */
-  timestamps: {
-    created: string;
-    signed?: string;
-    verified?: string;
-    submitted?: string;
-    failed?: string;
-  };
-}
 
 /**
  * Default TTL for signing requests (30 minutes)
@@ -266,6 +61,7 @@ export class ExternalSignerModule {
     unsignedTxCbor: string,
     txBodyHash: string,
     network: string,
+    message: string,
     options?: {
       requiredSigners?: string[];
       signerTypeHint?: ExternalSignerType;
@@ -289,6 +85,7 @@ export class ExternalSignerModule {
       signingInstructions: this.generateSigningInstructions(
         unsignedTxCbor,
         network,
+        message,
         signerTypeHint
       ),
     };
@@ -310,44 +107,18 @@ export class ExternalSignerModule {
   private generateSigningInstructions(
     unsignedTxCbor: string,
     network: string,
+    message: string,
     signerTypeHint: ExternalSignerType
   ): SigningInstructions {
-    const networkMagic = this.getNetworkMagic(network);
-
-    // Cardano CLI command example
-    const cardanoCliCommand = [
-      'cardano-cli conway transaction sign',
-      '--tx-body-file tx.unsigned',
-      '--signing-key-file payment.skey',
-      `--${network === 'mainnet' ? 'mainnet' : `testnet-magic ${networkMagic}`}`,
-      '--out-file tx.signed',
-    ].join(' \\\n  ');
-
     return {
       signerTypeHint,
-      message: `Sign the transaction using your preferred method. The transaction body hash is the data to be signed. After signing, submit the signed CBOR using the SubmitTransaction action.`,
-      cardanoCliCommand,
+      message: message,
+      network,
       cip30SigningRequest: {
         txCbor: unsignedTxCbor,
         partialSign: false,
       },
     };
-  }
-
-  /**
-   * Get network magic for testnet
-   */
-  private getNetworkMagic(network: string): number {
-    switch (network.toLowerCase()) {
-      case 'mainnet':
-        return 764824073;
-      case 'preprod':
-        return 1;
-      case 'preview':
-        return 2;
-      default:
-        return 2; // Default to preview
-    }
   }
 
   /**

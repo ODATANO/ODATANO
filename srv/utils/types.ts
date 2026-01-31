@@ -367,3 +367,153 @@ export type TxBuildResult = {
   changeOutput?: { address: string; lovelace: string };
   warnings: string[];
 };
+
+/**
+ * Supported external signer types
+ */
+export enum ExternalSignerType {
+  /** Cardano CLI - Reference implementation for signing */
+  CARDANO_CLI = 'cardano-cli',
+  /** Browser wallets (Nami, Eternl, Flint, etc.) */
+  BROWSER_WALLET = 'browser-wallet',
+  /** Hardware wallets (Ledger, Trezor) */
+  HARDWARE_WALLET = 'hardware-wallet',
+  /** Custom/Unknown signer */
+  CUSTOM = 'custom',
+}
+
+/**
+ * Signing request status
+ */
+export enum SigningStatus {
+  /** Request created, awaiting signing */
+  PENDING = 'pending',
+  /** Transaction has been signed */
+  SIGNED = 'signed',
+  /** Signature verified, ready for submission */
+  VERIFIED = 'verified',
+  /** Transaction submitted to network */
+  SUBMITTED = 'submitted',
+  /** Signing or verification failed */
+  FAILED = 'failed',
+  /** Request expired (not signed within TTL) */
+  EXPIRED = 'expired',
+}
+
+/**
+ * Instructions for external signers
+ */
+export interface SigningInstructions {
+  /** Signer type hint (which tool/wallet to use) */
+  signerTypeHint: ExternalSignerType;
+  /** Human-readable message to display */
+  message: string;
+  /** Cardano network */
+  network: string;
+  /** CIP-30 signing request format (for browser wallets) */
+  cip30SigningRequest?: {
+    /** Transaction CBOR to sign */
+    txCbor: string;
+    /** Whether to include partial witnesses */
+    partialSign: boolean;
+  };
+}
+
+/**
+ * Unsigned transaction export payload for external signers
+ *
+ * This is the standardized format returned by BuildTransaction actions.
+ * External signers use this payload to sign the transaction.
+ */
+export interface UnsignedTxExportPayload {
+  /** Unique identifier for this signing request */
+  signingRequestId: string;
+  /** Deterministic reference ID linking to the build */
+  buildId: string;
+  /** Transaction body hash (the data to be signed) */
+  txBodyHash: string;
+  /** Unsigned transaction CBOR in hex format */
+  unsignedTxCbor: string;
+  /** Cardano network (mainnet | preprod | preview) */
+  network: string;
+  /** Timestamp when the request was created (ISO 8601) */
+  createdAt: string;
+  /** Timestamp when the request expires (ISO 8601) */
+  expiresAt: string;
+  /** Required signers (public key hashes) if known */
+  requiredSigners?: string[];
+  /** Signing instructions for the external signer */
+  signingInstructions: SigningInstructions;
+}
+
+/**
+ * Signed transaction submission payload
+ */
+export interface SignedTxPayload {
+  /** Original signing request ID */
+  signingRequestId: string;
+  /** Build ID from the original build */
+  buildId: string;
+  /** Signed transaction CBOR */
+  signedTxCbor: string;
+  /** Signer type used */
+  signerType: ExternalSignerType;
+  /** Optional: Signer identification (wallet name, etc.) */
+  signerInfo?: string;
+}
+
+/**
+ * Signing workflow state
+ */
+export interface SigningWorkflowState {
+  /** Current status of the signing workflow */
+  status: SigningStatus;
+  /** Signing request details */
+  request: UnsignedTxExportPayload;
+  /** Signed transaction (if available) */
+  signedTxCbor?: string;
+  /** Verification result (if verified) */
+  verificationResult?: SignatureVerificationResult;
+  /** Transaction hash after submission */
+  txHash?: string;
+  /** Error message if failed */
+  errorMessage?: string;
+  /** Timestamps for tracking */
+  timestamps: {
+    created: string;
+    signed?: string;
+    verified?: string;
+    submitted?: string;
+    failed?: string;
+  };
+}
+
+/**
+ * Result of signature verification
+ */
+export interface SignatureVerificationResult {
+  /** Whether the signature is valid */
+  isValid: boolean;
+  /** Transaction body hash from the signed transaction */
+  txBodyHash: string;
+  /** Number of witnesses (signatures) found */
+  witnessCount: number;
+  /** List of public key hashes that signed the transaction */
+  signerKeyHashes: string[];
+  /** Any warnings during verification */
+  warnings: string[];
+  /** Error message if verification failed */
+  errorMessage?: string;
+}
+
+/**
+ * Options for signature verification
+ */
+export interface VerificationOptions {
+  /** Expected transaction body hash (from the build) */
+  expectedTxBodyHash?: string;
+  /** Whether to require at least one signature */
+  requireSignature?: boolean;
+  /** List of required signer key hashes (public key hashes) */
+  requiredSigners?: string[];
+}

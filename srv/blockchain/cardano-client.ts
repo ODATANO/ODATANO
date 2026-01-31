@@ -284,8 +284,8 @@ export class CardanoClient {
    * @param address bech32 address
    * @returns {Promise<Transaction[]>} list of transactions for this address
    */
-  getAddressTransactions(address: string): Promise<Transaction[]> {
-    return this.route('getAddressTransactions', b => b.getAddressTransactions(address));
+  getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
+    return this.route('getAddressTransactions', b => b.getAddressTransactions(address, limit));
   }
 
   /**

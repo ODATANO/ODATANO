@@ -216,16 +216,16 @@ export class CardanoIndexer {
 
   /**
    * Index & return address transactions (separate from indexAddress for lazy loading)
-   * This method is expensive as it fetches full transaction data for each tx
    * @param tx       CAP transaction
    * @param addr     bech32 address
+   * @param limit    maximum number of transactions to fetch
    * @return {Promise<AddressTransactions[]>} address transaction entities
    */
-  async indexAddressTransactions(tx: CapTransaction, addr: string): Promise<AddressTransactions[]> {
+  async indexAddressTransactions(tx: CapTransaction, addr: string, limit: number): Promise<AddressTransactions[]> {
     logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
 
     // Fetch transactions for this address
-    const transactions = await cardano.getAddressTransactions(addr);
+    const transactions = await cardano.getAddressTransactions(addr, limit);
 
     logger.debug(`indexAddressTransactions: found ${transactions.length} transactions for ${addr}`);
 

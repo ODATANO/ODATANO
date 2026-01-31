@@ -5,7 +5,8 @@ import { validateTransactionInputs } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
-import { getExternalSignerModule, combineTransactionWithWitnesses } from './blockchain/signing/external-signer';
+import { getExternalSignerModule } from './blockchain/signing/external-signer';
+import { combineTransactionWithWitnesses } from './utils/signing-helper';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -341,7 +342,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('CreateSigningRequest', async (req: Request) => {
     logger.debug('CreateSigningRequest Action handler called');
-    const { buildId } = req.data;
+    const { buildId , message } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs({ buildId }, ['buildId']);
@@ -367,7 +368,8 @@ module.exports = (srv: cds.Service) => {
         build.id,
         build.unsignedTxCbor,
         build.txBodyHash,
-        build.network
+        build.network, 
+        message
       );
 
       // Delegate persistence to indexer

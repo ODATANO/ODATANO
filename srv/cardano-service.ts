@@ -31,7 +31,8 @@ module.exports = (srv: cds.Service) => {
     Pools,
     Accounts,
     Dreps,
-    LedgerProtocolParameters
+    LedgerProtocolParameters,
+    AddressTransactions
   } = require('#cds-models/CardanoODataService');
 
   /**
@@ -671,5 +672,22 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
+  srv.on('GetLatestTransactionsByAddress', async (req: Request) => {
+    logger.debug('GetLatestTransactionsByAddress Action handler called');
+    const { address, limit } = req.data as { address?: string, limit?: number };
+    // Validate input before business logic
+    if (!address) rejectMissing(req, 'GetLatestTransactionsByAddress', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetLatestTransactionsByAddress', 'Invalid bech32 address format', 'address');
+    const txLimit = limit && limit > 0 ? limit : 10; // Default limit to 10 if not provided or invalid
+    return handleRequest(req, async (db) => {
+      // Check if address transactions exist
+      const existing = await db.run(SELECT.one.from(AddressTransactions).where({ address }));
+      if (!existing) {
+        logger.debug({ address }, 'Indexing address via indexer');
+        return indexer.indexAddressTransactions(db, address, txLimit);
+      }
+      return existing;
+    });
+  });
   logger.debug('All handlers registered');
 };
