@@ -198,7 +198,7 @@ export class CardanoIndexer {
     logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
     if (utxoAssetEntities.length) {
-      // Deduplicate by composite key (remove duplicates within the batch)
+      // Remove possible duplicates before upsert
       const seen = new Set<string>();
       const uniqueAssets = utxoAssetEntities.filter(asset => {
         const key = `${asset.utxo_address_address}|${asset.utxo_hash}|${asset.utxo_index}|${asset.unit}`;
@@ -209,8 +209,11 @@ export class CardanoIndexer {
 
       logger.debug(`indexAddress: ${utxoAssetEntities.length} assets, ${uniqueAssets.length} unique (removed ${utxoAssetEntities.length - uniqueAssets.length} duplicates)`);
       await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
-    }
 
+      this.indexAddressTransactions(tx, addr, 10).catch(err => {
+        logger.error(`indexAddressTransactions failed for address ${addr}: ${err.message}`);
+      });
+    }
     return AddrEntity;
   }
 
@@ -390,7 +393,6 @@ export class CardanoIndexer {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
-
     return buildResult;
   }
 

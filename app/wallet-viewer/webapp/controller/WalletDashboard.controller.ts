@@ -111,7 +111,7 @@ export default class WalletDashboard extends Controller {
             // First, ensure address is indexed via GetAddressByBech32 action
             const indexAction = oDataModel.bindContext("/GetAddressByBech32(...)");
             indexAction.setParameter("address", primaryAddress);
-            await indexAction.execute();
+            await indexAction.invoke();
 
             // Query transactions with netAmount and blockTime (now stored directly)
             const listBinding = oDataModel.bindList(
