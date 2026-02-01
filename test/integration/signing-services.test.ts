@@ -37,20 +37,20 @@ describe('Signing Services Integration Tests', () => {
 
   let testBuildId: string;
 
-  beforeAll(async () => {
-    resetCardanoClient();
-    resetTransactionBuilder('csl');
-  });
-
   beforeEach(async () => {
     await test.data.reset();
 
-    // Setup nock
+    // IMPORTANT: Setup nock FIRST before creating any axios instances
+    // nock needs to be active before axios.create() is called
     nock.cleanAll();
     nock.restore();
     nock.activate();
     nock.disableNetConnect();
     nock.enableNetConnect(/localhost/);
+
+    // NOW reset CardanoClient - this creates new axios instances that nock can intercept
+    resetCardanoClient();
+    await resetTransactionBuilder('csl');
 
     // Create test build
     const now = Date.now();
@@ -73,6 +73,7 @@ describe('Signing Services Integration Tests', () => {
 
   afterEach(() => {
     nock.cleanAll();
+    nock.restore();
   });
 
   afterAll(async () => {
