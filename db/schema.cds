@@ -442,35 +442,6 @@ entity UTxOAssets : temporal {
         asset : AssetSlice; // asset details
 }
 
-@title : 'Address Transactions'
-@description : 'Association entity for transactions involving an address'
-entity AddressTransactions : temporal {
-
-        @title      : 'Address (key)'
-        @description: 'The Bech32 encoded address associated with the transaction'
-    key address : Association to Addresses;
-
-        @title      : 'Transaction (key)'
-        @description: 'The associated transaction'
-    key tx      : Association to Transactions;
-
-        @title      : 'Net Amount (Lovelace)'
-        @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
-        netAmount   : Int64;
-
-        @title      : 'Block Time'
-        @description: 'Block time of the transaction (denormalized for sorting)'
-        blockTime   : Integer64;
-
-        @title      : 'Net Assets'
-        @description: 'JSON array of net asset changes [{unit, policyId, assetName, quantity}] (positive = received, negative = sent)'
-        netAssets   : LargeString;
-
-        @title      : 'Has Assets'
-        @description: 'Indicates if this transaction involves native assets for this address'
-        hasAssets   : Boolean default false;
-}
-
 @title      : 'Accounts Entity'
 @description: 'Account information entity definition'
 entity Accounts : temporal {
@@ -1143,9 +1114,8 @@ entity TransactionSubmissionErrors {
 }
 
 //-----------------------------------------------------
-// M3 - External Signing Workflow Entities
+// M3 - External Signing Workflow Entities & Address Additions
 //-----------------------------------------------------
-
 @title      : 'Signing Request Status'
 @description: 'Enum type for signing request status'
 type SigningStatus : String(20) enum {
@@ -1155,6 +1125,60 @@ type SigningStatus : String(20) enum {
     submitted = 'submitted';
     expired   = 'expired';
     failed    = 'failed';
+}
+@title : 'Address Transactions'
+@description : 'Association entity for transactions involving an address'
+entity AddressTransactions {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the transaction'
+    key address : Association to Addresses;
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx      : Association to Transactions;
+
+        @title      : 'Net Amount (Lovelace)'
+        @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
+        netAmount   : Int64;
+
+        @title      : 'Block Time'
+        @description: 'Block time of the transaction (denormalized for sorting)'
+        blockTime   : Integer64;
+
+        @title      : 'Net Assets'
+        @description: 'JSON array of net asset changes [{unit, policyId, assetName, quantity}] (positive = received, negative = sent)'
+        netAssets   : LargeString;
+
+        @title      : 'Has Assets'
+        @description: 'Indicates if this transaction involves native assets for this address'
+        hasAssets   : Boolean default false;
+}
+
+@title : 'Address Signing Requests'
+@description : 'Association entity for signing requests involving an address'
+entity AddressSigningRequests {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the signing request'
+    key address : Association to Addresses;
+
+        @title      : 'Signing Request (key)'
+        @description: 'The associated signing request'
+    key signingRequest : Association to SigningRequests;
+}
+
+@title : 'Address Transaction Builds'
+@description : 'Association entity for transaction builds involving an address'
+entity AddressTransactionBuilds{
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the transaction build'
+    key address : Association to Addresses;
+
+        @title      : 'Transaction Build (key)'
+        @description: 'The associated transaction build'
+    key txBuild : Association to TransactionBuilds;
 }
 
 @title      : 'Signing Requests'

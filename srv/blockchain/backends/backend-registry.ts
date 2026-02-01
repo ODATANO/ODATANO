@@ -14,7 +14,6 @@ export type BackendName = 'ogmios' | 'blockfrost' | 'koios';
 
 /**
  * BackendRegistry - Central registry for creating and managing backend instances
- * 
  * Provides factory methods for creating backend instances based on configuration
  */
 export class BackendRegistry {

@@ -98,7 +98,6 @@ describe('Signing Services Integration Tests', () => {
       expect(data).to.have.property('txBodyHash', FIXTURE.txBodyHash);
       expect(data).to.have.property('unsignedTxCbor', FIXTURE.unsignedTxCbor);
       expect(data).to.have.property('status', 'pending');
-      expect(data.cardanoCliCommand).to.include('testnet-magic 2'); // preview network
 
       // Test duplicate returns same request
       const { data: duplicateData } = await test.post('/odata/v4/cardano-transaction/CreateSigningRequest', {

@@ -513,7 +513,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
         if (!existing) {
           logger.debug({ txHash }, 'Indexing transaction via indexer');
-          return await indexer.indexTransaction(db, txHash, true);
+          return await indexer.indexTransaction(db, txHash);
         }
         return existing;
       }
@@ -542,7 +542,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
       if (!existing) {
         logger.debug({ hash }, 'Indexing transaction via indexer');
-        return await indexer.indexTransaction(db, hash, true);
+        return await indexer.indexTransaction(db, hash);
       }
       return existing;
     });
@@ -660,9 +660,10 @@ module.exports = (srv: cds.Service) => {
   });
 
   /** 
-   * Get Protocol Parameters
-   * @param req - CDS request object
-   * @returns Protocol Parameters 
+   * Action handler for `GetLedgerProtocolParameters`.
+   * Returns ledger protocol parameters; indexes them if not yet present.
+   * @param req -  The incoming request data
+   * @returns {LedgerProtocolParameters} Protocol Parameters 
    */
   srv.on('GetLedgerProtocolParameters', async (req: Request) => {
     logger.debug('GetLedgerProtocolParameters Action handler called');
@@ -672,6 +673,12 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
+  /**
+   * Action handler for `GetLatestTransactionsByAddress`.
+   * Returns latest transactions for a given address; indexes them if not yet present.
+   * @param req - The incoming request data
+   * @returns {AddressTransactions} The latest transactions for the requested address
+   */
   srv.on('GetLatestTransactionsByAddress', async (req: Request) => {
     logger.debug('GetLatestTransactionsByAddress Action handler called');
     const { address, limit } = req.data as { address?: string, limit?: number };

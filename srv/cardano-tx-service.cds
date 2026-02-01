@@ -166,6 +166,14 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     @description: 'Projection for Signature Verifications - stores verification results'
     entity SignatureVerifications       as projection on db.SignatureVerifications;
 
+    @title      : 'Address Signing Requests'
+    @description: 'Projection for retrieving signing requests by address'
+    entity AddressSigningRequests       as projection on db.AddressSigningRequests;
+
+    @title      : 'Address Transaction Builds'
+    @description: 'Projection for retrieving transaction builds by address'
+    entity AddressTransactionBuilds     as projection on db.AddressTransactionBuilds;
+
     @title      : 'Create Signing Request'
     @description: 'Create a signing request for external signing. Returns transaction details, signing instructions, and CLI commands. The request is persisted for audit trail.'
     action CreateSigningRequest(
@@ -214,4 +222,17 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                      @title: 'Signer Info'
                                      @description: 'Additional signer information'
                                      signerInfo: String(100)) returns TransactionSubmissions;
+    @title: 'Address Signing Requests'
+    @description: 'Projection for retrieving signing requests by address'
+    action GetSigningRequestsByAddress(
+                                        @title: 'Bech32 Address'
+                                        @description: 'The Bech32 encoded address to retrieve signing requests for'
+                                        address: db.Bech32)        returns AddressSigningRequests;
+    @title: 'Address Transaction Builds'
+    @description: 'Projection for retrieving transaction builds by address'
+    action GetTransactionBuildsByAddress(
+                                          @title: 'Bech32 Address'
+                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
+                                          address: db.Bech32)    returns AddressTransactionBuilds;
+                                        
 }

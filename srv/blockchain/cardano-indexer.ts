@@ -65,7 +65,7 @@ import {
   mapAddressTransactions
 } from '../utils/mappers';
 
-import { Transaction as TransactionProviderData, TxBuildRequest } from '../utils/types';
+import { TxBuildRequest } from '../utils/types';
 
 const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
@@ -92,21 +92,16 @@ export class CardanoIndexer {
    * @param txHash  Cardano transaction hash (hex)
    * @returns {Promise<CardanoTransaction>} transaction entity data
    */
-  async indexTransaction(tx: CapTransaction, txHash: string, ensureAddr: boolean): Promise<CardanoTransaction> {
+  async indexTransaction(tx: CapTransaction, txHash: string): Promise<CardanoTransaction> {
     // getting data from cardano data provider
     const providerTx = await cardano.getTransaction(txHash);
     const txRow = mapTransaction(providerTx);
 
     await tx.run(UPSERT.into(Transactions).entries(txRow))
-    
+
     logger.debug(`indexTransaction: upserted transaction ${txHash}`);
 
     if (providerTx.inputs) {
-      const addresses = this._collectAddressesFromUtxos(providerTx);
-      if (ensureAddr) {
-        await this._ensureAddresses(tx, addresses);
-      }
-
       // Inputs + InputAssets
       const inputRows = mapTransactionInputs(txHash, providerTx.inputs);
       const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs);
@@ -234,7 +229,7 @@ export class CardanoIndexer {
 
     // Index each transaction
     for (const txData of transactions) {
-      await this.indexTransaction(tx, txData.hash, false);
+      await this.indexTransaction(tx, txData.hash);
     }
 
     // Create address-transaction mapping entries
@@ -788,28 +783,7 @@ export class CardanoIndexer {
   // Private Helpers
   //-----------------------------------------------------------------------------
 
-  /** 
-   * Collect all unique addresses from UTxOs in transaction data
-   * @param txUtxos transaction data with UTxOs
-   * @returns {string[]} array of unique bech32 addresses
-   */
-  private _collectAddressesFromUtxos(txUtxos: TransactionProviderData): string[] {
-    const set = new Set<string>();
-
-    const inputs = txUtxos.inputs;
-    const outputs = txUtxos.outputs;
-
-    for (const i of inputs) {
-      if (i.address) set.add(i.address);
-    }
-    for (const o of outputs) {
-      if (o.address) set.add(o.address);
-    }
-
-    return Array.from(set);
-  }
-
-  /** 
+  /**
    * Index multiple addresses with assets
    * @param tx CAP transaction object
    * @param bech32List array of bech32 addresses

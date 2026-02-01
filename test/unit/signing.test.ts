@@ -8,18 +8,24 @@ import {
   ExternalSignerModule,
   createExternalSignerModule,
   getExternalSignerModule,
-  combineTransactionWithWitnesses,
-  isWitnessSetCbor,
-  ExternalSignerType,
-  SigningStatus,
-  UnsignedTxExportPayload,
 } from '../../srv/blockchain/signing/external-signer';
 
 import {
   SignatureVerifier,
   getSignatureVerifier,
-  SignatureVerificationResult,
 } from '../../srv/blockchain/signing/signature-verifier';
+
+import {
+  combineTransactionWithWitnesses,
+  isWitnessSetCbor,
+} from '../../srv/utils/signing-helper';
+
+import {
+  ExternalSignerType,
+  SigningStatus,
+  UnsignedTxExportPayload,
+  SignatureVerificationResult,
+} from '../../srv/utils/types';
 
 import { TransactionValidationError } from '../../srv/utils/errors';
 import * as cbor from 'cbor';
@@ -269,7 +275,8 @@ describe('ExternalSignerModule', () => {
         buildId,
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        network
+        network,
+        'Test signing message'
       );
 
       expect(request.signingRequestId).toBe('test-uuid-1234');
@@ -292,6 +299,7 @@ describe('ExternalSignerModule', () => {
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
         'preprod',
+        'Test signing message',
         { requiredSigners }
       );
 
@@ -306,6 +314,7 @@ describe('ExternalSignerModule', () => {
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
         'mainnet',
+        'Test signing message',
         { signerTypeHint: ExternalSignerType.BROWSER_WALLET }
       );
 
@@ -319,10 +328,11 @@ describe('ExternalSignerModule', () => {
         'build-123',
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        'mainnet'
+        'mainnet',
+        'Test signing message'
       );
 
-      expect(request.signingInstructions.cardanoCliCommand).toContain('--mainnet');
+      expect(request.signingInstructions.network).toBe('mainnet');
       expect(request.signingInstructions.cip30SigningRequest).toBeDefined();
       expect(request.signingInstructions.cip30SigningRequest?.txCbor).toBe(VALID_UNSIGNED_TX_CBOR);
     });
@@ -334,10 +344,11 @@ describe('ExternalSignerModule', () => {
         'build-123',
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        'preprod'
+        'preprod',
+        'Test signing message'
       );
 
-      expect(request.signingInstructions.cardanoCliCommand).toContain('testnet-magic 1');
+      expect(request.signingInstructions.network).toBe('preprod');
     });
 
     it('should generate proper signing instructions for preview testnet', () => {
@@ -347,10 +358,11 @@ describe('ExternalSignerModule', () => {
         'build-123',
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        'preview'
+        'preview',
+        'Test signing message'
       );
 
-      expect(request.signingInstructions.cardanoCliCommand).toContain('testnet-magic 2');
+      expect(request.signingInstructions.network).toBe('preview');
     });
 
     it('should set expiration time based on default TTL (30 minutes)', () => {
@@ -361,7 +373,8 @@ describe('ExternalSignerModule', () => {
         'build-123',
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        'preprod'
+        'preprod',
+        'Test signing message'
       );
 
       const expiresAt = new Date(request.expiresAt);
@@ -427,7 +440,8 @@ describe('ExternalSignerModule', () => {
         'build-123',
         VALID_UNSIGNED_TX_CBOR,
         txBodyHash,
-        'preprod'
+        'preprod',
+        'Test signing message'
       );
     });
 

@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors } from './utils/errors';
-import { validateTransactionInputs } from './utils/validators';
+import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
+import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
@@ -26,6 +26,8 @@ module.exports = (srv: cds.Service) => {
     TransactionSubmissionErrors,
     SigningRequests,
     SignatureVerifications,
+    AddressSigningRequests,
+    AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
 
   /**
@@ -80,7 +82,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a simple ADA-only transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, changeAddress)
-   * @returns Transaction build details
+   * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount } = req.data;
@@ -101,7 +103,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a transaction with metadata
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
-   * @returns Transaction build details
+   * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
@@ -129,7 +131,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a multi-asset transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
-   * @returns Transaction build details
+   * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
@@ -163,7 +165,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Build a minting transaction
    * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
-   * @returns Transaction build details
+   * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
@@ -202,7 +204,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Get build details for previously built transaction
    * @param req - CDS request object (with buildId)
-   * @returns Transaction build details
+   * @returns {TransactionBuild} Transaction build details
    */
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
@@ -223,7 +225,7 @@ module.exports = (srv: cds.Service) => {
    * Submit signed transaction built previously
    * Handler validates, checks build exists, submits to blockchain, delegates persistence to indexer
    * @param req - CDS request object (with buildId, signedTxCbor)
-   * @returns Transaction submission details
+   * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitTransaction', async (req: Request) => {
     logger.debug('SubmitTransaction Action handler called');
@@ -262,7 +264,7 @@ module.exports = (srv: cds.Service) => {
    * Submit signed transaction without prior build
    * Handler validates, submits to blockchain, delegates persistence to indexer
    * @param req - CDS request object (with signedTxCbor, network)
-   * @returns Transaction submission details
+   * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
     logger.info('SubmitSignedTransaction Action handler called');
@@ -320,6 +322,8 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * READ handler for SigningRequests entity
+   * @param req - The incoming request data
+   * @returns {SigningRequest} The signing requests fitting the request query 
    */
   srv.on('READ', SigningRequests, async (req: Request) => {
     logger.debug('SigningRequests READ handler called');
@@ -328,9 +332,31 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * READ handler for SignatureVerifications entity
+   * @param req - The incoming request data
+   * @returns {SignatureVerification} The signature verifications fitting the request query
    */
   srv.on('READ', SignatureVerifications, async (req: Request) => {
     logger.debug('SignatureVerifications READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /** 
+   * READ handler for AddressSigningRequests entity
+   * @param req - The incoming request data
+   * @returns {AddressSigningRequest} The address signing requests fitting the request query
+   */
+  srv.on('READ', AddressSigningRequests, async (req: Request) => {
+    logger.debug('AddressSigningRequests READ handler called');
+    return handleRequest(req, (db) => db.run(req.query));
+  });
+
+  /** 
+   * READ handler for AddressTransactionBuilds entity
+   * @param req - The incoming request data
+   * @returns {AddressTransactionBuild} The address transaction builds fitting the request query
+   */
+  srv.on('READ', AddressTransactionBuilds, async (req: Request) => {
+    logger.debug('AddressTransactionBuilds READ handler called');
     return handleRequest(req, (db) => db.run(req.query));
   });
 
@@ -338,7 +364,7 @@ module.exports = (srv: cds.Service) => {
    * Create a new signing request for external signing
    * Persists the request for audit trail and workflow tracking
    * @param req - CDS request object (with buildId)
-   * @returns Persisted signing request entity
+   * @returns {SigningRequest} Signing request entity
    */
   srv.on('CreateSigningRequest', async (req: Request) => {
     logger.debug('CreateSigningRequest Action handler called');
@@ -387,7 +413,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Get an existing signing request by ID
    * @param req - CDS request object (with signingRequestId)
-   * @returns Signing request entity
+   * @returns {SigningRequest} signing request entity
    */
   srv.on('GetSigningRequest', async (req: Request) => {
     logger.debug('GetSigningRequest Action handler called');
@@ -414,7 +440,7 @@ module.exports = (srv: cds.Service) => {
    * Verify signature of a signed transaction
    * Handler validates, verifies signature, delegates persistence to indexer
    * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
-   * @returns Persisted signature verification entity
+   * @returns {SignatureVerification} Persisted signature verification entity
    */
   srv.on('VerifySignature', async (req: Request) => {
     logger.debug('VerifySignature Action handler called');
@@ -466,7 +492,7 @@ module.exports = (srv: cds.Service) => {
    * Verify and submit a signed transaction in one step
    * Handler validates, checks preconditions, and delegates persistence to indexer
    * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
-   * @returns Transaction submission details
+   * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitVerifiedTransaction', async (req: Request) => {
     logger.debug('SubmitVerifiedTransaction Action handler called');
@@ -538,4 +564,40 @@ module.exports = (srv: cds.Service) => {
       return submissionRecord;
     });
   });
+
+  /**
+   * Get all existing signing requests by address
+   * @param req - CDS request object (with address)
+   * @returns {SigningRequests} Signing request entitys
+   */
+  srv.on('GetSigningRequestByAddress', async (req: Request) => {
+    logger.debug('GetSigningRequestByAddress Action handler called');
+    const { address } = req.data;
+    // Validate inputs
+    // Validate input before business logic
+    if (!address) rejectMissing(req, 'GetSigningRequestByAddress', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetSigningRequestByAddress', 'Invalid bech32 address format', 'address');
+    // Fetch the signing request
+    const signingRequest = await cds.run(SELECT.from(AddressSigningRequests).where({ address }));
+    if (!signingRequest) rejectInvalid(req, 'GetSigningRequestByAddress', 'Signing request not found', 'address');
+    return signingRequest;
+  });
+
+  /**
+   * Get all existing transaction builds by address
+   * @param req - CDS request object (with address)
+   * @returns {TransactionBuilds} Transaction build entitys
+   */
+  srv.on('GetAddressTransactionBuild', async (req: Request) => {
+    logger.debug('GetAddressTransactionBuild Action handler called');
+    const { address } = req.data;
+    // Validate inputs
+    if (!address) rejectMissing(req, 'GetAddressTransactionBuild', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAddressTransactionBuild', 'Invalid bech32 address format', 'address');
+    // Fetch the transaction builds
+    const txBuild = await cds.run(SELECT.from(AddressTransactionBuilds).where({ address }));
+    if (!txBuild) rejectInvalid(req, 'GetAddressTransactionBuild', 'Transaction build not found', 'address');
+    return txBuild;
+  });
+
 };

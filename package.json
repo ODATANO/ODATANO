@@ -13,7 +13,7 @@
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.21",
     "@sap/cds": "^9",
-        "@sap/xssec": "^4",
+    "@sap/xssec": "^4",
     "axios": "^1.13.2",
     "bech32": "^2.0.0",
     "dotenv": "^16.3.1",
@@ -31,6 +31,7 @@
     "@types/node": "^22.19.3",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.2",
     "jest": "^29.6.1",
     "mock-socket": "^9.3.1",
@@ -82,8 +83,7 @@
     "test:integration:both": "npm run test:integration:blockfrost && npm run test:integration:koios",
     "test:unit": "npm test -- --testPathPattern=unit",
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
-    "watch-wallet-viewer": "cds watch --open odatanoview.walletviewer/index.html?sap-ui-xx-viewCache=false --livereload false",
-    "dev:wallet-viewer": "npm run cds:watch"
+    "watch-wallet-viewer": "concurrently --names \"CAP,UI5\" -c \"blue,green\" \"cds watch\" \"npm start --workspace=wallet-viewer\""
   },
   "workspaces": [
     "app/*"
