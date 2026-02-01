@@ -227,12 +227,12 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     action GetSigningRequestsByAddress(
                                         @title: 'Bech32 Address'
                                         @description: 'The Bech32 encoded address to retrieve signing requests for'
-                                        address: db.Bech32)        returns AddressSigningRequests;
+                                        address: db.Bech32)        returns array of AddressSigningRequests;
     @title: 'Address Transaction Builds'
     @description: 'Projection for retrieving transaction builds by address'
     action GetTransactionBuildsByAddress(
                                           @title: 'Bech32 Address'
                                           @description: 'The Bech32 encoded address to retrieve transaction builds for'
-                                          address: db.Bech32)    returns AddressTransactionBuilds;
+                                          address: db.Bech32)    returns array of AddressTransactionBuilds;
                                         
 }

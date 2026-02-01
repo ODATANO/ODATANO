@@ -577,36 +577,33 @@ module.exports = (srv: cds.Service) => {
   /**
    * Get all existing signing requests by address
    * @param req - CDS request object (with address)
-   * @returns {SigningRequests} Signing request entitys
+   * @returns {AddressSigningRequests} Address signing request associations
    */
-  srv.on('GetSigningRequestByAddress', async (req: Request) => {
-    logger.debug('GetSigningRequestByAddress Action handler called');
+  srv.on('GetSigningRequestsByAddress', async (req: Request) => {
+    logger.debug('GetSigningRequestsByAddress Action handler called');
     const { address } = req.data;
-    // Validate inputs
     // Validate input before business logic
-    if (!address) rejectMissing(req, 'GetSigningRequestByAddress', 'address');
-    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetSigningRequestByAddress', 'Invalid bech32 address format', 'address');
-    // Fetch the signing request
-    const signingRequest = await cds.run(SELECT.from(AddressSigningRequests).where({ address }));
-    if (!signingRequest) rejectInvalid(req, 'GetSigningRequestByAddress', 'Signing request not found', 'address');
-    return signingRequest;
+    if (!address) rejectMissing(req, 'GetSigningRequestsByAddress', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetSigningRequestsByAddress', 'Invalid bech32 address format', 'address');
+    // Fetch the address-signing request associations
+    const signingRequests = await cds.run(SELECT.from(AddressSigningRequests).where({ address_address: address }));
+    return signingRequests;
   });
 
   /**
    * Get all existing transaction builds by address
    * @param req - CDS request object (with address)
-   * @returns {TransactionBuilds} Transaction build entitys
+   * @returns {AddressTransactionBuilds} Address transaction build associations
    */
-  srv.on('GetAddressTransactionBuild', async (req: Request) => {
-    logger.debug('GetAddressTransactionBuild Action handler called');
+  srv.on('GetTransactionBuildsByAddress', async (req: Request) => {
+    logger.debug('GetTransactionBuildsByAddress Action handler called');
     const { address } = req.data;
     // Validate inputs
-    if (!address) rejectMissing(req, 'GetAddressTransactionBuild', 'address');
-    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAddressTransactionBuild', 'Invalid bech32 address format', 'address');
-    // Fetch the transaction builds
-    const txBuild = await cds.run(SELECT.from(AddressTransactionBuilds).where({ address }));
-    if (!txBuild) rejectInvalid(req, 'GetAddressTransactionBuild', 'Transaction build not found', 'address');
-    return txBuild;
+    if (!address) rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
+    // Fetch the address-build associations
+    const txBuilds = await cds.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
+    return txBuilds;
   });
 
 };

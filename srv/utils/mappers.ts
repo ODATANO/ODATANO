@@ -41,7 +41,9 @@ import type {
   TransactionBuild as TransactionBuildRow,
   TransactionBuildInput as TransactionBuildInputRow,
   TransactionBuildOutput as TransactionBuildOutputRow,
-  TransactionSubmission as TransactionSubmissionRow
+  TransactionSubmission as TransactionSubmissionRow,
+  AddressSigningRequest as AddressSigningRequestRow,
+  AddressTransactionBuild as AddressTransactionBuildRow
 } from '#cds-models/CardanoTransactionService';
 
 
@@ -728,7 +730,7 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
   };
 }
 
-/** 
+/**
  * Map Transaction Submission
  * Converts signed transaction CBOR and hash into TransactionSubmissionRow format
  * @param signedTxCbor signed transaction in CBOR hex format
@@ -741,6 +743,34 @@ export function mapTransactionSubmission(signedTxCbor: string, txHash: string): 
     signedTxCbor: signedTxCbor,
     txHash: txHash,
     submittedAt: now,
+  };
+}
+
+/**
+ * Map Address Signing Requests
+ * Creates AddressSigningRequest row for address-signing request association
+ * @param addr bech32 address
+ * @param signingRequestId signing request UUID
+ * @returns {AddressSigningRequestRow} mapped address signing request row
+ */
+export function mapAddressSigningRequest(addr: string, signingRequestId: string): AddressSigningRequestRow {
+  return {
+    address_address: addr,
+    signingRequest_id: signingRequestId,
+  };
+}
+
+/**
+ * Map Address Transaction Builds
+ * Creates AddressTransactionBuild row for address-build association
+ * @param addr bech32 address
+ * @param buildId transaction build UUID
+ * @returns {AddressTransactionBuildRow} mapped address transaction build row
+ */
+export function mapAddressTransactionBuild(addr: string, buildId: string): AddressTransactionBuildRow {
+  return {
+    address_address: addr,
+    txBuild_id: buildId,
   };
 }
 

@@ -37,7 +37,9 @@ import {
   TransactionSubmission,
   TransactionSubmissions,
   SigningRequests,
-  SignatureVerifications
+  SignatureVerifications,
+  AddressSigningRequests,
+  AddressTransactionBuilds
 } from '#cds-models/CardanoTransactionService';
 
 import {
@@ -62,7 +64,9 @@ import {
   mapBuildOutputs,
   mapProtocolParameters,
   mapTransactionSubmission,
-  mapAddressTransactions
+  mapAddressTransactions,
+  mapAddressSigningRequest,
+  mapAddressTransactionBuild
 } from '../utils/mappers';
 
 import { TxBuildRequest } from '../utils/types';
@@ -252,7 +256,43 @@ export class CardanoIndexer {
     return transactionsEntities as AddressTransactions[];
   }
 
-  /** 
+  /**
+   * Index & return address signing request association
+   * Links an address to a signing request for address-based queries
+   * @param tx       CAP transaction
+   * @param addr     bech32 address
+   * @param signingRequestId signing request UUID
+   * @return {Promise<void>}
+   */
+  async indexAddressSigningRequests(tx: CapTransaction, addr: string, signingRequestId: string): Promise<void> {
+    logger.debug(`indexAddressSigningRequests: linking address ${addr} to signing request ${signingRequestId}`);
+
+    const addressSigningRequestEntity = mapAddressSigningRequest(addr, signingRequestId);
+
+    await tx.run(UPSERT.into(AddressSigningRequests).entries(addressSigningRequestEntity));
+
+    logger.debug(`indexAddressSigningRequests: linked address ${addr} to signing request ${signingRequestId}`);
+  }
+
+  /**
+   * Index & return address transaction build association
+   * Links an address to a transaction build for address-based queries
+   * @param tx       CAP transaction
+   * @param addr     bech32 address
+   * @param buildId  transaction build UUID
+   * @return {Promise<void>}
+   */
+  async indexAddressTransactionBuilds(tx: CapTransaction, addr: string, buildId: string): Promise<void> {
+    logger.debug(`indexAddressTransactionBuilds: linking address ${addr} to build ${buildId}`);
+
+    const addressTransactionBuildEntity = mapAddressTransactionBuild(addr, buildId);
+
+    await tx.run(UPSERT.into(AddressTransactionBuilds).entries(addressTransactionBuildEntity));
+
+    logger.debug(`indexAddressTransactionBuilds: linked address ${addr} to build ${buildId}`);
+  }
+
+  /**
    * Index & return metadata for a single transaction (Metadata)
    * @param tx       CAP transaction
    * @param txHash   transaction hash
@@ -388,6 +428,12 @@ export class CardanoIndexer {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
+
+    // Index address-build association for sender address
+    if (buildResult.id && buildreq.senderAddress) {
+      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
+    }
+
     return buildResult;
   }
 
@@ -412,10 +458,16 @@ export class CardanoIndexer {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
+
+    // Index address-build association for sender address
+    if (buildResult.id && buildreq.senderAddress) {
+      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
+    }
+
     return buildResult;
   }
 
-  /** 
+  /**
    * Index & return the multi-asset transaction build result data
    * @param tx CAP transaction object
    * @param buildreq transaction build request data
@@ -446,10 +498,15 @@ export class CardanoIndexer {
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
 
+    // Index address-build association for sender address
+    if (buildResult.id && buildreq.senderAddress) {
+      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
+    }
+
     return buildResult;
   }
 
-  /** 
+  /**
    * Index & return the minting transaction build result data
    * @param tx CAP transaction object
    * @param buildreq transaction build request data
@@ -480,10 +537,15 @@ export class CardanoIndexer {
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
 
+    // Index address-build association for sender address
+    if (buildResult.id && buildreq.senderAddress) {
+      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
+    }
+
     return buildResult;
   }
 
-  /** 
+  /**
    * Index & return the protocol parameters data
    * @param tx CAP transaction object
    * @returns {Promise<LedgerProtocolParameter>} protocol parameters entity data
@@ -603,6 +665,12 @@ export class CardanoIndexer {
     // Persist to database
     await tx.run(INSERT.into(SigningRequests).entries(signingRequestRecord));
     logger.debug({ signingRequestId: signingRequestRecord.id, buildId }, 'Persisted signing request');
+
+    // Index address-signing request association
+    const build = await tx.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+    if (build?.senderAddress) {
+      await this.indexAddressSigningRequests(tx, build.senderAddress, signingRequestRecord.id);
+    }
 
     return signingRequestRecord;
   }

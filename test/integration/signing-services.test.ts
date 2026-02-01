@@ -219,10 +219,10 @@ describe('Signing Services Integration Tests', () => {
   });
 
   // ==========================================================================
-  // SubmitVerifiedTransaction Tests
+  // SubmitVerifiedTransaction Action
   // ==========================================================================
 
-  describe('SubmitVerifiedTransaction', () => {
+  describe('SubmitVerifiedTransaction Action', () => {
     let signingRequestId: string;
 
     beforeEach(async () => {
@@ -301,6 +301,24 @@ describe('Signing Services Integration Tests', () => {
     });
   });
 
+  describe('GetSigningRequestsByAddress Action', () => {
+    it('should retrieve signing requests for a given address', async () => {
+      // Create a signing request
+      const { data: createData } = await test.post('/odata/v4/cardano-transaction/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+      
+      // Retrieve by address
+      const { status, data } = await test.get(`/odata/v4/cardano-transaction/SigningRequests?$filter=build/senderAddress eq '${FIXTURE.validSenderAddress}'`);
+
+      expect(status).to.equal(200);
+      expect(data.value).to.be.an('array');
+      expect(data.value.length).to.be.greaterThan(0);
+      const found = data.value.find((req: any) => req.id === createData.id);
+      expect(found).to.exist;
+    });
+  });
+
   // ==========================================================================
   // READ Entities Tests
   // ==========================================================================
@@ -367,6 +385,23 @@ describe('Signing Services Integration Tests', () => {
       expect(expandStatus).to.equal(200);
       expect(expandData.signingRequest).to.have.property('id', createData.id);
     });
+
+    it ('should read AddressSigningRequests with Address filter', async () => {
+      // Create a signing request (this also creates AddressSigningRequests association)
+      const { data: createData } = await test.post('/odata/v4/cardano-transaction/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+      const signingRequestId = createData.id;
+
+      // Read AddressSigningRequests filtered by address
+      const { status, data } = await test.get(`/odata/v4/cardano-transaction/AddressSigningRequests?$filter=address_address eq '${FIXTURE.validSenderAddress}'`);
+
+      expect(status).to.equal(200);
+      expect(data.value).to.be.an('array');
+      expect(data.value.length).to.be.greaterThan(0);
+      const found = data.value.find((req: any) => req.signingRequest_id === signingRequestId);
+      expect(found).to.exist;
+    }); 
   });
 
   // ==========================================================================
