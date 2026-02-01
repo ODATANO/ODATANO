@@ -1,3 +1,4 @@
+/* global window */
 /// <reference lib="dom" />
 import JSONModel from "sap/ui/model/json/JSONModel";
 import MessageToast from "sap/m/MessageToast";
