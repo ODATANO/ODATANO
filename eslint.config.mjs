@@ -74,4 +74,15 @@ export default [
       },
     },
   },
+
+  // Browser globals for wallet-viewer app
+  {
+    files: ['app/wallet-viewer/**/*.ts'],
+    languageOptions: {
+      globals: {
+        navigator: 'readonly',
+        window: 'readonly',
+      },
+    },
+  },
 ];

@@ -9,6 +9,13 @@ module.exports = [
     {
         // Relax strict TypeScript rules for UI5 event handling
         files: ["**/*.ts"],
+        languageOptions: {
+            globals: {
+                // Browser globals for wallet integration
+                navigator: "readonly",
+                window: "readonly"
+            }
+        },
         rules: {
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-unsafe-member-access": "off",
