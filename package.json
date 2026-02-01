@@ -67,7 +67,7 @@
     "start": "cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
-    "cds:types": "cds-typer * --outputDirectory @cds-models",
+    "cds:types": "cds-typer '*' --outputDirectory @cds-models",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
