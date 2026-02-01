@@ -6,7 +6,7 @@ import { getTxHashFromCbor } from './utils/tx-build-helper';
 import indexer from './blockchain/cardano-indexer';
 import cardanoClient from './blockchain/cardano-client';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
-import { combineTransactionWithWitnesses } from './utils/signing-helper';
+import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -526,8 +526,17 @@ module.exports = (srv: cds.Service) => {
         rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has no associated build', 'signingRequestId');
       }
 
-      // Combine witness set with unsigned transaction
-      const fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
+      // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
+      let fullSignedTxCbor: string;
+      if (isWitnessSetCbor(signedTxCbor)) {
+        // CIP-30 wallet returns only witness set - combine with unsigned tx
+        fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
+        logger.debug({ signingRequestId }, 'Combined witness set with unsigned transaction');
+      } else {
+        // Full signed transaction provided (e.g., from cardano-cli)
+        fullSignedTxCbor = signedTxCbor;
+        logger.debug({ signingRequestId }, 'Using full signed transaction directly');
+      }
 
       // Verify signature (throws on failure)
       const signerModule = getExternalSignerModule();

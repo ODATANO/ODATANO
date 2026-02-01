@@ -688,8 +688,8 @@ module.exports = (srv: cds.Service) => {
     const txLimit = limit && limit > 0 ? limit : 10; // Default limit to 10 if not provided or invalid
     return handleRequest(req, async (db) => {
       // Check if address transactions exist
-      const existing = await db.run(SELECT.one.from(AddressTransactions).where({ address }));
-      if (!existing) {
+      const existing = await db.run(SELECT.from(AddressTransactions).where({ address }).limit(txLimit));
+      if (!existing || existing.length === 0) {
         logger.debug({ address }, 'Indexing address via indexer');
         return indexer.indexAddressTransactions(db, address, txLimit);
       }
