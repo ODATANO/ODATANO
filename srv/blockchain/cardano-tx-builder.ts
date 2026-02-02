@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { getCardanoClient } from './cardano-client';
+import type { CardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult } from '../utils/types';
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
@@ -8,13 +8,23 @@ import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 
 const logger = cds.log('CardanoTransactionBuilder');
 
-/** 
+/**
  * CardanoTransactionBuilder - High-level transaction builder that utilizes specific CardanoTxBuilder implementations
  * to build various types of Cardano transactions.
  */
 export class CardanoTransactionBuilder {
+    private client: CardanoClient;
     private txBuilder: CardanoTxBuilder | undefined;
     private initialized = false;
+
+    /**
+     * Create a new CardanoTransactionBuilder instance
+     * @param client - The CardanoClient instance for UTxO fetching
+     */
+    constructor(client: CardanoClient) {
+        this.client = client;
+        logger.info('CardanoTransactionBuilder instance created');
+    }
 
     async init(): Promise<void> {
         if (this.initialized && this.txBuilder) return;
@@ -141,7 +151,7 @@ export class CardanoTransactionBuilder {
         const mintReq: TxBuildMintRequest = req as TxBuildMintRequest;
 
         const builder = await this.ensureInitialized();
-        const cardanoClient = getCardanoClient();
+        const cardanoClient = this.client;
 
         // Prepare the transaction build context
         const txContext: TxBuildContext = {
@@ -175,29 +185,7 @@ export class CardanoTransactionBuilder {
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
         // fetch UTxOs directly using cardano client
         logger.debug(`Fetching UTxOs for address: ${address}`);
-        const utxos = await getCardanoClient().getAddressUtxos(address);
+        const utxos = await this.client.getAddressUtxos(address);
         return utxos;
     }
 }
-
-/**
- * Singleton Cardano Transaction Builder instance
- */
-const cardanoTransactionBuilder = new CardanoTransactionBuilder();
-
-/**
- * Reset the transaction builder with a specific builder type
- * Similar to resetCardanoClient - takes builder name directly for test isolation
- * @param builderName - The builder name ('csl' or 'buildooor')
- */
-export async function resetTransactionBuilder(builderName: string): Promise<void> {
-    cardanoTransactionBuilder.reset();
-    // Directly create and initialize the specified builder
-    const txBuilder = TxBuilderRegistry.create(builderName);
-    await txBuilder.init();
-    // Set it using the public method
-    cardanoTransactionBuilder.setBuilder(txBuilder);
-    logger.info(`Transaction builder reset to: ${builderName}`);
-}
-
-export default cardanoTransactionBuilder;

@@ -1,0 +1,67 @@
+/* Cardano Wallet Viewer Custom Styles */
+
+/* Dashboard Cards */
+.sapFCard {
+    margin-bottom: 1rem;
+}
+
+/* Tile styling */
+.sapMGT {
+    margin: 0.25rem;
+}
+
+/* Address/Hash text - monospace for better readability */
+.sapMText[class*="hash"],
+.sapMText[class*="address"] {
+    font-family: "Roboto Mono", monospace;
+}
+
+/* Object page improvements */
+.sapUxAPObjectPageHeaderTitle {
+    padding-bottom: 0.5rem;
+}
+
+/* Table styling */
+.sapMListTbl .sapMListTblCell {
+    vertical-align: middle;
+}
+
+/* Responsive adjustments for mobile */
+@media (max-width: 600px) {
+    .sapUiSmallMargin {
+        margin: 0.5rem !important;
+    }
+
+    .sapUiMediumMargin {
+        margin: 0.75rem !important;
+    }
+
+    .sapMGT {
+        width: 100% !important;
+        margin: 0.25rem 0 !important;
+    }
+}
+
+/* Network info grid */
+.sapUiLayoutGrid .sapUiLayoutGridContent {
+    min-height: 4rem;
+}
+
+/* Emphasize ADA amounts */
+.sapMObjectNumber.sapMObjectNumberEmph {
+    font-size: 1.25rem;
+}
+
+/* Better link styling */
+.sapMLnk {
+    word-break: break-all;
+}
+
+/* FCL adjustments */
+.sapFFCL {
+    background-color: #f7f7f7;
+}
+
+.sapFFCLBackgroundDesignTranslucent {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}

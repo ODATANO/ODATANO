@@ -7,11 +7,13 @@
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
+    "@cap-js/hana": "^2",
     "@cap-js/sqlite": "^2",
     "@cardano-ogmios/client": "^6.14.0",
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.21",
     "@sap/cds": "^9",
+    "@sap/xssec": "^4",
     "axios": "^1.13.2",
     "bech32": "^2.0.0",
     "dotenv": "^16.3.1",
@@ -29,7 +31,7 @@
     "@types/node": "^22.19.3",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
-    "cds-plugin-ui5": "^0.13.0",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.2",
     "jest": "^29.6.1",
     "mock-socket": "^9.3.1",
@@ -46,6 +48,17 @@
         "credentials": {
           "url": "db.sqlite"
         }
+      },
+      "[production]": {
+        "db": {
+          "kind": "hana",
+          "pool": {
+            "acquireTimeoutMillis": 30000,
+            "min": 0,
+            "max": 10
+          }
+        },
+        "auth": "xsuaa"
       }
     }
   },
@@ -55,7 +68,7 @@
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
     "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
-    "lint": "eslint \"**/*.ts\"",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
     "pretest": "npm run cds:types && npm run db:deploy",
@@ -69,7 +82,8 @@
     "test:integration:ogmios": "npm test -- --testPathPattern=core-ogmios.test.ts",
     "test:integration:both": "npm run test:integration:blockfrost && npm run test:integration:koios",
     "test:unit": "npm test -- --testPathPattern=unit",
-    "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false"
+    "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
+    "watch-wallet-viewer": "concurrently --names \"CAP,UI5\" -c \"blue,green\" \"cds watch\" \"npm start --workspace=wallet-viewer\""
   },
   "workspaces": [
     "app/*"

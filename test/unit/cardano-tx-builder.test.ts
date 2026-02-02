@@ -1,16 +1,11 @@
-import { CardanoTransactionBuilder, resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
+import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
 import { TxBuilderRegistry } from '../../srv/blockchain/transaction-building/tx-builder-registry';
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
-import * as cardanoClientModule from '../../srv/blockchain/cardano-client';
+import type { CardanoClient } from '../../srv/blockchain/cardano-client';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO } from '../../srv/utils/types';
 
 // Mock the TxBuilderRegistry
 jest.mock('../../srv/blockchain/transaction-building/tx-builder-registry');
-
-// Mock the cardano-client module
-jest.mock('../../srv/blockchain/cardano-client', () => ({
-  getCardanoClient: jest.fn(),
-}));
 
 // Mock CardanoTxBuilder for testing
 class MockTxBuilder implements CardanoTxBuilder {
@@ -103,27 +98,26 @@ const mockMintTxRequest: TxBuildRequest = {
 describe('CardanoTransactionBuilder', () => {
   let builder: CardanoTransactionBuilder;
   let mockTxBuilder: MockTxBuilder;
-  let mockCardanoClient: any;
+  let mockCardanoClient: jest.Mocked<CardanoClient>;
 
   beforeEach(() => {
     // Reset all mocks
     jest.clearAllMocks();
 
-    // Create fresh instances
-    builder = new CardanoTransactionBuilder();
+    // Create mock CardanoClient
+    mockCardanoClient = {
+      getAddressUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      hasOgmiosBackend: jest.fn().mockReturnValue(false),
+      evaluateTransaction: jest.fn(),
+    } as unknown as jest.Mocked<CardanoClient>;
+
+    // Create fresh instances - pass mock client to constructor
+    builder = new CardanoTransactionBuilder(mockCardanoClient);
     mockTxBuilder = new MockTxBuilder();
 
     // Setup TxBuilderRegistry mock
     (TxBuilderRegistry.createDefault as jest.Mock).mockReturnValue(mockTxBuilder);
     (TxBuilderRegistry.create as jest.Mock).mockReturnValue(mockTxBuilder);
-
-    // Setup CardanoClient mock
-    mockCardanoClient = {
-      getAddressUtxos: jest.fn().mockResolvedValue(mockUtxos),
-      hasOgmiosBackend: jest.fn().mockReturnValue(false),
-      evaluateTransaction: jest.fn(),
-    };
-    (cardanoClientModule.getCardanoClient as jest.Mock).mockReturnValue(mockCardanoClient);
   });
 
   // ============================================================================
@@ -325,18 +319,6 @@ describe('CardanoTransactionBuilder', () => {
       };
       await expect(builder.buildMintTransaction(reqWithoutScript, mockProtocolParameters))
         .rejects.toThrow('[CardanoTransactionBuilder] buildMintTransaction requires mintingPolicyScript to be specified');
-    });
-  });
-
-  // ============================================================================
-  // resetTransactionBuilder() Factory Function Tests
-  // ============================================================================
-  describe('resetTransactionBuilder()', () => {
-    it('should reset and initialize with specified builder', async () => {
-      await resetTransactionBuilder('csl');
-
-      expect(TxBuilderRegistry.create).toHaveBeenCalledWith('csl');
-      expect(mockTxBuilder.initCalled).toBe(true);
     });
   });
 

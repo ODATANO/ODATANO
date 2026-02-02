@@ -62,6 +62,10 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
     @description: 'Projection for Address UTxOs'
     entity AddressUTxOs             as projection on db.AddressUTxOs;
 
+    @title : 'Address Transactions'
+    @description: 'Projection for Address Transactions'
+    entity AddressTransactions     as projection on db.AddressTransactions;
+
     @title      : 'UTxO Assets'
     @description: 'Projection for UTxO Assets'
     entity UTxOAssets               as projection on db.UTxOAssets;
@@ -150,6 +154,16 @@ service CardanoODataService @(impl: 'srv/cardano-service') {
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
                               address: db.Bech32)            returns many AddressAssets;
+
+    @title : 'Get latest Transactions by Bech32 Address'
+    @description: 'Retrieve the latest transactions from the Bech32 Address'
+    action GetLatestTransactionsByAddress(
+                                    @title: 'Bech32 Address'
+                                    @description: 'The Bech32 encoded address'
+                                    address: db.Bech32,
+                                    @title: 'Limit'
+                                    @description: 'The maximum number of transactions to retrieve'
+                                    limit: Integer)            returns many AddressTransactions;
 
     @title      : 'Get Latest Block'
     @description: 'Retrieve the latest block information'

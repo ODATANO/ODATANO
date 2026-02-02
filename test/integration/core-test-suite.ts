@@ -1202,6 +1202,25 @@ export function createBackendTestSuite(backendConfig: BackendTestConfig) {
         });
       });
     });
+
+    describe('ODATANO Milestone 3 - CardanoService Tests', () => {
+      describe( 'Address Transactions Tests', () => {
+
+        it('GET /AddressTransactions – read AddressTransactions collection', async () => {
+          const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressTransactions`);
+          // For initial empty DB, expect empty collection
+          expect(Array.isArray(data.value)).to.be.true;
+          expect(data.value.length).to.be.equal(0);
+          expect(status).to.equal(200);
+        });
+
+        it('POST /GetLatestTransactionsByAddress – read Transactions by Address', async () => {
+          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: FIXTURE.validAddress });
+          expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+          expect(status).to.be.equal(200);
+        });
+      });
+    });
   });
 
 }

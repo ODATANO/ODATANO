@@ -51,6 +51,13 @@ export interface CardanoBackend {
   getAddressUtxos(address: string): Promise<UTxO[]>;
 
   /**
+   * Get Address Transactions (lightweight - only tx hashes and basic info)
+   * @param address bech32 address
+   * @returns {Promise<Transaction[]>} list of transactions involving this address
+   */
+  getAddressTransactions(address: string, limit: number): Promise<Transaction[]>;
+
+  /**
    * Get Network Information
    * @returns {Promise<Network>} network information
    */

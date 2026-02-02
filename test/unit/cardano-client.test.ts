@@ -77,6 +77,10 @@ class MockBackend implements CardanoBackend {
     throw new Error('Not implemented in mock');
   }
 
+  async getAddressTransactions(_address: string): Promise<Transaction[]> {
+    throw new Error('Not implemented in mock');
+  }
+
   async getlatestBlock(): Promise<BlockData> {
     throw new Error('Not implemented in mock');
   }

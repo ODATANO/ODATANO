@@ -1,0 +1,28 @@
+{
+  "name": "wallet-viewer",
+  "version": "0.0.1",
+  "description": "ODATANO Example Wallet Viewer Application",
+  "keywords": [
+    "ui5",
+    "openui5",
+    "sapui5"
+  ],
+  "main": "webapp/index.html",
+  "devDependencies": {
+    "@sap-ux/eslint-plugin-fiori-tools": "^9.0.0",
+    "@sap/ux-ui5-tooling": "1",
+    "@sapui5/ts-types-esm": "^1.144.0",
+    "@sapui5/types": "~1.144.0",
+    "@types/jquery": "^3.5.33",
+    "@ui5/cli": "^4.0.33",
+    "eslint": "^9",
+    "typescript": "^5.9.3",
+    "ui5-task-zipper": "^3",
+    "ui5-tooling-transpile": "^3.10.0"
+  },
+  "scripts": {
+    "start": "ui5 serve -o index.html",
+    "build": "ui5 build --clean-dest",
+    "deploy-config": "npx -p @sap/ux-ui5-tooling fiori add deploy-config cf"
+  }
+}

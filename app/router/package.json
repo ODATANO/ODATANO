@@ -1,0 +1,10 @@
+{
+  "name": "approuter",
+  "dependencies": {
+    "@sap/approuter": "^20.0.0",
+    "odatano": "file:../.."
+  },
+  "scripts": {
+    "start": "node node_modules/@sap/approuter/approuter.js"
+  }
+}

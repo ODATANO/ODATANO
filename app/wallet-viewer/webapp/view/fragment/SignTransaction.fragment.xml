@@ -1,0 +1,103 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:form="sap.ui.layout.form">
+
+    <Dialog
+        id="signTransactionDialog"
+        title="Sign Transaction"
+        contentWidth="480px"
+        type="Message"
+        state="{signing>/dialogState}">
+
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <!-- Wallet info header -->
+                <HBox alignItems="Center" class="sapUiSmallMarginBottom" visible="{wallet>/isConnected}">
+                    <Image
+                        src="{wallet>/walletIcon}"
+                        width="24px"
+                        height="24px"
+                        class="sapUiSmallMarginEnd"/>
+                    <Text text="Signing with {wallet>/walletName} ({wallet>/networkName})"/>
+                </HBox>
+
+                <!-- No wallet connected warning -->
+                <MessageStrip
+                    text="Please connect a wallet first"
+                    type="Warning"
+                    showIcon="true"
+                    visible="{= !${wallet>/isConnected}}"
+                    class="sapUiSmallMarginBottom"/>
+
+                <!-- Transaction details -->
+                <form:SimpleForm
+                    editable="false"
+                    layout="ResponsiveGridLayout"
+                    labelSpanXL="4"
+                    labelSpanL="4"
+                    labelSpanM="4"
+                    labelSpanS="12"
+                    visible="{wallet>/isConnected}">
+
+                    <Label text="Recipient"/>
+                    <Text text="{= ${signing>/recipientAddress} ? ${signing>/recipientAddress}.substring(0, 20) + '...' + ${signing>/recipientAddress}.slice(-8) : '' }"/>
+
+                    <Label text="Amount"/>
+                    <ObjectNumber
+                        number="{= Math.floor(Number(${signing>/lovelaceAmount} || 0) / 1000000 * 100) / 100 }"
+                        unit="ADA"
+                        emphasized="true"/>
+
+                    <Label text="Transaction Hash"/>
+                    <Text text="{= ${signing>/txBodyHash} ? ${signing>/txBodyHash}.substring(0, 8) + '...' + ${signing>/txBodyHash}.slice(-8) : '' }"/>
+
+                    <Label text="Network"/>
+                    <ObjectStatus
+                        text="{signing>/network}"
+                        state="{= ${signing>/network} === 'mainnet' ? 'Success' : 'Warning'}"/>
+
+                </form:SimpleForm>
+
+                <!-- Network mismatch warning -->
+                <MessageStrip
+                    text="Warning: Transaction network ({signing>/network}) does not match wallet network ({wallet>/networkName})"
+                    type="Warning"
+                    showIcon="true"
+                    visible="{signing>/networkMismatch}"
+                    class="sapUiSmallMarginTop"/>
+
+                <!-- Status message -->
+                <MessageStrip
+                    text="{signing>/statusMessage}"
+                    type="{signing>/statusType}"
+                    showIcon="true"
+                    visible="{= !!${signing>/statusMessage}}"
+                    class="sapUiSmallMarginTop"/>
+
+                <!-- Progress indicator when signing -->
+                <BusyIndicator
+                    text="Waiting for wallet signature..."
+                    visible="{signing>/busy}"
+                    class="sapUiMediumMarginTop"/>
+            </VBox>
+        </content>
+
+        <beginButton>
+            <Button
+                text="Sign and Submit"
+                type="Emphasized"
+                icon="sap-icon://signature"
+                press=".onConfirmSign"
+                enabled="{= ${wallet>/isConnected} &amp;&amp; !${signing>/busy} &amp;&amp; !${signing>/signed}}"/>
+        </beginButton>
+
+        <endButton>
+            <Button
+                text="{= ${signing>/signed} ? 'Close' : 'Cancel'}"
+                press=".onCancelSign"/>
+        </endButton>
+
+    </Dialog>
+
+</core:FragmentDefinition>

@@ -191,8 +191,8 @@ export class BlockfrostBackend implements CardanoBackend {
     );
   }
 
-  /** 
-   * Get Address Data
+  /**
+   * Get Address Data (without transactions - use getAddressTransactions() separately)
    * @param address bech32 address string
    * @returns {Promise<Address>} address data
    */
@@ -218,6 +218,26 @@ export class BlockfrostBackend implements CardanoBackend {
             scriptRef: utxo.reference_script_hash,
           })),
         };
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get Address Transactions
+   * @param address bech32 address string
+   * @returns {Promise<Transaction[]>} list of transactions for this address
+   */
+  async getAddressTransactions(address: string, limit?: number): Promise<Transaction[]> {
+    return handleBackendRequest(
+      async () => {
+        const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+
+        const transactions = await Promise.all(address_txs.map(async (tx) => {
+          return this.getTransaction(tx.tx_hash);
+        }));
+
+        return transactions;
       },
       this.name
     );

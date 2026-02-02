@@ -34,13 +34,16 @@ import {
   Drep as DrepRow,
   Account as AccountRow,
   LedgerProtocolParameter as ProtocolParameterRow,
+  AddressTransaction as AddressTransactionRow
 } from '#cds-models/CardanoODataService';
 
 import type {
   TransactionBuild as TransactionBuildRow,
   TransactionBuildInput as TransactionBuildInputRow,
   TransactionBuildOutput as TransactionBuildOutputRow,
-  TransactionSubmission as TransactionSubmissionRow
+  TransactionSubmission as TransactionSubmissionRow,
+  AddressSigningRequest as AddressSigningRequestRow,
+  AddressTransactionBuild as AddressTransactionBuildRow
 } from '#cds-models/CardanoTransactionService';
 
 
@@ -91,8 +94,9 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
  */
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
-    // determine input index, defaulting to array index if not provided
-    const inputIndex = input.outputIndex ?? idx;
+    // Use array index as the input index (position in this transaction's inputs)
+    // Note: input.outputIndex is the output index from the ORIGINAL UTxO being spent, not for keying here
+    const inputIndex = idx;
     // check presence of address and amount arrays
     const hasAddress = !!input.address?.length;
     const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
@@ -124,8 +128,8 @@ export function mapTransactionInputAssets(
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
   return inputs.flatMap((input, idx) => {
-
-    const inputIndex = input.outputIndex ?? idx;
+    // Use array index as the input index (must match mapTransactionInputs)
+    const inputIndex = idx;
 
     if (!Array.isArray(input.amount)) return [];
 
@@ -218,6 +222,10 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
+  // Transactions are loaded separately via getAddressTransactions() - set to false initially
+  // Will be updated when transactions are indexed
+  const hasTransactions = false;
+
   return {
     address,
     stakeAddress: addressData.stakeAddress || null,
@@ -228,8 +236,115 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
     validTo: validToIso,
     hasAssets: hasAssets,
     hasUTxOs: hasUtxos,
+    hasTransactions: hasTransactions,
   };
 }
+
+/**
+ * Net asset change structure
+ */
+interface NetAsset {
+  unit: string;
+  policyId: string;
+  assetName: string;
+  assetNameHex: string;
+  quantity: string;
+}
+
+/**
+ * Map Address Transactions
+ * Converts provider address transaction data into AddressTransactionRow format
+ * @param addr address string
+ * @param addressTxsData address transactions data from provider
+ * @returns {AddressTransactionRow[]} mapped address transaction rows
+ *  */
+export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[],validFrom: string, validTo: string): AddressTransactionRow[] {
+
+  return addressTxsData.map((tx: TransactionProviderData) => {
+    // Calculate net amounts for this address in this transaction
+    const { netLovelace, netAssets } = calculateNetAmounts(addr, tx);
+
+    return {
+      address_address: addr,
+      tx_hash: tx.hash,
+      netAmount: netLovelace,
+      blockTime: tx.blockTime,
+      netAssets: netAssets.length > 0 ? JSON.stringify(netAssets) : null,
+      hasAssets: netAssets.length > 0,
+      validFrom: validFrom,
+      validTo: validTo,
+    };
+  });
+}
+
+/**
+ * Calculate net lovelace and asset changes for an address in a transaction
+ * @param addr the address to calculate for
+ * @param tx the transaction data
+ * @returns object with netLovelace and netAssets array
+ */
+function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLovelace: number; netAssets: NetAsset[] } {
+  let inputLovelace = 0;
+  let outputLovelace = 0;
+  const assetBalances = new Map<string, bigint>(); // unit -> net quantity
+
+  // Process inputs belonging to this address (subtract)
+  for (const input of tx.inputs || []) {
+    if (input.address === addr) {
+      for (const amount of input.amount || []) {
+        if (amount.unit === 'lovelace') {
+          inputLovelace += parseInt(amount.quantity, 10) || 0;
+        } else {
+          // Native asset
+          const current = assetBalances.get(amount.unit) || BigInt(0);
+          assetBalances.set(amount.unit, current - BigInt(amount.quantity));
+        }
+      }
+    }
+  }
+
+  // Process outputs going to this address (add)
+  for (const output of tx.outputs || []) {
+    if (output.address === addr) {
+      for (const amount of output.amount || []) {
+        if (amount.unit === 'lovelace') {
+          outputLovelace += parseInt(amount.quantity, 10) || 0;
+        } else {
+          // Native asset
+          const current = assetBalances.get(amount.unit) || BigInt(0);
+          assetBalances.set(amount.unit, current + BigInt(amount.quantity));
+        }
+      }
+    }
+  }
+
+  // Convert asset map to array, filtering out zero balances
+  const netAssets: NetAsset[] = [];
+  for (const [unit, quantity] of assetBalances) {
+    if (quantity !== BigInt(0)) {
+      // Parse unit into policyId and assetName
+      // Format: policyId (56 chars) + assetNameHex
+      const policyId = unit.substring(0, 56);
+      const assetNameHex = unit.substring(56);
+      const assetName = hexToUtf8(assetNameHex);
+
+      netAssets.push({
+        unit,
+        policyId,
+        assetName,
+        assetNameHex,
+        quantity: quantity.toString()
+      });
+    }
+  }
+
+  return {
+    netLovelace: outputLovelace - inputLovelace,
+    netAssets
+  };
+}
+
+
 
 /** 
  * Map Address UTxOs
@@ -241,27 +356,24 @@ export function mapAddress(address: string, addressData: AddressProviderData): A
  */
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
-  const hasAssets = addressUtxosData.some((utxo: UtxosProviderData) =>
-    Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace')
-  );
-  const totalLovelace = addressUtxosData.reduce((sum, utxo) => {
-    const lovelaceAmount = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity);
-    return sum + lovelaceAmount;
-  }, 0);
+  return addressUtxosData.map((utxo: UtxosProviderData) => {
+    const lovelace = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity ?? 0);
+    const hasAssets = Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace');
 
-  return addressUtxosData.map((utxo: UtxosProviderData) => ({
-    address_address: addr,
-    hash: utxo.txHash,
-    index: utxo.outputIndex,
-    blockHash: utxo.blockHash,
-    utxodata_dataHash: utxo.datumHash,
-    utxodata_inlineDatum: null,
-    utxodata_referenceScriptHash: utxo.scriptRef,
-    totalLovelace: totalLovelace,
-    validFrom: validFrom,
-    validTo: validTo,
-    hasAssets: hasAssets,
-  }));
+    return {
+      address_address: addr,
+      hash: utxo.txHash,
+      index: utxo.outputIndex,
+      blockHash: utxo.blockHash,
+      utxodata_dataHash: utxo.datumHash,
+      utxodata_inlineDatum: null,
+      utxodata_referenceScriptHash: utxo.scriptRef,
+      lovelace: lovelace,
+      validFrom: validFrom,
+      validTo: validTo,
+      hasAssets: hasAssets,
+    };
+  });
 }
 
 /** 
@@ -618,7 +730,7 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
   };
 }
 
-/** 
+/**
  * Map Transaction Submission
  * Converts signed transaction CBOR and hash into TransactionSubmissionRow format
  * @param signedTxCbor signed transaction in CBOR hex format
@@ -631,6 +743,34 @@ export function mapTransactionSubmission(signedTxCbor: string, txHash: string): 
     signedTxCbor: signedTxCbor,
     txHash: txHash,
     submittedAt: now,
+  };
+}
+
+/**
+ * Map Address Signing Requests
+ * Creates AddressSigningRequest row for address-signing request association
+ * @param addr bech32 address
+ * @param signingRequestId signing request UUID
+ * @returns {AddressSigningRequestRow} mapped address signing request row
+ */
+export function mapAddressSigningRequest(addr: string, signingRequestId: string): AddressSigningRequestRow {
+  return {
+    address_address: addr,
+    signingRequest_id: signingRequestId,
+  };
+}
+
+/**
+ * Map Address Transaction Builds
+ * Creates AddressTransactionBuild row for address-build association
+ * @param addr bech32 address
+ * @param buildId transaction build UUID
+ * @returns {AddressTransactionBuildRow} mapped address transaction build row
+ */
+export function mapAddressTransactionBuild(addr: string, buildId: string): AddressTransactionBuildRow {
+  return {
+    address_address: addr,
+    txBuild_id: buildId,
   };
 }
 
