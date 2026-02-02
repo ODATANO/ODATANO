@@ -1,8 +1,7 @@
 import cds from '@sap/cds';
 import nock from 'nock';
 import { TxBuilderTestConfig } from './backend-test-helper';
-import { resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
-import { resetCardanoClient, getCardanoClient } from '../../srv/blockchain/cardano-client';
+import { createTestContext, resetAppContext, getCardanoClient, shutdownAppContext } from '../../srv/server';
 
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(60000);
@@ -177,12 +176,10 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
       // Setup default mocks (protocol params + ADA-only UTxOs)
       setupKoiosMocks();
 
-      // NOW reset CardanoClient - this creates new axios instances that nock can intercept
-      resetCardanoClient(['koios']);
-
-      // Reset transaction builder to the specific builder type
-      // This will fetch protocol params using the mocked Koios
-      await resetTransactionBuilder(txBuilderConfig.name);
+      // NOW reset app context - this creates new instances that nock can intercept
+      // Pass the specific builder type for this test configuration
+      const testContext = await createTestContext(['koios'], txBuilderConfig.name);
+      resetAppContext(testContext);
     });
 
     afterEach(() => {
@@ -190,10 +187,12 @@ export function createTxServiceTestSuite(txBuilderConfig: TxBuilderTestConfig) {
       nock.restore();
     });
 
-    afterAll(() => {
+    afterAll(async () => {
       nock.cleanAll();
       nock.restore();
       nock.enableNetConnect();
+      // Shutdown app context to close backend connections
+      await shutdownAppContext();
     });
 
     // ============================================================================

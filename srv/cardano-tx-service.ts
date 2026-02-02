@@ -3,8 +3,7 @@ import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor } from './utils/tx-build-helper';
-import indexer from './blockchain/cardano-indexer';
-import cardanoClient from './blockchain/cardano-client';
+import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
 const { SELECT, UPDATE } = cds.ql;
@@ -97,7 +96,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info({ senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
-      return await indexer.indexSimpleBuildResult(db, req.data);
+      return await getCardanoIndexer().indexSimpleBuildResult(db, req.data);
     });
   });
   /**
@@ -124,7 +123,7 @@ module.exports = (srv: cds.Service) => {
         { senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
         'Building transaction with metadata'
       );
-      return await indexer.indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
+      return await getCardanoIndexer().indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
     });
   });
 
@@ -156,7 +155,7 @@ module.exports = (srv: cds.Service) => {
       const cleanData = { ...req.data };
       delete cleanData.assetsJson;
 
-      const result = await indexer.indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
+      const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
       logger.info({ result }, 'Multi-asset transaction build result');
       return result;
     });
@@ -193,7 +192,7 @@ module.exports = (srv: cds.Service) => {
       const cleanData = { ...req.data };
       delete cleanData.mintActionsJson;
 
-      return await indexer.indexMintBuildResult(db, {
+      return await getCardanoIndexer().indexMintBuildResult(db, {
         ...cleanData,
         mintActions: parsedMintActions,
         mintingPolicyScript
@@ -246,11 +245,11 @@ module.exports = (srv: cds.Service) => {
       const txHash = existing.txBodyHash;
 
       // Submit to blockchain
-      await cardanoClient.submitTransaction(signedTxCbor);
+      await getCardanoClient().submitTransaction(signedTxCbor);
       logger.info({ txHash }, 'Transaction submitted to blockchain');
 
       // Delegate persistence to indexer
-      const submissionRecord = await indexer.persistTransactionSubmission(db, {
+      const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
         buildId,
@@ -279,11 +278,11 @@ module.exports = (srv: cds.Service) => {
       const txHash = getTxHashFromCbor(signedTxCbor);
 
       // Submit to blockchain
-      await cardanoClient.submitTransaction(signedTxCbor);
+      await getCardanoClient().submitTransaction(signedTxCbor);
       logger.info({ txHash }, 'External transaction submitted');
 
       // Delegate persistence to indexer (no build association)
-      const submissionRecord = await indexer.persistTransactionSubmission(db, {
+      const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
         buildId: null,
@@ -399,7 +398,7 @@ module.exports = (srv: cds.Service) => {
       );
 
       // Delegate persistence to indexer
-      const signingRequestRecord = await indexer.persistSigningRequest(db, {
+      const signingRequestRecord = await getCardanoIndexer().persistSigningRequest(db, {
         buildId,
         signingPayload,
       });
@@ -469,7 +468,7 @@ module.exports = (srv: cds.Service) => {
       const result = signerModule.verifySignedTransaction(signedTxCbor, signingRequest.txBodyHash);
 
       // Delegate persistence to indexer
-      const verificationRecord = await indexer.persistSignatureVerification(db, {
+      const verificationRecord = await getCardanoIndexer().persistSignatureVerification(db, {
         signingRequestId,
         signedTxCbor,
         verificationResult: result,
@@ -550,11 +549,11 @@ module.exports = (srv: cds.Service) => {
 
       // Submit to blockchain
       const txHash = signingRequest.txBodyHash;
-      await cardanoClient.submitTransaction(fullSignedTxCbor);
+      await getCardanoClient().submitTransaction(fullSignedTxCbor);
       logger.info({ txHash }, 'Verified transaction submitted to blockchain');
 
       // Delegate all persistence to indexer
-      const submissionRecord = await indexer.indexVerifiedTransactionSubmission(db, {
+      const submissionRecord = await getCardanoIndexer().indexVerifiedTransactionSubmission(db, {
         signingRequestId,
         buildId: signingRequest.build_id,
         fullSignedTxCbor,

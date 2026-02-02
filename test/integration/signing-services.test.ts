@@ -6,8 +6,7 @@
 
 import cds from '@sap/cds';
 import nock from 'nock';
-import { resetTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
-import { resetCardanoClient } from '../../srv/blockchain/cardano-client';
+import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
 
 const { INSERT, UPDATE } = cds.ql;
 
@@ -48,9 +47,9 @@ describe('Signing Services Integration Tests', () => {
     nock.disableNetConnect();
     nock.enableNetConnect(/localhost/);
 
-    // NOW reset CardanoClient - this creates new axios instances that nock can intercept
-    resetCardanoClient();
-    await resetTransactionBuilder('csl');
+    // NOW reset app context - this creates new instances that nock can intercept
+    const testContext = await createTestContext(['koios']);
+    resetAppContext(testContext);
 
     // Create test build
     const now = Date.now();
@@ -81,6 +80,8 @@ describe('Signing Services Integration Tests', () => {
     nock.cleanAll();
     nock.restore();
     nock.enableNetConnect();
+    // Shutdown app context to close backend connections
+    await shutdownAppContext();
   });
 
   // ==========================================================================

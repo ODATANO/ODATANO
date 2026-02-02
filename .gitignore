@@ -66,3 +66,5 @@ app/router/package-lock.json
 build-ubuntu.sh
 
 mta*
+
+dist/

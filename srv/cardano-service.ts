@@ -1,5 +1,5 @@
 import cds, { Request } from '@sap/cds';
-import indexer from './blockchain/cardano-indexer';
+import { getCardanoIndexer } from './server';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest } from './utils/backend-request-handler';
@@ -48,7 +48,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(NetworkInformation));
       if (!existing) {
         logger.debug('Indexing network information via indexer');
-        return await indexer.indexNetworkInformation(db);
+        return await getCardanoIndexer().indexNetworkInformation(db);
       }
       return existing;
     });
@@ -67,7 +67,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(NetworkInformation));
       if (!existing) {
         logger.debug('Indexing network information via indexer');
-        return await indexer.indexNetworkInformation(db);
+        return await getCardanoIndexer().indexNetworkInformation(db);
       }
       return existing;
     });
@@ -94,7 +94,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
         if (!existing) {
           logger.debug({ hash: hash }, 'Indexing block via indexer');
-          return await indexer.indexBlock(db, hash);
+          return await getCardanoIndexer().indexBlock(db, hash);
         }
         return existing;
       }
@@ -121,7 +121,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Blocks).where({ hash: hash }));
       if (!existing) {
         logger.debug({ hash: hash }, 'Indexing block via indexer');
-        return await indexer.indexBlock(db, hash);
+        return await getCardanoIndexer().indexBlock(db, hash);
       }
       return existing;
     });
@@ -135,7 +135,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('GetLatestBlock', async (req: Request) => {
     return handleRequest(req, async (db) => {
-      return await indexer.indexLatestBlock(db);
+      return await getCardanoIndexer().indexLatestBlock(db);
     });
   });
 
@@ -160,7 +160,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
         if (!existing) {
           logger.debug({ epochNumber }, 'Indexing epoch via indexer');
-          return await indexer.indexEpoch(db, epochNumber);
+          return await getCardanoIndexer().indexEpoch(db, epochNumber);
         }
         return existing;
       }
@@ -189,7 +189,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Epochs).where({ epoch: epochNumber }));
       if (!existing) {
         logger.debug({ epochNumber }, 'Indexing epoch via indexer');
-        return await indexer.indexEpoch(db, epochNumber);
+        return await getCardanoIndexer().indexEpoch(db, epochNumber);
       }
       return existing;
     });
@@ -203,7 +203,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('GetLatestEpoch', async (req: Request) => {
     return handleRequest(req, async (db) => {
-      return await indexer.indexLatestEpoch(db);
+      return await getCardanoIndexer().indexLatestEpoch(db);
     });
   });
 
@@ -226,7 +226,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Pools).where({ poolId: poolId }));
         if (!existing) {
           logger.debug({ poolId }, 'Indexing Pool data via indexer');
-          return await indexer.indexPool(db, poolId);
+          return await getCardanoIndexer().indexPool(db, poolId);
         }
       }
       return db.run(req.query);
@@ -252,7 +252,7 @@ module.exports = (srv: cds.Service) => {
       const existent = await db.run(SELECT.one.from(Pools).where({ poolId }));
       if (!existent) {
         logger.debug({ poolId }, 'Indexing pool via indexer');
-        return await indexer.indexPool(db, poolId);
+        return await getCardanoIndexer().indexPool(db, poolId);
       }
       return existent;
     });
@@ -278,7 +278,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress: stakeAddress }));
         if (!existing) {
           logger.debug({ stakeAddress }, 'Indexing account via indexer');
-          return await indexer.indexAccount(db, stakeAddress);
+          return await getCardanoIndexer().indexAccount(db, stakeAddress);
         }
         return existing;
       }
@@ -307,7 +307,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Accounts).where({ stakeAddress }));
       if (!existing) {
         logger.debug({ stakeAddress }, '[CardanoService] Indexing account via indexer');
-        return await indexer.indexAccount(db, stakeAddress);
+        return await getCardanoIndexer().indexAccount(db, stakeAddress);
       }
       return existing;
     });
@@ -332,7 +332,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Dreps).where({ drepId: drepId }));
         if (!existing) {
           logger.debug({ drepId }, 'Indexing drep via indexer');
-          return await indexer.indexDrep(db, drepId);
+          return await getCardanoIndexer().indexDrep(db, drepId);
         }
         return existing;
       }
@@ -361,7 +361,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Dreps).where({ drepId }));
       if (!existing) {
         logger.debug({ drepId }, 'Indexing drep via indexer');
-        return await indexer.indexDrep(db, drepId);
+        return await getCardanoIndexer().indexDrep(db, drepId);
       }
       return existing;
     });
@@ -385,7 +385,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Addresses).where({ address: addr }));
         if (!existing) {
           logger.debug({ address: addr }, 'Indexing address');
-          return await indexer.indexAddress(db, addr);
+          return await getCardanoIndexer().indexAddress(db, addr);
         }
         return existing;
       }
@@ -414,7 +414,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
-        return await indexer.indexAddress(db, address);
+        return await getCardanoIndexer().indexAddress(db, address);
       }
       return existing;
     });
@@ -451,7 +451,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
-        await indexer.indexAddress(db, address);
+        await getCardanoIndexer().indexAddress(db, address);
       }
       return db.run(SELECT.from(AddressAssets).where({ address_address: address }));
     });
@@ -487,7 +487,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) {
         logger.debug({ address }, 'Indexing address via indexer');
-        await indexer.indexAddress(db, address);
+        await getCardanoIndexer().indexAddress(db, address);
       }
       return db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
     });
@@ -513,7 +513,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(Transactions).where({ hash: txHash }));
         if (!existing) {
           logger.debug({ txHash }, 'Indexing transaction via indexer');
-          return await indexer.indexTransaction(db, txHash);
+          return await getCardanoIndexer().indexTransaction(db, txHash);
         }
         return existing;
       }
@@ -542,7 +542,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
       if (!existing) {
         logger.debug({ hash }, 'Indexing transaction via indexer');
-        return await indexer.indexTransaction(db, hash);
+        return await getCardanoIndexer().indexTransaction(db, hash);
       }
       return existing;
     });
@@ -608,7 +608,7 @@ module.exports = (srv: cds.Service) => {
         const existing = await db.run(SELECT.one.from(TransactionMetadata).where({ tx_hash: tx_hash }));
         if (!existing) {
           logger.debug({ tx_hash }, 'Indexing transaction metadata via indexer');
-          return await indexer.indexTransactionMetadata(db, tx_hash);
+          return await getCardanoIndexer().indexTransactionMetadata(db, tx_hash);
         }
         return existing;
       }
@@ -636,7 +636,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash: tx_hash }));
       if (!existing || existing.length == 0) {
         logger.debug({ tx_hash }, '[CardanoService] Indexing transaction metadata via indexer');
-        return await indexer.indexTransactionMetadata(db, tx_hash);
+        return await getCardanoIndexer().indexTransactionMetadata(db, tx_hash);
       }
       return existing;
     });
@@ -653,7 +653,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(LedgerProtocolParameters));
       if (!existing) {
         logger.debug('[CardanoService] Indexing protocol parameters via indexer');
-        return indexer.indexProtocolParameters(db);
+        return getCardanoIndexer().indexProtocolParameters(db);
       }
       return existing;
     });
@@ -669,7 +669,7 @@ module.exports = (srv: cds.Service) => {
     logger.debug('GetLedgerProtocolParameters Action handler called');
     return handleRequest(req, async (db) => {
       logger.debug('Indexing protocol parameters via indexer');
-      return indexer.indexProtocolParameters(db);
+      return getCardanoIndexer().indexProtocolParameters(db);
     });
   });
 
@@ -691,7 +691,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressTransactions).where({ address }).limit(txLimit));
       if (!existing || existing.length === 0) {
         logger.debug({ address }, 'Indexing address via indexer');
-        return indexer.indexAddressTransactions(db, address, txLimit);
+        return getCardanoIndexer().indexAddressTransactions(db, address, txLimit);
       }
       return existing;
     });
