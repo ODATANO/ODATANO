@@ -1,16 +1,10 @@
 # ODATANO
 
-**OData Service for Cardano Blockchain Data**
+**OData Service for the Cardano Blockchain**
 
-ODATANO is a SAP CAP service providing standardized OData V4 access to Cardano blockchain data and native transaction execution capabilities, enabling enterprise-grade read/write blockchain integration via a unified REST/OData interface.
-
-**Funded by Cardano Catalyst Fund 14** ([Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk))
-
-**Milestone Status:**
-- [Milestone 1: OData Service Foundation & Blockchain Read Access](https://milestones.projectcatalyst.io/projects/1400109/milestones/1) - Completed
-- [Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2) - Completed / Pending Approval
-- [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3) - Upcoming
-- [Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4) - Upcoming
+**ODATANO** is an SAP CAP–based service that exposes the Cardano blockchain via a standardized **OData V4** interface, enabling seamless enterprise-grade read and write access.
+It provides unified REST/OData access to on-chain data while supporting native transaction building and submission directly from business applications.
+By abstracting blockchain complexity behind familiar SAP integration patterns, ODATANO allows enterprises to integrate Cardano into core processes securely, auditable, and at scale.
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
@@ -18,21 +12,40 @@ ODATANO is a SAP CAP service providing standardized OData V4 access to Cardano b
 [![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## Status
+## Project Status
 
-### Milestone 1 (Completed)
+**Funded by Cardano Catalyst Fund 14:** [Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk)
+
+### Milestone 1 (Completed January 2026) ✅ 
 Cardano read operations with multi-provider failover (Blockfrost → Koios), 17 Entities defining Cardano Core Components & 11 Blockchain Read Actions with comprehensive input validation, full OData V4 query support, lazy on-demand indexing with TTL-based refresh, 340 tests across 11 test suites, CI/CD with Codecov integration
 
-### Milestone 2 (Completed / Pending Approval)
+[Milestone 1: OData Service Foundation & Blockchain Read Access](https://milestones.projectcatalyst.io/projects/1400109/milestones/1)
+
+### Milestone 2 (Completed February 2026) ✅ 
 Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4 transaction types (simple transfers, token minting, multi-asset transfers, metadata), Ogmios live backend for protocol parameters & UTxO queries, 6 Transaction Actions with external signing workflow, full Build → Sign → Submit flow, 327 new tests & 6 new test suites, end-to-end Preview testnet examples & Postman collection
+
+[Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2)
+
+### Milestone 3 (Pending March 2026) ⏳
+Extension of the transaction module & external workflow to export unsigned Cardano transactions via OData, enabling deterministic external signing (e.g. Cardano CLI or browser wallets) with full key separation and no private-key handling in the CAP service.
+Includes end-to-end external signer integration, SAP S/4HANA business process examples, enterprise use cases, a sample Fiori wallet viewer app, and comprehensive automated integration and security tests.
+
+[Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3)
+
+### Final Milestone (Upcoming April/May 2026) 
+A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, compliance, and sustainability use cases, accompanied by transparent community announcements. The milestone is closed with a formal Catalyst close-out report and a short end-to-end video summarizing results, lessons learned, and future plans.
+
+[Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4)
+
 
 ## Key Features
 
 - **OData V4 Protocol**: Full query support ($filter, $select, $expand, $top, $skip, $count, $orderby)
 - **Multi-Network Support**: Mainnet, Preview, and Preprod configurations
 - **Multi-Provider Architecture**: Blockfrost + Koios + Ogmios with automatic failover
-- **Transaction Building**: CSL & Buildooor for minting, transfers, and metadata transactions
-- **Lazy On-Demand Indexing**: TTL-based refresh, no background jobs
+- **Transaction Building**: Cardano Serialization Library (CSL) & Buildooor for minting, ADA or Token transfers, and metadata transactions
+- **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
+- **Enterprise-Grade Validation**: Strict input validation and error handling
 - **Comprehensive Testing**: 692 tests across 19 test suites, 96%+ statement coverage
 
 ## Quick Start
@@ -61,15 +74,12 @@ See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 
 ## Usage Examples
 
-**Read Operations:**
+**Read Operations (M1):**
 ```bash
-# Network information
-curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
-
 # Query transaction
 curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('tx_hash')"
 
-# Address with OData filters
+# Address with OData expand for assets
 curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')?\$expand=assets"
 ```
 
@@ -84,6 +94,20 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTr
 curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransaction \
   -H "Content-Type: application/json" \
   -d '{"buildId":"uuid-from-build-response","signedTxCbor":"84a400..."}'
+```
+
+**External Signing Operations (M3):**
+
+```bash
+# Build transaction with external signing (returns buildId and unsigned CBOR)
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+  -H "Content-Type: application/json" \
+  -d '{"buildId":"uuid-from-build-response"}'
+
+# Submit externally signed transaction
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+  -H "Content-Type: application/json" \
+  -d '{"buildId":"uuid-from-build-response","signedTxCbor":"84a400..."}'  
 ```
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
@@ -129,6 +153,12 @@ See [Test Documentation](test/README.md) for details.
 **7 Entities:** TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors
 
 **6 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildTokenMintTransaction, BuildMultiAssetTransaction, SubmitTransaction, GetProtocolParameters
+
+## External Signing Service (`/odata/v4/cardano-transaction`) - M3
+
+**4 Entities:** SigningRequests, SignatureVerifications, AddressTransactionBuilds, AddressSigningRequests
+
+**6 Actions:** CreateSigningRequest,  GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference with parameters.
 
