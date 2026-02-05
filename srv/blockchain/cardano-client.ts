@@ -1,14 +1,12 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend } from './backends/cardano-backend';
-import { BackendRegistry } from './backends/backend-registry';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
-import { CONFIG } from '../../config/config';
 
 import {
   Transaction,
   Address,
   UTxO,
-  Network,
+  NetworkInformation,
   BlockData,
   EpochData,
   MetadataLabelTx,
@@ -17,12 +15,10 @@ import {
   AccountData,
   LedgerProtocolParameters
 } from '../utils/types';
+import { OgmiosBackend } from './backends/ogmios-backend';
+import { BlockfrostBackend } from './backends/blockfrost-backend';
+import { KoiosBackend } from './backends/koios-backend';
 
-/**
- * Timeout settings for backends 
- */
-const PRIMARY_TIMEOUT_MS = Number(CONFIG.primaryTimeoutMs);
-const FALLBACK_TIMEOUT_MS = Number(CONFIG.fallbackTimeoutMs);
 const logger = cds.log('CardanoClient');
 
 /**
@@ -32,7 +28,7 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
   getAddress: { preferLive: true },
   getAddressUtxos: { preferLive: true },
-  getAddressTransactions: { preferLive: false }, // Historical data - prefer indexers
+  getAddressTransactions: { preferLive: false },
   getNetworkInformation: { preferLive: true },
   getTransactionMetadata: { preferLive: false },
   getBlock: { preferLive: false },
@@ -46,17 +42,20 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   submitTransaction: { preferLive: true },
 };
 
-/**
- * Protocol parameters cache TTL (5 minutes - parameters rarely change)
- */
-const PROTOCOL_PARAMS_CACHE_TTL_MS = 5 * 60 * 1000;
+export type Network = 'mainnet' | 'preview' | 'preprod';
+export type BackendName = 'blockfrost' | 'koios' | 'ogmios';
+export type TransactionBuilderName = 'csl' | 'buildooor';
 
-/**
- * Cached protocol parameters with timestamp
- */
-interface CachedProtocolParams {
-  params: LedgerProtocolParameters;
-  fetchedAt: number;
+export type CardanoClientConfig = {
+  network: Network;
+  backends: BackendName[];
+  blockfrostApiKey: string;
+  koiosApiKey: string;
+  ogmiosUrl: string;
+  transactionBuilders: TransactionBuilderName[];
+  primaryTimeoutMs: number;
+  fallbackTimeoutMs: number;
+  indexTtlMs: number;
 }
 
 /**
@@ -68,29 +67,41 @@ interface CachedProtocolParams {
  * - Automatic fallback between backends
  */
 export class CardanoClient {
+  private config: CardanoClientConfig;
   private liveBackend?: CardanoBackend;
   private historicalBackends: CardanoBackend[] = [];
   private initialized = false;
   private initPromise: Promise<void> | null = null;
-  private protocolParamsCache: CachedProtocolParams | null = null;
+  network: Network;
+  max_age_ms: number = 60000; // default 10 minutes for temporary caching 
 
   /** 
    * Constructor for CardanoClient
    * @param liveBackend - Optional backend for live/state queries (typically Ogmios)
    * @param historicalBackends - Optional backends for historical queries (typically Blockfrost/Koios)
    */
-  constructor(
-    liveBackend?: CardanoBackend,
-    historicalBackends: CardanoBackend[] = []
-  ) {
-    if (!liveBackend && historicalBackends.length === 0) {
-      throw new ConfigError(
-        'CardanoClient misconfigured: no backend available. Check CONFIG and API keys.'
-      );
+  constructor( clientConfig: CardanoClientConfig) {
+    this.network = clientConfig.network;
+   
+    const backends = clientConfig.backends;
+
+    if (backends.includes('ogmios')) {
+      this.liveBackend = new OgmiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.ogmiosUrl);
     }
-    this.liveBackend = liveBackend;
-    this.historicalBackends = historicalBackends;
+
+    if (backends.includes('blockfrost')) {
+      this.historicalBackends.push(new BlockfrostBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.blockfrostApiKey));
+    }
+    if (backends.includes('koios')) {
+      this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));
+    }
+
+    if (!this.liveBackend && this.historicalBackends.length === 0) {
+      throw new ConfigError('No valid backends configured for CardanoClient');
+    }
+
     logger.info('CardanoClient instance created.');
+    this.config = clientConfig;
   }
 
   /**
@@ -178,10 +189,10 @@ export class CardanoClient {
    * @returns {number} timeout in milliseconds
    */
   private getTimeoutForBackend(backend: CardanoBackend): number {
-    if (backend.name === 'ogmios') return PRIMARY_TIMEOUT_MS;
-    if (backend.name === 'blockfrost') return PRIMARY_TIMEOUT_MS;
-    if (backend.name === 'koios') return FALLBACK_TIMEOUT_MS;
-    return PRIMARY_TIMEOUT_MS;
+    if (backend.name === 'ogmios') return this.config.primaryTimeoutMs;
+    if (backend.name === 'blockfrost') return this.config.primaryTimeoutMs;
+    if (backend.name === 'koios') return this.config.fallbackTimeoutMs;
+    return this.config.primaryTimeoutMs;
   }
 
   /** 
@@ -292,7 +303,7 @@ export class CardanoClient {
    * Get network information with fallback between backends
    * @returns {Promise<Network>} network information
    */
-  getNetworkInformation(): Promise<Network> {
+  getNetworkInformation(): Promise<NetworkInformation> {
     return this.route('getNetworkInformation', b => b.getNetworkInformation());
   }
 
@@ -356,34 +367,9 @@ export class CardanoClient {
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
    */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    const now = Date.now();
-
-    // Return cached value if still valid
-    if (this.protocolParamsCache &&
-        (now - this.protocolParamsCache.fetchedAt) < PROTOCOL_PARAMS_CACHE_TTL_MS) {
-      logger.debug('Returning cached protocol parameters');
-      return this.protocolParamsCache.params;
-    }
-
     // Fetch fresh parameters
     logger.debug('Fetching fresh protocol parameters');
-    const params = await this.route('getProtocolParameters', b => b.getProtocolParameters());
-
-    // Cache the result
-    this.protocolParamsCache = {
-      params,
-      fetchedAt: now
-    };
-
-    return params;
-  }
-
-  /**
-   * Clear the protocol parameters cache (useful for testing or forced refresh)
-   */
-  clearProtocolParamsCache(): void {
-    this.protocolParamsCache = null;
-    logger.debug('Protocol parameters cache cleared');
+    return this.route('getProtocolParameters', b => b.getProtocolParameters());
   }
 
   /**
@@ -403,17 +389,6 @@ export class CardanoClient {
     }
 
     // Shutdown historical backends
-    for (const backend of this.historicalBackends) {
-      if ('shutdown' in backend && typeof backend.shutdown === 'function') {
-        try {
-          await backend.shutdown();
-          logger.debug(`Historical backend ${backend.name} shut down`);
-        } catch (err) {
-          logger.error(`Error shutting down historical backend ${backend.name}: ${err}`);
-        }
-      }
-    }
-
     this.initialized = false;
     this.initPromise = null;
     logger.info('CardanoClient shutdown complete');
@@ -468,82 +443,3 @@ export class CardanoClient {
     return this.liveBackend.evaluateTransaction(unsignedTxCbor);
   }
 }
-
-/**
- * CardanoClientFactory - Factory for creating CardanoClient instances
- */
-export class CardanoClientFactory {
-  /**
-   * Create CardanoClient instance from configuration
-   * @returns {CardanoClient} configured client instance
-   */
-  static createFromConfig(): CardanoClient {
-    const liveBackend = BackendRegistry.createLiveBackend();
-    const historicalBackends = BackendRegistry.createHistoricalBackends();
-    
-    return new CardanoClient(liveBackend, historicalBackends);
-  }
-
-  /**
-   * Create CardanoClient instance for specified backends (used in tests)
-   * @param backendNames list of backend names
-   * @returns {CardanoClient} CardanoClient instance
-   */
-  static createForBackends(backendNames: string[]): CardanoClient {
-    let testLiveBackend: CardanoBackend | undefined;
-    const testHistoricalBackends: CardanoBackend[] = [];
-
-    for (const backendName of backendNames) {
-      
-      if (backendName === 'blockfrost' && CONFIG.blockfrostApiKey) {
-        testHistoricalBackends.push(BackendRegistry.create('blockfrost'));
-      }
-      
-      if (backendName === 'koios') {
-        // Koios doesn't require an API key (optional)
-        testHistoricalBackends.push(BackendRegistry.create('koios'));
-      }
-    }
-
-    if (!testLiveBackend && testHistoricalBackends.length === 0) {
-      throw new ConfigError(`No valid backends configured: ${backendNames.join(',')}`);
-    }
-
-    return new CardanoClient(testLiveBackend, testHistoricalBackends);
-  }
-}
-
-/**
- * Legacy function for backward compatibility (used in tests)
- * @deprecated Use CardanoClientFactory.createForBackends() instead
- */
-export function createCardanoClientForBackends(backendNames: string[]): CardanoClient {
-  return CardanoClientFactory.createForBackends(backendNames);
-}
-
-/** CardanoClient exported singleton instance */
-let cardanoClient = CardanoClientFactory.createFromConfig();
-
-/**
- * Reset the CardanoClient singleton with specified backends (for testing)
- * @param backendNames list of backend names to use
- */
-export function resetCardanoClient(backendNames?: string[]): void {
-  if (backendNames) {
-    cardanoClient = CardanoClientFactory.createForBackends(backendNames);
-  } else {
-    cardanoClient = CardanoClientFactory.createFromConfig();
-  }
-}
-
-/**
- * Get the current CardanoClient instance
- * Use this function instead of importing cardanoClient directly if you need
- * the client to be updated after resetCardanoClient() is called
- */
-export function getCardanoClient(): CardanoClient {
-  return cardanoClient;
-}
-
-export { cardanoClient };
-export default cardanoClient;

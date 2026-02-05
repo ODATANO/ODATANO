@@ -5,7 +5,7 @@ import {
   TxInputLine as TxInputProviderData,
   TxOutputLine as TxOutputProviderData,
   Amount as AmountProviderData,
-  Network as NetworkInfoProviderData,
+  NetworkInformation as NetworkInfoProviderData,
   BlockData as BlockProviderData,
   EpochData as EpochProviderData,
   MetadataLabelTx as MetadataLabelTxProviderData,
@@ -49,13 +49,11 @@ import type {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
-import { CONFIG } from '../../config/config';
 import cds from '@sap/cds';
 
 /** 
  * Maximum age for cached/indexed data in milliseconds 
  */
-const MAX_AGE_MS = CONFIG.indexTtlMs;
 
 /** 
  * Map Transaction Data
@@ -212,10 +210,10 @@ export function mapTransactionOutputAssets(
  * @param addressData address data from provider
  * @returns {AddressRow} mapped address row
  */
-export function mapAddress(address: string, addressData: AddressProviderData): AddressRow {
+export function mapAddress(address: string, addressData: AddressProviderData, maxAge: number): AddressRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+  const validToIso = new Date(now + maxAge).toISOString();
   const totalLovelace = Array.isArray(addressData.amount)
     ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity)
     : 0;
@@ -443,13 +441,13 @@ export function mapAddressUtxoAssets(
  * @param providerNetworkData 
  * @returns {NetworkInfoRow} mapped network information row
  */
-export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData): NetworkInfoRow {
+export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData, max_age: number, network: string): NetworkInfoRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const validToIso = new Date(now + MAX_AGE_MS).toISOString();
+  const validToIso = new Date(now + max_age).toISOString();
 
   return {
-    network: CONFIG.network,
+    network: network,
     validFrom: nowIso,
     validTo: validToIso,
     maxSupply: Number(providerNetworkData.supply.max),
@@ -575,9 +573,9 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
  * @param providerAccountData account data from provider
  * @returns {AccountRow} mapped account row
  */
-export function mapAccount(providerAccountData: AccountProviderData): AccountRow {
+export function mapAccount(providerAccountData: AccountProviderData, max_age: number): AccountRow {
   const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
 
   return {
     validFrom: validFrom,
@@ -616,11 +614,11 @@ export function mapError(req: Request, err: BackendError, ctx: string) {
  * @param txbuildResult transaction build result from provider
  * @returns {TransactionBuildRow} mapped transaction build row
  */
-export function mapBuildResult(txbuildResult: TransactionBuildResult): TransactionBuildRow {
+export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: number): TransactionBuildRow {
   const buildId = cds.utils.uuid();
   const now = Math.floor(Date.now() / 1000);
   const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + MAX_AGE_MS).toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
   const hasInputs = Array.isArray(txbuildResult.inputs) && txbuildResult.inputs.length > 0;
   const hasOutputs = Array.isArray(txbuildResult.outputs) && txbuildResult.outputs.length > 0;
 
@@ -637,14 +635,11 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult): Transacti
     fee: Number(txbuildResult.feeLovelace),
     size: txbuildResult.sizeBytes, // size in bytes
     createdAt: now, // epoch seconds
-    // inputs             : txbuildResult.inputs,
-    // outputs            : txbuildResult.outputs ? JSON.stringify(txbuildResult.outputs) : null,
     submission: null,
     hasInputs: hasInputs, // indicates if build has inputs
     hasOutputs: hasOutputs, // indicates if build has outputs
     wasSubmitted: false, // indicates if this build was submitted
   }
-
 }
 
 /** 

@@ -1,14 +1,15 @@
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { NotFoundError } from '../../utils/errors';
-import { CONFIG } from '../../../config/config';
+import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { CARDANO_DEFAULTS } from '../../utils/const';
+
 import {
   Transaction,
   BlockData,
   Address,
   UTxO,
-  Network,
+  NetworkInformation,
   EpochData,
   JSONValue,
   MetadataLabelTx,
@@ -18,6 +19,13 @@ import {
   Amount,
   LedgerProtocolParameters
 } from '../../utils/types';
+import { Network } from '../cardano-client';
+
+const KOIOS_URLS: Record<Network, string> = {
+  mainnet: 'https://api.koios.rest/api/v1',
+  preview: 'https://preview.koios.rest/api/v1',
+  preprod: 'https://preprod.koios.rest/api/v1',
+};
 
 /**
  * KoiosBackend Implementation for CardanoBackend Interface
@@ -26,22 +34,38 @@ import {
 export class KoiosBackend implements CardanoBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
+  private network: Network;
 
   /**
-   * Constructor 
+   * Constructor
    */
-  constructor() {
+  constructor(network: Network, timeoutMs: number, apiKey?: string) {
+    const headers: Record<string, string> = {};
+
+    // Add Authorization header if API key is configured
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
     this.api = axios.create({
-      baseURL: CONFIG.koiosApiUrl,
-      timeout: CONFIG.primaryTimeoutMs,
+      baseURL: KOIOS_URLS[network],
+      timeout: timeoutMs,
+      headers,
     });
+    this.network = network;
   }
 
   /** 
    * Initialize the backend 
    */
-  async init(): Promise<void> {
-    return;
+  async init(): Promise<Boolean> {
+    // Test connection by fetching latest block
+    try {
+    await this.api.get('/tip');
+    } catch (error) {
+      throw new BackendInitError('koios', error);
+    }
+    return true;
   }
 
   /** 
@@ -333,7 +357,7 @@ export class KoiosBackend implements CardanoBackend {
    * Get Network Information
    * @returns {Promise<Network>} network information
    */
-  async getNetworkInformation(): Promise<Network> {
+  async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(
       async () => {
         // Try /totals endpoint (works on mainnet, but returns empty array on preview/preprod testnet)
@@ -345,7 +369,7 @@ export class KoiosBackend implements CardanoBackend {
           const latest = totalsData[0];
           return {
             supply: {
-              max: CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
+              max: CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
               total: latest.supply || '0',
               circulating: latest.circulation || '0',
               locked: '0', // Not available in /totals
@@ -367,7 +391,7 @@ export class KoiosBackend implements CardanoBackend {
         // Default values based on mainnet epoch 608 snapshot
         return {
           supply: {
-            max: genesis.maxlovelacesupply || CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
+            max: genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
             total: '38388567212743111',
             circulating: '36035240284477897',
             locked: '0',
@@ -564,7 +588,7 @@ export class KoiosBackend implements CardanoBackend {
         const { data } = await this.api.get('/cli_protocol_params');
 
         return {
-          network: CONFIG.network,
+          network: this.network,
           epoch: 0, // Koios doesn't provide current epoch in this endpoint
           // --- Fees / Sizes ---
           minFeeA: data.txFeePerByte,

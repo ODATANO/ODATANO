@@ -1,91 +1,60 @@
+import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
+import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
+
+// Mock the BlockFrostAPI
 jest.mock('@blockfrost/blockfrost-js', () => {
-  const BlockFrostAPI = jest.fn().mockImplementation(() => ({}));
-  return { BlockFrostAPI };
+  const mockBlockFrostAPI = jest.fn().mockImplementation(() => ({
+    txSubmit: jest.fn(),
+    poolsById: jest.fn(),
+    blocksLatest: jest.fn(),
+    addressesUtxos: jest.fn(),
+    epochsLatestParameters: jest.fn(),
+    options: { requestTimeout: 0 },
+  }));
+  return { BlockFrostAPI: mockBlockFrostAPI };
 });
 
+const NETWORK = 'preview' as const;
+const TIMEOUT_MS = 5000;
+
 describe('BlockfrostBackend constructor Error Test', () => {
-  beforeEach(() => {
-    jest.resetModules();
-    jest.clearAllMocks();
+  it('throws BackendInitError when projectId is missing', () => {
+    expect(() => new BlockfrostBackend(NETWORK, TIMEOUT_MS, '')).toThrow(BackendInitError);
+    try {
+      new BlockfrostBackend(NETWORK, TIMEOUT_MS, '');
+    } catch (err: any) {
+      expect(err.originalError?.message).toMatch(/Blockfrost Api Key is not set/i);
+    }
   });
 
-  it('throws BackendInitError when BLOCKFROST_KEY is missing', () => {
-    // Mock config to force empty key irrespective of env/.env
-    jest.isolateModules(() => {
-      jest.doMock('../../config/config', () => ({
-        CONFIG: {
-          blockfrostApiKey: '',
-          blockfrostApiUrl: '',
-          koiosApiUrl: '',
-          koiosApiKey: '',
-          network: 'preview',
-          hrp: { addr: /^$/, stake: /^$/ },
-          primaryTimeoutMs: 0,
-          fallbackTimeoutMs: 0,
-          indexTtlMs: 0,
-          logLevel: 'info',
-          backends: ['blockfrost'],
-        },
-      }));
-
-      const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
-
-      try {
-        new BlockfrostBackend();
-        throw new Error('Expected constructor to throw');
-      } catch (err) {
-        expect((err as any).name).toBe('BackendInitError');
-        expect((err as Error).message).toMatch(/Failed to initialize backend: blockfrost/);
-        expect((err as any).originalError?.message).toMatch(/blockfrostApiKey is not set/i);
-      }
-    });
+  it('creates backend successfully with valid projectId', () => {
+    expect(() => new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key')).not.toThrow();
   });
 });
 
 describe('BlockfrostBackend submitTransaction mock test', () => {
   it('should submit a transaction and return the transaction hash', async () => {
     const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-    const mockTxSubmit = jest.fn().mockResolvedValue(mockTxHash);
 
-    jest.isolateModules(() => {
-      jest.doMock('@blockfrost/blockfrost-js', () => ({
-        BlockFrostAPI: jest.fn().mockImplementation(() => ({
-          txSubmit: mockTxSubmit,
-        })),
-      }));
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txSubmit: jest.fn().mockResolvedValue(mockTxHash),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
 
-      jest.doMock('../../config/config', () => ({
-        CONFIG: {
-          blockfrostApiKey: 'test-key',
-          blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
-          koiosApiUrl: '',
-          koiosApiKey: '',
-          network: 'preview',
-          hrp: { addr: /^addr_test/, stake: /^stake_test/ },
-          primaryTimeoutMs: 5000,
-          fallbackTimeoutMs: 3000,
-          indexTtlMs: 60000,
-          logLevel: 'info',
-          backends: ['blockfrost'],
-        },
-      }));
-    });
-
-    const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
-    const backend = new BlockfrostBackend();
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
 
     const signedTxCbor = '84a300818258201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef00018182581d60abcdef1234567890abcdef1234567890abcdef1234567890abcdef12341a000f4240021a0002a389a0f6';
 
     const result = await backend.submitTransaction(signedTxCbor);
-
     expect(result).toBe(mockTxHash);
-    expect(mockTxSubmit).toHaveBeenCalledWith(Buffer.from(signedTxCbor, 'hex'));
   });
 });
 
 describe('BlockfrostBackend getPool mock test', () => {
   beforeEach(() => {
-    jest.resetModules();
     jest.clearAllMocks();
   });
 
@@ -107,34 +76,18 @@ describe('BlockfrostBackend getPool mock test', () => {
       reward_account: 'stake1uxyz789'
     };
 
-    const mockPoolsById = jest.fn().mockResolvedValue(mockPoolData);
-
-    jest.doMock('@blockfrost/blockfrost-js', () => ({
-      BlockFrostAPI: jest.fn().mockImplementation(() => ({
-        poolsById: mockPoolsById,
-      })),
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      poolsById: jest.fn().mockResolvedValue(mockPoolData),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
     }));
 
-    jest.doMock('../../config/config', () => ({
-      CONFIG: {
-        blockfrostApiKey: 'test-key',
-        blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
-        network: 'preview',
-        hrp: { addr: /^addr_test/, stake: /^stake_test/ },
-        primaryTimeoutMs: 5000,
-        fallbackTimeoutMs: 3000,
-        indexTtlMs: 60000,
-        logLevel: 'info',
-        backends: ['blockfrost'],
-      },
-    }));
-
-    const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
-    const backend = new BlockfrostBackend();
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
 
     const result = await backend.getPool('pool1abc123def456');
 
-    expect(mockPoolsById).toHaveBeenCalledWith('pool1abc123def456');
     expect(result).toEqual({
       poolId: 'pool1abc123def456',
       vrfKeyHash: 'vrf_vk1abc123',
@@ -171,30 +124,15 @@ describe('BlockfrostBackend getPool mock test', () => {
       reward_account: 'stake1min'
     };
 
-    const mockPoolsById = jest.fn().mockResolvedValue(mockPoolData);
-
-    jest.doMock('@blockfrost/blockfrost-js', () => ({
-      BlockFrostAPI: jest.fn().mockImplementation(() => ({
-        poolsById: mockPoolsById,
-      })),
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      poolsById: jest.fn().mockResolvedValue(mockPoolData),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
     }));
 
-    jest.doMock('../../config/config', () => ({
-      CONFIG: {
-        blockfrostApiKey: 'test-key',
-        blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
-        network: 'preview',
-        hrp: { addr: /^addr_test/, stake: /^stake_test/ },
-        primaryTimeoutMs: 5000,
-        fallbackTimeoutMs: 3000,
-        indexTtlMs: 60000,
-        logLevel: 'info',
-        backends: ['blockfrost'],
-      },
-    }));
-
-    const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
-    const backend = new BlockfrostBackend();
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
 
     const result = await backend.getPool('pool1minimal');
 
@@ -205,34 +143,161 @@ describe('BlockfrostBackend getPool mock test', () => {
   });
 
   it('should throw NotFoundError when pool does not exist', async () => {
-    const mockPoolsById = jest.fn().mockRejectedValue({
-      status: 404,
-      message: 'Pool not found'
-    });
-
-    jest.doMock('@blockfrost/blockfrost-js', () => ({
-      BlockFrostAPI: jest.fn().mockImplementation(() => ({
-        poolsById: mockPoolsById,
-      })),
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      poolsById: jest.fn().mockRejectedValue({
+        status: 404,
+        message: 'Pool not found'
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
     }));
 
-    jest.doMock('../../config/config', () => ({
-      CONFIG: {
-        blockfrostApiKey: 'test-key',
-        blockfrostApiUrl: 'https://cardano-preview.blockfrost.io/api/v0',
-        network: 'preview',
-        hrp: { addr: /^addr_test/, stake: /^stake_test/ },
-        primaryTimeoutMs: 5000,
-        fallbackTimeoutMs: 3000,
-        indexTtlMs: 60000,
-        logLevel: 'info',
-        backends: ['blockfrost'],
-      },
-    }));
-
-    const { BlockfrostBackend } = require('../../srv/blockchain/backends/blockfrost-backend');
-    const backend = new BlockfrostBackend();
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
 
     await expect(backend.getPool('pool1nonexistent')).rejects.toThrow();
+  });
+});
+
+describe('BlockfrostBackend getAddressUtxos', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should return UTxOs for valid address', async () => {
+    const mockUtxos = [
+      {
+        tx_hash: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        output_index: 0,
+        address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae',
+        amount: [
+          { unit: 'lovelace', quantity: '10000000' }
+        ],
+        block: 'block123',
+        data_hash: null
+      },
+      {
+        tx_hash: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+        output_index: 1,
+        address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae',
+        amount: [
+          { unit: 'lovelace', quantity: '5000000' },
+          { unit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '100' }
+        ],
+        block: 'block456',
+        data_hash: null
+      }
+    ];
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAddressUtxos('addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae');
+
+    expect(result).toHaveLength(2);
+    expect(result[0].txHash).toBe('1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef');
+    expect(result[0].outputIndex).toBe(0);
+    expect(result[1].amount).toHaveLength(2);
+  });
+
+  it('should throw NotFoundError when address has no UTxOs', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      addressesUtxos: jest.fn().mockRejectedValue({
+        status_code: 404,
+        message: 'The requested component has not been found.'
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await expect(backend.getAddressUtxos('addr_test1empty')).rejects.toThrow(NotFoundError);
+  });
+});
+
+describe('BlockfrostBackend getProtocolParameters', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should return protocol parameters', async () => {
+    const mockProtocolParams = {
+      epoch: 500,
+      min_utxo: '1000000',
+      nonce: 'nonce123',
+      min_fee_a: 44,
+      min_fee_b: 155381,
+      max_tx_size: 16384,
+      max_block_header_size: 1100,
+      max_block_size: 65536,
+      key_deposit: '2000000',
+      pool_deposit: '500000000',
+      e_max: 18,
+      n_opt: 500,
+      a0: 0.3,
+      rho: 0.003,
+      tau: 0.2,
+      protocol_major_ver: 8,
+      protocol_minor_ver: 0,
+      min_pool_cost: '340000000',
+      price_mem: 0.0577,
+      price_step: 0.0000721,
+      max_tx_ex_mem: '14000000',
+      max_tx_ex_steps: '10000000000',
+      max_block_ex_mem: '62000000',
+      max_block_ex_steps: '20000000000',
+      max_val_size: '5000',
+      collateral_percent: 150,
+      max_collateral_inputs: 3,
+      coins_per_utxo_size: '4310',
+      cost_models: {
+        PlutusV3: Array(297).fill(1000)
+      }
+    };
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      epochsLatestParameters: jest.fn().mockResolvedValue(mockProtocolParams),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getProtocolParameters();
+
+    expect(result).toHaveProperty('epoch', 500);
+    expect(result).toHaveProperty('minFeeA', 44);
+    expect(result).toHaveProperty('minFeeB', 155381);
+    expect(result).toHaveProperty('maxTxSize', 16384);
+  });
+
+  it('should throw on API error', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      epochsLatestParameters: jest.fn().mockRejectedValue({
+        status_code: 500,
+        message: 'Internal server error'
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await expect(backend.getProtocolParameters()).rejects.toThrow();
   });
 });

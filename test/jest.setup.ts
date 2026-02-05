@@ -5,6 +5,7 @@
 
 /* eslint-disable no-console */
 
+
 // Store original console methods
 const originalConsoleLog = console.log;
 const originalConsoleInfo = console.info;
@@ -26,26 +27,9 @@ if (suppressLogs) {
   console.dir = () => {};
 }
 
-// Restore console and cleanup app context after all tests
-afterAll(async () => {
-  // Shutdown app context if it exists (to close backend connections)
-  try {
-    const { shutdownAppContext } = await import('../srv/server');
-    await shutdownAppContext();
-  } catch {
-    // Ignore if server module not imported or context doesn't exist
-  }
-
-  // Also shutdown the legacy singleton if it exists
-  try {
-    const { cardanoClient } = await import('../srv/blockchain/cardano-client');
-    if (cardanoClient && typeof cardanoClient.shutdown === 'function') {
-      await cardanoClient.shutdown();
-    }
-  } catch {
-    // Ignore if not initialized or already shut down
-  }
-
+// Restore console after all tests
+// Note: App context shutdown is handled by individual test suites
+afterAll(() => {
   console.log = originalConsoleLog;
   console.info = originalConsoleInfo;
   console.warn = originalConsoleWarn;

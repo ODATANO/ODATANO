@@ -2,12 +2,12 @@ import cds from '@sap/cds'
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
-import { getCardanoClient } from "../cardano-client";
 import { InsufficientFundsError } from "../../utils/errors";
-import { CONFIG } from "../../../config/config";
+import { CardanoClient } from '../cardano-client';
+import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER } from '../../utils/const';
 
 const logger = cds.log('CSLTxBuilder');
 
@@ -40,13 +40,17 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   public readonly name = "CslTxBuilder";
   private txBuilderConfig!: CSL.TransactionBuilderConfig;
   private protocolParameters!: LedgerProtocolParameter; // Store for cost models
+  private cardanoClient!: CardanoClient;
 
   /**
    * Initialize the builder
+   * @param cardanoClient - The CardanoClient instance
+   * @param protocolParams - Optional protocol parameters (if not provided, fetched from backend)
    */
-  public async init(): Promise<void> {
-    this.protocolParameters = await getCardanoClient().getProtocolParameters();
+  public async init(cardanoClient: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void> {
+    this.protocolParameters = protocolParams ?? await cardanoClient.getProtocolParameters();
     this.txBuilderConfig = this._createTxBuilderConfig(this.protocolParameters);
+    this.cardanoClient = cardanoClient;
     logger.info(`Initialized with protocol parameters.`);
   }
 
@@ -108,7 +112,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace: feeLovelace,
@@ -183,7 +187,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
@@ -286,7 +290,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
@@ -310,16 +314,16 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     try {
       // Determine execution units based on evaluator availability
       let finalExUnits = {
-        mem: String(CONFIG.DEFAULT_EXECUTION_UNITS.mem),
-        cpu: String(CONFIG.DEFAULT_EXECUTION_UNITS.cpu)
+        mem: String(DEFAULT_EXECUTION_UNITS.mem),
+        cpu: String(DEFAULT_EXECUTION_UNITS.cpu)
       };
 
       if (ctx.evaluateTransaction) {
         // Build first pass with high execution units for evaluation
         logger.debug(`[CSLTxBuilder] Building evaluation pass with high execution units`);
         const evalTx = this._buildMintTx(req, ctx, {
-          mem: String(CONFIG.HIGH_EXECUTION_UNITS.mem),
-          cpu: String(CONFIG.HIGH_EXECUTION_UNITS.cpu)
+          mem: String(HIGH_EXECUTION_UNITS.mem),
+          cpu: String(HIGH_EXECUTION_UNITS.cpu)
         });
         const evalTxCbor = Buffer.from(evalTx.to_bytes()).toString('hex');
 
@@ -333,8 +337,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
             const budget = evalResults[0].budget;
             // Add safety margin to evaluated units
             finalExUnits = {
-              mem: Math.ceil(budget.memory * CONFIG.EXECUTION_UNIT_BUFFER).toString(),
-              cpu: Math.ceil(budget.cpu * CONFIG.EXECUTION_UNIT_BUFFER).toString()
+              mem: Math.ceil(budget.memory * EXECUTION_UNIT_BUFFER).toString(),
+              cpu: Math.ceil(budget.cpu * EXECUTION_UNIT_BUFFER).toString()
             };
             logger.info(`[CSLTxBuilder] Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
           }
@@ -378,7 +382,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor,
         txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxCbor.length / 2, // hex to bytes
         builderEngine: this.name,
         feeLovelace,
@@ -391,7 +395,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         warnings: [],
       };
     } catch (error: any) {
-      logger.error(`Error toString: ${error}`);
+      logger.error(`[CSLTxBuilder] buildUnsignedMintTransaction error: ${error?.message || error}`);
       mapBuilderError(error, 'lovelace');
     }
   }
@@ -503,6 +507,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
 
     // Calculate script data hash BEFORE add_change_if_needed
+    // Always call calc_script_data_hash for Plutus transactions - CSL requires it
     const costModels = this._createCostModels('v3');
     txb.calc_script_data_hash(costModels);
 
@@ -684,32 +689,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       // Parse cost models JSON from protocol parameters
       // Format: { "plutus:v1": [array of 166 numbers], "plutus:v2": [array of 175 numbers], ... }
       const costModelsJson = JSON.parse(this.protocolParameters.costModels || '{}');
-
-      // PlutusV1 cost model (check both "plutus:v1" and "PlutusV1" formats)
-      if (!version || version === 'v1') {
-        const plutusV1Costs = costModelsJson['plutus:v1'] || costModelsJson['PlutusV1'];
-        if (plutusV1Costs && Array.isArray(plutusV1Costs)) {
-          const plutusV1CostModel = CSL.CostModel.new();
-          for (let i = 0; i < plutusV1Costs.length; i++) {
-            plutusV1CostModel.set(i, CSL.Int.new_i32(plutusV1Costs[i]));
-          }
-          costModels.insert(CSL.Language.new_plutus_v1(), plutusV1CostModel);
-          logger.debug(`[CSLTxBuilder] Added PlutusV1 cost model with ${plutusV1Costs.length} parameters`);
-        }
-      }
-
-      // PlutusV2 cost model (check both "plutus:v2" and "PlutusV2" formats)
-      if (!version || version === 'v2') {
-        const plutusV2Costs = costModelsJson['plutus:v2'] || costModelsJson['PlutusV2'];
-        if (plutusV2Costs && Array.isArray(plutusV2Costs)) {
-          const plutusV2CostModel = CSL.CostModel.new();
-          for (let i = 0; i < plutusV2Costs.length; i++) {
-            plutusV2CostModel.set(i, CSL.Int.new_i32(plutusV2Costs[i]));
-          }
-          costModels.insert(CSL.Language.new_plutus_v2(), plutusV2CostModel);
-          logger.debug(`[CSLTxBuilder] Added PlutusV2 cost model with ${plutusV2Costs.length} parameters`);
-        }
-      }
 
       // PlutusV3 cost model (check both "plutus:v3" and "PlutusV3" formats)
       if (!version || version === 'v3') {

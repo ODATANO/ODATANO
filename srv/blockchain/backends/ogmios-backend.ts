@@ -5,7 +5,6 @@ import {
   createLedgerStateQueryClient
 } from '@cardano-ogmios/client';
 
-import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import {
@@ -13,7 +12,7 @@ import {
   BlockData,
   Address,
   UTxO,
-  Network,
+  NetworkInformation,
   EpochData,
   MetadataLabelTx,
   PoolData,
@@ -23,6 +22,9 @@ import {
 } from '../../utils/types';
 
 import { EvaluatingBackend } from './cardano-backend';
+
+import { CARDANO_DEFAULTS } from '../../utils/const';
+import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
 
@@ -59,21 +61,28 @@ export class OgmiosBackend implements EvaluatingBackend {
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
   private context: any = null;
   private isShutdown = false;
+  private network: Network;
+  private timeoutMs: number;
+  private ogmiosUrl: string;
+
 
   /** 
    * Constructor 
    */
-  constructor() {
-    if (!CONFIG.ogmiosUrl) {
-      throw new BackendInitError('ogmios', new Error('CONFIG.ogmiosUrl is not set'));
+  constructor(network: Network, timeoutMs: number, ogmiosUrl: string) {
+    if (!ogmiosUrl) {
+      throw new BackendInitError('ogmios', new Error('ogmiosUrl is not set'));
     }
+    this.network = network;
+    this.timeoutMs = timeoutMs;
+    this.ogmiosUrl = ogmiosUrl;
   }
 
   /** 
    * Initialize the Ogmios backend connection
    */
-  async init(): Promise<void> {
-    const url = new URL(CONFIG.ogmiosUrl);
+  async init(): Promise<Boolean> {
+    const url = new URL(this.ogmiosUrl);
     const connection = {
       host: url.hostname,
       port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80),
@@ -90,6 +99,7 @@ export class OgmiosBackend implements EvaluatingBackend {
 
     this.stateQueryClient = await createLedgerStateQueryClient(this.context);
     this.txSubmissionClient = await createTransactionSubmissionClient(this.context);
+    return true;
   }
 
   /** 
@@ -162,15 +172,15 @@ export class OgmiosBackend implements EvaluatingBackend {
    * Get specific Network Information
    * @returns {Promise<Network>} network information
    */
-  async getNetworkInformation(): Promise<Network> {
+  async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(async () => {
-      const maxSupply = CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY;
+      const maxSupply = CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
 
       return {
         supply: {
-          max: maxSupply,
-          total: maxSupply,
-          circulating: maxSupply,
+          max: maxSupply.toString(),
+          total: maxSupply.toString(),
+          circulating: maxSupply.toString(),
           locked: '0',
           treasury: '0',
           reserves: '0'
@@ -379,7 +389,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       ]);
 
       return {
-        network: CONFIG.network,
+        network: this.network,
         epoch: currentEpoch,
         minUtxo: params.minUtxoDepositCoefficient?.toString() || '0',
         nonce: '',
@@ -437,7 +447,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       const slot = tip === 'origin' ? 0 : tip.slot;
 
       // Calculate epoch boundaries using era start as reference
-      const SLOTS_PER_EPOCH = CONFIG.CARDANO_PROTOCOL.SLOTS_PER_EPOCH;
+      const SLOTS_PER_EPOCH = CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
       const epochStartSlot = currentEpoch * SLOTS_PER_EPOCH;
       const epochEndSlot = (currentEpoch + 1) * SLOTS_PER_EPOCH;
 
@@ -494,7 +504,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       const blockTime = eraStartTime + (slotsSinceEraStart * 1000); // Each slot = 1 second
 
       // Calculate slot within epoch
-      const epochSlot = slot % CONFIG.CARDANO_PROTOCOL.SLOTS_PER_EPOCH;
+      const epochSlot = slot % CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
 
       return {
         time: blockTime, // Already in milliseconds

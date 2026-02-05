@@ -2,7 +2,7 @@ import {
   Transaction,
   Address,
   UTxO,
-  Network,
+  NetworkInformation,
   BlockData,
   EpochData,
   MetadataLabelTx,
@@ -27,7 +27,7 @@ export interface CardanoBackend {
   /**
    * Initialize the backend 
    */
-  init(): Promise<void>;
+  init(): Promise<Boolean>;
 
   /**
    * Get Transaction Data
@@ -59,9 +59,9 @@ export interface CardanoBackend {
 
   /**
    * Get Network Information
-   * @returns {Promise<Network>} network information
+   * @returns {Promise<NetworkInformation>} network information
    */
-  getNetworkInformation(): Promise<Network>;
+  getNetworkInformation(): Promise<NetworkInformation>;
 
   /**
    * Get Transaction Metadata

@@ -1,13 +1,11 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
-import { getCardanoClient } from "../cardano-client";
 import cds from "@sap/cds";
 import { InsufficientFundsError } from "../../utils/errors";
-import { CONFIG } from "../../../config/config";
 import {
   defaultProtocolParameters,
   Address,
@@ -28,6 +26,8 @@ import {
   TxMetadatumMap
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 import { DataI } from "@harmoniclabs/plutus-data";
+import { CardanoClient } from "../cardano-client";
+import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS,EXECUTION_UNIT_BUFFER,WITNESS_BUFFER_BYTES} from '../../utils/const'
 
 const logger = cds.log('BuildooorTxBuilder');
 
@@ -58,13 +58,17 @@ export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = 'BuildooorTxBuilder';
   private txBuilder!: TxBuilder;
+  private cardanoClient!: CardanoClient;
 
-  /** 
+  /**
    * Initialize the builder
+   * @param client - The CardanoClient instance
+   * @param protocolParams - Optional protocol parameters (if not provided, fetched from backend)
    */
-  public async init(): Promise<void> {
-    const protocolParams = await getCardanoClient().getProtocolParameters();
-    const txbParameters = this._mapLedgerParametersToBuildooorParams(protocolParams);
+  public async init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void> {
+    this.cardanoClient = client;
+    const params = protocolParams ?? await client.getProtocolParameters();
+    const txbParameters = this._mapLedgerParametersToBuildooorParams(params);
     this.txBuilder = new TxBuilder(txbParameters);
     logger.debug(`TxBuilder initialized with protocol parameters`);
   }
@@ -115,7 +119,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxBytes.length,
         builderEngine: this.name,
         feeLovelace: tx.body.fee.toString(),
@@ -177,7 +181,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         builderEngine: this.name,
         sizeBytes: unsignedTxBytes.length,
         feeLovelace: tx.body.fee.toString(),
@@ -250,7 +254,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         sizeBytes: unsignedTxBytes.length,
         builderEngine: this.name,
         feeLovelace: tx.body.fee.toString(),
@@ -268,7 +272,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     } catch (err: any) {
       // Extract asset unit from error message if possible
       const assetMatch = err?.message?.match(/not enough\s+([a-f0-9.]+)/i);
-      const assetUnit = assetMatch?.[1] || 'assets';
+      const assetUnit = assetMatch?.[1];
       mapBuilderError(err, assetUnit);
     }
   }
@@ -354,12 +358,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
 
       // Determine execution units based on evaluator availability
-      let finalExUnits = CONFIG.DEFAULT_EXECUTION_UNITS;
+      let finalExUnits = DEFAULT_EXECUTION_UNITS;
 
       if (ctx.evaluateTransaction) {
         // Build first pass with high execution units for evaluation
         logger.debug(`Building evaluation pass with high execution units`);
-        const evalMints = buildMints(CONFIG.HIGH_EXECUTION_UNITS);
+        const evalMints = buildMints(HIGH_EXECUTION_UNITS);
 
         const evalTx = await this.txBuilder.build({
           inputs,
@@ -381,8 +385,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             const budget = evalResults[0].budget;
             // Add safety margin to evaluated units
             finalExUnits = {
-              mem: Math.ceil(budget.memory * CONFIG.EXECUTION_UNIT_BUFFER),
-              cpu: Math.ceil(budget.cpu * CONFIG.EXECUTION_UNIT_BUFFER)
+              mem: Math.ceil(budget.memory * EXECUTION_UNIT_BUFFER),
+              cpu: Math.ceil(budget.cpu * EXECUTION_UNIT_BUFFER)
             };
             logger.info(`Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
           }
@@ -408,7 +412,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
       const calculatedFee = BigInt(txFirstPass.body.fee.toString());
-      const witnessBuffer = BigInt(CONFIG.TX_BUILDING.WITNESS_BUFFER_BYTES);
+      const witnessBuffer = BigInt(WITNESS_BUFFER_BYTES);
       const adjustedMinFee = calculatedFee + witnessBuffer;
 
       logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
@@ -434,7 +438,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
         senderAddress: req.senderAddress,
-        network: CONFIG.network,
+        network: this.cardanoClient.network,
         builderEngine: this.name,
         sizeBytes: unsignedTxBytes.length,
         feeLovelace: tx.body.fee.toString(),

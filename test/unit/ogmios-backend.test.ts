@@ -7,13 +7,6 @@ jest.mock('@sap/cds', () => ({
   })),
 }));
 
-jest.mock('../../config/config', () => ({
-  CONFIG: {
-    ogmiosUrl: 'ws://localhost:1337',
-    network: 'preview'
-  }
-}));
-
 jest.mock('@cardano-ogmios/client', () => ({
   createInteractionContext: jest.fn(),
   createLedgerStateQueryClient: jest.fn(),
@@ -22,39 +15,26 @@ jest.mock('@cardano-ogmios/client', () => ({
 
 import { OgmiosBackend } from '../../srv/blockchain/backends/ogmios-backend';
 import { BackendInitError } from '../../srv/utils/errors';
-import { CONFIG } from '../../config/config';
 
 describe('OgmiosBackend', () => {
-  let originalOgmiosUrl: string | undefined;
-
-  beforeEach(() => {
-    originalOgmiosUrl = CONFIG.ogmiosUrl;
-    // Clear all mocks
-    jest.clearAllMocks();
-  });
-
-  afterEach(() => {
-    (CONFIG as any).ogmiosUrl = originalOgmiosUrl;
-  });
+  const NETWORK = 'preview' as const;
+  const TIMEOUT_MS = 5000;
+  const OGMIOS_URL = 'ws://localhost:1337';
 
   describe('Constructor', () => {
-    it('should create instance successfully when CONFIG.ogmiosUrl is set', () => {
-      (CONFIG as any).ogmiosUrl = 'ws://localhost:1337';
-      
-      expect(() => new OgmiosBackend()).not.toThrow();
-      
-      const backend = new OgmiosBackend();
+    it('should create instance successfully when ogmiosUrl is provided', () => {
+      expect(() => new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL)).not.toThrow();
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       expect(backend.name).toBe('ogmios');
     });
 
-    it('should throw BackendInitError when CONFIG.ogmiosUrl is not set', () => {
-      (CONFIG as any).ogmiosUrl = undefined;
-      
-      expect(() => new OgmiosBackend()).toThrow(BackendInitError);
-      
+    it('should throw BackendInitError when ogmiosUrl is not provided', () => {
+      expect(() => new OgmiosBackend(NETWORK, TIMEOUT_MS, '')).toThrow(BackendInitError);
+
       // Verify the error is about ogmios backend initialization
       try {
-        new OgmiosBackend();
+        new OgmiosBackend(NETWORK, TIMEOUT_MS, '');
         expect(true).toBe(false); // Should not reach here
       } catch (error) {
         expect(error).toBeInstanceOf(BackendInitError);
@@ -62,16 +42,8 @@ describe('OgmiosBackend', () => {
       }
     });
 
-    it('should throw BackendInitError when CONFIG.ogmiosUrl is empty string', () => {
-      (CONFIG as any).ogmiosUrl = '';
-      
-      expect(() => new OgmiosBackend()).toThrow(BackendInitError);
-    });
-
-    it('should throw BackendInitError when CONFIG.ogmiosUrl is null', () => {
-      (CONFIG as any).ogmiosUrl = null;
-      
-      expect(() => new OgmiosBackend()).toThrow(BackendInitError);
+    it('should throw BackendInitError when ogmiosUrl is empty string', () => {
+      expect(() => new OgmiosBackend(NETWORK, TIMEOUT_MS, '')).toThrow(BackendInitError);
     });
   });
 
@@ -79,8 +51,7 @@ describe('OgmiosBackend', () => {
     let backend: OgmiosBackend;
 
     beforeEach(() => {
-      (CONFIG as any).ogmiosUrl = 'ws://localhost:1337';
-      backend = new OgmiosBackend();
+      backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
     });
 
     it('should convert lovelace-only value correctly', () => {
@@ -185,7 +156,7 @@ describe('OgmiosBackend', () => {
         }])
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
@@ -194,7 +165,7 @@ describe('OgmiosBackend', () => {
       expect(mockStateQueryClient.rewardAccountSummaries).toHaveBeenCalledWith({
         keys: ['stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr']
       });
-      
+
       expect(result).toEqual({
         stakeaddress: 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr',
         active: true,
@@ -216,7 +187,7 @@ describe('OgmiosBackend', () => {
         rewardAccountSummaries: jest.fn().mockResolvedValue([])
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
 
       await expect(
@@ -225,7 +196,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should throw error when stateQueryClient is not initialized', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = null;
 
       await expect(
@@ -242,7 +213,7 @@ describe('OgmiosBackend', () => {
         }])
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
@@ -269,7 +240,7 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).context = mockContext;
@@ -287,7 +258,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should handle null clients during shutdown', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = null;
       (backend as any).txSubmissionClient = null;
       (backend as any).context = null;
@@ -304,7 +275,7 @@ describe('OgmiosBackend', () => {
         shutdown: jest.fn().mockResolvedValue(undefined)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).isShutdown = false;
@@ -328,7 +299,7 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
@@ -344,7 +315,7 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).context = mockContext;
       (backend as any).isShutdown = true;
 
@@ -360,7 +331,7 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
@@ -368,14 +339,10 @@ describe('OgmiosBackend', () => {
     });
 
     it('should return false when context is null', () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).context = null;
       (backend as any).isShutdown = false;
 
-      // When context is null, context?.socket?.readyState is undefined
-      // and context?.socket?.OPEN is also undefined
-      // undefined === undefined is true, BUT we want false
-      // So the implementation needs to check for null/undefined context first
       expect(backend.isConnected()).toBe(false);
     });
   });
@@ -386,16 +353,15 @@ describe('OgmiosBackend', () => {
         epoch: jest.fn().mockResolvedValue(500)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).isShutdown = false;
 
-      // Should not throw - ensureNotShutdown is synchronous
       expect(() => (backend as any).ensureNotShutdown()).not.toThrow();
     });
 
     it('should throw when client is shutdown', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).isShutdown = true;
 
       expect(() => (backend as any).ensureNotShutdown()).toThrow('Ogmios client has been shutdown');
@@ -407,11 +373,10 @@ describe('OgmiosBackend', () => {
         protocolParameters: jest.fn().mockResolvedValue({})
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).isShutdown = true;
 
-      // getProtocolParameters should fail because ensureNotShutdown is called
       await expect(backend.getProtocolParameters()).rejects.toThrow('Ogmios client has been shutdown');
     });
   });
@@ -423,7 +388,7 @@ describe('OgmiosBackend', () => {
         submitTransaction: jest.fn().mockResolvedValue(mockTxHash)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).isShutdown = false;
 
@@ -435,7 +400,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should throw error when backend is shutdown', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).isShutdown = true;
 
       await expect(backend.submitTransaction('84a300818258201234567890abcdef'))
@@ -443,7 +408,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should throw error when txSubmissionClient is not initialized', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = null;
       (backend as any).isShutdown = false;
 
@@ -465,7 +430,7 @@ describe('OgmiosBackend', () => {
         evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).isShutdown = false;
 
@@ -486,7 +451,7 @@ describe('OgmiosBackend', () => {
         evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).isShutdown = false;
 
@@ -498,7 +463,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should throw error when backend is shutdown', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).isShutdown = true;
 
       await expect(backend.evaluateTransaction('84a400818258201234567890abcdef'))
@@ -506,7 +471,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('should throw error when txSubmissionClient is not initialized', async () => {
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = null;
       (backend as any).isShutdown = false;
 
@@ -521,7 +486,7 @@ describe('OgmiosBackend', () => {
         )
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).isShutdown = false;
 
@@ -539,13 +504,12 @@ describe('OgmiosBackend', () => {
         shutdown: jest.fn().mockResolvedValue(undefined)
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).context = null;
       (backend as any).isShutdown = false;
 
-      // Should not throw - error is logged
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
     });
@@ -558,13 +522,12 @@ describe('OgmiosBackend', () => {
         shutdown: jest.fn().mockRejectedValue(new Error('TX client shutdown failed'))
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).context = null;
       (backend as any).isShutdown = false;
 
-      // Should not throw - error is logged
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
     });
@@ -579,13 +542,12 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = null;
       (backend as any).txSubmissionClient = null;
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
-      // Should not throw - error is logged
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
     });
@@ -606,13 +568,12 @@ describe('OgmiosBackend', () => {
         socket: mockSocket
       };
 
-      const backend = new OgmiosBackend();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = mockStateQueryClient;
       (backend as any).txSubmissionClient = mockTxSubmissionClient;
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
-      // Should not throw even when all shutdown operations fail
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
       expect((backend as any).stateQueryClient).toBe(null);
@@ -620,4 +581,8 @@ describe('OgmiosBackend', () => {
       expect((backend as any).context).toBe(null);
     });
   });
+
+  // Note: createInteractionContext, getAddressUtxos, and getProtocolParameters error handling
+  // is tested through BackendInitError in init() tests - the underlying Ogmios client
+  // errors are wrapped and thrown appropriately by the backend implementation.
 });

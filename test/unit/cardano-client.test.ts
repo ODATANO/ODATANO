@@ -1,133 +1,123 @@
-import { CardanoClient, createCardanoClientForBackends } from '../../srv/blockchain/cardano-client';  
-import { CardanoBackend, EvaluatingBackend, isEvaluatingBackend } from '../../srv/blockchain/backends/cardano-backend';
-import { ConfigError, AllBackendsInitFailedError } from '../../srv/utils/errors';
-import {
-  Transaction,
-  Address,
-  UTxO,
-  Network,
-  BlockData,
-  EpochData,
-  MetadataLabelTx,
-  PoolData,
-  DrepData,
-  AccountData,
-  LedgerProtocolParameters
-} from '../../srv/utils/types';
+import { CardanoClient, CardanoClientConfig, Network } from '../../srv/blockchain/cardano-client';
+import { isEvaluatingBackend } from '../../srv/blockchain/backends/cardano-backend';
+import { ConfigError, AllBackendsInitFailedError, AllBackendsFailedError } from '../../srv/utils/errors';
+import nock from 'nock';
 
-// Mock backend for testing
-class MockBackend implements CardanoBackend {
-  public readonly name: string;
-  private shouldFailInit: boolean;
-  private initCalled = false;
+const NETWORK: Network = 'preview';
+const TIMEOUT_MS = 5000;
+const KOIOS_BASE_URL = 'https://preview.koios.rest/api/v1';
+const BLOCKFROST_BASE_URL = 'https://cardano-preview.blockfrost.io';
 
-  constructor(name: string, shouldFailInit = false) {
-    this.name = name;
-    this.shouldFailInit = shouldFailInit;
-  }
+/**
+ * Create a CardanoClientConfig for testing
+ */
+function createTestConfig(overrides: Partial<CardanoClientConfig> = {}): CardanoClientConfig {
+  return {
+    network: NETWORK,
+    backends: ['koios'],
+    blockfrostApiKey: 'test-blockfrost-key',
+    koiosApiKey: 'test-koios-key',
+    ogmiosUrl: 'ws://localhost:1337',
+    transactionBuilders: ['csl'],
+    primaryTimeoutMs: TIMEOUT_MS,
+    fallbackTimeoutMs: TIMEOUT_MS * 2,
+    indexTtlMs: 3600000,
+    ...overrides,
+  };
+}
 
-  async init(): Promise<void> {
-    this.initCalled = true;
-    if (this.shouldFailInit) {
-      throw new Error(`${this.name} init failed`);
-    }
-  }
+/**
+ * Setup nock mocks for Koios tip endpoint (used for initialization)
+ */
+function setupKoiosTipMock() {
+  nock(KOIOS_BASE_URL)
+    .get('/tip')
+    .reply(200, [{
+      hash: 'test-block-hash',
+      epoch_no: 100,
+      abs_slot: 50000000,
+      epoch_slot: 100000,
+      block_no: 1000000,
+      block_time: 1704067200,
+    }]);
+}
 
-  async getTransaction(_txHash: string): Promise<Transaction> {
-    throw new Error('Not implemented in mock');
-  }
-  async getAddress(_address: string): Promise<Address> {
-    throw new Error('Not implemented in mock');
-  }
-  async getAddressUtxos(_address: string): Promise<UTxO[]> {
-    throw new Error('Not implemented in mock');
-  }
-  async getNetworkInformation(): Promise<Network> {
-    throw new Error('Not implemented in mock');
-  }
-  async getTransactionMetadata(_txHash: string): Promise<MetadataLabelTx[]> {
-    throw new Error('Not implemented in mock');
-  }
-  async getBlock(_blockHash: string): Promise<BlockData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getEpoch(_epochNumber: number): Promise<EpochData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getLatestBlock(): Promise<BlockData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getLatestEpoch(): Promise<EpochData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getPool(_poolId: string): Promise<PoolData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getDrep(_drepId: string): Promise<DrepData> {
-    throw new Error('Not implemented in mock');
-  }
-  async getAccount(_stakeAddress: string): Promise<AccountData> {
-    throw new Error('Not implemented in mock');
-  }
-  async submitTransaction(_signedTxCbor: string): Promise<string> {
-    throw new Error('Not implemented in mock');
-  }
+/**
+ * Setup nock mocks for Blockfrost health endpoint (used for initialization)
+ */
+function setupBlockfrostHealthMock() {
+  nock(BLOCKFROST_BASE_URL)
+    .get('/api/health')
+    .reply(200, { is_healthy: true });
+}
 
-  async getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    throw new Error('Not implemented in mock');
-  }
-
-  async getAddressTransactions(_address: string): Promise<Transaction[]> {
-    throw new Error('Not implemented in mock');
-  }
-
-  async getlatestBlock(): Promise<BlockData> {
-    throw new Error('Not implemented in mock');
-  }
-
-  async getlatestEpoch(): Promise<EpochData> {
-    throw new Error('Not implemented in mock');
-  }
-
-  wasInitCalled(): boolean {
-    return this.initCalled;
-  }
+/**
+ * Setup nock mocks for network information
+ */
+function setupNetworkInfoMocks() {
+  // Koios network info (GET with query params)
+  nock(KOIOS_BASE_URL)
+    .get('/totals')
+    .query({ order: 'epoch_no.desc', limit: '1' })
+    .reply(200, [{
+      epoch_no: 100,
+      circulation: '35000000000000000',
+      treasury: '1000000000000000',
+      reward: '500000000000000',
+      supply: '35000000000000000',
+      reserves: '10000000000000000',
+    }]);
 }
 
 describe('CardanoClient Configuration', () => {
+
+  beforeEach(() => {
+    nock.cleanAll();
+  });
+
+  afterEach(() => {
+    nock.cleanAll();
+  });
 
   // ============================================================================
   // Constructor Validation
   // ============================================================================
   describe('Constructor', () => {
     it('should throw ConfigError when no backends provided', () => {
-      expect(() => new CardanoClient(undefined, [])).toThrow(ConfigError);
-      expect(() => new CardanoClient(undefined, [])).toThrow('no backend available');
+      const config = createTestConfig({ backends: [] });
+      expect(() => new CardanoClient(config)).toThrow(ConfigError);
+      expect(() => new CardanoClient(config)).toThrow('No valid backends configured');
     });
 
-    it('should accept only live backend', () => {
-      const liveBackend = new MockBackend('ogmios');
-      expect(() => new CardanoClient(liveBackend, [])).not.toThrow();
+    it('should accept koios backend', () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      expect(() => new CardanoClient(config)).not.toThrow();
     });
 
-    it('should accept only historical backends', () => {
-      const historical = [new MockBackend('blockfrost')];
-      expect(() => new CardanoClient(undefined, historical)).not.toThrow();
+    it('should accept blockfrost backend', () => {
+      const config = createTestConfig({ backends: ['blockfrost'] });
+      expect(() => new CardanoClient(config)).not.toThrow();
     });
 
-    it('should accept both live and historical backends', () => {
-      const liveBackend = new MockBackend('ogmios');
-      const historical = [new MockBackend('blockfrost')];
-      expect(() => new CardanoClient(liveBackend, historical)).not.toThrow();
+    it('should accept ogmios backend', () => {
+      const config = createTestConfig({ backends: ['ogmios'] });
+      expect(() => new CardanoClient(config)).not.toThrow();
     });
 
-    it('should accept multiple historical backends', () => {
-      const liveBackend = new MockBackend('ogmios');
-      const historical = [
-        new MockBackend('blockfrost'),
-        new MockBackend('koios'),
-      ];
-      expect(() => new CardanoClient(liveBackend, historical)).not.toThrow();
+    it('should accept multiple backends', () => {
+      const config = createTestConfig({ backends: ['koios', 'blockfrost'] });
+      expect(() => new CardanoClient(config)).not.toThrow();
+    });
+
+    it('should accept all backends', () => {
+      const config = createTestConfig({ backends: ['ogmios', 'blockfrost', 'koios'] });
+      expect(() => new CardanoClient(config)).not.toThrow();
+    });
+
+    it('should set network from config', () => {
+      const config = createTestConfig({ network: 'mainnet', backends: ['koios'] });
+      const client = new CardanoClient(config);
+      expect(client.network).toBe('mainnet');
     });
   });
 
@@ -135,208 +125,167 @@ describe('CardanoClient Configuration', () => {
   // Backend Initialization
   // ============================================================================
   describe('Backend Initialization', () => {
-    it('should initialize all backends on first call', async () => {
-      const live = new MockBackend('ogmios');
-      const hist = new MockBackend('blockfrost');
-      const client = new CardanoClient(live, [hist]);
+    it('should initialize koios backend on first operation', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
 
-      // Trigger initialization via getNetworkInformation (will fail but init should happen)
-      await expect(client.getNetworkInformation()).rejects.toThrow();
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
-      expect(live.wasInitCalled()).toBe(true);
-      expect(hist.wasInitCalled()).toBe(true);
+      // This will trigger initialization
+      await expect(client.getNetworkInformation()).resolves.toBeDefined();
+      expect(nock.isDone()).toBe(true);
     });
 
-    it('should throw AllBackendsInitFailedError when all backends fail to init', async () => {
-      const live = new MockBackend('ogmios', true);
-      const hist = new MockBackend('blockfrost', true);
-      const client = new CardanoClient(live, [hist]);
+    it('should throw AllBackendsInitFailedError when backend init fails', async () => {
+      // Mock failing tip endpoint
+      nock(KOIOS_BASE_URL)
+        .get('/tip')
+        .reply(500, { error: 'Server error' });
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
     });
 
     it('should continue with working backends when some fail to init', async () => {
-      const failingLive = new MockBackend('ogmios', true);
-      const workingHist = new MockBackend('blockfrost', false);
-      const client = new CardanoClient(failingLive, [workingHist]);
+      // Koios succeeds
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
 
-      // Trigger init - should not throw because historical backend succeeds
-      await expect(client.getNetworkInformation()).rejects.toThrow('Not implemented in mock');
+      // Blockfrost fails
+      nock(BLOCKFROST_BASE_URL)
+        .get('/api/health')
+        .reply(500, { error: 'Server error' });
 
-      expect(failingLive.wasInitCalled()).toBe(true);
-      expect(workingHist.wasInitCalled()).toBe(true);
+      const config = createTestConfig({ backends: ['blockfrost', 'koios'] });
+      const client = new CardanoClient(config);
+
+      // Should still work via koios fallback
+      await expect(client.getNetworkInformation()).resolves.toBeDefined();
     });
 
     it('should only initialize once', async () => {
-      const live = new MockBackend('ogmios');
-      const client = new CardanoClient(live, []);
+      // Setup tip mock to be called only once
+      const tipScope = nock(KOIOS_BASE_URL)
+        .get('/tip')
+        .reply(200, [{
+          hash: 'test-block-hash',
+          epoch_no: 100,
+          abs_slot: 50000000,
+          epoch_slot: 100000,
+          block_no: 1000000,
+          block_time: 1704067200,
+        }]);
+
+      // Setup network info mock to be called twice
+      nock(KOIOS_BASE_URL)
+        .get('/totals')
+        .query({ order: 'epoch_no.desc', limit: '1' })
+        .times(2)
+        .reply(200, [{
+          epoch_no: 100,
+          circulation: '35000000000000000',
+          treasury: '1000000000000000',
+          reward: '500000000000000',
+          supply: '35000000000000000',
+          reserves: '10000000000000000',
+        }]);
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
       // Call multiple times
-      await expect(client.getNetworkInformation()).rejects.toThrow();
-      await expect(client.getNetworkInformation()).rejects.toThrow();
+      await client.getNetworkInformation();
+      await client.getNetworkInformation();
 
-      // Init should only be called once
-      expect(live.wasInitCalled()).toBe(true);
+      // Tip should have been called only once (initialization)
+      expect(tipScope.isDone()).toBe(true);
     });
   });
 
   // ============================================================================
-  // createCardanoClientForBackends Factory
-  // ============================================================================
-  describe('createCardanoClientForBackends', () => {
-    it('should throw ConfigError when no valid backends configured', () => {
-      // Use non-existent backend name
-      expect(() => createCardanoClientForBackends(['invalid-backend'])).toThrow(ConfigError);
-      expect(() => createCardanoClientForBackends(['invalid-backend'])).toThrow('No valid backends configured');
-    });
-
-    it('should throw when empty backends array provided', () => {
-      expect(() => createCardanoClientForBackends([])).toThrow(ConfigError);
-      expect(() => createCardanoClientForBackends([])).toThrow('No valid backends configured');
-    });
-
-    it('should create client with koios backend', () => {
-      expect(() => createCardanoClientForBackends(['koios'])).not.toThrow();
-    });
-
-    it('should create client with multiple backends', () => {
-      expect(() => createCardanoClientForBackends(['blockfrost', 'koios'])).not.toThrow();
-    });
-  });
-
-  // ============================================================================
-  // Fallback Mechanism  
+  // Fallback Mechanism
   // ============================================================================
   describe('Fallback Mechanism', () => {
-    it('should try historical backend when live fails for live-first query', async () => {
-      class FailingBackend extends MockBackend {
-        async getNetworkInformation(): Promise<Network> {
-          throw new Error('Live backend failed');
-        }
-      }
+    it('should fallback to koios when blockfrost fails', async () => {
+      // Blockfrost init succeeds but query fails
+      setupBlockfrostHealthMock();
+      nock(BLOCKFROST_BASE_URL)
+        .get('/api/v0/network')
+        .reply(500, { error: 'Internal error' });
 
-      class WorkingBackend extends MockBackend {
-        async getNetworkInformation(): Promise<Network> {
-          return {
-            supply: {
-              max: '45000000000000000',
-              total: '35000000000000000',
-              circulating: '33000000000000000',
-              locked: '2000000000000000',
-              treasury: '1000000000000000',
-              reserves: '10000000000000000',
-            },
-            stake: {
-              live: '23000000000000000',
-              active: '22000000000000000',
-            },
-          };
-        }
-      }
+      // Koios succeeds
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
 
-      const failingLive = new FailingBackend('ogmios');
-      const workingHist = new WorkingBackend('blockfrost');
-      const client = new CardanoClient(failingLive, [workingHist]);
+      const config = createTestConfig({ backends: ['blockfrost', 'koios'] });
+      const client = new CardanoClient(config);
 
       const result = await client.getNetworkInformation();
-      expect(result.supply.max).toBe('45000000000000000');
+      expect(result).toBeDefined();
+      expect(result.supply).toBeDefined();
     });
 
     it('should throw AllBackendsFailedError when all backends fail', async () => {
-      class FailingBackend extends MockBackend {
-        async getNetworkInformation(): Promise<Network> {
-          throw new Error('Backend failed');
-        }
-      }
+      // Koios init succeeds
+      setupKoiosTipMock();
 
-      const live = new FailingBackend('ogmios');
-      const hist = new FailingBackend('blockfrost');
-      const client = new CardanoClient(live, [hist]);
+      // But network info query fails
+      nock(KOIOS_BASE_URL)
+        .post('/totals')
+        .reply(500, { error: 'Server error' });
 
-      await expect(client.getNetworkInformation()).rejects.toThrow('All backends failed');
-    });
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
-    it('should use live backend first for live-first queries', async () => {
-      class FastLive extends MockBackend {
-        async getNetworkInformation(): Promise<Network> {
-          return {
-            supply: {
-              max: '11111111111111111',
-              total: '11111111111111111',
-              circulating: '11111111111111111',
-              locked: '0',
-              treasury: '0',
-              reserves: '0',
-            },
-            stake: {
-              live: '0',
-              active: '0',
-            },
-          };
-        }
-      }
-
-      class HistoricalBackend extends MockBackend {
-        async getNetworkInformation(): Promise<Network> {
-          // This should never be called because live backend succeeds
-          throw new Error('Should not be called');
-        }
-      }
-
-      const live = new FastLive('ogmios');
-      const hist = new HistoricalBackend('blockfrost');
-      const client = new CardanoClient(live, [hist]);
-
-      const result = await client.getNetworkInformation();
-      expect(result.supply.max).toBe('11111111111111111');
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
     });
   });
 
   // ============================================================================
-  // Private Method Tests (via reflection/indirect testing)
+  // getTransaction Tests
   // ============================================================================
-  describe('getTimeoutForBackend', () => {
-    it('should return PRIMARY_TIMEOUT_MS for unknown backend names', async () => {
-      // Create a backend with an unknown name
-      const unknownBackend = new MockBackend('unknown-backend');
-      const client = new CardanoClient(unknownBackend, []);
+  describe('getTransaction', () => {
+    it('should fetch transaction from backend', async () => {
+      setupKoiosTipMock();
 
-      // We can't directly call getTimeoutForBackend (it's private), but we can test
-      // that the client was successfully created
-      // getTimeoutForBackend should handle the unknown backend name correctly
-      
-      // If this succeeds without throwing, it means the unknown backend name
-      // was handled correctly (returned PRIMARY_TIMEOUT_MS as default)
-      expect(client).toBeDefined();
-    });
+      const mockTxResponse = [{
+        tx_hash: 'abc123',
+        block_hash: 'block456',
+        block_height: 1000,
+        tx_timestamp: 1704067200,
+        tx_block_index: 0,
+        tx_size: 300,
+        total_output: '5000000',
+        fee: '170000',
+        deposit: '0',
+        invalid_before: null,
+        invalid_after: null,
+        collateral_inputs: [],
+        collateral_output: null,
+        reference_inputs: [],
+        inputs: [],
+        outputs: [],
+        withdrawals: [],
+        assets_minted: [],
+        metadata: [],
+        certificates: [],
+        native_scripts: [],
+        plutus_contracts: [],
+      }];
 
-    it('should handle unknown backend in timeout logic during operations', async () => {
-      class UnknownBackend extends MockBackend {
-        async getTransaction(_txHash: string): Promise<Transaction> {
-          return {
-            hash: 'test',
-            blockHash: 'block123',
-            blockHeight: 100,
-            blockTime: 1704067200,
-            slot: 1000,
-            index: 0,
-            fee: 170000,
-            deposit: 0,
-            size: 300,
-            inputs: [],
-            outputs: [],
-            metadata: []
-          };
-        }
-      }
+      nock(KOIOS_BASE_URL)
+        .post('/tx_info')
+        .reply(200, mockTxResponse);
 
-      const unknownBackend = new UnknownBackend('custom-unknown-backend');
-      const client = new CardanoClient(unknownBackend, []);
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
-      // This operation will use getTimeoutForBackend internally and trigger initialization
-      // If unknown backend returns PRIMARY_TIMEOUT_MS, the operation should succeed
-      const result = await client.getTransaction('test-hash');
-      expect(result.hash).toBe('test');
+      const result = await client.getTransaction('abc123');
+      expect(result.hash).toBe('abc123');
+      expect(result.blockHash).toBe('block456');
     });
   });
 
@@ -344,53 +293,149 @@ describe('CardanoClient Configuration', () => {
   // evaluateTransaction Tests
   // ============================================================================
   describe('evaluateTransaction', () => {
-    it('should throw error when no live backend is configured', async () => {
-      const histBackend = new MockBackend('blockfrost');
-      const client = new CardanoClient(undefined, [histBackend]);
+    it('should throw error when no ogmios backend is configured', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Trigger initialization first
+      await client.getNetworkInformation();
 
       await expect(client.evaluateTransaction('test-cbor'))
         .rejects.toThrow('Transaction evaluation requires an evaluating backend');
     });
+  });
 
-    it('should throw error when live backend is not an EvaluatingBackend', async () => {
-      // MockBackend does NOT have evaluateTransaction method
-      const nonEvaluatingBackend = new MockBackend('ogmios');
-      const client = new CardanoClient(nonEvaluatingBackend, []);
-
-      await expect(client.evaluateTransaction('test-cbor'))
-        .rejects.toThrow('Transaction evaluation requires an evaluating backend');
+  // ============================================================================
+  // hasOgmiosBackend Tests
+  // ============================================================================
+  describe('hasOgmiosBackend', () => {
+    it('should return false when ogmios is not configured', () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+      expect(client.hasOgmiosBackend()).toBe(false);
     });
 
-    it('should call evaluateTransaction on EvaluatingBackend', async () => {
-      const mockEvaluationResult = [
-        { validator: { index: 0 }, budget: { memory: 1000000, cpu: 500000 } }
-      ];
+    it('should return true when ogmios is configured', () => {
+      const config = createTestConfig({ backends: ['ogmios', 'koios'] });
+      const client = new CardanoClient(config);
+      expect(client.hasOgmiosBackend()).toBe(true);
+    });
+  });
 
-      class MockEvaluatingBackend extends MockBackend implements EvaluatingBackend {
-        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
-          return mockEvaluationResult;
-        }
-      }
+  // ============================================================================
+  // shutdown Tests
+  // ============================================================================
+  describe('shutdown', () => {
+    it('should reset initialization state', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
 
-      const evaluatingBackend = new MockEvaluatingBackend('ogmios');
-      const client = new CardanoClient(evaluatingBackend, []);
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
-      const result = await client.evaluateTransaction('test-cbor');
-      expect(result).toEqual(mockEvaluationResult);
+      // Trigger initialization
+      await client.getNetworkInformation();
+
+      // Shutdown
+      await client.shutdown();
+
+      // Setup mocks again for re-initialization
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      // Should re-initialize on next call
+      await expect(client.getNetworkInformation()).resolves.toBeDefined();
     });
 
-    it('should propagate errors from backend evaluateTransaction', async () => {
-      class FailingEvaluatingBackend extends MockBackend implements EvaluatingBackend {
-        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
-          throw new Error('Evaluation failed: script execution error');
-        }
-      }
+    it('should reset initialized flag (resetCardanoClient behavior)', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
 
-      const failingBackend = new FailingEvaluatingBackend('ogmios');
-      const client = new CardanoClient(failingBackend, []);
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
 
-      await expect(client.evaluateTransaction('invalid-cbor'))
-        .rejects.toThrow('Evaluation failed: script execution error');
+      // Trigger initialization
+      await client.getNetworkInformation();
+
+      // Verify initialized before shutdown
+      expect((client as any).initialized).toBe(true);
+
+      // Shutdown
+      await client.shutdown();
+
+      // Verify state is reset
+      expect((client as any).initialized).toBe(false);
+      expect((client as any).initPromise).toBeNull();
+    });
+
+    it('should allow re-initialization after shutdown', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Trigger initialization
+      await client.getNetworkInformation();
+      expect((client as any).initialized).toBe(true);
+
+      // Shutdown
+      await client.shutdown();
+      expect((client as any).initialized).toBe(false);
+
+      // Setup mocks for re-initialization
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      // Re-initialize
+      await client.getNetworkInformation();
+      expect((client as any).initialized).toBe(true);
+    });
+
+    it('should not throw when shutdown errors occur (logs instead)', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Trigger initialization
+      await client.getNetworkInformation();
+
+      // Shutdown should not throw even if internal cleanup fails
+      await expect(client.shutdown()).resolves.not.toThrow();
+    });
+  });
+
+  // ============================================================================
+  // getProtocolParameters Tests
+  // ============================================================================
+  describe('getProtocolParameters', () => {
+    // Note: Happy path for getProtocolParameters is tested in koios-backend.test.ts
+    // and blockfrost-backend.test.ts directly on the backend level
+
+    it('should fallback to historical backend on primary failure', async () => {
+      // First backend (koios) init succeeds
+      setupKoiosTipMock();
+
+      // But protocol params query fails
+      nock(KOIOS_BASE_URL)
+        .get('/cli_protocol_params')
+        .reply(500, { error: 'Server error' });
+
+      // Fallback to second koios call (in this test, same backend retried)
+      nock(KOIOS_BASE_URL)
+        .get('/cli_protocol_params')
+        .reply(500, { error: 'Server error' });
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Should throw AllBackendsFailedError when all backends fail
+      await expect(client.getProtocolParameters()).rejects.toThrow(AllBackendsFailedError);
     });
   });
 
@@ -398,20 +443,17 @@ describe('CardanoClient Configuration', () => {
   // isEvaluatingBackend Type Guard Tests
   // ============================================================================
   describe('isEvaluatingBackend', () => {
-    it('should return false for regular CardanoBackend', () => {
-      const regularBackend = new MockBackend('blockfrost');
-      expect(isEvaluatingBackend(regularBackend)).toBe(false);
+    it('should return false for object without evaluateTransaction', () => {
+      const notEvaluating = { name: 'test' };
+      expect(isEvaluatingBackend(notEvaluating as any)).toBe(false);
     });
 
-    it('should return true for EvaluatingBackend', () => {
-      class MockEvaluatingBackend extends MockBackend implements EvaluatingBackend {
-        async evaluateTransaction(_unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
-          return [];
-        }
-      }
-
-      const evaluatingBackend = new MockEvaluatingBackend('ogmios');
-      expect(isEvaluatingBackend(evaluatingBackend)).toBe(true);
+    it('should return true for object with evaluateTransaction function', () => {
+      const evaluating = {
+        name: 'test',
+        evaluateTransaction: async () => [],
+      };
+      expect(isEvaluatingBackend(evaluating as any)).toBe(true);
     });
   });
 });

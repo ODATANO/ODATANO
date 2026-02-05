@@ -13,14 +13,14 @@ import { createBackendTestSuite } from './core-test-suite';
 import { createErrorBackendSuite } from './error-handling.backend';
 
 // Run tests only if Blockfrost API key is configured
-if (process.env.BLOCKFROST_KEY) {
+if (process.env.BLOCKFROST_API_KEY) {
   createBackendTestSuite({
-    name: 'blockfrost',
-    enabled: true,
+    backendName: 'blockfrost',
+    txBuilderName: 'csl',
   });
   // Also include backend-focused error handling suite
   createErrorBackendSuite({
-    name: 'blockfrost',
-    enabled: true,
+    backendName: 'blockfrost',
+    txBuilderName: 'csl',
   });
 }

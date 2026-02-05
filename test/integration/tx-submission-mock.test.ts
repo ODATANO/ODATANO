@@ -1,16 +1,21 @@
 import cds from '@sap/cds';
-import nock from 'nock';
+
+import { TEST_FIXTURES } from './test-fixtures';
+import { setupKoiosMocks, nock } from './mock-helpers';
+import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
 
 jest.setTimeout(60000);
-// Configure environment to use only Koios backend for these tests with mocks because it uses HTTP
+
+// Skip server auto-init - mock tests create their own context after setting up nock mocks
+process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 delete process.env.OGMIOS_URL;
 delete process.env.OGMIOS_WS_URL;
-delete process.env.BLOCKFROST_KEY;
+delete process.env.BLOCKFROST_API_KEY;
 
 /**
  * Transaction Submission Tests with Mocked Koios Backend
- * 
+ *
  * This test suite focuses on testing the transaction submission functionality of the CardanoTransactionService
  * using a mocked Koios backend via the nock library. It ensures that transaction submissions are handled correctly
  * without making real network calls.
@@ -20,34 +25,36 @@ describe('Transaction Submission Tests [MOCKED]', () => {
   const test = cds.test(__dirname + '/../../');
   const expect = test.expect;
 
-  const FIXTURE = {
-    network: 'preview',
-    validSenderAddress: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
-    validRecipientAddress: 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622',
-    lovelaceAmount: '5000000',
-    // represents a real signed transaction CBOR (in hex) for testing
-    signedTxCbor: '84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3125eb326a258c76f78000182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a1011b000000025370c023021a00028d5d0f00a100d9010281825820e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f584066b33b3bcaf0a5f908d83a13273d570d2d9fbbe240d917985d620fc5d24d3a9e7919426a00a960d10a7e430889eac4f16a55e6520f8804891e9fb9af443c010ef5f6',
-    // tx hash corresponding to the above signedTxCbor
-    expectedTxHash: '290c6b9abf9118cdc1fdcbdc6635f94ef0d414c1212c2c95b069a209d32b97cf',
-  };
+  // Create app context once before all tests
+  beforeAll(async () => {
+    // Setup nock first for initialization
+    nock.cleanAll();
+    nock.restore();
+    nock.activate();
+    nock.disableNetConnect();
+    nock.enableNetConnect(/localhost/);
+    setupKoiosMocks();
+
+    const testContext = await createTestContext(['koios'], 'csl');
+    resetAppContext(testContext);
+  });
 
   beforeEach(async () => {
     await test.data.reset();
 
-    // cleanup nock before each test to avoid interference
+    // Reactivate nock and setup mocks for each test
     nock.cleanAll();
     nock.restore();
     nock.activate();
-
-    // Disable all real network connections except localhost (for CDS test server)
     nock.disableNetConnect();
-    // Allow localhost (for CDS test server)
     nock.enableNetConnect(/localhost/);
+    setupKoiosMocks();
   });
 
   afterEach(() => {
     // Cleanup after each test
     nock.cleanAll();
+    nock.restore();
   });
 
   afterAll(async () => {
@@ -56,9 +63,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     nock.restore();
     nock.enableNetConnect(); // Re-enable normal network calls
 
-    // Shutdown all backend connections to allow Jest to exit
-    const { cardanoClient } = await import('../../srv/blockchain/cardano-client');
-    await cardanoClient.shutdown();
+    // Shutdown app context to close backend connections
+    await shutdownAppContext();
   });
 
   describe('Koios Backend - TX Submission Mock', () => {
@@ -66,22 +72,22 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       // Mock Koios TX Submit
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submit_tx', {
-          _txs: [FIXTURE.signedTxCbor]
+          _txs: [TEST_FIXTURES.signedTxCbor2]
         })
         .reply(200, [
-          { tx_hash: FIXTURE.expectedTxHash }
+          { tx_hash: TEST_FIXTURES.expectedTxHashCbor2 }
         ]);
 
       const submitResponse = await test.post(
         '/odata/v4/cardano-transaction/SubmitSignedTransaction',
         {
-          signedTxCbor: FIXTURE.signedTxCbor,
-          network: FIXTURE.network,
+          signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+          network: TEST_FIXTURES.network,
         }
       );
 
       expect(submitResponse.status).to.equal(200);
-      expect(submitResponse.data.txHash).to.equal(FIXTURE.expectedTxHash);
+      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashCbor2);
       expect(scope.isDone()).to.be.true;
     });
 
@@ -94,14 +100,14 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       await cds.run(
         INSERT.into('CardanoTransactionService.TransactionBuilds').entries({
           id: mockBuildId,
-          network: FIXTURE.network,
-          senderAddress: FIXTURE.validSenderAddress,
-          recipientAddress: FIXTURE.validRecipientAddress,
-          lovelaceAmount: FIXTURE.lovelaceAmount,
-          changeAddress: FIXTURE.validSenderAddress,
+          network: TEST_FIXTURES.network,
+          senderAddress: TEST_FIXTURES.addressWithFunds,
+          recipientAddress: TEST_FIXTURES.emptyAddress,
+          lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
+          changeAddress: TEST_FIXTURES.addressWithFunds,
           status: 'BUILT',
           unsignedTxCbor: 'mock_unsigned_tx_cbor',
-          txBodyHash: FIXTURE.expectedTxHash,
+          txBodyHash: TEST_FIXTURES.expectedTxHashCbor2,
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -111,10 +117,10 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       // Mock Koios TX Submit
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submit_tx', {
-          _txs: [FIXTURE.signedTxCbor]
+          _txs: [TEST_FIXTURES.signedTxCbor2]
         })
         .reply(200, [
-          { tx_hash: FIXTURE.expectedTxHash }
+          { tx_hash: TEST_FIXTURES.expectedTxHashCbor2 }
         ]);
 
       // Submit with Build ID
@@ -122,13 +128,13 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         '/odata/v4/cardano-transaction/SubmitTransaction',
         {
           buildId: mockBuildId,
-          signedTxCbor: FIXTURE.signedTxCbor,
+          signedTxCbor: TEST_FIXTURES.signedTxCbor2,
         }
       );
 
       expect(submitResponse.status).to.equal(200);
       expect(submitResponse.data).to.exist;
-      expect(submitResponse.data.txHash).to.equal(FIXTURE.expectedTxHash);
+      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashCbor2);
       expect(submitResponse.data.build_id).to.equal(mockBuildId);
       expect(scope.isDone()).to.be.true;
     });
@@ -150,8 +156,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: FIXTURE.signedTxCbor,
-            network: FIXTURE.network,
+            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 
@@ -173,8 +179,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: FIXTURE.signedTxCbor,
-            network: FIXTURE.network,
+            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 
@@ -190,14 +196,14 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submit_tx')
           .reply(400, {
-            error: `Transaction ${FIXTURE.expectedTxHash} already exists in mempool`
+            error: `Transaction ${TEST_FIXTURES.expectedTxHashCbor2} already exists in mempool`
           });
 
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: FIXTURE.signedTxCbor,
-            network: FIXTURE.network,
+            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 
@@ -219,8 +225,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: FIXTURE.signedTxCbor,
-            network: FIXTURE.network,
+            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 
@@ -241,8 +247,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: FIXTURE.signedTxCbor,
-            network: FIXTURE.network,
+            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 

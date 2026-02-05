@@ -2,8 +2,7 @@ import { normalizeBackendError } from './errors';
 import cds, { Request } from '@sap/cds';
 import { mapError } from './mappers';
 
-const COMPONENT_NAME = 'BackendRequestHandler';
-const logger = cds.log(COMPONENT_NAME);
+const logger = cds.log('BackendRequestHandler');
 
 /** 
  * BackendRequestHandler - Provides standardized handling for backend requests 
@@ -42,7 +41,7 @@ export async function handleRequest(
   try {
     return await handler(db);
   } catch (e: any) {
-    logger.error({ err: e }, `[CardanoService] ${context} error`);
+    logger.error({ err: e }, `${context} error`);
     return mapError(req, e, context);
 
   }

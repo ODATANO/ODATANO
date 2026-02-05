@@ -1,6 +1,5 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
-import { CONFIG } from '../../../config/config';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import {
@@ -8,7 +7,7 @@ import {
   BlockData,
   Address,
   UTxO,
-  Network,
+  NetworkInformation,
   EpochData,
   JSONValue,
   MetadataLabelTx,
@@ -17,6 +16,7 @@ import {
   DrepData,
   LedgerProtocolParameters
 } from '../../utils/types';
+import { Network } from '../cardano-client';
 
 /**
  * BlockfrostBackend Implementation for CardanoBackend Interface
@@ -25,28 +25,40 @@ import {
 export class BlockfrostBackend implements CardanoBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
+  private network: Network;
+  private timeoutMs: number;
 
   /** 
    * Constructor
    */
-  constructor() {
-    const projectId = CONFIG.blockfrostApiKey;
+  constructor(network: Network, timeoutMs: number, projectId: string) {
     if (!projectId) {
-      throw new BackendInitError('blockfrost', new Error('CONFIG.blockfrostApiKey is not set'));
+      throw new BackendInitError('blockfrost', new Error('Blockfrost Api Key is not set'));
     }
     this.api = new BlockFrostAPI({ projectId });
+    this.network = network;
+    this.timeoutMs = timeoutMs;
   }
 
   /** 
    * Initialize the backend 
    */
-  async init(): Promise<void> { }
+  async init(): Promise<Boolean> { 
+    this.api.options.requestTimeout = this.timeoutMs;
+    // Test connection by fetching latest block
+    try {
+      await this.api.blocksLatest();
+    } catch (error) {
+      throw new BackendInitError('blockfrost', error);
+    }
+    return true;
+  }
 
   /** 
    * Get Network Information
-   * @returns {Promise<Network>} network information
+   * @returns {Promise<NetworkInformation>} network information
    */
-  async getNetworkInformation(): Promise<Network> {
+  async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(
       async () => {
         const networkInfo = await this.api.network();
@@ -377,7 +389,7 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const protocolParams = await this.api.epochsLatestParameters();
         return {
-          network: CONFIG.network,
+          network: this.network,
           epoch: protocolParams.epoch,
           minUtxo: protocolParams.min_utxo,
           nonce: protocolParams.nonce,

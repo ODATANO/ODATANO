@@ -1,42 +1,9 @@
-import { CONFIG } from "../../config/config";
 import { bech32 } from "bech32";
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,TX_HASH_REGEX,ASSET_UNIT_REGEX,
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP
+} from "./const";
 
-/**
- * Configuration constants
- */
-const { BECH32_MAX_LENGTH, MAX_EPOCH, POOL_ID_BYTES } = CONFIG.VALIDITY_VARIANTS;
-const { MAX_JSON_SIZE, MAX_DEPTH, MAX_KEYS, MAX_ARRAY_LENGTH, MAX_STRING_LENGTH } = CONFIG.JSON_LIMITS;
-
-/** 
- * Transaction hash Regex - 64-character hexadecimal string
- */
-const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
-
-/**
- * Asset unit Regex - policy ID (56 hex chars) + asset name (0-128 hex chars)
- */
-const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
-
-/**
- *  Pool ID Regex - bech32 with HRP "pool" and 28 bytes payload
- */
-const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/;
-
-/**
- * DRep ID Regex - bech32 with HRP "drep" and 50-60 chars payload
- */
-const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/;
-
-/**
- * Bech32 Address Regular Expressions from Config
- */
-const BECH32_ADDRESS_REGEX = CONFIG.hrp.addr;
-
-/**
- * Bech32 Stake Address Regular Expressions from Config
- */
-const BECH32_STAKE_REGEX = CONFIG.hrp.stake;
-
+import { getCardanoClient } from "../server";
 /** 
  * Safely trim a string value
  * @param s - The value to trim
@@ -226,12 +193,16 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
  * @param addrRaw - The raw value to validate against bech32 address format
  * @returns { boolean } true if valid bech32 address false otherwise
  */
-export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
+export function isValidBech32Address(addrRaw: string): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
+  // get client to check right network
+  const client = getCardanoClient();
+  const network = client.network;
+
   // prefilter from config to make sure it is the right network
-  if (!BECH32_ADDRESS_REGEX.test(addr)) return false;
+  if (!HRP[network].addr.test(addr)) return false;
 
   const allowed = ["addr", "addr_test"];
   const decoded = tryDecodeBech32WithHrp(addr, allowed);
@@ -252,8 +223,12 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
   const stake = safeTrimString(stakeRaw);
   if (!stake) return false;
 
+  // get client to check right network
+  const client = getCardanoClient();
+  const network = client.network;
+
   // prefilter from config to make sure it is the right network
-  if (!BECH32_STAKE_REGEX.test(stake)) return false;
+  if (!HRP[network].stake.test(stake)) return false;
 
   const allowed = ["stake", "stake_test"];
   const decoded = tryDecodeBech32WithHrp(stake, allowed);

@@ -1,3 +1,8 @@
+// Mock getCardanoClient before imports
+jest.mock('../../srv/server', () => ({
+  getCardanoClient: jest.fn()
+}));
+
 import {
   isTxHash,
   isAssetUnit,
@@ -10,8 +15,17 @@ import {
   isValidCbor,
   validateTransactionInputs,
 } from '../../srv/utils/validators';
+import { getCardanoClient } from '../../srv/server';
+
+// Type the mock for better IntelliSense
+const mockGetCardanoClient = getCardanoClient as jest.MockedFunction<typeof getCardanoClient>;
 
 describe('Validator Helper Methods and Type Guards', () => {
+
+  // Set default network for all tests
+  beforeEach(() => {
+    mockGetCardanoClient.mockReturnValue({ network: 'preview' } as any);
+  });
 
   // ==========================================================================
   // isTxHash
@@ -207,7 +221,6 @@ describe('Validator Helper Methods and Type Guards', () => {
   // ==========================================================================
   describe('isValidBech32Address', () => {
 
-
     it('should return false for address with wrong HRP', () => {
       const invalidAddr = 'stake1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
       expect(isValidBech32Address(invalidAddr)).toBe(false);
@@ -235,9 +248,9 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
 
     it('should return false for non-string input', () => {
-      expect(isValidBech32Address(123)).toBe(false);
-      expect(isValidBech32Address(null)).toBe(false);
-      expect(isValidBech32Address(undefined)).toBe(false);
+      expect(isValidBech32Address("123")).toBe(false);
+      expect(isValidBech32Address("null")).toBe(false);
+      expect(isValidBech32Address("undefined")).toBe(false);
     });
   });
 
@@ -262,9 +275,9 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
 
     it('should return false for non-string input', () => {
-      expect(isValidBech32StakeAddress(null)).toBe(false);
-      expect(isValidBech32StakeAddress(undefined)).toBe(false);
-      expect(isValidBech32StakeAddress(123)).toBe(false);
+      expect(isValidBech32StakeAddress("null")).toBe(false);
+      expect(isValidBech32StakeAddress("undefined")).toBe(false);
+      expect(isValidBech32StakeAddress("123")).toBe(false);
     });
   });
 
@@ -340,9 +353,9 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
 
     it('should return false for non-string input', () => {
-      expect(isValidCbor(123)).toBe(false);
-      expect(isValidCbor(null)).toBe(false);
-      expect(isValidCbor(undefined)).toBe(false);
+      expect(isValidCbor("123")).toBe(false);
+      expect(isValidCbor("null")).toBe(false);
+      expect(isValidCbor("undefined")).toBe(false);
     });
   });
 

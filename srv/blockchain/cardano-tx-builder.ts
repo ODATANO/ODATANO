@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 import type { CardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult } from '../utils/types';
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
@@ -26,11 +26,15 @@ export class CardanoTransactionBuilder {
         logger.info('CardanoTransactionBuilder instance created');
     }
 
-    async init(): Promise<void> {
+    /**
+     * Initialize the transaction builder
+     * @param protocolParams - Optional protocol parameters (if not provided, fetched from backend)
+     */
+    async init(protocolParams?: LedgerProtocolParameters): Promise<void> {
         if (this.initialized && this.txBuilder) return;
         // Create transaction builder from registry
         this.txBuilder = TxBuilderRegistry.createDefault();
-        await this.txBuilder.init();
+        await this.txBuilder.init(this.client, protocolParams);
         this.initialized = true;
         logger.info(`Initialized with builder: ${this.txBuilder.name}`);
     }

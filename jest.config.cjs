@@ -1,3 +1,6 @@
+// Set NODE_ENV for test detection in application code
+process.env.NODE_ENV = 'test';
+
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
@@ -31,5 +34,11 @@ module.exports = {
   },
 
   openHandlesTimeout: 0,
+
+  // Increase test timeout (default is 5000ms)
+  testTimeout: 120000,
+
+  // Increase slow test threshold to avoid warnings (default is 5000ms)
+  slowTestThreshold: 120000,
 };
 

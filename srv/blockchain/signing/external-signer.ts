@@ -235,7 +235,7 @@ export class ExternalSignerModule {
     verificationResult: SignatureVerificationResult
   ): SigningWorkflowState {
     if (!verificationResult.isValid) {
-      return this.markAsFailed(state, verificationResult.errorMessage || 'Verification failed');
+      return this.markAsFailed(state, String(verificationResult.errorMessage));
     }
 
     return {

@@ -9,25 +9,18 @@ jest.mock('@sap/cds', () => ({
   })),
 }));
 
-jest.mock('../../config/config', () => ({
-  CONFIG: {
-    koiosApiUrl: 'https://api.koios.rest/api/v1',
-    network: 'mainnet',
-    primaryTimeoutMs: 5000,
-    CARDANO_PROTOCOL: {
-      MAX_LOVELACE_SUPPLY: '45000000000000000',
-    },
-  },
-}));
-
 import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';
-import { CONFIG } from '../../config/config';
+import { CARDANO_DEFAULTS } from '../../srv/utils/const';
 
 describe('KoiosBackend', () => {
   let backend: KoiosBackend;
 
+  const NETWORK = 'mainnet' as const;
+  const TIMEOUT_MS = 5000;
+  const KOIOS_BASE_URL = 'https://api.koios.rest';
+
   beforeEach(() => {
-    backend = new KoiosBackend();
+    backend = new KoiosBackend(NETWORK, TIMEOUT_MS);
     nock.cleanAll();
   });
 
@@ -51,7 +44,7 @@ describe('KoiosBackend', () => {
         deposits_proposal: '700000000000'
       }];
 
-      nock('https://api.koios.rest')
+      nock(KOIOS_BASE_URL)
         .get('/api/v1/totals')
         .query({ order: 'epoch_no.desc', limit: 1 })
         .reply(200, totalsResponse);
@@ -60,7 +53,7 @@ describe('KoiosBackend', () => {
 
       expect(result).toEqual({
         supply: {
-          max: CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY,
+          max: CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
           total: '38388567212743111',
           circulating: '36035240284477897',
           locked: '0',
@@ -76,7 +69,7 @@ describe('KoiosBackend', () => {
 
     it('should fallback to /genesis endpoint when /totals returns empty array (preview/preprod)', async () => {
       // Mock empty /totals response (preview/preprod behavior)
-      nock('https://api.koios.rest')
+      nock(KOIOS_BASE_URL)
         .get('/api/v1/totals')
         .query({ order: 'epoch_no.desc', limit: 1 })
         .reply(200, []);
@@ -98,7 +91,7 @@ describe('KoiosBackend', () => {
         conwaygenesis: '{}'
       }];
 
-      nock('https://api.koios.rest')
+      nock(KOIOS_BASE_URL)
         .get('/api/v1/genesis')
         .reply(200, genesisResponse);
 
@@ -121,20 +114,82 @@ describe('KoiosBackend', () => {
       });
     });
 
-    it('should use CONFIG max supply when genesis maxlovelacesupply is missing', async () => {
-      nock('https://api.koios.rest')
+    it('should use CARDANO_DEFAULTS max supply when genesis maxlovelacesupply is missing', async () => {
+      nock(KOIOS_BASE_URL)
         .get('/api/v1/totals')
         .query({ order: 'epoch_no.desc', limit: 1 })
         .reply(200, []);
 
       // Genesis without maxlovelacesupply
-      nock('https://api.koios.rest')
+      nock(KOIOS_BASE_URL)
         .get('/api/v1/genesis')
         .reply(200, [{ networkmagic: '1' }]);
 
       const result = await backend.getNetworkInformation();
 
-      expect(result.supply.max).toBe(CONFIG.CARDANO_PROTOCOL.MAX_LOVELACE_SUPPLY);
+      expect(result.supply.max).toBe(CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY);
+    });
+  });
+
+  describe('constructor', () => {
+    it('should create backend with API key', () => {
+      const backendWithKey = new KoiosBackend('preview', 10000, 'test-api-key');
+      expect(backendWithKey.name).toBe('koios');
+    });
+
+    it('should create backend without API key', () => {
+      const backendWithoutKey = new KoiosBackend('preprod', 10000);
+      expect(backendWithoutKey.name).toBe('koios');
+    });
+  });
+
+  describe('getProtocolParameters', () => {
+    it('should return protocol parameters from /cli_protocol_params', async () => {
+      const mockProtocolParams = {
+        txFeePerByte: 44,
+        txFeeFixed: 155381,
+        maxTxSize: 16384,
+        maxBlockHeaderSize: 1100,
+        maxBlockBodySize: 65536,
+        stakeAddressDeposit: 2000000,
+        stakePoolDeposit: 500000000,
+        poolRetireMaxEpoch: 18,
+        stakePoolTargetNum: 500,
+        poolPledgeInfluence: 0.3,
+        monetaryExpansion: 0.003,
+        treasuryCut: 0.2,
+        minPoolCost: 340000000,
+        protocolVersion: { major: 8, minor: 0 },
+        executionUnitPrices: { priceMemory: 0.0577, priceSteps: 0.0000721 },
+        maxTxExecutionUnits: { memory: 14000000, steps: 10000000000 },
+        maxBlockExecutionUnits: { memory: 62000000, steps: 20000000000 },
+        maxValueSize: 5000,
+        collateralPercentage: 150,
+        maxCollateralInputs: 3,
+        utxoCostPerByte: 4310,
+        costModels: {
+          'PlutusV3': Array(297).fill(1000)
+        }
+      };
+
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/cli_protocol_params')
+        .reply(200, mockProtocolParams);
+
+      const result = await backend.getProtocolParameters();
+
+      expect(result).toHaveProperty('minFeeA', 44);
+      expect(result).toHaveProperty('minFeeB', 155381);
+      expect(result).toHaveProperty('maxTxSize', 16384);
+      expect(result).toHaveProperty('network', 'mainnet');
+    });
+
+    it('should throw on API error', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/cli_protocol_params')
+        .reply(500, { error: 'Internal server error' });
+
+      await expect(backend.getProtocolParameters()).rejects.toThrow();
     });
   });
 });

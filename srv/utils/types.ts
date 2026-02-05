@@ -136,7 +136,7 @@ export interface Stake {
 /** 
  * Network Information Data Structure Type - Network supply and stake information
  */
-export interface Network {
+export interface NetworkInformation {
   supply: Supply;
   stake: Stake;
 }

@@ -1,7 +1,10 @@
 import cds from '@sap/cds';
-import { CardanoClient, CardanoClientFactory } from './blockchain/cardano-client';
+import { CardanoClient, CardanoClientConfig, Network,BackendName,TransactionBuilderName } from './blockchain/cardano-client';
 import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
+import type { LedgerProtocolParameters } from './utils/types';
+
+import { env } from 'process';
 
 const logger = cds.log('server');
 
@@ -20,16 +23,18 @@ let appContext: AppContext | null = null;
 /**
  * Initialize the application context with blockchain components
  * Called once during CAP server startup via cds.on('served')
+ * @param config - CardanoClientConfig
+ * @param protocolParams - Optional protocol parameters (for tests to skip backend call)
  */
-async function initializeAppContext(): Promise<AppContext> {
+async function initializeAppContext(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters): Promise<AppContext> {
   logger.info('Initializing blockchain components...');
 
   // Create CardanoClient from configuration
-  const cardanoClient = CardanoClientFactory.createFromConfig();
+  const cardanoClient = new CardanoClient(config);
 
   // Create CardanoTransactionBuilder with the client
   const cardanoTxBuilder = new CardanoTransactionBuilder(cardanoClient);
-  await cardanoTxBuilder.init();
+  await cardanoTxBuilder.init(protocolParams);
 
   // Create CardanoIndexer with client and transaction builder
   const cardanoIndexer = new CardanoIndexer(cardanoClient, cardanoTxBuilder);
@@ -71,20 +76,43 @@ export function getCardanoClient(): CardanoClient {
 }
 
 /**
- * Get the CardanoTransactionBuilder instance
- * Convenience function for services
- */
-export function getCardanoTxBuilder(): CardanoTransactionBuilder {
-  return getAppContext().cardanoTxBuilder;
-}
-
-/**
  * Reset the application context (for testing only)
  * Allows tests to inject their own instances
  */
 export function resetAppContext(context: AppContext | null): void {
   appContext = context;
   logger.debug('Application context reset');
+}
+
+/**
+ * Create a test context with specific backends and transaction builder
+ * Used by integration tests to create isolated test instances
+ * @param backends Array of backend names to use (e.g., ['koios'], ['blockfrost'])
+ * @param txBuilderName Optional transaction builder name ('csl' or 'buildooor'), defaults to 'csl'
+ * @param protocolParams Optional protocol parameters (to skip backend call during init)
+ * @returns Promise<AppContext> The created application context
+ */
+export async function createTestContext(
+  backends: BackendName[],
+  txBuilderName: TransactionBuilderName = 'csl',
+  protocolParams?: LedgerProtocolParameters
+): Promise<AppContext> {
+  // Set TX_BUILDERS env so TxBuilderRegistry.createDefault() uses the correct builder
+  env.TX_BUILDERS = txBuilderName;
+
+  const config: CardanoClientConfig = {
+    network: (env.NETWORK as Network) || 'preview',
+    backends,
+    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+    koiosApiKey: env.KOIOS_API_KEY || '',
+    ogmiosUrl: env.OGMIOS_URL || '',
+    transactionBuilders: [txBuilderName],
+    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
+    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+  };
+
+  return initializeAppContext(config, protocolParams);
 }
 
 /**
@@ -100,40 +128,30 @@ export async function shutdownAppContext(): Promise<void> {
   }
 }
 
-/**
- * Create application context for testing with specific backends
- * @param backendNames - List of backend names to use
- * @param txBuilderName - Optional transaction builder name ('csl' or 'buildooor')
- */
-export async function createTestContext(
-  backendNames?: string[],
-  txBuilderName?: string
-): Promise<AppContext> {
-  // Set TX_BUILDERS env var if specified (for TxBuilderRegistry.createDefault())
-  if (txBuilderName) {
-    process.env.TX_BUILDERS = txBuilderName;
-  }
-
-  const cardanoClient = backendNames
-    ? CardanoClientFactory.createForBackends(backendNames)
-    : CardanoClientFactory.createFromConfig();
-
-  const cardanoTxBuilder = new CardanoTransactionBuilder(cardanoClient);
-  await cardanoTxBuilder.init();
-
-  const cardanoIndexer = new CardanoIndexer(cardanoClient, cardanoTxBuilder);
-
-  return {
-    cardanoClient,
-    cardanoIndexer,
-    cardanoTxBuilder,
-  };
-}
 
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
+  // Skip auto-initialization when SKIP_AUTO_INIT is set (e.g., for tests with mocked backends)
+  if (env.SKIP_AUTO_INIT === 'true') {
+    logger.info('Skipping auto-initialization (SKIP_AUTO_INIT=true)');
+    return;
+  }
+
+  // Read environment configuration for CardanoClient
+  const config: CardanoClientConfig = {
+      network: (env.NETWORK as Network) || 'preview',
+      backends: env.BACKENDS ? env.BACKENDS.split(',') as BackendName[] : ['koios'],
+      blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+      koiosApiKey: env.KOIOS_API_KEY || '',
+      ogmiosUrl: env.OGMIOS_URL || '',
+      transactionBuilders: env.TX_BUILDERS ? env.TX_BUILDERS.split(',') as TransactionBuilderName[] : ['csl'],
+      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
+      fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+      indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+  };
+
   try {
-    appContext = await initializeAppContext();
+    appContext = await initializeAppContext(config);
     logger.info('CAP server bootstrap complete');
   } catch (err) {
     logger.error('Failed to initialize blockchain components:', err);

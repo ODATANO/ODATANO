@@ -1,4 +1,5 @@
-import { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult } from "../../utils/types";
+import { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from "../../utils/types";
+import { CardanoClient } from "../cardano-client";
 
 /** 
  * CardanoTxBuilder - Interface Definition for multiple Cardano transaction builders (Buildooor, CSL, etc.)
@@ -9,10 +10,12 @@ export interface CardanoTxBuilder {
    * Builder name 
    */
   name: string;
-  /** 
-   * Initialize the builder 
+  /**
+   * Initialize the builder
+   * @param client - The CardanoClient instance
+   * @param protocolParams - Optional protocol parameters (if not provided, fetched from backend)
    */
-  init(): Promise<void>;
+  init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void>;
 
   /** 
    * Build unsigned ADA transfer transaction

@@ -1,15 +1,28 @@
 import cds from '@sap/cds';
-import { BackendTestConfig, configureBackendForTest } from './backend-test-helper';
+import { TestConfiguration, configureBackendForTest } from './test-fixtures';
+import { shutdownAppContext } from '../../srv/server';
 
 jest.setTimeout(20000);
 
-export function createErrorBackendSuite(backendConfig: BackendTestConfig) {
-	// Configure environment for this backend
-	const originalBlockfrostKey = process.env.BLOCKFROST_KEY;
+export function createErrorBackendSuite(backendConfig: TestConfiguration) {
+	// Configure environment BEFORE cds.test() - server uses these via cds.on('served')
+	const originalBlockfrostKey = process.env.BLOCKFROST_API_KEY;
 	configureBackendForTest(backendConfig, originalBlockfrostKey);
 
-	describe(`Error Handling – Backend-Specific [${backendConfig.name.toUpperCase()}]`, () => {
-		const { GET, POST, expect } = cds.test(__dirname + '/../../');
+	describe(`Error Handling – Backend-Specific [${backendConfig.backendName.toUpperCase()}]`, () => {
+		// cds.test() starts server which creates AppContext automatically
+		const test = cds.test(__dirname + '/../../');
+		const { GET, POST, expect } = test;
+
+		// Only reset the database before each test
+		beforeEach(async () => {
+			await test.data.reset();
+		});
+
+		// Cleanup app context after all tests
+		afterAll(async () => {
+			await shutdownAppContext();
+		});
 
 		describe('ODATANO Milestone 1 - Error Handling Tests', () => {
 			// Error 404 resource not found with valid-looking inputs

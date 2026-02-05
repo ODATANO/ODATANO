@@ -170,7 +170,7 @@ export class CardanoIndexer {
     logger.debug(`indexAddress: provider response for address ${addr}`);
     logger.debug({ addrData }, 'indexAddress: provider response');
 
-    const AddrEntity = mapAddress(addr, addrData);
+    const AddrEntity = mapAddress(addr, addrData, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
@@ -328,7 +328,7 @@ export class CardanoIndexer {
    */
   async indexNetworkInformation(tx: CapTransaction): Promise<NetworkInformation> {
     const netInfo = await this.client.getNetworkInformation();
-    const netEntity = mapNetworkInfo(netInfo);
+    const netEntity = mapNetworkInfo(netInfo,this.client.max_age_ms,this.client.network);
 
     await tx.run(UPSERT.into(NetworkInformation).entries(netEntity));
     return netEntity;
@@ -370,7 +370,7 @@ export class CardanoIndexer {
   */
   async indexAccount(tx: CapTransaction, stakeAddress: string): Promise<Account> {
     const accountInfo = await this.client.getAccount(stakeAddress);
-    const accountEntity = mapAccount(accountInfo);
+    const accountEntity = mapAccount(accountInfo, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Accounts).entries(accountEntity))
 
@@ -426,7 +426,7 @@ export class CardanoIndexer {
       buildreq,
       protocolParams);
 
-    const buildResult = mapBuildResult(txbuildResult);
+    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
@@ -458,7 +458,7 @@ export class CardanoIndexer {
       buildreq,
       protocolParams);
       
-    const buildResult = mapBuildResult(txbuildResult);
+    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
     // Store inputs if available
@@ -495,7 +495,7 @@ export class CardanoIndexer {
       buildreq,
       protocolParams);
 
-    const buildResult = mapBuildResult(txbuildResult);
+    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
@@ -534,7 +534,7 @@ export class CardanoIndexer {
       buildreq,
       protocolParams);
 
-    const buildResult = mapBuildResult(txbuildResult);
+    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
