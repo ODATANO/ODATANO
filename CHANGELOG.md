@@ -5,6 +5,74 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3-milestone3] - 2026-02-05 - Milestone 3: External Signing & SAP Integration
+
+### Added
+
+- **External Signing Module**: Complete external signing workflow with private key isolation
+  - `ExternalSignerModule` - Signing request creation and workflow management
+  - `SignatureVerifier` - Cryptographic signature verification
+  - CIP-30 browser wallet support (Nami, Eternl, Yoroi, etc.)
+  - Cardano CLI signing support
+  - Hardware wallet compatibility (Ledger, Trezor)
+
+- **5 New Entities** for signing workflow:
+  - `SigningRequests` - Unsigned transaction export with TTL-based expiration
+  - `SignatureVerifications` - Cryptographic verification results and audit trail
+  - `AddressSigningRequests` - Address-to-signing-request associations
+  - `AddressTransactionBuilds` - Address-to-build associations
+  - `AddressTransactions` - Address transaction history with net amounts
+
+- **6 External Signing Actions** (OData POST endpoints):
+  - `CreateSigningRequest` - Create signing request for external signing
+  - `GetSigningRequest` - Retrieve signing request (auto-expires if TTL exceeded)
+  - `VerifySignature` - Cryptographically verify signed transaction
+  - `SubmitVerifiedTransaction` - Verify and submit in one step
+  - `GetSigningRequestsByAddress` - Get signing requests for an address
+  - `GetTransactionBuildsByAddress` - Get transaction builds for an address
+
+- **Centralized App Context Architecture**: Refactored initialization in `server.ts`
+  - `getAppContext()` - Get singleton application context
+  - `getCardanoIndexer()` - Convenience function for services
+  - `getCardanoClient()` - Convenience function for services
+  - `createTestContext()` - Create isolated test contexts
+  - `shutdownAppContext()` - Graceful connection cleanup
+
+- **CIP-30 Wallet Integration**:
+  - `combineTransactionWithWitnesses()` - Combine unsigned TX with CIP-30 witness set
+  - `isWitnessSetCbor()` - Detect witness set vs full transaction
+  - Automatic handling in SubmitVerifiedTransaction
+
+- **Signing Workflow States**: `SigningStatus` enum
+  - `pending` - Request created, awaiting signing
+  - `signed` - Transaction has been signed
+  - `verified` - Signature verified, ready for submission
+  - `submitted` - Transaction submitted to network
+  - `expired` - Request expired (30 minute default TTL)
+  - `failed` - Signing or verification failed
+
+- **New Test Suites** (2 new test files):
+  - `signing-services.test.ts` - External signing integration tests
+  - `signing.test.ts` - SignatureVerifier and ExternalSignerModule unit tests
+
+- **SAP BTP Deployment Learnings**: `BTP-DEPLOYMENT-LEARNINGS.md` with deployment patterns
+
+### Changed
+
+- Architecture refactored to centralized App Context pattern
+- Services now use `getCardanoIndexer()` instead of direct instantiation
+- Test suite updated: 20 test files across integration and unit tests
+- Enhanced error handling with signing-specific error cases
+
+### Security
+
+- **Private Key Isolation**: Server NEVER handles private keys
+- **Signature Verification**: Cryptographic verification before submission
+- **Audit Trail**: Complete history of signing requests and verifications
+- **TTL Expiration**: Signing requests expire after 30 minutes (configurable)
+
+---
+
 ## [v0.2-milestone2] - 2025-01-25 - Milestone 2: Transaction Build & Submit
 
 ### Added
@@ -149,4 +217,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [GitHub Repository](https://github.com/ODATANO/ODATANO)
 - [Milestone 1 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.1-milestone1)
 - [Milestone 2 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.2-milestone2)
+- [Milestone 3 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3)
 - [Catalyst Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk)

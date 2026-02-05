@@ -6,11 +6,12 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 692 tests across 19 test suites
-- **Statement Coverage**: 96.28%
-- **Branch Coverage**: 81.97%
+- **Total Test Files**: 20 test files across integration and unit tests
+- **Statement Coverage**: 96%+
+- **Branch Coverage**: 81%+
 - **Networks**: Cardano Preview testnet
 - **Backends**: Blockfrost, Koios, Ogmios
+- **Milestones Covered**: M1 (Read), M2 (Transaction Build), M3 (External Signing)
 
 ---
 
@@ -31,6 +32,7 @@ test/
 │   ├── tx.buildooor.test.ts            # Buildooor builder integration tests (M2)
 │   ├── tx-submission-mock.test.ts      # Transaction submission tests (M2)
 │   ├── tx-error-handling.builder.ts    # TX builder error scenarios (M2)
+│   ├── signing-services.test.ts        # External signing integration tests (M3)
 │   └── backend-test-helper.ts          # Backend configuration helper
 ├── unit/                               # Unit tests (isolated component testing)
 │   ├── validators.test.ts              # Validator type guards and helpers
@@ -41,7 +43,8 @@ test/
 │   ├── ogmios-backend.test.ts          # Ogmios backend tests (M2)
 │   ├── csl-tx-builder.test.ts          # CSL transaction builder tests (M2)
 │   ├── tx-builder-registry.test.ts     # Builder registry tests (M2)
-│   └── tx-build-helper.test.ts         # Transaction helper utilities (M2)
+│   ├── tx-build-helper.test.ts         # Transaction helper utilities (M2)
+│   └── signing.test.ts                 # External signing unit tests (M3)
 └── README.md                           # This file
 ```
 
@@ -144,6 +147,35 @@ Transaction-specific error scenarios:
 - Invalid signature (ODATANO_TX_VALIDATION_FAILED)
 - Network failure (ODATANO_PROVIDER_UNAVAILABLE)
 - Duplicate transaction (ODATANO_TX_ALREADY_SUBMITTED)
+
+---
+
+## External Signing Tests (M3)
+
+M3 milestone adds comprehensive external signing workflow tests.
+
+### **signing-services.test.ts** (Integration)
+External signing service integration tests:
+
+- **CreateSigningRequest** - Create signing request from build
+- **GetSigningRequest** - Retrieve signing request status
+- **VerifySignature** - Cryptographic signature verification
+- **SubmitVerifiedTransaction** - Verify and submit workflow
+- **GetSigningRequestsByAddress** - Address-based request lookup
+- **GetTransactionBuildsByAddress** - Address-based build lookup
+- TTL expiration handling (auto-mark as expired)
+- CIP-30 witness set combination
+
+### **signing.test.ts** (Unit)
+External signing module unit tests:
+
+- **ExternalSignerModule** - Signing request creation, status updates
+- **SignatureVerifier** - Signature verification, witness extraction
+- **combineTransactionWithWitnesses()** - CIP-30 witness set combination
+- **isWitnessSetCbor()** - Witness set vs full transaction detection
+- Signing status state transitions (pending → signed → verified → submitted)
+- Expired request handling
+- Invalid signature detection
 
 ---
 

@@ -1,8 +1,8 @@
 # ODATANO User Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.2.0 (Milestone 2 Complete)\
-**Last Updated:** January 2026
+**Version:** 0.3.0 (Milestone 3 Complete)\
+**Last Updated:** February 2026
 
 ---
 
@@ -29,6 +29,9 @@ ODATANO is an **OData V4 service** that provides access to Cardano blockchain da
 - ✅ Access transaction metadata
 - ✅ **Build unsigned transactions** (ADA transfers, token minting, multi-asset) - M2
 - ✅ **Submit signed transactions** to Cardano network - M2
+- ✅ **External signing workflow** (CIP-30 wallets, Cardano CLI, hardware wallets) - M3
+- ✅ **Signature verification** with cryptographic validation - M3
+- ✅ **Complete audit trail** for signing requests and verifications - M3
 - ✅ Automatic failover (Ogmios → Blockfrost → Koios)
 - ✅ Intelligent caching (configurable TTL)
 - ✅ Full OData V4 support ($filter, $select, $expand, $top, $skip, $count, $orderby)
@@ -429,7 +432,92 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransactio
 | `SubmitTransaction` | Submit previously built transaction |
 | `SubmitSignedTransaction` | Submit externally built transaction |
 
-See [Transaction Workflow Guide](../concepts%20&%20architecture/TRANSACTION_WORKFLOW.md) for complete documentation.
+See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documentation.
+
+---
+
+## External Signing (M3)
+
+ODATANO M3 adds a complete external signing workflow with private key isolation.
+
+### External Signing Workflow
+
+```
+1. Build Transaction    → Returns unsigned CBOR
+2. Create Signing Request → Returns signing instructions & TTL
+3. Sign Externally      → Use CIP-30 wallet or Cardano CLI
+4. Verify & Submit      → Cryptographically verify and submit
+```
+
+### Create Signing Request
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buildId": "uuid-from-build-response",
+    "message": "Please sign this transaction"
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": "signing-request-uuid",
+  "txBodyHash": "abc123...",
+  "unsignedTxCbor": "84a50081825820...",
+  "status": "pending",
+  "expiresAt": "2026-02-05T12:30:00Z",
+  "cardanoCliCommand": "cardano-cli transaction sign --tx-body-file tx.raw..."
+}
+```
+
+### Verify and Submit
+
+After signing externally:
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "signingRequestId": "signing-request-uuid",
+    "signedTxCbor": "84a5008182...",
+    "signerType": "browser-wallet",
+    "signerInfo": "Nami"
+  }'
+```
+
+### Available External Signing Actions
+
+| Action | Description |
+|--------|-------------|
+| `CreateSigningRequest` | Create signing request with TTL (30 min default) |
+| `GetSigningRequest` | Get signing request status (auto-marks expired) |
+| `VerifySignature` | Cryptographically verify signed transaction |
+| `SubmitVerifiedTransaction` | Verify and submit in one step |
+| `GetSigningRequestsByAddress` | Get signing requests for an address |
+| `GetTransactionBuildsByAddress` | Get transaction builds for an address |
+
+### Signing Methods Supported
+
+| Method | Description |
+|--------|-------------|
+| **CIP-30 Browser Wallets** | Nami, Eternl, Yoroi, Flint, etc. |
+| **Cardano CLI** | Command-line signing with payment.skey |
+| **Hardware Wallets** | Ledger, Trezor via browser extensions |
+
+### Signing Status States
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Request created, awaiting signing |
+| `signed` | Transaction has been signed |
+| `verified` | Signature verified, ready for submission |
+| `submitted` | Transaction submitted to network |
+| `expired` | TTL exceeded (30 minutes default) |
+| `failed` | Signing or verification failed |
+
+See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documentation.
 
 ---
 
@@ -437,7 +525,8 @@ See [Transaction Workflow Guide](../concepts%20&%20architecture/TRANSACTION_WORK
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
-- **Test Docs:** [test/README.md](../../test/README.md) - 692 tests, 96%+ coverage
+- **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
+- **Test Docs:** [test/README.md](../../test/README.md) - 20 test files, 96%+ coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -446,5 +535,5 @@ See [Transaction Workflow Guide](../concepts%20&%20architecture/TRANSACTION_WORK
 
 ---
 
-**Version:** 0.2.0 (Milestone 2 Complete)\
-**Status:** Production-Ready — OData V4 read service + transaction building with multi-provider failover
+**Version:** 0.3.0 (Milestone 3 Complete)\
+**Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

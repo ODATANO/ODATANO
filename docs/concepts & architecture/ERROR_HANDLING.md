@@ -5,7 +5,7 @@ errors are normalized and propagated to the client.
 
 ## Error Classes Overview
 
-ODATANO uses **11 specialized error classes** for comprehensive error handling:
+ODATANO uses **12 specialized error classes** for comprehensive error handling:
 
 ### Backend Communication Errors
 
@@ -86,6 +86,34 @@ Transaction with same hash already exists on chain or in mempool.
 - **Error Code**: `ODATANO_TX_ALREADY_SUBMITTED`
 - **Example**: Duplicate submission of same transaction
 - **Result**: Idempotent - transaction already processed
+
+#### 12. `MixedAssetsError` (400)
+
+UTxO contains non-ADA assets when ADA-only transaction was requested.
+- **Error Code**: `ODATANO_INVALID_INPUT`
+- **Example**: Simple ADA transfer includes UTxO with native tokens
+- **Fix**: Use multi-asset transaction or select different UTxOs
+
+### External Signing Errors (M3)
+
+M3 reuses existing error classes for signing-specific scenarios:
+
+**Signing Request Not Found (404)**
+- Uses `NotFoundError`
+- Signing request ID doesn't exist or has been cleaned up
+
+**Signing Request Expired (400)**
+- Uses `rejectInvalid` with "Signing request expired" message
+- Request exceeded 30-minute TTL
+
+**Signature Verification Failed (400)**
+- Uses `TransactionValidationError`
+- Invalid signature, wrong signing key, or malformed CBOR
+- **Example**: Signed with wrong key, tampered transaction
+
+**Build Not Found (404)**
+- Uses `NotFoundError`
+- Transaction build ID doesn't exist or has expired
 
 ## Normalization Rules
 
@@ -197,6 +225,13 @@ return handleRequest(req, async (db) => {
 9. **400 = InsufficientFundsError** – Not enough UTxOs for amount + fees
 10. **400 = TransactionValidationError** – Invalid signature or CBOR
 11. **409 = TransactionAlreadySubmittedError** – Duplicate transaction
+12. **400 = MixedAssetsError** – UTxO contains non-ADA assets
+
+### External Signing Errors (M3)
+
+- **404 = NotFoundError** – Signing request or build not found
+- **400 = rejectInvalid** – Signing request expired (TTL exceeded)
+- **400 = TransactionValidationError** – Signature verification failed
 
 ### Key Principles
 

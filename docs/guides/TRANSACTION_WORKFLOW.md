@@ -1,8 +1,8 @@
 # Transaction Workflow Guide
 
-**ODATANO Milestone 2 - Transaction Build & Submit**
+**ODATANO Milestone 2 & 3 - Transaction Build, Sign & Submit**
 
-This guide explains how to build, sign, and submit Cardano transactions using the ODATANO API with external signing.
+This guide explains how to build, sign, and submit Cardano transactions using the ODATANO API with external signing. M3 adds a complete external signing workflow with SigningRequests and cryptographic verification.
 
 ---
 
@@ -660,17 +660,24 @@ curl http://localhost:1337/health
 
 ## Summary
 
-ODATANO M2 provides a complete transaction workflow with:
+ODATANO M2/M3 provides a complete transaction workflow with:
 
 ✅ **4 Transaction Types**: Simple ADA, Metadata, Multi-Asset, Minting
 ✅ **2 Builder Options**: CSL & Buildooor
 ✅ **Multi-Backend Support**: Ogmios + Blockfrost/Koios with automatic failover
 ✅ **External Signing**: Complete private key isolation
 ✅ **Full Audit Trail**: TransactionBuilds & TransactionSubmissions entities
-✅ **Production Ready**: 250+ transaction tests, comprehensive error handling
+✅ **Production Ready**: Comprehensive transaction tests
+
+### M3 External Signing Additions:
+
+✅ **SigningRequests**: Persistent signing workflow with TTL expiration
+✅ **SignatureVerifications**: Cryptographic verification with audit trail
+✅ **CIP-30 Support**: Browser wallet integration (Nami, Eternl, Yoroi)
+✅ **6 New Actions**: CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** January 25, 2026
-**Milestone:** M2 - Transaction Build & Submit
+**Document Version:** 2.0
+**Last Updated:** February 5, 2026
+**Milestone:** M2/M3 - Transaction Build, Sign & Submit

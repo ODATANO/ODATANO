@@ -257,6 +257,53 @@ erDiagram
         string backend
     }
 
+    SigningRequests {
+        uuid id PK
+        uuid build FK
+        string txBodyHash
+        string unsignedTxCbor
+        string network
+        string status
+        string message
+        string cardanoCliCommand
+        datetime createdAt
+        datetime expiresAt
+        datetime signedAt
+        datetime verifiedAt
+        datetime submittedAt
+    }
+
+    SignatureVerifications {
+        uuid id PK
+        uuid signingRequest FK
+        string signedTxCbor
+        boolean isValid
+        int witnessCount
+        string signerKeyHashes
+        string signerType
+        string signerInfo
+        string errorMessage
+        datetime verifiedAt
+    }
+
+    AddressSigningRequests {
+        string address FK
+        uuid signingRequest FK
+    }
+
+    AddressTransactionBuilds {
+        string address FK
+        uuid txBuild FK
+    }
+
+    AddressTransactions {
+        string address FK
+        string tx FK
+        decimal netAmount
+        boolean isInput
+        boolean isOutput
+    }
+
     Epochs ||--o{ Blocks : has
     Addresses ||--o{ AddressAssets : contains
     Addresses ||--o{ AddressUTxOs : contains
@@ -276,6 +323,14 @@ erDiagram
     TransactionBuildInputs ||--o{ TransactionBuildInputAssets : contains
     TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : contains
     TransactionSubmissions ||--o{ TransactionSubmissionErrors : has
+    SigningRequests }o--|| TransactionBuilds : references
+    SigningRequests ||--o{ SignatureVerifications : has
+    Addresses ||--o{ AddressSigningRequests : has
+    AddressSigningRequests }o--|| SigningRequests : references
+    Addresses ||--o{ AddressTransactionBuilds : has
+    AddressTransactionBuilds }o--|| TransactionBuilds : references
+    Addresses ||--o{ AddressTransactions : has
+    AddressTransactions }o--|| Transactions : references
 ```
 
 ---
@@ -314,5 +369,46 @@ erDiagram
 - **Purpose**: Error details from failed submissions
 - **Temporal**: No - linked to parent TransactionSubmissions
 - **Fields**: Error code, message, backend that failed
+
+---
+
+## M3 Milestone Additions
+
+### External Signing Entities
+
+**SigningRequests** manages the external signing workflow:
+- **Purpose**: Export unsigned transactions for external signing (CIP-30 wallets, Cardano CLI, hardware wallets)
+- **Temporal**: Yes - TTL-based expiration (30 minutes default)
+- **Key**: UUID (id)
+- **Status**: 'pending', 'signed', 'verified', 'submitted', 'expired', 'failed'
+- **Relations**: References TransactionBuilds, has SignatureVerifications
+
+**SignatureVerifications** stores cryptographic verification results:
+- **Purpose**: Audit trail for signature verification attempts
+- **Temporal**: No - immutable verification records
+- **Key**: UUID (id)
+- **Fields**: Signed CBOR, validity, witness count, signer key hashes, signer type/info
+- **Relations**: References SigningRequests
+
+### Address Association Entities
+
+**AddressSigningRequests** links addresses to signing requests:
+- **Purpose**: Query signing requests by sender address
+- **Temporal**: No
+- **Key**: Composite (address + signingRequest)
+- **Use Case**: "Show me all pending signing requests for this address"
+
+**AddressTransactionBuilds** links addresses to transaction builds:
+- **Purpose**: Query transaction builds by sender address
+- **Temporal**: No
+- **Key**: Composite (address + txBuild)
+- **Use Case**: "Show me all transaction builds for this address"
+
+**AddressTransactions** tracks address transaction history:
+- **Purpose**: Query transactions affecting an address with net amounts
+- **Temporal**: No
+- **Key**: Composite (address + tx)
+- **Fields**: Net amount change, isInput, isOutput flags
+- **Use Case**: "Show me transaction history with amounts for this address"
 
 ---

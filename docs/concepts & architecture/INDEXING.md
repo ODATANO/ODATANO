@@ -77,6 +77,7 @@ Temporal entities represent **mutable blockchain state** that can change over ti
 - **AddressUTxOs**: Available UTxOs change
 - **TransactionBuilds** (M2): Unsigned transaction builds with TTL expiry
 - **TransactionSubmissions** (M2): Transaction submission records with status tracking
+- **SigningRequests** (M3): External signing requests with TTL-based expiration (30 min default)
 
 For example, the `NetworkInformation` entity is marked as **temporal**:
 
@@ -140,6 +141,10 @@ Non-temporal entities represent **immutable blockchain facts** that never change
 - **TransactionBuildInputs/Outputs** (M2): Transaction build details (linked to TransactionBuilds)
 - **TransactionBuildInputAssets/OutputAssets** (M2): Asset details in transaction builds
 - **TransactionSubmissionErrors** (M2): Error records from failed submissions
+- **SignatureVerifications** (M3): Cryptographic verification results (immutable audit trail)
+- **AddressSigningRequests** (M3): Address-to-signing-request associations
+- **AddressTransactionBuilds** (M3): Address-to-build associations
+- **AddressTransactions** (M3): Address transaction history with net amounts
 
 These entities are stored **without** `validFrom`/`validTo` fields and remain in the database permanently once indexed. They do not respect the `INDEX_TTL_MS` setting.
 
@@ -337,6 +342,94 @@ If failed: record errors in TransactionSubmissionErrors
 
 ---
 
+## M3: External Signing Indexing
+
+### Signing Request Flow (Temporal Entity with Custom TTL)
+
+The M3 milestone introduces **SigningRequests** with a dedicated 30-minute TTL:
+
+```cds
+entity SigningRequests : temporal {
+    key id                : UUID;
+        build             : Association to TransactionBuilds;
+        txBodyHash        : Blake2b256;
+        unsignedTxCbor    : HexBytes;
+        network           : String;
+        status            : String; // 'pending', 'signed', 'verified', 'submitted', 'expired', 'failed'
+        message           : String;
+        cardanoCliCommand : String;
+        createdAt         : DateTime;
+        expiresAt         : DateTime;
+        signedAt          : DateTime;
+        verifiedAt        : DateTime;
+        submittedAt       : DateTime;
+}
+```
+
+#### External Signing Workflow
+
+```
+Client → POST /CreateSigningRequest (with buildId)
+  ↓
+Service retrieves TransactionBuild by buildId
+  ↓
+Create SigningRequest with 30-minute TTL
+  ↓
+Generate Cardano CLI signing command
+  ↓
+Return signing instructions to client
+  ↓
+Client signs externally (CIP-30 wallet, CLI, hardware wallet)
+  ↓
+Client → POST /SubmitVerifiedTransaction (with signed CBOR)
+  ↓
+Service verifies signature cryptographically
+  ↓
+Record verification in SignatureVerifications
+  ↓
+Submit to Cardano network
+  ↓
+Update SigningRequest status to 'submitted'
+```
+
+**TTL Behavior**: SigningRequests have a custom 30-minute expiration (not tied to `INDEX_TTL_MS`). When `GetSigningRequest` is called, the service automatically marks expired requests as 'expired'.
+
+### Signature Verification (Non-Temporal Entity)
+
+**SignatureVerifications** creates an immutable audit trail:
+
+```cds
+entity SignatureVerifications {
+    key id                : UUID;
+        signingRequest    : Association to SigningRequests;
+        signedTxCbor      : HexBytes;
+        isValid           : Boolean;
+        witnessCount      : Integer;
+        signerKeyHashes   : String; // Comma-separated list
+        signerType        : String; // 'browser-wallet', 'cardano-cli', 'hardware-wallet'
+        signerInfo        : String; // e.g., 'Nami', 'Eternl', 'Ledger'
+        errorMessage      : String;
+        verifiedAt        : DateTime;
+}
+```
+
+**Behavior**: Every verification attempt is recorded, whether successful or failed. This provides a complete audit trail for compliance and security analysis.
+
+### Address Association Entities (Non-Temporal)
+
+M3 adds association entities for querying by address:
+
+- **AddressSigningRequests**: Links addresses to their signing requests
+- **AddressTransactionBuilds**: Links addresses to their transaction builds
+- **AddressTransactions**: Links addresses to confirmed transactions with net amounts
+
+These entities enable efficient queries like:
+- "Show all pending signing requests for this address"
+- "Show all transaction builds for this address"
+- "Show transaction history with amounts for this address"
+
+---
+
 ## Summary
 
 This lazy indexing architecture provides:
@@ -345,6 +438,8 @@ This lazy indexing architecture provides:
 ✅ **Efficiency**: Immutable data (transactions, blocks) indexed once\
 ✅ **Performance**: All indexed data served from local database\
 ✅ **Flexibility**: No full blockchain sync required\
-✅ **SAP Integration**: Full OData V4 compliance with $filter, $expand, etc.
+✅ **SAP Integration**: Full OData V4 compliance with $filter, $expand, etc.\
+✅ **Audit Trail** (M3): Complete signing verification history for compliance\
+✅ **Security** (M3): Private key isolation with external signing workflow
 
 The combination of temporal and non-temporal entities ensures optimal balance between data freshness and query performance, while minimizing blockchain API calls.

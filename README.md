@@ -154,7 +154,7 @@ See [Test Documentation](test/README.md) for details.
 
 **6 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildTokenMintTransaction, BuildMultiAssetTransaction, SubmitTransaction, GetProtocolParameters
 
-## External Signing Service (`/odata/v4/cardano-transaction`) - M3
+### External Signing Service (`/odata/v4/cardano-transaction`) - M3
 
 **4 Entities:** SigningRequests, SignatureVerifications, AddressTransactionBuilds, AddressSigningRequests
 

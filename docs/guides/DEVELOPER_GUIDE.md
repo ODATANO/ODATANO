@@ -1,9 +1,9 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.2.0 (Milestone 2)\
-**Status:** Production-Ready - 692 tests, 96%+ coverage\
-**Last Updated:** January 2026
+**Version:** 0.3.0 (Milestone 3)\
+**Status:** Production-Ready - 20 test files, 96%+ coverage\
+**Last Updated:** February 2026
 
 ---
 
@@ -12,9 +12,11 @@
 1. [Architecture](#architecture)
 2. [Quick Setup](#quick-setup)
 3. [Core Components](#core-components)
-4. [Error Handling](#error-handling)
-5. [Testing](#testing)
-6. [Deployment](#deployment)
+4. [App Context Pattern](#app-context-pattern)
+5. [External Signing Module](#external-signing-module)
+6. [Error Handling](#error-handling)
+7. [Testing](#testing)
+8. [Deployment](#deployment)
 
 ---
 
@@ -22,26 +24,32 @@
 
 ### Service Surface
 
-**16+ Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, TransactionBuilds, TransactionSubmissions (M2)
+**25+ Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionSubmissions (M2), SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, AddressTransactions (M3)
 
 **11 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress
 
-**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
+**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, GetProtocolParameters
+
+**6 External Signing Actions (M3):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
 
 ### Layered Architecture
 
 ```
 HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts)
     ↓
-Validation & Mapping (validators.ts, mappers.ts)
+App Context (server.ts: getCardanoIndexer(), getCardanoClient())
     ↓
-Blockchain Client (cardano-client.ts)
+CardanoIndexer + CardanoTransactionBuilder
     ↓
-Backends: Ogmios (live) + Blockfrost (8s) → Koios Fallback (10s)
+CardanoClient (Multi-Backend Orchestrator)
     ↓
-Transaction Builders: CSL / Buildooor (M2)
+Backends: Ogmios (live) + Blockfrost → Koios Fallback
     ↓
-Indexer Cache (SQLite temporal entities)
+Transaction Builders: CSL / Buildooor
+    ↓
+External Signing Module (M3): ExternalSignerModule + SignatureVerifier
+    ↓
+SQLite Cache (temporal entities)
 ```
 
 ### Data Flow
@@ -89,10 +97,11 @@ npm run test:coverage # Coverage report
 
 ```
 srv/
+  server.ts              # App Context initialization (M3)
   cardano-service.cds    # Read entity/action definitions
   cardano-service.ts     # Read handler implementations
-  cardano-tx-service.cds # Transaction service definitions (M2)
-  cardano-tx-service.ts  # Transaction handler implementations (M2)
+  cardano-tx-service.cds # Transaction + Signing service definitions
+  cardano-tx-service.ts  # Transaction + Signing handler implementations
   blockchain/
     cardano-client.ts    # Multi-backend orchestrator
     cardano-indexer.ts   # Lazy indexing & caching
@@ -105,16 +114,20 @@ srv/
       csl-tx.ts              # Cardano Serialization Lib builder
       buildooor-tx.ts        # Buildooor builder
       tx-builder-registry.ts # Builder factory
+    signing/                 # M3 External Signing
+      external-signer.ts     # Signing request creation & workflow
+      signature-verifier.ts  # Cryptographic signature verification
   utils/
     validators.ts        # Input validation (10+ functions)
     errors.ts            # Error hierarchy (11 classes)
     mappers.ts           # API → OData transformations
     tx-build-helper.ts   # Transaction utilities (M2)
+    signing-helper.ts    # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds          # 16+ entities with temporal support
+db/schema.cds          # 25+ entities with temporal support
 config/config.ts       # Timeouts, network, TTL, builders
-test/                  # 692 tests (integration + unit)
+test/                  # 20 test files (integration + unit)
 ```
 
 ---
@@ -210,6 +223,155 @@ rejectInvalid(req, entity, msg, field)  // Invalid input (400)
 
 See [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) for details.
 
+---
+
+## App Context Pattern
+
+### Overview (srv/server.ts)
+
+M3 introduced a centralized App Context pattern that manages all blockchain components as a singleton:
+
+```typescript
+interface AppContext {
+  cardanoClient: CardanoClient;
+  cardanoIndexer: CardanoIndexer;
+  cardanoTxBuilder: CardanoTransactionBuilder;
+}
+```
+
+### Key Functions
+
+```typescript
+// Get the singleton context (must be called after CAP bootstrap)
+getAppContext(): AppContext
+
+// Convenience functions for services
+getCardanoIndexer(): CardanoIndexer
+getCardanoClient(): CardanoClient
+
+// Test utilities
+createTestContext(backends, txBuilderName?, protocolParams?): Promise<AppContext>
+resetAppContext(context: AppContext | null): void
+shutdownAppContext(): Promise<void>
+```
+
+### Usage in Services
+
+```typescript
+// In cardano-service.ts or cardano-tx-service.ts
+import { getCardanoIndexer, getCardanoClient } from './server';
+
+srv.on('GetTransactionByHash', async (req: Request) => {
+  return handleRequest(req, async (db) => {
+    // Use shared indexer instance
+    return await getCardanoIndexer().indexTransaction(db, hash);
+  });
+});
+
+srv.on('SubmitVerifiedTransaction', async (req: Request) => {
+  return handleRequest(req, async (db) => {
+    // Use shared client instance
+    await getCardanoClient().submitTransaction(signedTxCbor);
+  });
+});
+```
+
+### Bootstrap Process
+
+The context is automatically initialized when CAP starts:
+
+```typescript
+cds.on('served', async () => {
+  if (env.SKIP_AUTO_INIT === 'true') return; // For tests
+
+  const config: CardanoClientConfig = {
+    network: env.NETWORK || 'preview',
+    backends: env.BACKENDS?.split(',') || ['koios'],
+    // ... other config from environment
+  };
+
+  appContext = await initializeAppContext(config);
+});
+```
+
+### Test Context Management
+
+```typescript
+// In test setup
+beforeAll(async () => {
+  const testContext = await createTestContext(['koios'], 'csl');
+  resetAppContext(testContext);
+});
+
+afterAll(async () => {
+  await shutdownAppContext(); // Clean up connections
+});
+```
+
+---
+
+## External Signing Module
+
+### Overview (srv/blockchain/signing/)
+
+M3 provides complete external signing workflow with private key isolation:
+
+### ExternalSignerModule
+
+```typescript
+// Create signing request for external signing
+createSigningRequest(buildId, unsignedTxCbor, txBodyHash, network, message): UnsignedTxExportPayload
+
+// Verify signed transaction cryptographically
+verifySignedTransaction(signedTxCbor, expectedTxBodyHash): SignatureVerificationResult
+
+// Workflow state management
+createWorkflowState(request): SigningWorkflowState
+markAsSigned(state, signedTxCbor): SigningWorkflowState
+markAsVerified(state, result): SigningWorkflowState
+markAsSubmitted(state, txHash): SigningWorkflowState
+```
+
+### SignatureVerifier
+
+```typescript
+// Verify without throwing
+verify(signedTxCbor, options?): SignatureVerificationResult
+
+// Verify with throwing on failure
+verifyOrThrow(signedTxCbor, options?): SignatureVerificationResult
+
+// Utility functions
+extractTxBodyHash(txCbor): string
+isSigned(txCbor): boolean
+getWitnessCount(txCbor): number
+```
+
+### Signing Workflow States
+
+```typescript
+enum SigningStatus {
+  PENDING = 'pending',      // Request created, awaiting signing
+  SIGNED = 'signed',        // Transaction signed externally
+  VERIFIED = 'verified',    // Signature cryptographically verified
+  SUBMITTED = 'submitted',  // Transaction submitted to blockchain
+  EXPIRED = 'expired',      // TTL exceeded (30 minutes default)
+  FAILED = 'failed',        // Signing or verification failed
+}
+```
+
+### CIP-30 Wallet Support (srv/utils/signing-helper.ts)
+
+```typescript
+// Combine unsigned TX with CIP-30 wallet witness set
+combineTransactionWithWitnesses(unsignedTxCbor, witnessSetCbor): string
+
+// Detect if CBOR is witness set (CIP-30) or full transaction
+isWitnessSetCbor(cborHex): boolean
+```
+
+---
+
 ### 5. Multi-Backend Failover (srv/blockchain/cardano-client.ts)
 
 ```typescript
@@ -291,27 +453,32 @@ return handleRequest(req, async (db) => {
 ```
 test/
 ├── integration/                        # Integration tests (live backend)
-│   ├── core-test-suite.ts              # 71 shared read tests
+│   ├── core-test-suite.ts              # Shared read tests
 │   ├── core.blockfrost.test.ts         # Blockfrost execution
 │   ├── core.koios.test.ts              # Koios execution
 │   ├── core-ogmios.test.ts             # Ogmios execution (M2)
-│   ├── error-handling-service.test.ts  # 34 error tests
-│   ├── odata_features.test.ts          # 28 OData V4 tests
+│   ├── error-handling-service.test.ts  # Error validation tests
+│   ├── odata_features.test.ts          # OData V4 query tests
 │   ├── tx-test-suite.ts                # Transaction builder tests (M2)
 │   ├── tx.csl.test.ts                  # CSL builder tests (M2)
 │   ├── tx.buildooor.test.ts            # Buildooor builder tests (M2)
-│   └── tx-submission-mock.test.ts      # Submission tests (M2)
+│   ├── tx-submission-mock.test.ts      # Submission tests (M2)
+│   └── signing-services.test.ts        # External signing tests (M3)
 └── unit/                               # Unit tests (isolated)
     ├── validators.test.ts              # Validator tests
     ├── errors.test.ts                  # Error class tests
     ├── cardano-client.test.ts          # Client tests
-    ├── ogmios-backend.test.ts          # Ogmios tests (M2)
+    ├── cardano-tx-builder.test.ts      # TX Builder tests
+    ├── blockfrost-backend.test.ts      # Blockfrost backend tests
+    ├── koios-backend.test.ts           # Koios backend tests
+    ├── ogmios-backend.test.ts          # Ogmios backend tests (M2)
     ├── csl-tx-builder.test.ts          # CSL builder tests (M2)
     ├── tx-builder-registry.test.ts     # Registry tests (M2)
-    └── tx-build-helper.test.ts         # Helper tests (M2)
+    ├── tx-build-helper.test.ts         # TX Helper tests (M2)
+    └── signing.test.ts                 # Signing module tests (M3)
 ```
 
-**Current Status:** 692 tests, 96%+ coverage
+**Current Status:** 20 test files, 96%+ coverage
 
 ### Running Tests
 
@@ -458,8 +625,10 @@ npm test           # Terminal 2 (wait 3s)
 
 **Additional Resources:**
 - [User Guide](USER_GUIDE.md) - API documentation
-- [Transaction Workflow](TRANSACTION_WORKFLOW.md) - Build, sign & submit transactions (M2)
+- [Transaction Workflow](TRANSACTION_WORKFLOW.md) - Build, sign & submit transactions (M2/M3)
 - [Test Documentation](../../test/README.md) - Complete test reference
 - [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) - Error architecture
 - [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) - Caching strategy
+- [Backend Configuration](BACKEND_CONFIGURATION.md) - Multi-backend setup
+- [BTP Deployment Learnings](BTP-DEPLOYMENT-LEARNINGS.md) - SAP BTP deployment patterns
 

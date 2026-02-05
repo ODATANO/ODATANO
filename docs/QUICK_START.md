@@ -201,10 +201,50 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTr
 
 See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for signing and submission.
 
+## External Signing (M3)
+
+Create signing requests for external wallets (CIP-30 browser wallets, Cardano CLI, hardware wallets):
+
+```bash
+# 1. Build transaction first (returns buildId)
+BUILD_RESPONSE=$(curl -s -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "senderAddress": "addr_test1...",
+    "recipientAddress": "addr_test1...",
+    "lovelaceAmount": 10000000
+  }')
+
+# 2. Create signing request (returns signing instructions)
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buildId": "<buildId-from-step-1>",
+    "message": "Please sign this transaction"
+  }'
+
+# 3. After signing externally, verify and submit
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "signingRequestId": "<signingRequestId-from-step-2>",
+    "signedTxCbor": "<signed-transaction-cbor>",
+    "signerType": "browser-wallet",
+    "signerInfo": "Nami"
+  }'
+```
+
+**Signing Methods Supported:**
+- **CIP-30 Browser Wallets**: Nami, Eternl, Yoroi, Flint (use `api.signTx()`)
+- **Cardano CLI**: Use the `cardanoCliCommand` from signing request response
+- **Hardware Wallets**: Ledger, Trezor via browser wallet extensions
+
+See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete external signing documentation.
+
 ## Testing
 
 ```bash
-# All tests (692 tests)
+# All tests (20 test files)
 npm test
 
 # Coverage report

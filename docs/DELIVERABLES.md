@@ -472,4 +472,175 @@ Implementation of comprehensive error handling for transaction-related operation
 - Testing Output summary: https://github.com/ODATANO/ODATANO/blob/main/docs/requirments%20%26%20milestones/ODATANO-M2%20Testing%20Screenshots%20Postman%20%26%20Scripts.pdf
 - Demo Video (M2 Walkthrough – ~5 min): https://www.youtube.com/watch?v=oFUJ-tN1QCE
 
+---
+---
+
+# Proof of Achievement – Milestone 3
+
+---
+
+## A. Output: Unsigned Transaction Export Interface
+
+Implementation of OData endpoints to export unsigned Cardano transactions for external signing. The interface provides signing instructions, Cardano CLI commands, and CIP-30 compatible CBOR for browser wallets. Signing requests include TTL-based expiration to ensure security.
+
+### Acceptance criteria
+
+- Unsigned transaction export via OData action (`CreateSigningRequest`)
+- Signing request with TTL-based expiration (30 minutes default)
+- Cardano CLI signing command generation
+- CIP-30 compatible CBOR format for browser wallets
+- Signing status tracking (pending, signed, verified, submitted, expired, failed)
+- Address association for request lookup
+
+### Evidence
+
+**Signing Request Implementation**
+
+- External Signer Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/external-signer.ts
+- Signing Helper Utilities: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/signing-helper.ts
+- Transaction Service (Signing Actions): https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-tx-service.ts
+
+**Data Model**
+
+- SigningRequests Entity: https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
+- AddressSigningRequests Entity: https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
+
+**OData Actions**
+
+- `CreateSigningRequest` - Create signing request from transaction build
+- `GetSigningRequest` - Retrieve signing request status (auto-marks expired)
+- `GetSigningRequestsByAddress` - Query signing requests by sender address
+
+---
+
+## B. Output: External Signer Integration Module
+
+Integration module enabling external signing of transactions through CIP-30 browser wallets (Nami, Eternl, Yoroi), Cardano CLI, and hardware wallets (Ledger, Trezor). The module handles witness set combination, signature verification, and audit trail creation.
+
+### Acceptance criteria
+
+- CIP-30 browser wallet integration (signTx API)
+- Cardano CLI signing support
+- Hardware wallet compatibility (via browser extensions)
+- Witness set combination for CIP-30 wallets
+- Cryptographic signature verification
+- Complete audit trail for verification attempts
+- Private key isolation (server never handles keys)
+
+### Evidence
+
+**Signing Module Implementation**
+
+- Signature Verifier: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/signature-verifier.ts
+- External Signer Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/external-signer.ts
+- CIP-30 Witness Combination: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/signing-helper.ts
+
+**OData Actions**
+
+- `VerifySignature` - Cryptographically verify signed transaction
+- `SubmitVerifiedTransaction` - Verify and submit in one step (supports CIP-30 witness sets)
+
+**Data Model**
+
+- SignatureVerifications Entity (Audit Trail): https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
+
+**Documentation**
+
+- Transaction Workflow Guide (M3 Section): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/TRANSACTION_WORKFLOW.md
+- User Guide (External Signing): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/USER_GUIDE.md
+
+---
+
+## C. Output: Centralized App Context Architecture
+
+Refactored application initialization using centralized App Context pattern in `server.ts`. This enables proper dependency injection, testability, and graceful shutdown of blockchain connections.
+
+### Acceptance criteria
+
+- Centralized initialization of CardanoClient, CardanoIndexer, CardanoTransactionBuilder
+- Singleton access via `getAppContext()`, `getCardanoIndexer()`, `getCardanoClient()`
+- Test context creation via `createTestContext()`
+- Graceful shutdown via `shutdownAppContext()`
+- Environment-based configuration
+
+### Evidence
+
+**Implementation**
+
+- Server App Context: https://github.com/ODATANO/ODATANO/blob/main/srv/server.ts
+
+**Functions Provided**
+
+- `getAppContext()` - Get singleton application context
+- `getCardanoIndexer()` - Convenience function for services
+- `getCardanoClient()` - Convenience function for services
+- `createTestContext()` - Create isolated test contexts
+- `resetAppContext()` - Reset context for testing
+- `shutdownAppContext()` - Graceful connection cleanup
+
+---
+
+## D. Output: Extended Test Suite (External Signing)
+
+Comprehensive test coverage for external signing workflow including signing request creation, signature verification, CIP-30 witness combination, and status transitions.
+
+### Acceptance criteria
+
+- Integration tests for all external signing actions
+- Unit tests for SignatureVerifier and ExternalSignerModule
+- CIP-30 witness set combination tests
+- Signing status transition tests
+- TTL expiration handling tests
+- Tests pass in continuous integration
+
+### Evidence
+
+**Integration Tests**
+
+- Signing Services Integration Tests: https://github.com/ODATANO/ODATANO/blob/main/test/integration/signing-services.test.ts
+
+**Unit Tests**
+
+- Signing Module Unit Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/signing.test.ts
+
+**Test Documentation**
+
+- Test README (M3 Section): https://github.com/ODATANO/ODATANO/blob/main/test/README.md
+
+**CI/CD**
+
+- Test Pipeline: https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml
+- Code Coverage: https://codecov.io/gh/ODATANO/ODATANO
+
+---
+
+## E. Output: Updated Documentation Package
+
+Comprehensive documentation updates covering external signing workflow, new entities, API actions, and architecture changes.
+
+### Acceptance criteria
+
+- External signing workflow documented
+- New entities documented (SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, AddressTransactions)
+- API reference for all M3 actions
+- Architecture documentation updated with App Context pattern
+- Data model diagrams updated
+
+### Evidence
+
+**Documentation Updates**
+
+- CHANGELOG (M3 Section): https://github.com/ODATANO/ODATANO/blob/main/CHANGELOG.md
+- User Guide (M3 External Signing): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/USER_GUIDE.md
+- Developer Guide (App Context): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/DEVELOPER_GUIDE.md
+- Transaction Workflow (M3 Flow): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/TRANSACTION_WORKFLOW.md
+- Data Model (M3 Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/MM_DATAMODEL.md
+- Indexing (M3 Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/INDEXING.md
+
+---
+
+**Demo & Release**
+
+- Milestone Release v0.3-milestone3: https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3
+- Demo Video (M3 Walkthrough): TBD
 
