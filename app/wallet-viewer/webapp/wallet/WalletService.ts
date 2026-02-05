@@ -60,7 +60,9 @@ const INITIAL_STATE: WalletConnectionState = {
     balance: null,
     error: null,
     availableWallets: [],
-    transactions: []
+    transactions: [],
+    signingRequests: [],
+    transactionBuilds: []
 };
 
 /**

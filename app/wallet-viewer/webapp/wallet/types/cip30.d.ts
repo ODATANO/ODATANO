@@ -100,6 +100,10 @@ export interface WalletConnectionState {
     availableWallets: AvailableWallet[];
     /** Transactions for the wallet addresses */
     transactions: WalletTransaction[];
+    /** Signing requests for the wallet addresses */
+    signingRequests: WalletSigningRequest[];
+    /** Transaction builds for the wallet addresses */
+    transactionBuilds: WalletTransactionBuild[];
 }
 
 /**
@@ -130,6 +134,52 @@ export interface WalletTransactionAsset {
     assetName: string;
     /** Net quantity change (positive = received, negative = sent) */
     quantity: string;
+}
+
+/**
+ * Signing request display info
+ */
+export interface WalletSigningRequest {
+    /** Signing request ID */
+    id: string;
+    /** Status (pending, signed, verified, submitted, expired, failed) */
+    status: string;
+    /** Target network */
+    network: string;
+    /** Request creation timestamp */
+    createdAt: string;
+    /** Request expiration timestamp */
+    expiresAt: string;
+    /** Signer type (browser, cli, hardware) */
+    signerType: string;
+    /** Signer info */
+    signerInfo: string;
+    /** Transaction body hash */
+    txBodyHash: string;
+}
+
+/**
+ * Transaction build display info
+ */
+export interface WalletTransactionBuild {
+    /** Build ID */
+    id: string;
+    /** Target network */
+    network: string;
+    /** Sender address */
+    senderAddress: string;
+    /** Change address */
+    changeAddress: string;
+    /** Fee in lovelace */
+    fee: string;
+    /** Transaction size in bytes */
+    size: number;
+    /** Build creation timestamp */
+    createdAt: string;
+    /** Whether the transaction was submitted */
+    wasSubmitted: boolean;
+    /** Transaction body hash */
+    txBodyHash: string;
 }
 
 /**

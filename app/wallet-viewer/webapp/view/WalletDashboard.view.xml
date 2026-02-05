@@ -190,6 +190,58 @@
                     </content>
                 </Panel>
 
+                <!-- Signing Requests -->
+                <Panel headerText="Signing Requests" expandable="true" expanded="false" class="sapUiTinyMarginTop"
+                    visible="{= ${wallet>/signingRequests}.length > 0 }">
+                    <content>
+                        <List items="{wallet>/signingRequests}" noDataText="No signing requests">
+                            <CustomListItem type="Active" press=".onSigningRequestItemPress">
+                                <VBox class="sapUiSmallMargin">
+                                    <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                        <VBox>
+                                            <Title level="H5" text="{= ${wallet>id} ? ${wallet>id}.substring(0, 8) + '...' + ${wallet>id}.slice(-4) : 'N/A'}"/>
+                                            <Label text="{parts: ['wallet>createdAt'], formatter: '.formatter.formatTimestamp'}" class="sapUiTinyMarginTop"/>
+                                        </VBox>
+                                        <ObjectStatus
+                                            text="{wallet>status}"
+                                            state="{parts: ['wallet>status'], formatter: '.formatter.getSigningRequestStatusState'}"
+                                            icon="{parts: ['wallet>status'], formatter: '.formatter.getSigningRequestStatusIcon'}"/>
+                                    </HBox>
+                                </VBox>
+                            </CustomListItem>
+                        </List>
+                    </content>
+                </Panel>
+
+                <!-- Transaction Builds -->
+                <Panel headerText="Transaction Builds" expandable="true" expanded="false" class="sapUiTinyMarginTop"
+                    visible="{= ${wallet>/transactionBuilds}.length > 0 }">
+                    <content>
+                        <List items="{wallet>/transactionBuilds}" noDataText="No transaction builds">
+                            <CustomListItem type="Active" press=".onTransactionBuildItemPress">
+                                <VBox class="sapUiSmallMargin">
+                                    <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                        <VBox>
+                                            <Title level="H5" text="{= ${wallet>id} ? ${wallet>id}.substring(0, 8) + '...' + ${wallet>id}.slice(-4) : 'N/A'}"/>
+                                            <Label text="{parts: ['wallet>createdAt'], formatter: '.formatter.formatTimestamp'}" class="sapUiTinyMarginTop"/>
+                                        </VBox>
+                                        <ObjectNumber
+                                            number="{= Math.floor(Number(${wallet>fee} || 0) / 1000000 * 100) / 100}"
+                                            unit="ADA fee"
+                                            state="Warning"/>
+                                    </HBox>
+                                    <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiTinyMarginTop">
+                                        <Label text="{= ${wallet>senderAddress} ? 'From: ' + ${wallet>senderAddress}.substring(0, 15) + '...' : ''}"/>
+                                        <ObjectStatus
+                                            text="{= ${wallet>wasSubmitted} ? 'Submitted' : 'Pending'}"
+                                            state="{= ${wallet>wasSubmitted} ? 'Success' : 'None'}"/>
+                                    </HBox>
+                                </VBox>
+                            </CustomListItem>
+                        </List>
+                    </content>
+                </Panel>
+
                 <!-- All Addresses -->
                 <Panel headerText="All Addresses" expandable="true" expanded="false" class="sapUiTinyMarginTop">
                     <content>

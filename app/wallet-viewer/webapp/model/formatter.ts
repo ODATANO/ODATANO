@@ -179,5 +179,48 @@ export default {
         if (b < 1024 * 1024) return `${(b / 1024).toFixed(2)} KB`;
         if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} MB`;
         return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    },
+
+    /**
+     * Get state color for signing request status
+     */
+    getSigningRequestStatusState(status: string | null | undefined): string {
+        const states: Record<string, string> = {
+            "pending": "Warning",
+            "signed": "Information",
+            "verified": "Information",
+            "submitted": "Success",
+            "expired": "Error",
+            "failed": "Error"
+        };
+        return states[status || ""] || "None";
+    },
+
+    /**
+     * Get icon for signing request status
+     */
+    getSigningRequestStatusIcon(status: string | null | undefined): string {
+        const icons: Record<string, string> = {
+            "pending": "sap-icon://pending",
+            "signed": "sap-icon://signature",
+            "verified": "sap-icon://accept",
+            "submitted": "sap-icon://complete",
+            "expired": "sap-icon://lateness",
+            "failed": "sap-icon://error"
+        };
+        return icons[status || ""] || "";
+    },
+
+    /**
+     * Format ISO timestamp to readable date
+     */
+    formatTimestamp(timestamp: string | null | undefined): string {
+        if (!timestamp) return "";
+        try {
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        } catch {
+            return "";
+        }
     }
 };

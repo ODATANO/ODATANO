@@ -74,6 +74,8 @@ export default class WalletDashboard extends Controller {
             const connected = await this.walletService.connect(walletId);
             if (connected) {
                 await this.loadTransactions();
+                await this.loadSigningRequests();
+                await this.loadTransactionBuilds();
             }
         }
     }
@@ -91,6 +93,8 @@ export default class WalletDashboard extends Controller {
     public async onRefreshWallet(): Promise<void> {
         await this.walletService.refresh();
         await this.loadTransactions();
+        await this.loadSigningRequests();
+        await this.loadTransactionBuilds();
     }
 
     /**
@@ -152,6 +156,134 @@ export default class WalletDashboard extends Controller {
         }
     }
 
+    /**
+     * Load signing requests for the connected wallet address from OData tx service
+     */
+    private async loadSigningRequests(): Promise<void> {
+        const primaryAddress = this.walletService.getPrimaryAddress();
+        if (!primaryAddress) {
+            return;
+        }
+
+        try {
+            const txModel = this.getView()?.getModel("tx") as ODataModel;
+            if (!txModel) {
+                return;
+            }
+
+            // Call GetSigningRequestsByAddress action
+            const action = txModel.bindContext("/GetSigningRequestsByAddress(...)");
+            action.setParameter("address", primaryAddress);
+            await action.invoke();
+
+            const result = action.getBoundContext()?.getObject() as any;
+            const associations = Array.isArray(result) ? result : (result?.value || []);
+
+            // Fetch full signing request details for each association
+            const signingRequests = await Promise.all(
+                associations.map(async (asr: any) => {
+                    try {
+                        const srBinding = txModel.bindContext(`/SigningRequests('${asr.signingRequest_id}')`);
+                        await srBinding.requestObject();
+                        const sr = srBinding.getBoundContext()?.getObject() as any;
+
+                        return {
+                            id: sr?.id || asr.signingRequest_id,
+                            status: sr?.status || "unknown",
+                            network: sr?.network || "",
+                            createdAt: sr?.createdAt || "",
+                            expiresAt: sr?.expiresAt || "",
+                            signerType: sr?.signerType || "",
+                            signerInfo: sr?.signerInfo || "",
+                            txBodyHash: sr?.txBodyHash || ""
+                        };
+                    } catch {
+                        return {
+                            id: asr.signingRequest_id,
+                            status: "unknown",
+                            network: "",
+                            createdAt: "",
+                            expiresAt: "",
+                            signerType: "",
+                            signerInfo: "",
+                            txBodyHash: ""
+                        };
+                    }
+                })
+            );
+
+            this.walletService.getModel().setProperty("/signingRequests", signingRequests);
+        } catch (error) {
+            console.warn("Failed to load signing requests:", error);
+            this.walletService.getModel().setProperty("/signingRequests", []);
+        }
+    }
+
+    /**
+     * Load transaction builds for the connected wallet address from OData tx service
+     */
+    private async loadTransactionBuilds(): Promise<void> {
+        const primaryAddress = this.walletService.getPrimaryAddress();
+        if (!primaryAddress) {
+            return;
+        }
+
+        try {
+            const txModel = this.getView()?.getModel("tx") as ODataModel;
+            if (!txModel) {
+                return;
+            }
+
+            // Call GetTransactionBuildsByAddress action
+            const action = txModel.bindContext("/GetTransactionBuildsByAddress(...)");
+            action.setParameter("address", primaryAddress);
+            await action.invoke();
+
+            const result = action.getBoundContext()?.getObject() as any;
+            const associations = Array.isArray(result) ? result : (result?.value || []);
+
+            // Fetch full build details for each association
+            const transactionBuilds = await Promise.all(
+                associations.map(async (atb: any) => {
+                    try {
+                        const buildBinding = txModel.bindContext(`/TransactionBuilds('${atb.txBuild_id}')`);
+                        await buildBinding.requestObject();
+                        const build = buildBinding.getBoundContext()?.getObject() as any;
+
+                        return {
+                            id: build?.id || atb.txBuild_id,
+                            network: build?.network || "",
+                            senderAddress: build?.senderAddress || "",
+                            changeAddress: build?.changeAddress || "",
+                            fee: build?.fee || "0",
+                            size: build?.size || 0,
+                            createdAt: build?.createdAt || "",
+                            wasSubmitted: build?.wasSubmitted || false,
+                            txBodyHash: build?.txBodyHash || ""
+                        };
+                    } catch {
+                        return {
+                            id: atb.txBuild_id,
+                            network: "",
+                            senderAddress: "",
+                            changeAddress: "",
+                            fee: "0",
+                            size: 0,
+                            createdAt: "",
+                            wasSubmitted: false,
+                            txBodyHash: ""
+                        };
+                    }
+                })
+            );
+
+            this.walletService.getModel().setProperty("/transactionBuilds", transactionBuilds);
+        } catch (error) {
+            console.warn("Failed to load transaction builds:", error);
+            this.walletService.getModel().setProperty("/transactionBuilds", []);
+        }
+    }
+
     // --- Address Actions ---
 
     /**
@@ -202,6 +334,48 @@ export default class WalletDashboard extends Controller {
         if (stakeAddress) {
             void navigator.clipboard.writeText(stakeAddress).then(() => {
                 MessageToast.show("Stake address copied to clipboard");
+            });
+        }
+    }
+
+    /**
+     * Handle transaction item press - copy tx hash to clipboard
+     */
+    public onTransactionItemPress(event: any): void {
+        const item = event.getSource();
+        const txHash = item.getBindingContext("wallet")?.getProperty("txHash") as string;
+
+        if (txHash) {
+            void navigator.clipboard.writeText(txHash).then(() => {
+                MessageToast.show("Transaction hash copied to clipboard");
+            });
+        }
+    }
+
+    /**
+     * Handle signing request item press - copy ID to clipboard
+     */
+    public onSigningRequestItemPress(event: any): void {
+        const item = event.getSource();
+        const id = item.getBindingContext("wallet")?.getProperty("id") as string;
+
+        if (id) {
+            void navigator.clipboard.writeText(id).then(() => {
+                MessageToast.show("Signing request ID copied to clipboard");
+            });
+        }
+    }
+
+    /**
+     * Handle transaction build item press - copy ID to clipboard
+     */
+    public onTransactionBuildItemPress(event: any): void {
+        const item = event.getSource();
+        const id = item.getBindingContext("wallet")?.getProperty("id") as string;
+
+        if (id) {
+            void navigator.clipboard.writeText(id).then(() => {
+                MessageToast.show("Build ID copied to clipboard");
             });
         }
     }

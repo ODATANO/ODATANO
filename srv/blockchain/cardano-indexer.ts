@@ -222,9 +222,11 @@ export class CardanoIndexer {
       logger.debug(`indexAddress: ${utxoAssetEntities.length} assets, ${uniqueAssets.length} unique (removed ${utxoAssetEntities.length - uniqueAssets.length} duplicates)`);
       await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
 
-      this.indexAddressTransactions(tx, addr, 10).catch(err => {
-        logger.error(`indexAddressTransactions failed for address ${addr}: ${err.message}`);
-      });
+      try {
+        await this.indexAddressTransactions(tx, addr, 10);
+      } catch (err) {
+        logger.error(`indexAddressTransactions failed for address ${addr}: ${(err as Error).message}`);
+      }
     }
     return AddrEntity;
   }
