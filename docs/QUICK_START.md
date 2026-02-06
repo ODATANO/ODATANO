@@ -1,8 +1,85 @@
 # ODATANO Quick Start Guide
 
-This guide gets you running the OData V4 service locally in minutes.
+This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 
-## Installation
+---
+
+## Option A: Use as CAP Plugin
+
+The fastest way to add Cardano blockchain access to any SAP CAP project.
+
+### 1) Install
+
+```bash
+npm install @odatano/core @cap-js/sqlite
+```
+
+### 2) Configure
+
+Add the `odatano-core` section to your project's `package.json`:
+
+```json
+{
+  "cds": {
+    "requires": {
+      "db": { "kind": "sqlite" },
+      "odatano-core": {
+        "network": "preview",
+        "backends": ["blockfrost"],
+        "blockfrostApiKey": "preview_YOUR_BLOCKFROST_KEY"
+      }
+    }
+  }
+}
+```
+
+Get a free Blockfrost API key at [blockfrost.io](https://blockfrost.io).
+
+All config options:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `network` | `preview` | `mainnet`, `preview`, or `preprod` |
+| `backends` | `["koios"]` | `blockfrost`, `koios`, `ogmios` (array) |
+| `blockfrostApiKey` | | Required if using blockfrost backend |
+| `koiosApiKey` | | Optional for Koios |
+| `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |
+| `txBuilders` | `["csl"]` | `csl` or `buildooor` (array) |
+| `primaryTimeoutMs` | `30000` | Timeout for primary backend |
+| `fallbackTimeoutMs` | `60000` | Timeout for fallback backends |
+| `indexTtlMs` | `3600000` | Cache TTL (1 hour) |
+
+### 3) Run
+
+```bash
+cds watch
+```
+
+Both services auto-register:
+- **CardanoODataService** at `/odata/v4/cardano-odata/` — read blockchain data
+- **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
+
+### 4) Verify
+
+```bash
+curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
+```
+
+### Programmatic Access (optional)
+
+```typescript
+import { getCardanoClient, getCardanoIndexer } from '@odatano/core';
+
+// After CAP has started
+const client = getCardanoClient();
+const indexer = getCardanoIndexer();
+```
+
+---
+
+## Option B: Standalone Development
+
+Clone and run ODATANO as a full standalone application.
 
 ### 1) Clone & Install
 

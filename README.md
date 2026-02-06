@@ -50,7 +50,38 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 
 ## Quick Start
 
-### Docker (Recommended)
+### Use as CAP Plugin (Recommended)
+
+Add ODATANO to any existing SAP CAP project:
+
+```bash
+npm install @odatano/core @cap-js/sqlite
+```
+
+Configure in your `package.json`:
+
+```json
+{
+  "cds": {
+    "requires": {
+      "db": { "kind": "sqlite" },
+      "odatano-core": {
+        "network": "preview",
+        "backends": ["blockfrost"],
+        "blockfrostApiKey": "preview_YOUR_KEY"
+      }
+    }
+  }
+}
+```
+
+```bash
+cds watch
+# → CardanoODataService + CardanoTransactionService auto-registered
+# → /odata/v4/cardano-odata/ and /odata/v4/cardano-transaction/ ready
+```
+
+### Docker (Standalone)
 
 ```bash
 git clone https://github.com/ODATANO/ODATANO && cd ODATANO
@@ -60,14 +91,14 @@ docker-compose up -d
 
 Service runs at `http://localhost:4004`
 
-### Local Development
+### Local Development (Standalone)
 
 ```bash
 git clone https://github.com/ODATANO/ODATANO && cd ODATANO
 npm ci
 cp .env.example .env  # Add your BLOCKFROST_KEY
 cds deploy --to sqlite
-npm run cds:watch / npm cds:serve
+npm run cds:watch
 ```
 
 See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
@@ -161,6 +192,10 @@ See [Test Documentation](test/README.md) for details.
 **8 Actions:** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference with parameters.
+
+## npm Package
+
+Published as [`@odatano/core`](https://www.npmjs.com/package/@odatano/core) on npm. See the [Developer Guide](docs/guides/DEVELOPER_GUIDE.md#plugin-architecture) for detailed plugin architecture documentation.
 
 ## Technology Stack
 

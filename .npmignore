@@ -1,0 +1,90 @@
+# Source TypeScript files (compiled JS is published instead)
+src/**/*.ts
+srv/**/*.ts
+db/**/*.ts
+
+# Tests
+test/
+coverage/
+*.test.ts
+*.spec.ts
+jest.config.cjs
+
+# Config files
+.env
+.env.example
+.env.*
+tsconfig.json
+tsconfig.build.json
+
+# IDE
+.vscode/
+.claude/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+*.tsbuildinfo
+dist/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Documentation
+docs/
+CHANGELOG.md
+
+# Frontend apps (not part of the plugin)
+app/
+
+# Docker / deployment files
+Dockerfile
+.dockerignore
+docker-compose.yml
+build-ubuntu.sh
+xs-security.json
+
+# Linting / CI config
+eslint.config.mjs
+codecov.yml
+
+# Generated HANA artifacts (consumer runs cds build themselves)
+gen/
+
+# Database files
+*.db
+*.sqlite
+db.sqlite-shm
+db.sqlite-wal
+
+# MTA / deployment
+mta*
+*.mtar
+
+# Generated type models (consumer generates their own)
+@cds-models/
+
+# Lock files
+package-lock.json
+
+# Scripts / examples
+scripts/
+
+# Temporary / misc
+tmp/
+temp/
+payment.addr
+payment.skey
+payment.vkey
+mtx/

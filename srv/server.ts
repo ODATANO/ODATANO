@@ -80,6 +80,23 @@ export function getCardanoClient(): CardanoClient {
 }
 
 /**
+ * Get the CardanoTransactionBuilder instance
+ * Convenience function for services and plugin consumers
+ */
+export function getCardanoTxBuilder(): CardanoTransactionBuilder {
+  return getAppContext().cardanoTxBuilder;
+}
+
+/**
+ * Initialize from a pre-built config (used by plugin's src/index.ts)
+ * @param config - validated CardanoClientConfig
+ * @param protocolParams - Optional protocol parameters (for tests)
+ */
+export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters): Promise<void> {
+  appContext = await initializeAppContext(config, protocolParams);
+}
+
+/**
  * Reset the application context (for testing only)
  * Allows tests to inject their own instances
  */
@@ -134,60 +151,81 @@ export async function shutdownAppContext(): Promise<void> {
 
 
 /**
- * Load and validate CardanoClientConfig from environment variables
+ * Load and validate CardanoClientConfig from CDS config or environment variables.
+ *
+ * When used as a plugin, consumers configure via package.json:
+ *   { "cds": { "requires": { "odatano-core": { "network": "preview", "backends": ["blockfrost"], ... }}}}
+ *
+ * Priority: cds.env.requires["odatano-core"].X > process.env.X > default
+ *
  * @returns validated CardanoClientConfig
- * @throws {Error} if any environment variable has an invalid value
+ * @throws {Error} if any config value is invalid
  */
 export function loadConfigFromEnv(): CardanoClientConfig {
-  const network = (env.NETWORK || 'preview') as Network;
+  // Check CDS plugin config first, fall back to env vars
+  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
+
+  const network = (cdsConfig.network || env.NETWORK || 'preview') as Network;
   if (!VALID_NETWORKS.includes(network)) {
-    throw new Error(`Invalid NETWORK "${env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
+    throw new Error(`Invalid NETWORK "${cdsConfig.network || env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
   }
 
-  const backendStrings = env.BACKENDS ? env.BACKENDS.split(',').map(b => b.trim()) : ['koios'];
+  const backendStrings: string[] = cdsConfig.backends
+    || (env.BACKENDS ? env.BACKENDS.split(',').map(b => b.trim()) : ['koios']);
   const invalidBackends = backendStrings.filter(b => !(VALID_BACKENDS as readonly string[]).includes(b));
   if (invalidBackends.length > 0) {
     throw new Error(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
   }
   const backends = backendStrings as BackendName[];
 
-  const txBuilderStrings = env.TX_BUILDERS ? env.TX_BUILDERS.split(',').map(b => b.trim()) : ['csl'];
+  const txBuilderStrings: string[] = cdsConfig.txBuilders
+    || (env.TX_BUILDERS ? env.TX_BUILDERS.split(',').map(b => b.trim()) : ['csl']);
   const invalidBuilders = txBuilderStrings.filter(b => !(VALID_TX_BUILDERS as readonly string[]).includes(b));
   if (invalidBuilders.length > 0) {
     throw new Error(`Invalid TX_BUILDERS: "${invalidBuilders.join(', ')}". Must be one of: ${VALID_TX_BUILDERS.join(', ')}`);
   }
   const txBuilders = txBuilderStrings as TransactionBuilderName[];
 
-  if (env.PRIMARY_TIMEOUT_MS && isNaN(Number(env.PRIMARY_TIMEOUT_MS))) {
-    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${env.PRIMARY_TIMEOUT_MS}". Must be a number.`);
+  const primaryTimeout = cdsConfig.primaryTimeoutMs || env.PRIMARY_TIMEOUT_MS;
+  const fallbackTimeout = cdsConfig.fallbackTimeoutMs || env.FALLBACK_TIMEOUT_MS;
+
+  if (primaryTimeout && isNaN(Number(primaryTimeout))) {
+    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
   }
-  if (env.FALLBACK_TIMEOUT_MS && isNaN(Number(env.FALLBACK_TIMEOUT_MS))) {
-    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${env.FALLBACK_TIMEOUT_MS}". Must be a number.`);
+  if (fallbackTimeout && isNaN(Number(fallbackTimeout))) {
+    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
   }
 
+  const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';
+  const koiosApiKey = cdsConfig.koiosApiKey || env.KOIOS_API_KEY || '';
+  const ogmiosUrl = cdsConfig.ogmiosUrl || env.OGMIOS_URL || '';
+
   // Warn about missing API keys for selected backends
-  if (backends.includes('blockfrost') && !env.BLOCKFROST_API_KEY) {
+  if (backends.includes('blockfrost') && !blockfrostApiKey) {
     logger.warn('BLOCKFROST_API_KEY is not set but blockfrost is listed in BACKENDS');
   }
-  if (backends.includes('ogmios') && !env.OGMIOS_URL) {
+  if (backends.includes('ogmios') && !ogmiosUrl) {
     logger.warn('OGMIOS_URL is not set but ogmios is listed in BACKENDS');
   }
 
   return {
     network,
     backends,
-    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-    koiosApiKey: env.KOIOS_API_KEY || '',
-    ogmiosUrl: env.OGMIOS_URL || '',
+    blockfrostApiKey,
+    koiosApiKey,
+    ogmiosUrl,
     transactionBuilders: txBuilders,
-    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
-    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+    primaryTimeoutMs: Number(primaryTimeout) || 30000,
+    fallbackTimeoutMs: Number(fallbackTimeout) || 60000,
+    indexTtlMs: Number(cdsConfig.indexTtlMs || env.INDEX_TTL_MS) || 3600000,
   };
 }
 
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
+  // Skip if already initialized by plugin (src/plugin.ts runs first)
+  if (appContext) return;
+
   // Skip auto-initialization when SKIP_AUTO_INIT is set (e.g., for tests with mocked backends)
   if (env.SKIP_AUTO_INIT === 'true') {
     logger.info('Skipping auto-initialization (SKIP_AUTO_INIT=true)');

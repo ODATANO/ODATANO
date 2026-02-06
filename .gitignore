@@ -44,6 +44,12 @@ coverage/
 # Compiled TypeScript files
 srv/**/*.js
 srv/**/*.js.map
+srv/**/*.d.ts
+srv/**/*.d.ts.map
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map
 config/**/*.js
 config/**/*.js.map
 test/**/*.js

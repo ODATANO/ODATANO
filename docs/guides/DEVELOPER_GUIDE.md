@@ -11,12 +11,13 @@
 
 1. [Architecture](#architecture)
 2. [Quick Setup](#quick-setup)
-3. [Core Components](#core-components)
-4. [App Context Pattern](#app-context-pattern)
-5. [External Signing Module](#external-signing-module)
-6. [Error Handling](#error-handling)
-7. [Testing](#testing)
-8. [Deployment](#deployment)
+3. [Plugin Architecture](#plugin-architecture)
+4. [Core Components](#core-components)
+5. [App Context Pattern](#app-context-pattern)
+6. [External Signing Module](#external-signing-module)
+7. [Error Handling](#error-handling)
+8. [Testing](#testing)
+9. [Deployment](#deployment)
 
 ---
 
@@ -129,6 +130,162 @@ db/schema.cds          # 25+ entities with temporal support
 config/config.ts       # Timeouts, network, TTL, builders
 test/                  # 20 test files (integration + unit)
 ```
+
+---
+
+## Plugin Architecture
+
+ODATANO is published as [`@odatano/core`](https://www.npmjs.com/package/@odatano/core) — a standard SAP CAP plugin that any CAP project can install and auto-configure.
+
+### How It Works
+
+CAP automatically detects packages with a `cds-plugin.js` file at their root. When a consumer installs `@odatano/core`, the following happens at startup:
+
+```
+1. CAP finds cds-plugin.js in node_modules/@odatano/core/
+2. cds-plugin.js requires src/plugin.js
+3. src/plugin.ts registers the 'odatano-core' service kind
+4. cds.on('served') → src/index.ts initialize() → srv/server.ts initializeFromConfig()
+5. CDS models from db/schema.cds and srv/*.cds are merged into the consumer's model
+6. Both OData services become available automatically
+```
+
+### Plugin File Structure
+
+```
+@odatano/core (npm package)
+├── cds-plugin.js              # CAP entry point → require('./src/plugin')
+├── src/
+│   ├── plugin.ts              # Register kind, cds.on('served'), cds.on('shutdown')
+│   └── index.ts               # Public API: initialize(), shutdown(), getStatus()
+├── srv/
+│   ├── cardano-service.cds    # CardanoODataService definition
+│   ├── cardano-service.js     # Compiled handler
+│   ├── cardano-tx-service.cds # CardanoTransactionService definition
+│   ├── cardano-tx-service.js  # Compiled handler
+│   ├── server.js              # AppContext, loadConfigFromEnv()
+│   ├── blockchain/            # Backends, indexer, tx builder, signing
+│   └── utils/                 # Validators, errors, mappers
+├── db/
+│   └── schema.cds             # 30+ entities (namespace: odatano.cardano)
+└── config/                    # Network genesis configurations
+```
+
+### Plugin Bootstrap (src/plugin.ts)
+
+```typescript
+import cds from '@sap/cds';
+let initialized = false;
+
+// Register the 'odatano-core' service kind
+cds.env.requires.kinds['odatano-core'] = { impl: '@odatano/core' };
+
+// Initialize on served — NEVER throws (don't crash the host app)
+cds.on('served', async () => {
+  if (initialized) return;
+  try {
+    const core = await import('./index');
+    await core.initialize();
+    initialized = true;
+  } catch (err) {
+    logger.error('Failed to initialize plugin:', err);
+  }
+});
+
+// Graceful shutdown (closes Ogmios WebSocket, etc.)
+cds.on('shutdown', async () => {
+  if (!initialized) return;
+  const core = await import('./index');
+  await core.shutdown();
+});
+```
+
+### Dual-Mode Config Loading (srv/server.ts)
+
+`loadConfigFromEnv()` supports both plugin and standalone modes:
+
+```
+Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
+```
+
+**Plugin mode** — consumer configures via `package.json`:
+
+```json
+{
+  "cds": {
+    "requires": {
+      "odatano-core": {
+        "network": "preview",
+        "backends": ["blockfrost", "koios"],
+        "blockfrostApiKey": "preview_KEY",
+        "txBuilders": ["csl"],
+        "primaryTimeoutMs": 30000,
+        "fallbackTimeoutMs": 60000,
+        "indexTtlMs": 3600000
+      }
+    }
+  }
+}
+```
+
+**Standalone mode** — configured via environment variables (unchanged from previous behavior):
+
+```env
+NETWORK=preview
+BACKENDS=blockfrost,koios
+BLOCKFROST_API_KEY=preview_KEY
+TX_BUILDERS=csl
+```
+
+### Dual-Mode Initialization Guard
+
+The `cds.on('served')` hook in `srv/server.ts` has a guard to prevent double-initialization:
+
+```typescript
+cds.on('served', async () => {
+  if (appContext) return;  // Already initialized by plugin
+  if (env.SKIP_AUTO_INIT === 'true') return;  // Tests
+  // ... normal standalone initialization
+});
+```
+
+When running as a plugin, `src/plugin.ts` hooks `served` first (plugins load before app code), sets `appContext` via `initializeFromConfig()`, and then `server.ts`'s hook sees `appContext` is already set and skips.
+
+### Public API (src/index.ts)
+
+```typescript
+import { initialize, shutdown, getStatus } from '@odatano/core';
+import { getCardanoClient, getCardanoIndexer, getCardanoTxBuilder } from '@odatano/core';
+import type { CardanoClientConfig, Network, BackendName } from '@odatano/core';
+```
+
+| Export | Description |
+|--------|-------------|
+| `initialize()` | Load config and start blockchain components |
+| `shutdown()` | Close all backend connections |
+| `getStatus()` | Returns `{ initialized, network }` |
+| `getCardanoClient()` | Multi-backend orchestrator instance |
+| `getCardanoIndexer()` | Lazy indexing instance |
+| `getCardanoTxBuilder()` | Transaction builder instance |
+| `CardanoClient` | Client class (for advanced use) |
+| `CardanoIndexer` | Indexer class |
+| `CardanoTransactionBuilder` | Tx builder class |
+| `loadConfigFromEnv()` | Config loader (dual CDS/env) |
+
+### Building & Publishing the Plugin
+
+```bash
+# Build (compiles TS in-place for @impl resolution)
+npm run build:plugin
+
+# Dry-run to check contents
+npm pack --dry-run
+
+# Publish to npm
+npm publish --access public
+```
+
+The `tsconfig.build.json` uses `outDir: "."` so compiled `.js` files sit alongside `.cds` files — this is required for CAP's `@impl` annotation resolution when installed from `node_modules`.
 
 ---
 

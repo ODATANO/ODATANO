@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "srv/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "app",
+    "@cds-models"
+  ]
+}
