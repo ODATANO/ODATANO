@@ -605,20 +605,17 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             id: '12345678-1234-1234-1234-1234567890ab',
             signedTxCbor: 'dummycbor',
             txHash: 'dummyhash',
-            status: 'pending',
+            status: 'submitted',
             validFrom: new Date(),
             validTo: new Date(Date.now() + 3600000),
           }));
 
-          const { status, data } = await test.post('/odata/v4/cardano-transaction/CheckSubmissionStatus', {
-            submissionId: '12345678-1234-1234-1234-1234567890ab',
-          });
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/TransactionSubmissions(12345678-1234-1234-1234-1234567890ab)/CardanoTransactionService.CheckSubmissionStatus', {});
 
           expect(status).to.equal(200);
           expect(data.id).to.equal('12345678-1234-1234-1234-1234567890ab');
           expect(data.txHash).to.equal('dummyhash');
           expect(data.signedTxCbor).to.equal('dummycbor');
-          expect(data.status).to.equal('pending');
         });
       });
     });

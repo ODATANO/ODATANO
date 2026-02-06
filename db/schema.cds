@@ -1060,7 +1060,7 @@ entity TransactionSubmissions {
 
         @title      : 'Submission Status'
         @description: 'Current status of the transaction submission (pending, submitted, confirmed, failed, rejected)'
-        status             : String(20);
+        status             : SubmissionStatus default 'pending' @readonly;
 
         @title      : 'Error Code'
         @description: 'Error code if failed'
@@ -1119,6 +1119,15 @@ entity TransactionSubmissionErrors {
         @title      : 'Is Recoverable'
         @description: 'Indicates if error is recoverable via retry'
         isRecoverable : Boolean;
+}
+
+@title      : 'Submission Status'
+@description: 'Enum type for transaction submission status'
+type SubmissionStatus : String(20) enum {
+    pending   = 'pending';
+    submitted = 'submitted';
+    confirmed = 'confirmed';
+    failed    = 'failed';
 }
 
 //-----------------------------------------------------
@@ -1215,7 +1224,7 @@ entity SigningRequests {
 
         @title      : 'Status'
         @description: 'Current status of the signing request'
-        status           : SigningStatus default 'pending';
+        status           : SigningStatus default 'pending' @readonly;
 
         @title      : 'Created At'
         @description: 'Timestamp when the signing request was created'

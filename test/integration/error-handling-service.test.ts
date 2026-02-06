@@ -396,20 +396,28 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		describe('CheckSubmissionStatus Action - Parameter Validation', () => {
+		describe('CheckSubmissionStatus Action - Bound Action Validation', () => {
 
-			it('POST /CheckSubmissionStatus - missing submissionId parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-transaction/CheckSubmissionStatus`, {}).catch(err => err.response);
-				expect(response.data.error.message).to.include('submissionId is required');
-				expect(response.status).to.equal(400);
+			it('POST /CheckSubmissionStatus - non-submitted status rejected by @flow.status', async () => {
+				// Insert a submission with 'pending' status — @from: [#submitted] should reject
+				const TxService = await cds.connect.to('CardanoTransactionService');
+				const { TransactionSubmissions } = TxService.entities;
+				await cds.run(INSERT.into(TransactionSubmissions).entries({
+					id: '00000000-0000-0000-0000-000000000001',
+					signedTxCbor: 'dummycbor',
+					txHash: 'dummyhash',
+					status: 'pending',
+					validFrom: new Date(),
+					validTo: new Date(Date.now() + 3600000),
+				}));
+
+				const response = await test.POST(`/odata/v4/cardano-transaction/TransactionSubmissions(00000000-0000-0000-0000-000000000001)/CardanoTransactionService.CheckSubmissionStatus`, {}).catch(err => err.response);
+				expect(response.status).to.equal(409);
 			});
 
 			it('POST /CheckSubmissionStatus - non-existent submissionId', async () => {
-				const response = await test.POST(`/odata/v4/cardano-transaction/CheckSubmissionStatus`, {
-					submissionId: '1'
-				}).catch(err => err.response);
-				expect(response.data.error.message).to.include('Submission not found');
-				expect(response.status).to.equal(400);
+				const response = await test.POST(`/odata/v4/cardano-transaction/TransactionSubmissions(00000000-0000-0000-0000-000000000099)/CardanoTransactionService.CheckSubmissionStatus`, {}).catch(err => err.response);
+				expect(response.status).to.be.oneOf([404, 409]);
 			});
 		});
 

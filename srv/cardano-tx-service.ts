@@ -374,16 +374,23 @@ module.exports = (srv: cds.Service) => {
       // Use txBodyHash from build
       const txHash = existing.txBodyHash;
 
-      // Submit to blockchain
-      await getCardanoClient().submitTransaction(signedTxCbor);
-      logger.info({ txHash }, 'Transaction submitted to blockchain');
-
-      // Delegate persistence to indexer
+      // Two-phase submit: persist with 'pending', then submit to blockchain
       const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
         buildId,
       });
+
+      try {
+        await getCardanoClient().submitTransaction(signedTxCbor);
+        logger.info({ txHash }, 'Transaction submitted to blockchain');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
+        submissionRecord.status = 'submitted';
+      } catch (err: any) {
+        logger.error({ txHash, error: err.message }, 'Transaction submission failed');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', err.message);
+        throw err;
+      }
 
       return submissionRecord;
     });
@@ -392,6 +399,7 @@ module.exports = (srv: cds.Service) => {
   /**
    * Submit signed transaction without prior build
    * Handler validates, submits to blockchain, delegates persistence to indexer
+   * Two-phase: persist with 'pending' first, then update to 'submitted' or 'failed'
    * @param req - CDS request object (with signedTxCbor, network)
    * @returns {TransactionSubmission} Transaction submission details
    */
@@ -407,39 +415,61 @@ module.exports = (srv: cds.Service) => {
       // Extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
 
-      // Submit to blockchain
-      await getCardanoClient().submitTransaction(signedTxCbor);
-      logger.info({ txHash }, 'External transaction submitted');
-
-      // Delegate persistence to indexer (no build association)
+      // Two-phase submit: persist with 'pending', then submit to blockchain
       const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
         buildId: null,
       });
 
+      try {
+        await getCardanoClient().submitTransaction(signedTxCbor);
+        logger.info({ txHash }, 'External transaction submitted');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
+        submissionRecord.status = 'submitted';
+      } catch (err: any) {
+        logger.error({ txHash, error: err.message }, 'External transaction submission failed');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', err.message);
+        throw err;
+      }
+
       return submissionRecord;
     });
   });
 
   /**
-   * Check submission status
-   * @param req - The incoming request data
-   * @returns {TransactionSubmission} The transaction submission status
+   * Check submission status (bound action on TransactionSubmissions)
+   * @flow.status validates @from: [#submitted] automatically (409 if wrong state)
+   * Queries blockchain for transaction confirmation and updates status accordingly
+   * @param req - CDS request with entity key in params
+   * @returns {TransactionSubmission} The updated transaction submission status
    */
   srv.on('CheckSubmissionStatus', async (req: Request) => {
     logger.debug('CheckSubmissionStatus Action handler called');
-    const { submissionId } = req.data;
+    const { id: submissionId } = req.params[0] as { id: string };
 
-    // validate inputs
-    const errors = validateTransactionInputs({ submissionId }, ['submissionId']);
-    throwIfValidationErrors(req, 'CheckSubmissionStatus', errors);
+    // @from: [#submitted] validated by framework — no manual status check needed
 
-    // handle the request / checking submission status
     return handleRequest(req, async (db) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
-
       if (!submission) rejectInvalid(req, 'CheckSubmissionStatus', 'Submission not found', 'submissionId');
+
+      // Query blockchain for confirmation
+      try {
+        const txDetails = await getCardanoClient().getTransaction(submission.txHash);
+        if (txDetails) {
+          await db.run(
+            UPDATE.entity(TransactionSubmissions)
+              .set({ status: 'confirmed' })
+              .where({ id: submissionId })
+          );
+          submission.status = 'confirmed';
+          logger.info({ submissionId, txHash: submission.txHash }, 'Transaction confirmed on chain');
+        }
+      } catch {
+        // Transaction not yet confirmed on chain — status stays 'submitted'
+        logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
+      }
 
       return submission;
     });
@@ -450,9 +480,27 @@ module.exports = (srv: cds.Service) => {
   // ---------------------------------------------------------------------------
 
   /**
+   * before-READ handler for SigningRequests: lazy expiration check
+   * Updates status to 'expired' if expiresAt has passed (for pending requests)
+   */
+  srv.before('READ', SigningRequests, async (req: Request) => {
+    // Expiration check runs on single-entity reads (where ID is provided)
+    if (req.params && req.params.length > 0) {
+      const { id } = req.params[0] as { id: string };
+      if (id) {
+        const db = await cds.connect.to('db');
+        const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id }));
+        if (signingRequest && signingRequest.status === 'pending') {
+          await checkAndExpireSigningRequest(db, signingRequest, SigningRequests);
+        }
+      }
+    }
+  });
+
+  /**
    * READ handler for SigningRequests entity
    * @param req - The incoming request data
-   * @returns {SigningRequest} The signing requests fitting the request query 
+   * @returns {SigningRequest} The signing requests fitting the request query
    */
   srv.on('READ', SigningRequests, async (req: Request) => {
     logger.debug('SigningRequests READ handler called');
@@ -567,28 +615,29 @@ module.exports = (srv: cds.Service) => {
   });
 
   /**
-   * Verify signature of a signed transaction
-   * Handler validates, verifies signature, delegates persistence to indexer
-   * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
+   * Verify signature of a signed transaction (bound action on SigningRequests)
+   * @flow.status validates @from: [#pending] automatically (409 if wrong state)
+   * @param req - CDS request with entity key in params, action data in data
    * @returns {SignatureVerification} Persisted signature verification entity
    */
   srv.on('VerifySignature', async (req: Request) => {
     logger.debug('VerifySignature Action handler called');
-    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
+    const { id: signingRequestId } = req.params[0] as { id: string };
+    const { signedTxCbor, signerType, signerInfo } = req.data;
 
-    // Validate inputs
+    // Validate inputs (signingRequestId no longer needed — comes from URL)
     const errors = validateTransactionInputs(
-      { signingRequestId, signedTxCbor },
-      ['signingRequestId', 'signedTxCbor']
+      { signedTxCbor },
+      ['signedTxCbor']
     );
     throwIfValidationErrors(req, 'VerifySignature', errors);
 
     return handleRequest(req, async (db) => {
-      // Fetch the signing request
+      // Fetch the signing request (@from already validated by framework)
       const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
       if (!signingRequest) rejectInvalid(req, 'VerifySignature', 'Signing request not found', 'signingRequestId');
 
-      // Check if expired
+      // Check if expired (time-based, not covered by @flow.status)
       if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
       }
@@ -618,39 +667,35 @@ module.exports = (srv: cds.Service) => {
   });
 
   /**
-   * Verify and submit a signed transaction in one step
-   * Handler validates, checks preconditions, and delegates persistence to indexer
-   * @param req - CDS request object (with signingRequestId, signedTxCbor, signerType, signerInfo)
+   * Verify and submit a signed transaction in one step (bound action on SigningRequests)
+   * @flow.status validates @from: [#pending, #verified] and sets @to: #submitted automatically
+   * @param req - CDS request with entity key in params, action data in data
    * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitVerifiedTransaction', async (req: Request) => {
     logger.debug('SubmitVerifiedTransaction Action handler called');
-    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
+    const { id: signingRequestId } = req.params[0] as { id: string };
+    const { signedTxCbor, signerType, signerInfo } = req.data;
 
-    // Validate inputs
+    // Validate inputs (signingRequestId no longer needed — comes from URL)
     const errors = validateTransactionInputs(
-      { signingRequestId, signedTxCbor },
-      ['signingRequestId', 'signedTxCbor']
+      { signedTxCbor },
+      ['signedTxCbor']
     );
     throwIfValidationErrors(req, 'SubmitVerifiedTransaction', errors);
 
     return handleRequest(req, async (db) => {
-      // Fetch the signing request
+      // Fetch the signing request (@from already validated by framework)
       const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
       if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
 
-      // Check if expired
+      // Check if expired (time-based, not covered by @flow.status)
       if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
       }
 
-      // Check state machine: only 'pending' or 'verified' signing requests can be submitted
-      if (signingRequest.status === 'submitted') {
-        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Transaction already submitted', 'signingRequestId');
-      }
-      if (signingRequest.status !== 'pending' && signingRequest.status !== 'verified') {
-        rejectInvalid(req, 'SubmitVerifiedTransaction', `Cannot submit signing request in '${signingRequest.status}' state`, 'signingRequestId');
-      }
+      // STATUS CHECKS REMOVED — @flow.status handles @from: [#pending, #verified]
+      // Previously: manual checks for 'submitted', 'expired', 'failed' states
 
       // Check if build association exists
       if (!signingRequest.build_id) {

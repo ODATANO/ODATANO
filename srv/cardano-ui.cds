@@ -2754,7 +2754,7 @@ annotate txsrv.TransactionSubmissions with @(
     },
     {
       $Type : 'UI.DataFieldForAction',
-      Action: 'CardanoTransactionService.EntityContainer/CheckSubmissionStatus',
+      Action: 'CardanoTransactionService.CheckSubmissionStatus',
       Label : 'Check Status'
     }
   ],
@@ -2762,7 +2762,7 @@ annotate txsrv.TransactionSubmissions with @(
   UI.Identification               : [
     {
       $Type : 'UI.DataFieldForAction',
-      Action: 'CardanoTransactionService.EntityContainer/CheckSubmissionStatus',
+      Action: 'CardanoTransactionService.CheckSubmissionStatus',
       Label : 'Check Status'
     },
     {

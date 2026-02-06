@@ -511,12 +511,12 @@ export class CardanoIndexer {
     // Map submission data
     const indexSubmission = mapTransactionSubmission(signedTxCbor, txHash);
 
-    // Create submission record
+    // Create submission record (status: 'pending' — updated to 'submitted' after blockchain confirms)
     const submissionRecord = {
       ...indexSubmission,
       build_id: buildId || null,
       backendResponse: 'Submitted successfully',
-      status: 'submitted',
+      status: 'pending' as const,
     };
 
     // Persist submission
@@ -534,6 +534,32 @@ export class CardanoIndexer {
     }
 
     return submissionRecord;
+  }
+
+  /**
+   * Update the status of a transaction submission
+   * Used for the two-phase submit flow: pending → submitted (or failed)
+   * @param tx CAP transaction object
+   * @param submissionId the submission to update
+   * @param status new status value
+   * @param errorMessage optional error message for failed status
+   */
+  async updateSubmissionStatus(
+    tx: CapTransaction,
+    submissionId: string,
+    status: string,
+    errorMessage?: string
+  ): Promise<void> {
+    const updateData: Record<string, any> = { status };
+    if (errorMessage) {
+      updateData.errorMessage = errorMessage;
+    }
+    await tx.run(
+      UPDATE.entity(TransactionSubmissions)
+        .set(updateData)
+        .where({ id: submissionId })
+    );
+    logger.debug({ submissionId, status }, 'Updated submission status');
   }
 
   /**
@@ -699,17 +725,16 @@ export class CardanoIndexer {
       ...indexSubmission,
       build_id: buildId,
       backendResponse: `Submitted successfully (verified: ${verificationResult.witnessCount} witness(es))`,
-      status: 'submitted',
+      status: 'submitted' as const,
     };
     await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
     logger.debug({ submissionId: submissionRecord.id }, 'Persisted submission record');
 
-    // Step 3: Update signing request status
+    // Step 3: Update signing request metadata (status is set by @flow.status @to: #submitted)
     const now = new Date().toISOString();
     await tx.run(
       UPDATE.entity(SigningRequests)
         .set({
-          status: 'submitted',
           signerType: signerType || 'custom',
           signerInfo: signerInfo || null,
           signedAt: now,
@@ -718,7 +743,7 @@ export class CardanoIndexer {
         })
         .where({ id: signingRequestId })
     );
-    logger.debug({ signingRequestId }, 'Updated signing request status to submitted');
+    logger.debug({ signingRequestId }, 'Updated signing request metadata (status managed by @flow.status)');
 
     // Step 4: Update build status
     await tx.run(

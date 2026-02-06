@@ -34,7 +34,11 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
 
     @title      : 'Transaction Submissions'
     @description: 'Projection for Transaction Submissions'
-    entity TransactionSubmissions       as projection on db.TransactionSubmissions;
+    entity TransactionSubmissions       as projection on db.TransactionSubmissions actions {
+        @title      : 'Check Submission Status'
+        @description: 'Check the status of a submitted transaction by querying the blockchain for confirmation'
+        action CheckSubmissionStatus() returns TransactionSubmissions;
+    };
 
     @title      : 'Transaction Submission Errors'
     @description: 'Projection for Transaction Submission Errors'
@@ -188,20 +192,41 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                    @description: 'The Cardano network to submit the transaction to (e.g., mainnet, testnet)'
                                    network: String(10))        returns TransactionSubmissions;
 
-    @title      : 'Check Submission Status'
-    @description: 'Check the status of a submitted transaction using the Submission Id'
-    action CheckSubmissionStatus(
-                                 @title: 'Submission Id'
-                                 @description: 'The unique identifier of the transaction submission'
-                                 submissionId: UUID)           returns TransactionSubmissions;
-
     // ---------------------------------------------------------------------------
     // M3 - External Signing Workflow Entities & Actions
     // ---------------------------------------------------------------------------
 
     @title      : 'Signing Requests'
     @description: 'Projection for Signing Requests - tracks external signing workflow'
-    entity SigningRequests              as projection on db.SigningRequests;
+    entity SigningRequests              as projection on db.SigningRequests actions {
+        @title      : 'Verify Signature'
+        @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
+        action VerifySignature(
+            @title: 'Signed Transaction CBOR'
+            @description: 'The signed transaction CBOR to verify'
+            signedTxCbor: String,
+            @title: 'Signer Type'
+            @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
+            signerType: String(20),
+            @title: 'Signer Info'
+            @description: 'Additional signer information (wallet name, etc.)'
+            signerInfo: String(100)
+        ) returns SignatureVerifications;
+
+        @title      : 'Submit Verified Transaction'
+        @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
+        action SubmitVerifiedTransaction(
+            @title: 'Signed Transaction CBOR'
+            @description: 'The signed transaction CBOR'
+            signedTxCbor: String,
+            @title: 'Signer Type'
+            @description: 'Type of signer used'
+            signerType: String(20),
+            @title: 'Signer Info'
+            @description: 'Additional signer information'
+            signerInfo: String(100)
+        ) returns TransactionSubmissions;
+    };
 
     @title      : 'Signature Verifications'
     @description: 'Projection for Signature Verifications - stores verification results'
@@ -232,37 +257,6 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                              @description: 'The unique identifier of the signing request'
                              signingRequestId: UUID)         returns SigningRequests;
 
-    @title      : 'Verify Signature'
-    @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
-    action VerifySignature(
-                           @title: 'Signing Request ID'
-                           @description: 'The signing request to verify against'
-                           signingRequestId: UUID,
-                           @title: 'Signed Transaction CBOR'
-                           @description: 'The signed transaction CBOR to verify'
-                           signedTxCbor: String,
-                           @title: 'Signer Type'
-                           @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
-                           signerType: String(20),
-                           @title: 'Signer Info'
-                           @description: 'Additional signer information (wallet name, etc.)'
-                           signerInfo: String(100))          returns SignatureVerifications;
-
-    @title      : 'Submit Verified Transaction'
-    @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
-    action SubmitVerifiedTransaction(
-                                     @title: 'Signing Request ID'
-                                     @description: 'The signing request to submit'
-                                     signingRequestId: UUID,
-                                     @title: 'Signed Transaction CBOR'
-                                     @description: 'The signed transaction CBOR'
-                                     signedTxCbor: String,
-                                     @title: 'Signer Type'
-                                     @description: 'Type of signer used'
-                                     signerType: String(20),
-                                     @title: 'Signer Info'
-                                     @description: 'Additional signer information'
-                                     signerInfo: String(100)) returns TransactionSubmissions;
     @title: 'Address Signing Requests'
     @description: 'Projection for retrieving signing requests by address'
     action GetSigningRequestsByAddress(
@@ -275,5 +269,30 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                           @title: 'Bech32 Address'
                                           @description: 'The Bech32 encoded address to retrieve transaction builds for'
                                           address: db.Bech32)    returns array of AddressTransactionBuilds;
-                                        
+
 }
+
+// ---------------------------------------------------------------------------
+// Status-Transition Flows (CAP @flow.status — Gamma)
+// ---------------------------------------------------------------------------
+
+/**
+ * SigningRequests status flow:
+ *   pending ──[VerifySignature]──→ verified | failed  (conditional in handler)
+ *   pending | verified ──[SubmitVerifiedTransaction]──→ submitted
+ *   pending ──[checkExpire]──→ expired  (custom time-based logic in handler)
+ */
+annotate CardanoTransactionService.SigningRequests with @flow.status: status actions {
+    VerifySignature           @from: [#pending];
+    SubmitVerifiedTransaction @from: [#pending, #verified] @to: #submitted;
+};
+
+/**
+ * TransactionSubmissions status flow:
+ *   pending ──[submit to chain]──→ submitted  (internal, in SubmitTransaction handler)
+ *   submitted ──[CheckSubmissionStatus]──→ confirmed | stays submitted  (conditional)
+ *   pending | submitted ──→ failed  (on blockchain error)
+ */
+annotate CardanoTransactionService.TransactionSubmissions with @flow.status: status actions {
+    CheckSubmissionStatus @from: [#submitted];
+};
