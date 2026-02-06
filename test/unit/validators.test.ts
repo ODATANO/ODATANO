@@ -809,5 +809,171 @@ describe('Validator Helper Methods and Type Guards', () => {
         expect(errors).toHaveLength(0);
       });
     });
+
+    // ========================================================================
+    // Plutus Spending Fields
+    // ========================================================================
+    describe('Plutus spending fields', () => {
+      const validScriptCbor = 'aabbccdd';
+      const validScriptTxHash = 'a'.repeat(64);
+
+      it('should require validatorScript when listed as required', () => {
+        const errors = validateTransactionInputs(
+          {},
+          ['validatorScript']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('missing');
+        expect(errors[0].field).toBe('validatorScript');
+      });
+
+      it('should reject invalid validatorScript CBOR', () => {
+        const errors = validateTransactionInputs(
+          { validatorScript: 'not_hex!' },
+          ['validatorScript']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('validatorScript');
+      });
+
+      it('should reject odd-length validatorScript CBOR', () => {
+        const errors = validateTransactionInputs(
+          { validatorScript: 'abc' },
+          ['validatorScript']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('validatorScript');
+      });
+
+      it('should accept valid validatorScript CBOR', () => {
+        const errors = validateTransactionInputs(
+          { validatorScript: validScriptCbor },
+          ['validatorScript']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should reject invalid scriptTxHash format', () => {
+        const errors = validateTransactionInputs(
+          { scriptTxHash: 'invalidhash' },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('scriptTxHash');
+      });
+
+      it('should accept valid scriptTxHash', () => {
+        const errors = validateTransactionInputs(
+          { scriptTxHash: validScriptTxHash },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should reject negative scriptOutputIndex', () => {
+        const errors = validateTransactionInputs(
+          { scriptOutputIndex: -1, scriptTxHash: validScriptTxHash },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('scriptOutputIndex');
+      });
+
+      it('should reject non-integer scriptOutputIndex', () => {
+        const errors = validateTransactionInputs(
+          { scriptOutputIndex: 1.5, scriptTxHash: validScriptTxHash },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('scriptOutputIndex');
+      });
+
+      it('should accept valid scriptOutputIndex 0', () => {
+        const errors = validateTransactionInputs(
+          { scriptOutputIndex: 0, scriptTxHash: validScriptTxHash },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should accept valid scriptOutputIndex > 0', () => {
+        const errors = validateTransactionInputs(
+          { scriptOutputIndex: 3, scriptTxHash: validScriptTxHash },
+          ['scriptTxHash']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should reject invalid redeemerJson', () => {
+        const errors = validateTransactionInputs(
+          { redeemerJson: 'not valid json{' },
+          ['redeemerJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('redeemerJson');
+      });
+
+      it('should accept valid redeemerJson', () => {
+        const errors = validateTransactionInputs(
+          { redeemerJson: '{"constructor": 0, "fields": []}' },
+          ['redeemerJson']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should reject invalid datumJson', () => {
+        const errors = validateTransactionInputs(
+          { datumJson: '{invalid' },
+          ['datumJson']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].type).toBe('invalid');
+        expect(errors[0].field).toBe('datumJson');
+      });
+
+      it('should accept valid datumJson', () => {
+        const errors = validateTransactionInputs(
+          { datumJson: '{"int": 42}' },
+          ['datumJson']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+
+      it('should validate all Plutus spending fields together', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            validatorScript: validScriptCbor,
+            scriptTxHash: validScriptTxHash,
+            scriptOutputIndex: 0,
+            redeemerJson: '{"constructor": 0, "fields": []}',
+          },
+          ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
+        );
+
+        expect(errors).toHaveLength(0);
+      });
+    });
   });
 });

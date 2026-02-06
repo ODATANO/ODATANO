@@ -271,6 +271,8 @@ export type MintAction = {
   assetUnit: string;
   /** Quantity to mint (positive) or burn (negative) */
   quantity: bigint;
+  /** Optional redeemer data (integer). Defaults to 0 if not specified. */
+  redeemer?: number;
 };
 
 /**
@@ -279,9 +281,14 @@ export type MintAction = {
 export type PlutusScriptExecution = {
   /** Validator script (CBOR hex) */
   validatorScript: string;
+  /** The UTxO at the script address to consume */
+  scriptUtxo: {
+    txHash: string;
+    outputIndex: number;
+  };
   /** Redeemer data (JSON value that will be converted to PlutusData) */
   redeemer: JSONValue;
-  /** Datum data (JSON value, optional - for script outputs) */
+  /** Datum data (JSON value, optional - required for hash-based datums) */
   datum?: JSONValue;
   /** Execution units budget for script execution */
   executionUnits?: {
@@ -309,6 +316,8 @@ export type TxBuildRequest = {
   mintingPolicyScript?: string;
   /** Plutus script execution (optional) - for spending from script addresses */
   plutusScriptExecution?: PlutusScriptExecution;
+  /** Inline datum to attach to the recipient output (optional) - for locking at script addresses */
+  outputDatum?: JSONValue;
 };
 
 /**
@@ -317,6 +326,13 @@ export type TxBuildRequest = {
 export type TxBuildMintRequest = TxBuildRequest & {
   mintActions: MintAction[];
   mintingPolicyScript: string;
+};
+
+/**
+ * Transaction Build Request for Plutus spending - requires plutusScriptExecution
+ */
+export type TxBuildPlutusSpendRequest = TxBuildRequest & {
+  plutusScriptExecution: PlutusScriptExecution;
 };
 
 /**

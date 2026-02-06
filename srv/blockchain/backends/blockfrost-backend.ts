@@ -43,7 +43,7 @@ export class BlockfrostBackend implements CardanoBackend {
   /** 
    * Initialize the backend 
    */
-  async init(): Promise<Boolean> { 
+  async init(): Promise<boolean> {
     this.api.options.requestTimeout = this.timeoutMs;
     // Test connection by fetching latest block
     try {

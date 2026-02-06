@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
-import { getTxHashFromCbor } from './utils/tx-build-helper';
+import { getTxHashFromCbor, getLovelace } from './utils/tx-build-helper';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -99,7 +99,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
@@ -108,10 +108,20 @@ module.exports = (srv: cds.Service) => {
     );
     throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
 
+    // parse optional output datum
+    const cleanData = { ...req.data };
+    if (outputDatumJson) {
+      try {
+        cleanData.outputDatum = JSON.parse(outputDatumJson);
+      } catch {
+        return req.reject(400, 'Invalid outputDatumJson: must be valid JSON');
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ senderAddress, recipientAddress, lovelaceAmount }, 'Building simple ADA transaction');
-      return await getCardanoIndexer().indexSimpleBuildResult(db, req.data);
+      logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson }, 'Building simple ADA transaction');
+      return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
     });
   });
   /**
@@ -223,6 +233,55 @@ module.exports = (srv: cds.Service) => {
   });
 
   /**
+   * Build a Plutus spending transaction (consume UTxO at script address)
+   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, changeAddress)
+   * @returns {TransactionBuild} Transaction build details
+   */
+  srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson } = req.data;
+
+    // Validate inputs
+    const errors = validateTransactionInputs(
+      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson },
+      ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
+    );
+    throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
+
+    // Validate scriptOutputIndex separately (it's a number, not caught by required-fields check for empty string)
+    if (scriptOutputIndex === undefined || scriptOutputIndex === null) {
+      rejectMissing(req, 'BuildPlutusSpendTransaction', 'scriptOutputIndex');
+    }
+
+    // Parse redeemer JSON
+    const parsedRedeemer = JSON.parse(redeemerJson);
+
+    // Parse optional datum JSON
+    const parsedDatum = datumJson ? JSON.parse(datumJson) : undefined;
+
+    return handleRequest(req, async (db) => {
+      logger.info(
+        { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
+        'Building Plutus spending transaction'
+      );
+
+      const cleanData = {
+        ...req.data,
+        plutusScriptExecution: {
+          validatorScript,
+          scriptUtxo: {
+            txHash: scriptTxHash,
+            outputIndex: scriptOutputIndex,
+          },
+          redeemer: parsedRedeemer,
+          datum: parsedDatum,
+        }
+      };
+
+      return await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
+    });
+  });
+
+  /**
    * Get build details for previously built transaction
    * @param req - CDS request object (with buildId)
    * @returns {TransactionBuild} Transaction build details
@@ -239,6 +298,55 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
       return existing;
+    });
+  });
+
+  /**
+   * Set up a collateral UTxO for Plutus transactions.
+   * Checks if the address already has >= 2 UTxOs with >= 5 ADA each.
+   * If not, builds a self-send transaction to create a 5 ADA collateral UTxO.
+   * @param req - CDS request object (with address)
+   * @returns {TransactionBuild} Transaction build details for the collateral setup
+   */
+  srv.on('SetCollateral', async (req: Request) => {
+    const { address } = req.data;
+
+    if (!address || !isValidBech32Address(address)) {
+      return req.reject(400, 'SetCollateral: Invalid or missing Bech32 address');
+    }
+
+    const COLLATERAL_LOVELACE = 5_000_000n;
+    const FEE_BUFFER_LOVELACE = 1_000_000n;
+
+    // Fetch UTxOs and validate before entering handleRequest (req.reject inside handleRequest gets wrapped as 500)
+    const utxos = await getCardanoClient().getAddressUtxos(address);
+
+    if (utxos.length === 0) {
+      return req.reject(400, 'SetCollateral: No UTxOs found at address');
+    }
+
+    const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
+
+    if (qualifyingUtxos.length >= 2) {
+      return req.reject(409, `SetCollateral: Collateral already available — found ${qualifyingUtxos.length} UTxOs with >= 5 ADA`);
+    }
+
+    const totalLovelace = utxos.reduce((sum, u) => sum + getLovelace(u), 0n);
+
+    if (totalLovelace < COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) {
+      return req.reject(400, `SetCollateral: Insufficient funds — need at least ${Number(COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) / 1_000_000} ADA, have ${Number(totalLovelace) / 1_000_000} ADA`);
+    }
+
+    // Build self-send transaction: address → address, 5 ADA
+    logger.info({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
+    return handleRequest(req, async (db) => {
+      return await getCardanoIndexer().indexSimpleBuildResult(db, {
+        network: getCardanoClient().network,
+        senderAddress: address,
+        recipientAddress: address,
+        lovelaceAmount: Number(COLLATERAL_LOVELACE),
+        changeAddress: address,
+      });
     });
   });
 

@@ -467,6 +467,10 @@ export class CardanoIndexer {
     return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildMintTransaction(req, params));
   }
 
+  async indexPlutusSpendBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildPlutusSpendTransaction(req, params));
+  }
+
   /**
    * Index & return the protocol parameters data
    * @param tx CAP transaction object
@@ -485,18 +489,6 @@ export class CardanoIndexer {
     await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
 
     return protocolParams;
-  }
-
-  /**
-   * Index & return the transaction submission record (without persistence)
-   * @param signedTxCbor signed transaction in CBOR format (hex)
-   * @param txHash transaction hash (hex)
-   * @returns {Promise<TransactionSubmissionRow>} transaction submission entity data
-   * @deprecated Use persistTransactionSubmission instead
-   */
-  async indexTransactionSubmission(signedTxCbor: string, txHash: string): Promise<TransactionSubmission> {
-    const transactionSubmission = mapTransactionSubmission(signedTxCbor, txHash);
-    return transactionSubmission;
   }
 
   /**

@@ -283,7 +283,7 @@ const signedTx = await yoroi.signTx(unsignedTxCbor, true);
 
 ## Transaction Types
 
-ODATANO supports four types of transactions at the moment:
+ODATANO supports six types of transactions:
 
 ### 1. Simple ADA Transfer
 **Action:** `BuildSimpleAdaTransaction`
@@ -318,6 +318,35 @@ Create new native tokens.
 **Use cases:**
 - Token creation
 - Asset issuance
+
+### 5. Plutus Smart Contract Spending
+**Action:** `BuildPlutusSpendTransaction`
+Spend a UTxO locked at a Plutus validator script address.
+
+**Use cases:**
+- Redeeming funds locked in a Plutus smart contract
+- Executing on-chain logic (validator scripts)
+- DeFi protocol interactions
+
+**Workflow:**
+```
+1. Lock:  BuildSimpleAdaTransaction (with outputDatumJson) → Sign → Submit
+2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemer + scriptUtxo) → Sign → Submit
+```
+
+### 6. Collateral Setup
+**Action:** `SetCollateral`
+Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions.
+
+**Use cases:**
+- Preparing an address for Plutus script interactions
+- Ensuring collateral availability before smart contract calls
+
+**Logic:**
+- Checks if the address has at least 2 UTxOs with >= 5 ADA each
+- If already available, returns 409 (Collateral already available)
+- If insufficient funds (< 6 ADA total), returns 400
+- Otherwise, builds a self-send transaction creating a 5 ADA collateral UTxO
 
 ## Transaction Builders
 
@@ -427,6 +456,53 @@ Both builders available, CSL used as primary.
 
 ---
 
+### BuildPlutusSpendTransaction
+
+**Action:** `BuildPlutusSpendTransaction`
+**Method:** POST
+**Path:** `/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| senderAddress | bech32 | Yes | Sender address (pays fees) |
+| recipientAddress | bech32 | Yes | Recipient address for unlocked funds |
+| lovelaceAmount | Integer | Yes | Amount in lovelace to send to recipient |
+| validatorScript | String | Yes | Plutus validator script in CBOR hex format |
+| scriptTxHash | String | Yes | Transaction hash of the UTxO locked at the script address (64-char hex) |
+| scriptOutputIndex | Integer | Yes | Output index of the UTxO locked at the script address |
+| redeemerJson | String | Yes | Redeemer data as JSON string (converted to PlutusData) |
+| datumJson | String | No | Datum data as JSON string (for hash-based datums) |
+| changeAddress | bech32 | No | Change address (defaults to sender) |
+
+**Returns:** `TransactionBuild` entity
+
+---
+
+### SetCollateral
+
+**Action:** `SetCollateral`
+**Method:** POST
+**Path:** `/odata/v4/cardano-transaction/SetCollateral`
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| address | bech32 | Yes | Address to check and set up collateral for |
+
+**Returns:** `TransactionBuild` entity (if collateral setup needed) or 409 if already available
+
+**Error Codes:**
+
+| HTTP | Description |
+|------|-------------|
+| 200 | Collateral setup transaction built successfully |
+| 400 | Invalid address or insufficient funds (need >= 6 ADA) |
+| 409 | Collateral already available (>= 2 UTxOs with >= 5 ADA) |
+
+---
 
 ### SubmitTransaction
 
@@ -642,10 +718,10 @@ curl http://localhost:1337/health
 ---
 
 ### 'No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.' for minting transaction
-**Cause:** Minting transactions require a collateral UTxO
+**Cause:** Minting and Plutus transactions require a collateral UTxO
 **Solution:**
-- Ensure sender address has at least one UTxO with minimum 5 ADA
-- send yourself some ADA to create a collateral UTxO
+- Use the `SetCollateral` action to automatically create a dedicated 5 ADA collateral UTxO
+- Or ensure sender address has at least one UTxO with minimum 5 ADA
 
 ---
 
@@ -662,7 +738,7 @@ curl http://localhost:1337/health
 
 ODATANO M2/M3 provides a complete transaction workflow with:
 
-✅ **4 Transaction Types**: Simple ADA, Metadata, Multi-Asset, Minting
+✅ **6 Transaction Types**: Simple ADA, Metadata, Multi-Asset, Minting, Plutus Smart Contract Spending, Collateral Setup
 ✅ **2 Builder Options**: CSL & Buildooor
 ✅ **Multi-Backend Support**: Ogmios + Blockfrost/Koios with automatic failover
 ✅ **External Signing**: Complete private key isolation

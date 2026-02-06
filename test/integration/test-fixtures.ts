@@ -52,7 +52,8 @@ export const TEST_FIXTURES = {
   invalidMintActionsJson: "invalid_json",
   invalidMintingPolicyScript: 'invalid_script',
   validAssetsJson: JSON.stringify([{ unit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '100' }]),
-  validMintActionsJson: JSON.stringify([{ assetUnit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '1000' }])
+  validMintActionsJson: JSON.stringify([{ assetUnit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '1000' }]),
+  validSpendingScript: '587601010029800aba2aba1aab9eaab9dab9a48888966002646465300130053754003300700398038012444b30013370e9000001c4c9289bae300a3009375400915980099b874800800e2646644944c02c004c02cc030004c024dd5002459007200e18031803800980300098019baa0068a4d13656400401',
 };
 
 export const MOCK_EVALUATED_BUDGET = {
@@ -374,6 +375,54 @@ export const metaDataRequestBody2 = {
   lovelaceAmount: TEST_FIXTURES.highLovelaceAmount,
   metadataJson: JSON.stringify(METADATA),
 };
+
+// ---------------------------------------------------------------------------
+// Plutus Spend Transaction Test Data
+// ---------------------------------------------------------------------------
+
+export const SCRIPT_UTXO_TX_HASH = 'aabb0011223344556677889900aabbccddeeff00112233445566778899001122';
+export const SCRIPT_UTXO_OUTPUT_INDEX = 0;
+
+export const plutusSpendRequestBody = {
+  senderAddress: TEST_FIXTURES.addressWithFunds,
+  recipientAddress: TEST_FIXTURES.emptyAddress,
+  lovelaceAmount: '2000000',
+  validatorScript: TEST_FIXTURES.validSpendingScript,
+  scriptTxHash: SCRIPT_UTXO_TX_HASH,
+  scriptOutputIndex: SCRIPT_UTXO_OUTPUT_INDEX,
+  redeemerJson: JSON.stringify({ constructor: 0, fields: [] }),
+  datumJson: JSON.stringify({ constructor: 0, fields: [] }),
+  changeAddress: TEST_FIXTURES.addressWithFunds,
+};
+
+// Mock Koios tx_info response for script UTxO lookup
+export const mockScriptTxInfo = [{
+  tx_hash: SCRIPT_UTXO_TX_HASH,
+  block_hash: 'mockscriptblockhash0000000000000000000000000000000000000000000000',
+  block_height: 1000,
+  block_time: 1704067200,
+  slot_no: 50000000,
+  tx_index: 0,
+  tx_fee: '200000',
+  deposit: '0',
+  tx_size: 300,
+  inputs: [{
+    tx_hash: '0000000000000000000000000000000000000000000000000000000000000000',
+    tx_index: 0,
+    value: '10000000',
+    payment_addr: { bech32: TEST_FIXTURES.addressWithFunds },
+    asset_list: []
+  }],
+  outputs: [{
+    tx_index: SCRIPT_UTXO_OUTPUT_INDEX,
+    value: '10000000',
+    payment_addr: { bech32: TEST_FIXTURES.addressWithFunds },
+    asset_list: [],
+    datum_hash: null,
+    inline_datum: null,
+    reference_script: null
+  }]
+}];
 
 /**
  * Configure environment for a specific backend test

@@ -57,11 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **SAP BTP Deployment Learnings**: `BTP-DEPLOYMENT-LEARNINGS.md` with deployment patterns
 
+- **2 New Transaction Actions** (Plutus Smart Contracts & Collateral):
+  - `BuildPlutusSpendTransaction` - Spend UTxO locked at a Plutus validator script address (supports PlutusV3, redeemer/datum JSON, Ogmios execution unit evaluation)
+  - `SetCollateral` - Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions (auto-checks address UTxOs, builds self-send if needed)
+
+- **End-to-End Plutus Scripts**:
+  - `lock-ada-at-script-preview.ts` - Lock ADA at a PlutusV3 script address with inline datum
+  - `plutus-spend-preview.ts` - Spend locked UTxO with redeemer, verified on Preview testnet
+
 ### Changed
 
 - Architecture refactored to centralized App Context pattern
 - Services now use `getCardanoIndexer()` instead of direct instantiation
-- Test suite updated: 20 test files across integration and unit tests
+- Test suite updated: 25 test files, 932 tests across integration and unit tests
 - Enhanced error handling with signing-specific error cases
 
 ### Security
@@ -86,10 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **6 Transaction Actions** (OData POST endpoints):
   - `BuildSimpleAdaTransaction` - Build simple ADA transfer
   - `BuildTransactionWithMetadata` - Build ADA transfer with metadata
-  - `BuildTokenMintTransaction` - Build token minting transaction
+  - `BuildMintTransaction` - Build token minting transaction
   - `BuildMultiAssetTransaction` - Build multi-asset transfer
   - `SubmitTransaction` - Submit signed transaction to Cardano
-  - `GetProtocolParameters` - Fetch current protocol parameters
+  - `SubmitSignedTransaction` - Submit externally built transaction
 - **Ogmios Live Backend**: WebSocket-based real-time data access for protocol parameters, UTxO queries, and transaction submission
 - **TX Builder Registry**: Factory pattern for runtime builder selection and initialization
 - **End-to-End Example Scripts**:

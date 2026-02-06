@@ -748,6 +748,132 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
+		describe('BuildPlutusSpendTransaction - Invalid Input Handling', () => {
+			const validScriptCbor = 'aabbccdd';
+			const validScriptTxHash = 'a'.repeat(64);
+
+			it('BuildPlutusSpendTransaction - missing senderAddress parameter', async () => {
+				const requestBody = {
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('senderAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - missing recipientAddress parameter', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('recipientAddress is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - missing validatorScript parameter', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('validatorScript is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - missing scriptTxHash parameter', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('scriptTxHash is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - missing redeemerJson parameter', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('redeemerJson is required');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - invalid senderAddress format', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.invalidAddress,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid sender address format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - invalid validatorScript format', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: 'not_hex!',
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid validatorScript format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - invalid scriptTxHash format', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: 'invalidhash',
+					scriptOutputIndex: 0,
+					redeemerJson: '{"constructor": 0, "fields": []}',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid scriptTxHash format');
+				expect(response.status).to.equal(400);
+			});
+
+			it('BuildPlutusSpendTransaction - invalid redeemerJson format', async () => {
+				const requestBody = {
+					senderAddress: TEST_FIXTURES.validBech32Address,
+					recipientAddress: TEST_FIXTURES.validBech32Address,
+					validatorScript: validScriptCbor,
+					scriptTxHash: validScriptTxHash,
+					scriptOutputIndex: 0,
+					redeemerJson: '{invalid json',
+				};
+				const response = await test.POST(`/odata/v4/cardano-transaction/BuildPlutusSpendTransaction`, requestBody).catch(err => err.response);
+				expect(response.data.error.message).to.include('Invalid JSON in redeemerJson');
+				expect(response.status).to.equal(400);
+			});
+		});
+
 		describe('GetBuildDetails – Invalid Input Handling', () => {
 			it('GetBuildDetails - missing buildId parameter', async () => {
 				const response = await test.POST(`/odata/v4/cardano-transaction/GetBuildDetails`, {}).catch(err => err.response);

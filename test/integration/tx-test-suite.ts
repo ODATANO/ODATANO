@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 import { createTestContext, resetAppContext, getCardanoClient, shutdownAppContext } from '../../srv/server';
-import { TEST_FIXTURES, MOCK_EVALUATED_BUDGET, mockUtxosAdaOnly, multiAssetUtxos, utxosForBurn, mockUtxosWithAssets, simpleRequestBody, mintingRequestBody, metaDataRequestBody, burningRequestBody, multiAssetRequestBody, TestConfiguration } from './test-fixtures';
-import { setupKoiosMocks, setupUtxoMock, setupNocks, nock } from './mock-helpers';
+import { TEST_FIXTURES, MOCK_EVALUATED_BUDGET, mockUtxosAdaOnly, multiAssetUtxos, utxosForBurn, mockUtxosWithAssets, simpleRequestBody, mintingRequestBody, metaDataRequestBody, burningRequestBody, multiAssetRequestBody, plutusSpendRequestBody, mockScriptTxInfo, TestConfiguration } from './test-fixtures';
+import { setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupNocks, nock } from './mock-helpers';
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(60000);
 
@@ -375,6 +375,200 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           // Cleanup spies
           hasOgmiosSpy.mockRestore();
           evaluateSpy.mockRestore();
+        });
+      });
+
+      // ============================================================================
+      // BuildPlutusSpendTransaction Action Tests
+      // ============================================================================
+
+      describe('BuildPlutusSpendTransaction Action', () => {
+
+        it('POST /BuildPlutusSpendTransaction - successfully build Plutus spending transaction', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('id');
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+          expect(data.wasSubmitted).to.equal(false);
+          expect(data.fee).to.be.greaterThan(0);
+          expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - verify build is persisted in DB', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const TxService = await cds.connect.to('CardanoTransactionService');
+          const { TransactionBuilds } = TxService.entities;
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+          expect(status).to.equal(200);
+
+          const builds = await cds.run(SELECT.from(TransactionBuilds).where({ id: data.id }));
+          expect(builds.length).to.equal(1);
+          expect(builds[0].id).to.equal(data.id);
+          expect(builds[0].txBodyHash).to.equal(data.txBodyHash);
+          expect(builds[0].unsignedTxCbor).to.equal(data.unsignedTxCbor);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - with inputs and outputs persisted', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const TxService = await cds.connect.to('CardanoTransactionService');
+          const { TransactionBuildInputs, TransactionBuildOutputs } = TxService.entities;
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+          expect(status).to.equal(200);
+
+          const inputs = await cds.run(SELECT.from(TransactionBuildInputs).where({ build_id: data.id }));
+          expect(inputs.length).to.be.greaterThan(0);
+
+          const outputs = await cds.run(SELECT.from(TransactionBuildOutputs).where({ build_id: data.id }));
+          expect(outputs.length).to.be.greaterThan(0);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - uses evaluated execution units when Ogmios available', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const cardanoClient = getCardanoClient();
+          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
+            {
+              validator: { purpose: 'spend', index: 0 },
+              budget: MOCK_EVALUATED_BUDGET
+            }
+          ]);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('fee');
+
+          const jestExpect = (global as any).expect;
+          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
+          jestExpect(evaluateSpy).toHaveBeenCalled();
+
+          hasOgmiosSpy.mockRestore();
+          evaluateSpy.mockRestore();
+        });
+
+        it('POST /BuildPlutusSpendTransaction - uses default execution units when evaluation fails', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const cardanoClient = getCardanoClient();
+          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
+            new Error('Evaluation failed: script execution error')
+          );
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+
+          const jestExpect = (global as any).expect;
+          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
+          jestExpect(evaluateSpy).toHaveBeenCalled();
+
+          hasOgmiosSpy.mockRestore();
+          evaluateSpy.mockRestore();
+        });
+
+        it('POST /BuildPlutusSpendTransaction - without optional datumJson', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const requestWithoutDatum = { ...plutusSpendRequestBody };
+          delete (requestWithoutDatum as any).datumJson;
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestWithoutDatum);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+      });
+
+      // ============================================================================
+      // SetCollateral Action Tests
+      // ============================================================================
+
+      describe('SetCollateral Action', () => {
+
+        it('POST /SetCollateral - builds collateral tx when only 1 UTxO exists', async () => {
+          setupUtxoMock([{
+            tx_hash: 'aabb00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
+            tx_index: 0,
+            value: '20000000', // 20 ADA
+            asset_list: [],
+            block_hash: 'collateral1',
+            datum_hash: null
+          }]);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+            address: TEST_FIXTURES.addressWithFunds,
+          });
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('id');
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+          expect(data).to.have.property('fee');
+        });
+
+        it('POST /SetCollateral - rejects 409 when collateral already available', async () => {
+          setupUtxoMock([
+            {
+              tx_hash: 'aabb00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
+              tx_index: 0,
+              value: '10000000', // 10 ADA
+              asset_list: [],
+              block_hash: 'coll1',
+              datum_hash: null
+            },
+            {
+              tx_hash: 'ccdd00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
+              tx_index: 1,
+              value: '8000000', // 8 ADA
+              asset_list: [],
+              block_hash: 'coll2',
+              datum_hash: null
+            }
+          ]);
+
+          const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+            address: TEST_FIXTURES.addressWithFunds,
+          }).catch(err => err.response);
+
+          expect(status).to.equal(409);
+        });
+
+        it('POST /SetCollateral - rejects 400 when insufficient funds', async () => {
+          setupUtxoMock([{
+            tx_hash: 'aabb00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
+            tx_index: 0,
+            value: '3000000', // 3 ADA - not enough
+            asset_list: [],
+            block_hash: 'low1',
+            datum_hash: null
+          }]);
+
+          const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+            address: TEST_FIXTURES.addressWithFunds,
+          }).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /SetCollateral - rejects 400 for invalid address', async () => {
+          const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+            address: 'invalid_address',
+          }).catch(err => err.response);
+
+          expect(status).to.equal(400);
         });
       });
 

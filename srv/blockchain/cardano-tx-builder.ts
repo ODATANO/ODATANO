@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 import type { CardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
@@ -181,7 +181,74 @@ export class CardanoTransactionBuilder {
         return txBuildResult;
     }
 
-    /** 
+    /**
+     * Build a Plutus spending transaction (consume UTxO at script address)
+     * @param req transaction build request
+     * @param protocolParameters current protocol parameters
+     * @returns {Promise<TxBuildResult>} transaction build result
+     */
+    async buildPlutusSpendTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
+        if (!req.plutusScriptExecution) {
+            throw new Error('[CardanoTransactionBuilder] buildPlutusSpendTransaction requires plutusScriptExecution to be specified');
+        }
+
+        const spendReq: TxBuildPlutusSpendRequest = req as TxBuildPlutusSpendRequest;
+
+        const builder = await this.ensureInitialized();
+        const cardanoClient = this.client;
+
+        // Fetch sender UTxOs for fee payment
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+
+        // Fetch the script UTxO separately (it's at the script address, not sender address)
+        // We include it in the UTxO set so the builder can find it
+        const scriptRef = spendReq.plutusScriptExecution.scriptUtxo;
+        const allUtxos = [...senderUtxos];
+
+        // Check if the script UTxO is already in sender UTxOs (unlikely but possible)
+        const alreadyIncluded = senderUtxos.some(
+            u => u.txHash === scriptRef.txHash && u.outputIndex === scriptRef.outputIndex
+        );
+
+        if (!alreadyIncluded) {
+            // Fetch script UTxO via transaction lookup - the backend needs to provide it
+            // For now, we create a minimal UTxO entry from what we know
+            // The actual UTxO data will be resolved by the backend during tx building
+            logger.info(`Script UTxO ${scriptRef.txHash}#${scriptRef.outputIndex} not in sender UTxOs - fetching from backend`);
+            const tx = await cardanoClient.getTransaction(scriptRef.txHash);
+            const scriptOutput = tx.outputs?.find(o => o.outputIndex === scriptRef.outputIndex);
+            if (!scriptOutput) {
+                throw new Error(`[CardanoTransactionBuilder] Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
+            }
+            allUtxos.push({
+                txHash: scriptRef.txHash,
+                outputIndex: scriptRef.outputIndex,
+                address: scriptOutput.address,
+                amount: scriptOutput.amount,
+            });
+        }
+
+        const txContext: TxBuildContext = {
+            utxos: allUtxos,
+            protocolParameters: protocolParameters,
+            evaluateTransaction: cardanoClient.hasOgmiosBackend()
+                ? (cbor) => cardanoClient.evaluateTransaction(cbor)
+                : undefined
+        };
+
+        if (txContext.evaluateTransaction) {
+            logger.info(`Ogmios available - will use dynamic script evaluation`);
+        } else {
+            logger.info(`Ogmios not available - using default execution units`);
+        }
+
+        const txBuildResult = await builder.buildUnsignedPlutusSpendTransaction(spendReq, txContext);
+
+        logger.info(`Built Plutus spending transaction successfully.`);
+        return txBuildResult;
+    }
+
+    /**
      * Fetch UTxOs for a given address
      * @param address bech32 address
      * @returns {Promise<UTxO[]>} list of UTxOs

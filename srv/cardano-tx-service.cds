@@ -57,8 +57,11 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                      @description: 'The amount of ADA to send in lovelace'
                                      lovelaceAmount: db.Lovelace,
                                      @title: 'Change Address'
-                                     @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-                                     changeAddress: db.Bech32) returns TransactionBuilds;
+                                     @description: 'The Bech32 encoded address for returning change - defaults to sender address if not specified'
+                                     changeAddress: db.Bech32,
+                                     @title: 'Output Datum JSON'
+                                     @description: 'Optional inline datum to attach to the recipient output (JSON, cardano-cli DetailedSchema format). Required when sending to a script address.'
+                                     outputDatumJson: String) returns TransactionBuilds;
 
     @title : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -119,7 +122,45 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 @title: 'Change Address'
                                 @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
                                 changeAddress: db.Bech32) returns TransactionBuilds;
-                                            
+
+    @title : 'Build Plutus Spend Transaction'
+    @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'
+    action BuildPlutusSpendTransaction(
+                                @title: 'Sender Address'
+                                @description: 'The Bech32 encoded address of the sender (pays fees)'
+                                senderAddress: db.Bech32,
+                                @title: 'Recipient Address'
+                                @description: 'The Bech32 encoded address to receive the unlocked funds'
+                                recipientAddress: db.Bech32,
+                                @title: 'Lovelace Amount'
+                                @description: 'The amount of ADA to send to the recipient in lovelace'
+                                lovelaceAmount: db.Lovelace,
+                                @title: 'Validator Script'
+                                @description: 'The Plutus validator script in CBOR hex format'
+                                validatorScript: String,
+                                @title: 'Script UTxO Transaction Hash'
+                                @description: 'The transaction hash of the UTxO locked at the script address (64-char hex)'
+                                scriptTxHash: String,
+                                @title: 'Script UTxO Output Index'
+                                @description: 'The output index of the UTxO locked at the script address'
+                                scriptOutputIndex: Integer,
+                                @title: 'Redeemer JSON'
+                                @description: 'The redeemer data as JSON string (will be converted to PlutusData)'
+                                redeemerJson: String,
+                                @title: 'Datum JSON'
+                                @description: 'The datum data as JSON string (optional, for hash-based datums)'
+                                datumJson: String,
+                                @title: 'Change Address'
+                                @description: 'The Bech32 encoded address for returning change - defaults to sender address if not specified'
+                                changeAddress: db.Bech32) returns TransactionBuilds;
+
+    @title : 'Set Collateral'
+    @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
+    action SetCollateral(
+                          @title: 'Address'
+                          @description: 'The Bech32 encoded address to check and set up collateral for'
+                          address: db.Bech32) returns TransactionBuilds;
+
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
     action GetBuildDetails(

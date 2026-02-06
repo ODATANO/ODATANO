@@ -76,7 +76,7 @@ export class CardanoClient {
   private initPromise: Promise<void> | null = null;
   private circuitBreaker: CircuitBreakerManager;
   network: Network;
-  max_age_ms: number = 60000; // default 10 minutes for temporary caching
+  max_age_ms: number = 60000; // default 1 minute for temporary caching
 
   /** 
    * Constructor for CardanoClient

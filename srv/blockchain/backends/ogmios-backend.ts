@@ -91,7 +91,7 @@ export class OgmiosBackend implements EvaluatingBackend {
   /** 
    * Initialize the Ogmios backend connection
    */
-  async init(): Promise<Boolean> {
+  async init(): Promise<boolean> {
     const url = new URL(this.ogmiosUrl);
     const connection = {
       host: url.hostname,

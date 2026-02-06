@@ -63,6 +63,17 @@ class MockTxBuilder implements CardanoTxBuilder {
       warnings: [],
     };
   }
+
+  async buildUnsignedPlutusSpendTransaction(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
+    return {
+      unsignedTxCbor: 'mock-plutus-spend-tx-cbor',
+      txBodyHash: 'mock-plutus-spend-tx-hash',
+      feeLovelace: '400000',
+      inputs: [],
+      outputs: [],
+      warnings: [],
+    };
+  }
 }
 
 // Test fixtures

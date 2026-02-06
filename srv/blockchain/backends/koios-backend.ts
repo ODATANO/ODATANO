@@ -58,7 +58,7 @@ export class KoiosBackend implements CardanoBackend {
   /** 
    * Initialize the backend 
    */
-  async init(): Promise<Boolean> {
+  async init(): Promise<boolean> {
     // Test connection by fetching latest block
     try {
     await this.api.get('/tip');

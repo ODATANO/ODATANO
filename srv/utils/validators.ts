@@ -288,6 +288,12 @@ export interface TransactionInputs {
   signingRequestId?: string;
   signerType?: string;
   signerInfo?: string;
+  // Plutus spending
+  validatorScript?: string;
+  scriptTxHash?: string;
+  scriptOutputIndex?: number;
+  redeemerJson?: string;
+  datumJson?: string;
 }
 
 /**
@@ -358,6 +364,32 @@ export function validateTransactionInputs(
     });
   }
 
+  if (inputs.validatorScript && !isValidCbor(inputs.validatorScript)) {
+    errors.push({
+      type: 'invalid',
+      field: 'validatorScript',
+      message: 'Invalid validatorScript format'
+    });
+  }
+
+  if (inputs.scriptTxHash && !isTxHash(inputs.scriptTxHash)) {
+    errors.push({
+      type: 'invalid',
+      field: 'scriptTxHash',
+      message: 'Invalid scriptTxHash format'
+    });
+  }
+
+  if (inputs.scriptOutputIndex !== undefined && inputs.scriptOutputIndex !== null) {
+    if (!Number.isInteger(inputs.scriptOutputIndex) || inputs.scriptOutputIndex < 0) {
+      errors.push({
+        type: 'invalid',
+        field: 'scriptOutputIndex',
+        message: 'scriptOutputIndex must be a non-negative integer'
+      });
+    }
+  }
+
   // Validate JSON fields with size and complexity limits
   if (inputs.metadataJson) {
     const result = validateJsonWithLimits(inputs.metadataJson, 'metadataJson');
@@ -387,6 +419,28 @@ export function validateTransactionInputs(
       errors.push({
         type: 'invalid',
         field: 'mintActionsJson',
+        message: result.error!
+      });
+    }
+  }
+
+  if (inputs.redeemerJson) {
+    const result = validateJsonWithLimits(inputs.redeemerJson, 'redeemerJson');
+    if (!result.valid) {
+      errors.push({
+        type: 'invalid',
+        field: 'redeemerJson',
+        message: result.error!
+      });
+    }
+  }
+
+  if (inputs.datumJson) {
+    const result = validateJsonWithLimits(inputs.datumJson, 'datumJson');
+    if (!result.valid) {
+      errors.push({
+        type: 'invalid',
+        field: 'datumJson',
         message: result.error!
       });
     }

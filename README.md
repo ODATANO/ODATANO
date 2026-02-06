@@ -21,14 +21,14 @@ Cardano read operations with multi-provider failover (Blockfrost → Koios), 17 
 
 [Milestone 1: OData Service Foundation & Blockchain Read Access](https://milestones.projectcatalyst.io/projects/1400109/milestones/1)
 
-### Milestone 2 (Completed February 2026) ✅ 
+### Milestone 2 (Completed February 2026) ✅
 Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4 transaction types (simple transfers, token minting, multi-asset transfers, metadata), Ogmios live backend for protocol parameters & UTxO queries, 6 Transaction Actions with external signing workflow, full Build → Sign → Submit flow, 327 new tests & 6 new test suites, end-to-end Preview testnet examples & Postman collection
 
 [Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2)
 
 ### Milestone 3 (Pending March 2026) ⏳
 Extension of the transaction module & external workflow to export unsigned Cardano transactions via OData, enabling deterministic external signing (e.g. Cardano CLI or browser wallets) with full key separation and no private-key handling in the CAP service.
-Includes end-to-end external signer integration, SAP S/4HANA business process examples, enterprise use cases, a sample Fiori wallet viewer app, and comprehensive automated integration and security tests.
+Includes Plutus smart contract support (BuildPlutusSpendTransaction, SetCollateral), end-to-end external signer integration, SAP S/4HANA business process examples, enterprise use cases, a sample Fiori wallet viewer app, and comprehensive automated integration and security tests.
 
 [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3)
 
@@ -46,7 +46,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Transaction Building**: Cardano Serialization Library (CSL) & Buildooor for minting, ADA or Token transfers, and metadata transactions
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
-- **Comprehensive Testing**: 834 tests across 23 test suites, 96%+ statement coverage
+- **Comprehensive Testing**: 932 tests across 25 test suites, 96%+ statement coverage
 
 ## Quick Start
 
@@ -115,7 +115,7 @@ See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
 ## Testing
 
 ```bash
-npm test                    # Run all 692 tests
+npm test                    # Run all 932 tests
 npm run test:coverage       # With coverage report
 npm run test:integration    # Integration tests only
 npm run test:unit           # Unit tests only
@@ -134,7 +134,7 @@ See [Test Documentation](test/README.md) for details.
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
-| [Test Documentation](test/README.md) | Test suite overview (692 tests) |
+| [Test Documentation](test/README.md) | Test suite overview (932 tests) |
 
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)
@@ -152,13 +152,13 @@ See [Test Documentation](test/README.md) for details.
 
 **7 Entities:** TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors
 
-**6 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildTokenMintTransaction, BuildMultiAssetTransaction, SubmitTransaction, GetProtocolParameters
+**6 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
 
-### External Signing Service (`/odata/v4/cardano-transaction`) - M3
+### External Signing & Plutus Smart Contracts (`/odata/v4/cardano-transaction`) - M3
 
 **4 Entities:** SigningRequests, SignatureVerifications, AddressTransactionBuilds, AddressSigningRequests
 
-**6 Actions:** CreateSigningRequest,  GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
+**8 Actions:** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference with parameters.
 

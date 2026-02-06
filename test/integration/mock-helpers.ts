@@ -72,6 +72,13 @@ export function setupUtxoMock(utxos: any[]) {
     .persist();
 }
 
+export function setupTxInfoMock(txInfoResponse: any[]) {
+  nock('https://preview.koios.rest')
+    .post('/api/v1/tx_info', (body: any) => body._tx_hashes !== undefined)
+    .reply(200, txInfoResponse)
+    .persist();
+}
+
 export function setupNocks() {
   nock.cleanAll();
   nock.restore();

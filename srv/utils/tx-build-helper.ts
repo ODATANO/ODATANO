@@ -1,7 +1,8 @@
-import type { UTxO as OdatanoUtxo } from '../utils/types';
+import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
 import { MixedAssetsError, InsufficientFundsError } from './errors';
+import { dataFromJson, type Data } from '@harmoniclabs/plutus-data';
 
 /**
  * Extract lovelace amount from UTxO
@@ -89,4 +90,59 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
     policyId: assetUnit.substring(0, 56),
     assetName: assetUnit.substring(56)
   };
+}
+
+/**
+ * Normalize PlutusData JSON from cardano-cli format ("constructor") to
+ * Buildooor format ("constr"), recursively through fields/list/map.
+ */
+function normalizeConstructorKey(obj: Record<string, any>): Record<string, any> {
+  if (Object.hasOwn(obj, 'constructor') && !Object.hasOwn(obj, 'constr')) {
+    const result: Record<string, any> = { constr: obj.constructor };
+    if (Array.isArray(obj.fields)) {
+      result.fields = obj.fields.map((f: any) =>
+        typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
+      );
+    }
+    return result;
+  }
+  if ('list' in obj && Array.isArray(obj.list)) {
+    return { list: obj.list.map((item: any) =>
+      typeof item === 'object' && item !== null && !Array.isArray(item) ? normalizeConstructorKey(item) : item
+    )};
+  }
+  if ('map' in obj && Array.isArray(obj.map)) {
+    return { map: obj.map.map((entry: any) => ({
+      k: typeof entry.k === 'object' && entry.k !== null ? normalizeConstructorKey(entry.k) : entry.k,
+      v: typeof entry.v === 'object' && entry.v !== null ? normalizeConstructorKey(entry.v) : entry.v,
+    }))};
+  }
+  if ('constr' in obj && Array.isArray(obj.fields)) {
+    return { constr: obj.constr, fields: obj.fields.map((f: any) =>
+      typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
+    )};
+  }
+  return obj;
+}
+
+/**
+ * Convert JSON value to Buildooor PlutusData (Data type).
+ * Accepts both cardano-cli format ("constructor") and Buildooor format ("constr").
+ * - { "int": 42 } → DataI(42)
+ * - { "bytes": "deadbeef" } → DataB("deadbeef")
+ * - { "list": [...] } → DataList([...])
+ * - { "map": [{ "k": ..., "v": ... }] } → DataMap([...])
+ * - { "constructor": 0, "fields": [...] } or { "constr": 0, "fields": [...] } → DataConstr(0, [...])
+ * @param json JSON value representing PlutusData
+ * @returns Buildooor Data object
+ */
+export function jsonToPlutusData(json: JSONValue): Data {
+  if (json === null || json === undefined) {
+    throw new Error('PlutusData JSON cannot be null or undefined');
+  }
+  if (typeof json === 'object' && !Array.isArray(json)) {
+    const normalized = normalizeConstructorKey(json as Record<string, any>);
+    return dataFromJson(normalized);
+  }
+  throw new Error(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);
 }

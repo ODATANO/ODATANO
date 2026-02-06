@@ -27,7 +27,7 @@ export interface CardanoBackend {
   /**
    * Initialize the backend 
    */
-  init(): Promise<Boolean>;
+  init(): Promise<boolean>;
 
   /**
    * Get Transaction Data

@@ -1,8 +1,8 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
-import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
+import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
 import {
@@ -73,12 +73,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const amount = BigInt(String(req.lovelaceAmount));
 
       // build new outputs for recipient
-      const outputs = [
-        new TxOut({
-          address: recipientAddress,
-          value: Value.lovelaces(amount)
-        })
-      ];
+      const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
+        address: recipientAddress,
+        value: Value.lovelaces(amount),
+      };
+      if (req.outputDatum) {
+        txOutParams.datum = jsonToPlutusData(req.outputDatum);
+      }
+      const outputs = [new TxOut(txOutParams)];
+
       // build the transaction
       const tx = await this.txBuilder.build({
         inputs,
@@ -289,7 +292,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             value: assetValue,
             script: {
               inline: script,
-              redeemer: new DataI(0), // Simple redeemer - @TODO make it customizable
+              redeemer: new DataI(mintAction.redeemer ?? 0),
               executionUnits: exUnits
             }
           });
@@ -415,6 +418,172 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       return {
         unsignedTxCbor: unsignedTxCbor,
         txBodyHash: txBodyHash,
+        senderAddress: req.senderAddress,
+        network: this.cardanoClient.network,
+        builderEngine: this.name,
+        sizeBytes: unsignedTxBytes.length,
+        feeLovelace: tx.body.fee.toString(),
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString()
+        })),
+        outputs: tx.body.outputs.map((o: any) => ({
+          address: o.address?.toString?.() ?? "",
+          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
+        })),
+        warnings: []
+      };
+    } catch (err: any) {
+      mapBuilderError(err, 'lovelace');
+    }
+  }
+
+  public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    try {
+      const { plutusScriptExecution } = req;
+
+      // Parse the validator script
+      const scriptBytes = Buffer.from(plutusScriptExecution.validatorScript, 'hex');
+      const script = Script.fromCbor(scriptBytes);
+
+      // Convert redeemer JSON to PlutusData
+      const redeemerData = jsonToPlutusData(plutusScriptExecution.redeemer);
+
+      // Determine datum: "inline" if no datum provided (assumes inline datum on UTxO), otherwise convert
+      const datum = plutusScriptExecution.datum
+        ? jsonToPlutusData(plutusScriptExecution.datum)
+        : "inline" as const;
+
+      // Find the specific script UTxO in the provided context UTxOs
+      // The coordinator is responsible for including the script UTxO in ctx.utxos
+      const scriptUtxoRef = plutusScriptExecution.scriptUtxo;
+      const scriptOdatanoUtxo = ctx.utxos.find(
+        u => u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex
+      );
+
+      if (!scriptOdatanoUtxo) {
+        throw new Error(`[BuildooorTxBuilder] Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
+      }
+
+      // Map the script UTxO to ledger format
+      const scriptLedgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(scriptOdatanoUtxo);
+
+      // Map sender UTxOs (excluding the script UTxO) as regular inputs
+      const senderUtxos = ctx.utxos.filter(
+        u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
+      );
+      const senderLedgerUtxos: LedgerUTxO[] = senderUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
+
+      // Addresses
+      const recipientAddress = Address.fromString(req.recipientAddress);
+      const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
+
+      // Build output
+      const outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      const outputs = [
+        new TxOut({
+          address: recipientAddress,
+          value: outputValue
+        })
+      ];
+
+      // Find an ADA-only UTxO for collateral (from sender UTxOs only)
+      const adaOnlyUtxo = senderUtxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
+      if (!adaOnlyUtxo) {
+        throw new Error('[BuildooorTxBuilder] No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      }
+      const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
+
+      // Helper to build inputs with specified execution units
+      const buildInputs = (exUnits: { mem: number; cpu: number }) => {
+        // Script input with witness
+        const scriptInput = {
+          utxo: scriptLedgerUtxo,
+          inputScript: {
+            script,
+            datum,
+            redeemer: redeemerData,
+            executionUnits: exUnits
+          }
+        };
+        // Regular sender inputs for fees
+        const regularInputs = senderLedgerUtxos.map(utxo => ({ utxo }));
+        return [scriptInput, ...regularInputs];
+      };
+
+      // Determine execution units based on evaluator availability
+      let finalExUnits = DEFAULT_EXECUTION_UNITS;
+
+      if (ctx.evaluateTransaction) {
+        // Build first pass with high execution units for evaluation
+        logger.debug(`Building evaluation pass with high execution units`);
+        const evalInputs = buildInputs(HIGH_EXECUTION_UNITS);
+
+        const evalTx = await this.txBuilder.build({
+          inputs: evalInputs,
+          outputs,
+          changeAddress,
+          collaterals: collateralUtxos
+        });
+
+        const evalTxCbor = toHex(evalTx.toCbor().toBuffer());
+
+        try {
+          const evalResults = await ctx.evaluateTransaction(evalTxCbor);
+          logger.debug(`Evaluation results: ${JSON.stringify(evalResults)}`);
+
+          if (evalResults && evalResults.length > 0) {
+            const budget = evalResults[0].budget;
+            finalExUnits = {
+              mem: Math.ceil(budget.memory * EXECUTION_UNIT_BUFFER),
+              cpu: Math.ceil(budget.cpu * EXECUTION_UNIT_BUFFER)
+            };
+            logger.info(`Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
+          }
+        } catch (evalError: any) {
+          logger.warn(`Evaluation failed, using default units: ${evalError.message}`);
+        }
+      } else {
+        logger.debug(`No evaluator available, using default execution units`);
+      }
+
+      // Build with final execution units
+      const inputs = buildInputs(finalExUnits);
+
+      // First build to calculate base fee
+      const txFirstPass = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+        collaterals: collateralUtxos
+      });
+
+      // Add minimal buffer for witness set CBOR overhead
+      const calculatedFee = BigInt(txFirstPass.body.fee.toString());
+      const witnessBuffer = BigInt(WITNESS_BUFFER_BYTES);
+      const adjustedMinFee = calculatedFee + witnessBuffer;
+
+      logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
+
+      // Final build with adjusted minimum fee
+      const tx = await this.txBuilder.build({
+        inputs,
+        outputs,
+        changeAddress,
+        collaterals: collateralUtxos,
+        fee: adjustedMinFee
+      });
+
+      const unsignedTxBytes = tx.toCbor().toBuffer();
+      const unsignedTxCbor = toHex(unsignedTxBytes);
+      const txBodyHash = tx.hash.toString();
+
+      logger.debug(`Built unsigned Plutus spending transaction successfully with fee: ${tx.body.fee.toString()}`);
+
+      return {
+        unsignedTxCbor,
+        txBodyHash,
         senderAddress: req.senderAddress,
         network: this.cardanoClient.network,
         builderEngine: this.name,

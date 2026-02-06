@@ -1,4 +1,4 @@
-import { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from "../../utils/types";
+import { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from "../../utils/types";
 import { CardanoClient } from "../cardano-client";
 
 /** 
@@ -41,11 +41,19 @@ export interface CardanoTxBuilder {
    */
   buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
-  /** 
+  /**
    * Build unsigned Plutus SC transaction
    * @param req transaction build request
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
   buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
+
+  /**
+   * Build unsigned Plutus spending transaction (consume UTxO at script address)
+   * @param req transaction build request with plutusScriptExecution
+   * @param ctx transaction build context
+   * @returns {Promise<TxBuildResult>} transaction build result
+   */
+  buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 }

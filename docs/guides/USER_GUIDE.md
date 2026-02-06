@@ -429,6 +429,8 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransactio
 | `BuildTransactionWithMetadata` | Build ADA transfer with metadata |
 | `BuildMultiAssetTransaction` | Build multi-asset transfer |
 | `BuildMintTransaction` | Build token minting transaction |
+| `BuildPlutusSpendTransaction` | Spend UTxO locked at a Plutus script address |
+| `SetCollateral` | Ensure a dedicated ADA-only collateral UTxO exists |
 | `SubmitTransaction` | Submit previously built transaction |
 | `SubmitSignedTransaction` | Submit externally built transaction |
 

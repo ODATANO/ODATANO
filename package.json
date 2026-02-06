@@ -1,6 +1,6 @@
 {
   "name": "odatano",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A SAP CAP service for interacting with Cardano blockchain data.",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"

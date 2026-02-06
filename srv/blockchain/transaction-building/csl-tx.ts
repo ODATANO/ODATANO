@@ -2,7 +2,7 @@ import cds from '@sap/cds'
 import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
@@ -50,10 +50,17 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       // create Transaction Builder from stored config
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-      // add recipient & output (lovelace)
+      // add recipient & output (lovelace), with optional inline datum
       const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
       const outValue = CSL.Value.new(amount);
       const out = CSL.TransactionOutput.new(recipientAddress, outValue);
+      if (req.outputDatum) {
+        const plutusData = CSL.PlutusData.from_json(
+          JSON.stringify(req.outputDatum),
+          CSL.PlutusDatumSchema.DetailedSchema
+        );
+        out.set_plutus_data(plutusData);
+      }
       txb.add_output(out);
 
       // add inputs via coin selection + add change
@@ -395,10 +402,8 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Create Transaction Builder
     const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-    // Parse the Plutus script from CBOR hex
+    // Parse the Plutus script from CBOR hex (CBOR-wrapped flat UPLC bytecode)
     const scriptBytes = Buffer.from(req.mintingPolicyScript, 'hex');
-
-    // Create PlutusV3 script with language version
     const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
     const scriptHash = plutusScript.hash();
 
@@ -423,7 +428,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const mintQuantity = CSL.Int.new_i32(Number(mintAction.quantity));
 
       // Create redeemer with specified execution units
-      const redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str('0'));
+      const redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str(String(mintAction.redeemer ?? 0)));
       const redeemer = CSL.Redeemer.new(
         CSL.RedeemerTag.new_mint(),
         CSL.BigNum.from_str('0'),
@@ -495,7 +500,209 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     return txb.build_tx();
   }
 
-  
+  public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    try {
+      // Determine execution units - default or from evaluator
+      let finalExUnits = {
+        mem: DEFAULT_EXECUTION_UNITS.mem.toString(),
+        cpu: DEFAULT_EXECUTION_UNITS.cpu.toString()
+      };
+
+      if (ctx.evaluateTransaction) {
+        // Build evaluation pass with high execution units
+        logger.debug(`[CSLTxBuilder] Building evaluation pass for Plutus spending`);
+        const highExUnits = {
+          mem: HIGH_EXECUTION_UNITS.mem.toString(),
+          cpu: HIGH_EXECUTION_UNITS.cpu.toString()
+        };
+        const evalTx = this._buildPlutusSpendTx(req, ctx, highExUnits);
+        const evalTxCbor = Buffer.from(evalTx.to_bytes()).toString('hex');
+
+        try {
+          const evalResults = await ctx.evaluateTransaction(evalTxCbor);
+          logger.debug(`[CSLTxBuilder] Evaluation results: ${JSON.stringify(evalResults)}`);
+
+          if (evalResults && evalResults.length > 0) {
+            const budget = evalResults[0].budget;
+            finalExUnits = {
+              mem: Math.ceil(budget.memory * EXECUTION_UNIT_BUFFER).toString(),
+              cpu: Math.ceil(budget.cpu * EXECUTION_UNIT_BUFFER).toString()
+            };
+            logger.info(`[CSLTxBuilder] Using evaluated execution units: mem=${finalExUnits.mem}, cpu=${finalExUnits.cpu}`);
+          }
+        } catch (evalError: any) {
+          logger.warn(`[CSLTxBuilder] Evaluation failed, using default units: ${evalError.message}`);
+        }
+      } else {
+        logger.debug(`[CSLTxBuilder] No evaluator available, using default execution units`);
+      }
+
+      // Build final transaction with determined execution units
+      const unsignedTx = this._buildPlutusSpendTx(req, ctx, finalExUnits);
+
+      // Export as CBOR hex
+      const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString('hex');
+
+      // Extract transaction details
+      const body = unsignedTx.body();
+      const bodyBytes = body.to_bytes();
+      const hash = blake2b(32).update(bodyBytes).digest('hex');
+      const txBodyHash = hash;
+      const feeLovelace = body.fee().to_str();
+
+      // Extract outputs
+      const outputs: Array<{ address: string; lovelace: string }> = [];
+      const txOuts = body.outputs();
+      for (let i = 0; i < txOuts.len(); i++) {
+        const o = txOuts.get(i);
+        outputs.push({
+          address: o.address().to_bech32(),
+          lovelace: o.amount().coin().to_str(),
+        });
+      }
+
+      logger.info(`[CSLTxBuilder] Built unsigned Plutus spending transaction. Fee: ${feeLovelace}`);
+
+      return {
+        unsignedTxCbor,
+        txBodyHash,
+        senderAddress: req.senderAddress,
+        network: this.cardanoClient.network,
+        sizeBytes: unsignedTxCbor.length / 2,
+        builderEngine: this.name,
+        feeLovelace,
+        inputs: ctx.utxos.map(u => ({
+          txHash: u.txHash,
+          index: u.outputIndex,
+          lovelace: getLovelace(u).toString(),
+        })),
+        outputs,
+        warnings: [],
+      };
+    } catch (error: any) {
+      logger.error(`[CSLTxBuilder] buildUnsignedPlutusSpendTransaction error: ${error?.message || error}`);
+      mapBuilderError(error, 'lovelace');
+    }
+  }
+
+  /**
+   * Helper to build Plutus spending transaction with specified execution units
+   */
+  private _buildPlutusSpendTx(
+    req: TxBuildPlutusSpendRequest,
+    ctx: TxBuildContext,
+    exUnits: { mem: string; cpu: string }
+  ): CSL.Transaction {
+    const { plutusScriptExecution } = req;
+    const scriptUtxoRef = plutusScriptExecution.scriptUtxo;
+
+    // Prepare addresses
+    const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
+    const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
+
+    // Create Transaction Builder
+    const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
+
+    // Parse the Plutus validator script from CBOR hex (CBOR-wrapped flat UPLC bytecode)
+    const scriptBytes = Buffer.from(plutusScriptExecution.validatorScript, 'hex');
+    const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
+    const scriptSource = CSL.PlutusScriptSource.new(plutusScript);
+
+    // Build redeemer (using DetailedSchema: { "constructor": 0, "fields": [] } format)
+    const redeemerPlutusData = CSL.PlutusData.from_json(
+      JSON.stringify(plutusScriptExecution.redeemer),
+      CSL.PlutusDatumSchema.DetailedSchema
+    );
+    const redeemer = CSL.Redeemer.new(
+      CSL.RedeemerTag.new_spend(),
+      CSL.BigNum.from_str('0'), // index will be corrected by CSL
+      redeemerPlutusData,
+      CSL.ExUnits.new(
+        CSL.BigNum.from_str(exUnits.mem),
+        CSL.BigNum.from_str(exUnits.cpu)
+      )
+    );
+
+    // Build datum source
+    let datumSource: CSL.DatumSource;
+    if (plutusScriptExecution.datum) {
+      // Datum provided explicitly (hash-based datum)
+      const datumPlutusData = CSL.PlutusData.from_json(
+        JSON.stringify(plutusScriptExecution.datum),
+        CSL.PlutusDatumSchema.DetailedSchema
+      );
+      datumSource = CSL.DatumSource.new(datumPlutusData);
+    } else {
+      // No datum provided - for inline datums, pass a unit datum placeholder.
+      // The node will validate against the actual inline datum on-chain.
+      const unitDatum = CSL.PlutusData.new_constr_plutus_data(
+        CSL.ConstrPlutusData.new(CSL.BigNum.from_str('0'), CSL.PlutusList.new())
+      );
+      datumSource = CSL.DatumSource.new(unitDatum);
+    }
+
+    // Add the script input using TxInputsBuilder
+    const scriptInputsBuilder = CSL.TxInputsBuilder.new();
+
+    const scriptTxHash = CSL.TransactionHash.from_bytes(Buffer.from(scriptUtxoRef.txHash, 'hex'));
+    const scriptInput = CSL.TransactionInput.new(scriptTxHash, scriptUtxoRef.outputIndex);
+
+    // Find the script UTxO to get its value
+    const scriptOdatanoUtxo = ctx.utxos.find(
+      u => u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex
+    );
+    if (!scriptOdatanoUtxo) {
+      throw new Error(`[CSLTxBuilder] Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
+    }
+
+    const scriptUtxoValue = CSL.Value.new(CSL.BigNum.from_str(getLovelace(scriptOdatanoUtxo).toString()));
+
+    // Add Plutus script input
+    scriptInputsBuilder.add_plutus_script_input(
+      CSL.PlutusWitness.new_with_ref(scriptSource, datumSource, redeemer),
+      scriptInput,
+      scriptUtxoValue
+    );
+
+    txb.set_inputs(scriptInputsBuilder);
+
+    // Add sender UTxOs for fee payment via coin selection
+    const senderUtxos = ctx.utxos.filter(
+      u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
+    );
+    const cslSenderUtxos = this._mapMultiAssetUtxosToCslUtxos(senderUtxos);
+    txb.add_inputs_from(cslSenderUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+
+    // Create output for recipient
+    const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || 2_000_000)));
+    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
+    txb.add_output(recipientOutput);
+
+    // Add collateral (from sender UTxOs)
+    if (senderUtxos.length > 0) {
+      const collateralUtxo = senderUtxos[0];
+      const collateralBuilder = CSL.TxInputsBuilder.new();
+
+      const colTxHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralUtxo.txHash, 'hex'));
+      const colInput = CSL.TransactionInput.new(colTxHash, collateralUtxo.outputIndex);
+      const colAddress = CSL.Address.from_bech32(collateralUtxo.address);
+      const colValue = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralUtxo).toString()));
+
+      collateralBuilder.add_regular_input(colAddress, colInput, colValue);
+      txb.set_collateral(collateralBuilder);
+    }
+
+    // Calculate script data hash
+    const costModels = this._createCostModels('v3');
+    txb.calc_script_data_hash(costModels);
+
+    // Add change
+    txb.add_change_if_needed(changeAddress);
+
+    // Build and return transaction
+    return txb.build_tx();
+  }
+
   //---------------------------------------------------------------------------
   // Private Helper Methods
   //---------------------------------------------------------------------------

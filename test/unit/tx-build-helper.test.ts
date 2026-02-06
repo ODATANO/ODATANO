@@ -2,9 +2,10 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo } from '../../srv/utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
+import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 
 jest.mock('@harmoniclabs/cardano-ledger-ts', () => ({
   Tx: {
@@ -196,6 +197,89 @@ describe('tx-build-helper utilities', () => {
 
       expect(() => getTxHashFromCbor('aabbccdd'))
         .toThrow('Failed to parse transaction CBOR');
+    });
+  });
+
+  describe('jsonToPlutusData', () => {
+    it('should convert integer JSON to DataI', () => {
+      const result = jsonToPlutusData({ int: 42 });
+      expect(result).toBeInstanceOf(DataI);
+      expect((result as DataI).int).toBe(42n);
+    });
+
+    it('should convert zero integer', () => {
+      const result = jsonToPlutusData({ int: 0 });
+      expect(result).toBeInstanceOf(DataI);
+      expect((result as DataI).int).toBe(0n);
+    });
+
+    it('should convert bytes JSON to DataB', () => {
+      const result = jsonToPlutusData({ bytes: 'deadbeef' });
+      expect(result).toBeInstanceOf(DataB);
+    });
+
+    it('should convert "constr" JSON to DataConstr', () => {
+      const result = jsonToPlutusData({ constr: 0, fields: [] });
+      expect(result).toBeInstanceOf(DataConstr);
+      expect((result as DataConstr).constr).toBe(0n);
+      expect((result as DataConstr).fields).toHaveLength(0);
+    });
+
+    it('should convert "constructor" JSON to DataConstr (cardano-cli format)', () => {
+      const result = jsonToPlutusData({ constructor: 0, fields: [] });
+      expect(result).toBeInstanceOf(DataConstr);
+      expect((result as DataConstr).constr).toBe(0n);
+      expect((result as DataConstr).fields).toHaveLength(0);
+    });
+
+    it('should convert constructor with fields (constr format)', () => {
+      const result = jsonToPlutusData({
+        constr: 1,
+        fields: [{ int: 42 }, { bytes: 'cafe' }]
+      });
+      expect(result).toBeInstanceOf(DataConstr);
+      expect((result as DataConstr).constr).toBe(1n);
+      expect((result as DataConstr).fields).toHaveLength(2);
+      expect((result as DataConstr).fields[0]).toBeInstanceOf(DataI);
+      expect((result as DataConstr).fields[1]).toBeInstanceOf(DataB);
+    });
+
+    it('should convert constructor with fields (cardano-cli format)', () => {
+      const result = jsonToPlutusData({
+        constructor: 1,
+        fields: [{ int: 42 }, { bytes: 'cafe' }]
+      });
+      expect(result).toBeInstanceOf(DataConstr);
+      expect((result as DataConstr).constr).toBe(1n);
+      expect((result as DataConstr).fields).toHaveLength(2);
+      expect((result as DataConstr).fields[0]).toBeInstanceOf(DataI);
+      expect((result as DataConstr).fields[1]).toBeInstanceOf(DataB);
+    });
+
+    it('should convert list JSON to DataList', () => {
+      const result = jsonToPlutusData({ list: [{ int: 1 }, { int: 2 }] });
+      expect(result).toBeInstanceOf(DataList);
+      expect((result as DataList).list).toHaveLength(2);
+    });
+
+    it('should throw for null input', () => {
+      expect(() => jsonToPlutusData(null)).toThrow('PlutusData JSON cannot be null or undefined');
+    });
+
+    it('should throw for undefined input', () => {
+      expect(() => jsonToPlutusData(undefined as any)).toThrow('PlutusData JSON cannot be null or undefined');
+    });
+
+    it('should throw for array input', () => {
+      expect(() => jsonToPlutusData([1, 2, 3] as any)).toThrow('Unsupported PlutusData JSON format');
+    });
+
+    it('should throw for string input', () => {
+      expect(() => jsonToPlutusData('hello' as any)).toThrow('Unsupported PlutusData JSON format');
+    });
+
+    it('should throw for number input', () => {
+      expect(() => jsonToPlutusData(42 as any)).toThrow('Unsupported PlutusData JSON format');
     });
   });
 });

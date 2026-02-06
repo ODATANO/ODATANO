@@ -2,7 +2,7 @@
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
 **Version:** 0.3.0 (Milestone 3)\
-**Status:** Production-Ready - 20 test files, 96%+ coverage\
+**Status:** Production-Ready - 25 test files, 96%+ coverage\
 **Last Updated:** February 2026
 
 ---
@@ -28,9 +28,9 @@
 
 **11 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress
 
-**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, GetProtocolParameters
+**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
 
-**6 External Signing Actions (M3):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
+**8 External Signing & Plutus Actions (M3):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
 
 ### Layered Architecture
 
@@ -478,7 +478,7 @@ test/
     └── signing.test.ts                 # Signing module tests (M3)
 ```
 
-**Current Status:** 20 test files, 96%+ coverage
+**Current Status:** 25 test files, 96%+ coverage
 
 ### Running Tests
 
