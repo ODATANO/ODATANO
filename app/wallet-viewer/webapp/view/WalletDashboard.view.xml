@@ -114,7 +114,9 @@
                         icon="sap-icon://refresh"
                         type="Transparent"
                         press=".onRefreshWallet"
-                        tooltip="Refresh"/>
+                        tooltip="Refresh"
+                        ariaLabelledBy="__refreshLabel"/>
+                    <core:InvisibleText id="__refreshLabel" text="Refresh wallet data"/>
                 </HBox>
 
                 <!-- Balance Card -->
@@ -142,13 +144,15 @@
                 <Panel headerText="Your Address" expandable="false" class="sapUiTinyMarginTop">
                     <content>
                         <HBox alignItems="Center" class="sapUiSmallMargin">
-                            <Text text="{= ${wallet>/addresses/0/bech32} ? ${wallet>/addresses/0/bech32}.substring(0, 25) + '...' + ${wallet>/addresses/0/bech32}.slice(-10) : 'Loading...'}"/>
+                            <Text text="{parts: ['wallet>/addresses/0/bech32'], formatter: '.formatter.truncateAddress'}"/>
                             <ToolbarSpacer/>
                             <Button
                                 icon="sap-icon://copy"
                                 type="Transparent"
                                 press=".onAddressPress"
-                                tooltip="Copy address"/>
+                                tooltip="Copy address"
+                                ariaLabelledBy="__copyAddrLabel"/>
+                            <core:InvisibleText id="__copyAddrLabel" text="Copy address to clipboard"/>
                         </HBox>
                     </content>
                 </Panel>
@@ -162,16 +166,21 @@
                                     <!-- Main Row: Hash and Amount -->
                                     <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiTinyMarginBottom">
                                         <VBox>
-                                            <Title level="H5" text="{= ${wallet>txHash} ? ${wallet>txHash}.substring(0, 12) + '...' + ${wallet>txHash}.slice(-8) : 'N/A'}"/>
+                                            <Title level="H5" text="{parts: ['wallet>txHash'], formatter: '.formatter.truncateHash'}"/>
                                             <Label text="{parts: ['wallet>timestamp'], formatter: '.formatter.formatBlockTime'}" class="sapUiTinyMarginTop"/>
                                         </VBox>
-                                        <VBox alignItems="End">
+                                        <HBox alignItems="Center">
+                                            <core:Icon
+                                                src="{= ${wallet>amount} >= 0 ? 'sap-icon://arrow-top' : 'sap-icon://arrow-bottom'}"
+                                                color="{= ${wallet>amount} >= 0 ? '#107e3e' : '#bb0000'}"
+                                                size="1rem"
+                                                class="sapUiTinyMarginEnd"/>
                                             <ObjectNumber
                                                 number="{= (${wallet>amount} >= 0 ? '+' : '') + (Math.floor(Number(${wallet>amount} || 0) / 1000000 * 100) / 100)}"
-                                                unit="ADA"
+                                                unit="{= ${wallet>amount} >= 0 ? 'ADA Received' : 'ADA Sent'}"
                                                 state="{= ${wallet>amount} >= 0 ? 'Success' : 'Error'}"
                                                 emphasized="true"/>
-                                        </VBox>
+                                        </HBox>
                                     </HBox>
                                     <!-- Native Assets -->
                                     <VBox visible="{wallet>hasAssets}" class="sapUiSmallMarginTop">

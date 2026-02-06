@@ -41,7 +41,7 @@
                     visible="{wallet>/isConnected}">
 
                     <Label text="Recipient"/>
-                    <Text text="{= ${signing>/recipientAddress} ? ${signing>/recipientAddress}.substring(0, 20) + '...' + ${signing>/recipientAddress}.slice(-8) : '' }"/>
+                    <Text text="{parts: ['signing>/recipientAddress'], formatter: '.formatter.truncateAddress'}"/>
 
                     <Label text="Amount"/>
                     <ObjectNumber
@@ -50,7 +50,7 @@
                         emphasized="true"/>
 
                     <Label text="Transaction Hash"/>
-                    <Text text="{= ${signing>/txBodyHash} ? ${signing>/txBodyHash}.substring(0, 8) + '...' + ${signing>/txBodyHash}.slice(-8) : '' }"/>
+                    <Text text="{parts: ['signing>/txBodyHash'], formatter: '.formatter.truncateHash'}"/>
 
                     <Label text="Network"/>
                     <ObjectStatus

@@ -134,6 +134,7 @@ entity NetworkInformation : temporal {
 
 @title      : 'Block Entity'
 @description: 'Block information entity definition'
+@readonly
 entity Blocks {
 
         @title      : 'Block Hash (Key)'
@@ -180,6 +181,7 @@ entity Blocks {
 
 @title      : 'Epoch Entity'
 @description: 'Epoch information entity definition'
+@readonly
 entity Epochs {
 
         @title      : 'Epoch Number (Key)'
@@ -502,6 +504,7 @@ entity Accounts : temporal {
 
 @title      : 'Transaction Entity'
 @description: 'Transaction information entity definition'
+@readonly
 entity Transactions {
 
         @title      : 'Transaction Hash (Key)'
@@ -570,6 +573,7 @@ entity Transactions {
 
 @title      : 'Transaction Inputs'
 @description: 'Projection for Transaction Inputs'
+@readonly
 entity TransactionInputs {
 
         @title      : 'Transaction (key)'
@@ -612,6 +616,7 @@ entity TransactionInputs {
 
 @title      : 'Transaction Input Assets'
 @description: 'Projection for Transaction Input Assets'
+@readonly
 entity TransactionInputAssets {
 
         @title      : 'Transaction Input (key)'
@@ -629,6 +634,7 @@ entity TransactionInputAssets {
 
 @title      : 'Transaction Outputs'
 @description: 'Projection for Transaction Outputs'
+@readonly
 entity TransactionOutputs {
 
         @title      : 'Transaction (key)'
@@ -663,6 +669,7 @@ entity TransactionOutputs {
 
 @title      : 'Transaction Output Assets'
 @description: 'Projection for Transaction Output Assets'
+@readonly
 entity TransactionOutputAssets {
 
         @title      : 'Transaction Output (key)'
@@ -680,6 +687,7 @@ entity TransactionOutputAssets {
 
 @title      : 'Transaction Metadata'
 @description: 'Projection for Transaction Metadata'
+@readonly
 entity TransactionMetadata {
 
         @title      : 'ID (key)'

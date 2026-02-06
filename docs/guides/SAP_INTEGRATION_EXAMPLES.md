@@ -99,7 +99,7 @@ Start by connecting the App to one of your installed CIP-30 compatible wallets (
 
 ![App Start](../assets/screenshots/app_start.png)
 
-@TODO: Add screenshots of wallet connection flow, address overview, transaction details, and signature verifications
+*Visual documentation (screenshots of wallet connection flow, address overview, transaction details, and signature verifications) will be included with the Final Milestone delivery.*
 
 ## ABAP Integration Patterns
 

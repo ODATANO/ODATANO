@@ -1,5 +1,5 @@
 import { bech32 } from "bech32";
-import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,TX_HASH_REGEX,ASSET_UNIT_REGEX,
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,ASSET_UNIT_REGEX,
   POOL_ID_REGEX, DREP_ID_REGEX, HRP
 } from "./const";
 
@@ -185,7 +185,8 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
   if (!DREP_ID_REGEX.test(drepId)) return false;
 
   const decoded = tryDecodeBech32WithHrp(drepId, ["drep"]);
-  return decoded != null;
+  if (decoded) return wordsToBytesLen(decoded.words) === DREP_ID_BYTES;
+  return false;
 }
 
 /**

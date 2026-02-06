@@ -440,6 +440,196 @@ describe('CardanoClient Configuration', () => {
   });
 
   // ============================================================================
+  // initBackends - Live backend (Ogmios) failure with historical fallback
+  // ============================================================================
+  describe('initBackends - live backend failure', () => {
+    it('should continue with historical backends when live backend (ogmios) fails to init', async () => {
+      const config = createTestConfig({ backends: ['ogmios', 'koios'] });
+      const client = new CardanoClient(config);
+
+      // Ogmios init will fail (no real Ogmios running) - but we need to ensure
+      // koios still works. Mock ogmios to fail and koios to succeed.
+      const failingLiveBackend = {
+        name: 'ogmios',
+        init: jest.fn().mockRejectedValue(new Error('WebSocket connection refused')),
+      };
+      (client as any).liveBackend = failingLiveBackend;
+
+      // Koios init succeeds
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const result = await client.getNetworkInformation();
+      expect(result).toBeDefined();
+      expect(result.supply).toBeDefined();
+      // Live backend should be removed after failed init
+      expect((client as any).liveBackend).toBeUndefined();
+    });
+
+    it('should throw AllBackendsInitFailedError when both live and historical backends fail', async () => {
+      const config = createTestConfig({ backends: ['ogmios', 'koios'] });
+      const client = new CardanoClient(config);
+
+      // Ogmios fails
+      const failingLiveBackend = {
+        name: 'ogmios',
+        init: jest.fn().mockRejectedValue(new Error('WebSocket connection refused')),
+      };
+      (client as any).liveBackend = failingLiveBackend;
+
+      // Koios also fails
+      nock(KOIOS_BASE_URL)
+        .get('/tip')
+        .reply(500, { error: 'Server error' });
+
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+    });
+  });
+
+  // ============================================================================
+  // withTimeout - Timeout rejection path
+  // ============================================================================
+  describe('withTimeout', () => {
+    it('should reject with ProviderUnavailableError when backend times out', async () => {
+      setupKoiosTipMock();
+
+      // Koios network info - delayed beyond timeout
+      nock(KOIOS_BASE_URL)
+        .get('/totals')
+        .query({ order: 'epoch_no.desc', limit: '1' })
+        .delay(6000) // longer than fallbackTimeoutMs (10000) ... we'll set a short timeout
+        .reply(200, [{ epoch_no: 100, circulation: '35000000000000000', treasury: '1', reward: '1', supply: '35000000000000000', reserves: '1' }]);
+
+      const config = createTestConfig({
+        backends: ['koios'],
+        primaryTimeoutMs: 100,
+        fallbackTimeoutMs: 100, // very short timeout
+      });
+      const client = new CardanoClient(config);
+
+      await expect(client.getNetworkInformation()).rejects.toThrow('Backend timeout');
+    }, 10000);
+  });
+
+  // ============================================================================
+  // executeWithPriority - Circuit breaker skip
+  // ============================================================================
+  describe('executeWithPriority - circuit breaker', () => {
+    it('should skip backend with open circuit and use fallback', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Inject two mock historical backends and mark as initialized
+      const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
+      const primaryBackend = { name: 'blockfrost', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      const fallbackBackend = { name: 'koios', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      (client as any).historicalBackends = [primaryBackend, fallbackBackend];
+      (client as any).initialized = true;
+
+      // Force circuit open for primary backend
+      const cb = (client as any).circuitBreaker;
+      for (let i = 0; i < 6; i++) {
+        cb.recordFailure('blockfrost');
+      }
+
+      const result = await client.getNetworkInformation();
+      expect(result).toBeDefined();
+      // Primary should have been skipped, fallback should have been called
+      expect(primaryBackend.getNetworkInformation).not.toHaveBeenCalled();
+      expect(fallbackBackend.getNetworkInformation).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw AllBackendsFailedError when all backends have open circuits', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Inject mock backend and mark as initialized
+      const mockBackend = { name: 'koios', getNetworkInformation: jest.fn() };
+      (client as any).historicalBackends = [mockBackend];
+      (client as any).initialized = true;
+
+      // Force circuit open for koios
+      const cb = (client as any).circuitBreaker;
+      for (let i = 0; i < 6; i++) {
+        cb.recordFailure('koios');
+      }
+
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
+      expect(mockBackend.getNetworkInformation).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // shutdown - Historical backends + error handling
+  // ============================================================================
+  describe('shutdown - backend cleanup', () => {
+    it('should call shutdown on backends that have a shutdown method', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Trigger initialization
+      await client.getNetworkInformation();
+
+      // Replace historical backends with mocks that have shutdown
+      const mockBackend = {
+        name: 'mock-historical',
+        shutdown: jest.fn().mockResolvedValue(undefined),
+      };
+      (client as any).historicalBackends = [mockBackend as any];
+
+      await client.shutdown();
+
+      expect(mockBackend.shutdown).toHaveBeenCalledTimes(1);
+      expect((client as any).initialized).toBe(false);
+    });
+
+    it('should not throw when backend shutdown throws an error', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      await client.getNetworkInformation();
+
+      // Mock backend with failing shutdown
+      const failingBackend = {
+        name: 'failing-backend',
+        shutdown: jest.fn().mockRejectedValue(new Error('Shutdown failed')),
+      };
+      (client as any).historicalBackends = [failingBackend as any];
+
+      // Should not throw - errors are caught and logged
+      await expect(client.shutdown()).resolves.not.toThrow();
+      expect(failingBackend.shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it('should call shutdown on live backend when it has a shutdown method', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      await client.getNetworkInformation();
+
+      // Add a mock live backend with shutdown
+      const mockLiveBackend = {
+        name: 'ogmios',
+        shutdown: jest.fn().mockResolvedValue(undefined),
+      };
+      (client as any).liveBackend = mockLiveBackend;
+
+      await client.shutdown();
+
+      expect(mockLiveBackend.shutdown).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ============================================================================
   // isEvaluatingBackend Type Guard Tests
   // ============================================================================
   describe('isEvaluatingBackend', () => {

@@ -42,13 +42,23 @@ interface OgmiosStakePool {
 }
 
 interface OgmiosRewardAccountSummary {
-  controlledAmount?: number | bigint | string;
-  rewards?: number | bigint | string;
-  withdrawals?: number | bigint | string;
+  controlledAmount?: any;
+  rewards?: any;
+  withdrawals?: any;
   delegate?: { id?: string };
   delegation?: { poolId?: string };
   vote?: { id?: string };
   drep?: { id?: string };
+}
+
+/** Resolve Ogmios ledger tip which may be 'origin' (genesis block) or a point */
+export function resolveOgmiosTip(tip: 'origin' | { slot: number; id: string }): { slot: number; hash: string } {
+  return tip === 'origin' ? { slot: 0, hash: '' } : { slot: tip.slot, hash: tip.id };
+}
+
+/** Resolve Ogmios block height which may be 'origin' (genesis block) or a number */
+export function resolveOgmiosHeight(height: 'origin' | number): number {
+  return height === 'origin' ? 0 : height;
 }
 
 /**
@@ -245,7 +255,6 @@ export class OgmiosBackend implements EvaluatingBackend {
       this.ensureNotShutdown();
       
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
-
       return utxos.map((u: any) => {
         // convert Ogmios value format to standard amount array
         const amount = this.convertOgmiosValue(u.value);
@@ -296,15 +305,15 @@ export class OgmiosBackend implements EvaluatingBackend {
         vrfKeyHash: pool.vrf || pool.vrfKeyHash || '',
         blocksMinted: 0,
         blocksEpoch: 0,
-        liveStake: pool.stake?.ada?.lovelace ? Number(pool.stake.ada.lovelace) : 0,
+        liveStake: pool.stake?.ada?.lovelace ? String(pool.stake.ada.lovelace) : '0',
         liveSize: 0,
         liveDelegators: 0,
         liveSaturation: 0,
-        activeStake: Number(pool.pledge || 0),
+        activeStake: pool.pledge ? String(pool.pledge) : '0',
         activeSize: 0,
-        pledge: Number(pool.pledge || 0),
+        pledge: pool.pledge ? String(pool.pledge) : '0',
         margin: Number(pool.margin || 0),
-        fixedCost: Number(pool.cost || 0),
+        fixedCost: pool.cost ? String(pool.cost) : '0',
         rewardAccount: pool.rewardAccount || ''
       };
     }, this.name);
@@ -319,8 +328,11 @@ export class OgmiosBackend implements EvaluatingBackend {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
 
-      // Cast through unknown as Ogmios types are complex and don't match our simplified interface
-      const summaries = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] }) as unknown as OgmiosRewardAccountSummary[];
+      const rawResult = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] });
+      // Ogmios returns a record keyed by stake address; normalize to array
+      const summaries: OgmiosRewardAccountSummary[] = Array.isArray(rawResult)
+        ? rawResult
+        : Object.values(rawResult as Record<string, OgmiosRewardAccountSummary>);
 
       // Ogmios API returns array of account summaries
       const account = summaries && summaries.length > 0 ? summaries[0] : null;
@@ -442,9 +454,7 @@ export class OgmiosBackend implements EvaluatingBackend {
         this.stateQueryClient!.ledgerTip()
       ]);
       
-      // TypeScript requires 'origin' checks (genesis block), though practically never occurs
-      /* c8 ignore next */
-      const slot = tip === 'origin' ? 0 : tip.slot;
+      const { slot } = resolveOgmiosTip(tip);
 
       // Calculate epoch boundaries using era start as reference
       const SLOTS_PER_EPOCH = CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
@@ -492,11 +502,8 @@ export class OgmiosBackend implements EvaluatingBackend {
         this.stateQueryClient!.eraStart()
       ]);
 
-      // TypeScript requires 'origin' checks (genesis block), though practically never occurs
-      /* c8 ignore next 3 */
-      const slot = tip === 'origin' ? 0 : tip.slot;
-      const hash = tip === 'origin' ? '' : tip.id;
-      const height = blockHeight === 'origin' ? 0 : blockHeight;
+      const { slot, hash } = resolveOgmiosTip(tip);
+      const height = resolveOgmiosHeight(blockHeight);
 
       // eraStart.time is RelativeTime { seconds: bigint }
       const eraStartTime = Number(eraStart.time.seconds) * 1000;

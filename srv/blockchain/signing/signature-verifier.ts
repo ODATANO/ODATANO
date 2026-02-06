@@ -17,6 +17,20 @@ const logger = cds.log('SignatureVerifier');
  * 2. The transaction body hash matches the expected hash (integrity check)
  * 3. Required signatures are present (when specified)
  * 4. No tampering occurred between build and sign steps
+ *
+ * ARCHITECTURE NOTE - Dual-Library Approach:
+ * This verifier deliberately uses two Cardano libraries:
+ * - Harmoniclabs (@harmoniclabs/cardano-ledger-ts): For CBOR parsing and transaction body
+ *   hash computation. Harmoniclabs preserves the original CBOR byte encoding, producing
+ *   correct Blake2b-256 hashes. CSL's parse/re-serialize round-trip normalizes CBOR,
+ *   which changes the bytes and produces incorrect hashes.
+ * - CSL (@emurgo/cardano-serialization-lib-nodejs): For witness set extraction and
+ *   Ed25519 cryptographic signature verification. CSL provides a well-tested Ed25519
+ *   verify() API. Witness extraction is independent of body hash computation.
+ *
+ * This is safe because: the hash is computed from original bytes (Harmoniclabs),
+ * witnesses are structural data extracted separately (CSL), and Ed25519 verify is a
+ * pure cryptographic operation on raw bytes unaffected by CBOR encoding differences.
  */
 export class SignatureVerifier {
   /**
@@ -46,7 +60,8 @@ export class SignatureVerifier {
 
       logger.debug(`Computed transaction body hash (harmoniclabs): ${computedHash}`);
 
-      // Also parse with CSL for witness extraction (needed for signature verification)
+      // Also parse with CSL for witness extraction and Ed25519 verification
+      // (structural extraction independent of body hash computation - see class doc)
       const txBytes = Buffer.from(signedTxCbor, 'hex');
       const tx = CSL.Transaction.from_bytes(txBytes);
 

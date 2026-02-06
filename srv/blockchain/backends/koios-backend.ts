@@ -113,8 +113,8 @@ export class KoiosBackend implements CardanoBackend {
           blockTime: tx.block_time,
           slot: tx.slot_no,
           index: tx.tx_index,
-          fee: parseInt(tx.tx_fee || '0', 10),
-          deposit: parseInt(tx.deposit || '0', 10),
+          fee: tx.tx_fee || '0',
+          deposit: tx.deposit || '0',
           size: tx.tx_size,
           inputs: tx.inputs.map((input: any) => {
             const amount: Amount[] = [
@@ -384,19 +384,19 @@ export class KoiosBackend implements CardanoBackend {
         }
         
         // Fallback for preview/preprod networks where /totals doesn't work
-        // Use genesis endpoint to get max supply at minimum and fill rest with defaults from mainnet epoch 608 snapshot
+        // Use genesis endpoint to get max supply; remaining fields default to '0'
         const { data: genesisData } = await this.api.get('/genesis');
         const genesis = genesisData[0];
-        
-        // Default values based on mainnet epoch 608 snapshot
+        const maxSupply = genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
+
         return {
           supply: {
-            max: genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
-            total: '38388567212743111',
-            circulating: '36035240284477897',
+            max: maxSupply,
+            total: maxSupply,
+            circulating: maxSupply,
             locked: '0',
-            treasury: '1614459422162537',
-            reserves: '6611432787256889',
+            treasury: '0',
+            reserves: '0',
           },
           stake: {
             live: '0',
@@ -464,15 +464,15 @@ export class KoiosBackend implements CardanoBackend {
           vrfKeyHash: poolData.vrf_key_hash,
           blocksMinted: poolData.block_count,
           blocksEpoch: poolData.epoch_no,
-          liveStake: parseInt(poolData.live_stake || '0', 10),
+          liveStake: poolData.live_stake || '0',
           liveSize: poolData.live_size || 0,
           liveDelegators: poolData.live_delegators || 0,
           liveSaturation: poolData.live_saturation || 0,
-          activeStake: parseInt(poolData.active_stake || '0', 10),
+          activeStake: poolData.active_stake || '0',
           activeSize: poolData.active_size || 0,
-          pledge: parseInt(poolData.pledge || '0', 10),
+          pledge: poolData.pledge || '0',
           margin: poolData.margin || 0,
-          fixedCost: parseInt(poolData.fixed_cost || '0', 10),
+          fixedCost: poolData.fixed_cost || '0',
           rewardAccount: poolData.reward_addr,
         };
       },

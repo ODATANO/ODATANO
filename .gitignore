@@ -68,3 +68,7 @@ build-ubuntu.sh
 mta*
 
 dist/
+
+PRODUCTION_DEPLOYMENT.md
+PRODUCTION_DEPLOYMENT.md
+SECURITY_GUIDE.md

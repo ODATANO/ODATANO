@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
+import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 
 import {
   Transaction,
@@ -56,6 +57,7 @@ export type CardanoClientConfig = {
   primaryTimeoutMs: number;
   fallbackTimeoutMs: number;
   indexTtlMs: number;
+  circuitBreaker?: Partial<CircuitBreakerConfig>;
 }
 
 /**
@@ -72,8 +74,9 @@ export class CardanoClient {
   private historicalBackends: CardanoBackend[] = [];
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private circuitBreaker: CircuitBreakerManager;
   network: Network;
-  max_age_ms: number = 60000; // default 10 minutes for temporary caching 
+  max_age_ms: number = 60000; // default 10 minutes for temporary caching
 
   /** 
    * Constructor for CardanoClient
@@ -100,6 +103,7 @@ export class CardanoClient {
       throw new ConfigError('No valid backends configured for CardanoClient');
     }
 
+    this.circuitBreaker = new CircuitBreakerManager(clientConfig.circuitBreaker);
     logger.info('CardanoClient instance created.');
     this.config = clientConfig;
   }
@@ -189,8 +193,6 @@ export class CardanoClient {
    * @returns {number} timeout in milliseconds
    */
   private getTimeoutForBackend(backend: CardanoBackend): number {
-    if (backend.name === 'ogmios') return this.config.primaryTimeoutMs;
-    if (backend.name === 'blockfrost') return this.config.primaryTimeoutMs;
     if (backend.name === 'koios') return this.config.fallbackTimeoutMs;
     return this.config.primaryTimeoutMs;
   }
@@ -219,29 +221,40 @@ export class CardanoClient {
     
     const allBackends = [...primaryBackends, ...fallbackBackends];
     
-    // Try each backend in order
+    // Try each backend in order, respecting circuit breaker state
     for (const backend of allBackends) {
+      if (!this.circuitBreaker.shouldAttempt(backend.name)) {
+        logger.debug(`Circuit open for ${backend.name}, skipping`);
+        continue;
+      }
+
       try {
         const backendType = backend === this.liveBackend ? 'live' : 'historical';
         logger.debug(`Calling backend: ${backend.name} (${backendType})`);
-        
+
         const result = await this.withTimeout(
           fn(backend),
           this.getTimeoutForBackend(backend),
           backend.name
         );
+        this.circuitBreaker.recordSuccess(backend.name);
         return result;
       } catch (err: any) {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
-        
+
+        // Don't count 404s as backend failures (resource not found is a valid response)
+        if (backendError.statusCode !== 404) {
+          this.circuitBreaker.recordFailure(backend.name);
+        }
+
         const logLevel = backendError.statusCode === 404 ? 'debug' : 'warn';
         logger[logLevel](
           `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}: ${backend.name} - ${backendError.message}`
         );
       }
     }
-    
+
     throw new AllBackendsFailedError(errors);
   }
 
@@ -256,11 +269,7 @@ export class CardanoClient {
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
     const config = METHOD_ROUTING[methodName];
-    if (!config) {
-      logger.warn(`No routing config found for method ${methodName}, defaulting to live-first`);
-      return this.executeWithPriority(fn, true);
-    }
-    return this.executeWithPriority(fn, config.preferLive);
+    return this.executeWithPriority(fn, config?.preferLive ?? true);
   }
 
   /** 
@@ -389,6 +398,17 @@ export class CardanoClient {
     }
 
     // Shutdown historical backends
+    for (const backend of this.historicalBackends) {
+      if ('shutdown' in backend && typeof backend.shutdown === 'function') {
+        try {
+          await backend.shutdown();
+          logger.debug(`Historical backend ${backend.name} shut down`);
+        } catch (err) {
+          logger.error(`Error shutting down historical backend ${backend.name}: ${err}`);
+        }
+      }
+    }
+
     this.initialized = false;
     this.initPromise = null;
     logger.info('CardanoClient shutdown complete');

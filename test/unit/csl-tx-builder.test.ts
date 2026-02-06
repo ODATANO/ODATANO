@@ -6,8 +6,8 @@
  * transaction building, so we don't need to mock the cardano client.
  */
 
-import { CSLTxBuilder, mapBuilderError } from '../../srv/blockchain/transaction-building/csl-tx';
-import { mapBuilderError as mapBuildooorError } from '../../srv/blockchain/transaction-building/buildooor-tx';
+import { CSLTxBuilder } from '../../srv/blockchain/transaction-building/csl-tx';
+import { mapBuilderError } from '../../srv/utils/tx-build-helper';
 import { InsufficientFundsError } from '../../srv/utils/errors';
 import type { TxBuildRequest, TxBuildContext } from '../../srv/utils/types';
 
@@ -138,23 +138,63 @@ describe('CSLTxBuilder', () => {
   describe('mapBuilderError (Buildooor)', () => {
     it('should throw InsufficientFundsError for "not enough" error message', () => {
       const err = new Error('Not enough ADA');
-      expect(() => mapBuildooorError(err)).toThrow(InsufficientFundsError);
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
     });
 
     it('should throw InsufficientFundsError for "insufficient" error message', () => {
       const err = new Error('Insufficient balance');
-      expect(() => mapBuildooorError(err)).toThrow(InsufficientFundsError);
+      expect(() => mapBuilderError(err)).toThrow(InsufficientFundsError);
     });
 
     it('should re-throw original error for unrecognized error patterns', () => {
       const err = new Error('Transaction too large');
-      expect(() => mapBuildooorError(err)).toThrow('Transaction too large');
+      expect(() => mapBuilderError(err)).toThrow('Transaction too large');
     });
 
     it('should handle errors without message (returns empty string)', () => {
       // Buildooor version uses err?.message?.toLowerCase() || ''
       const err = {};
-      expect(() => mapBuildooorError(err)).toThrow();
+      expect(() => mapBuilderError(err)).toThrow();
+    });
+  });
+
+  describe('_createCostModels', () => {
+    const createCostModels = (costModelsValue: any, version?: 'v1' | 'v2' | 'v3') => {
+      (builder as any).protocolParameters = { costModels: costModelsValue };
+      return (builder as any)._createCostModels(version);
+    };
+
+    it('should return empty cost models when costModels is undefined', () => {
+      const result = createCostModels(undefined);
+      expect(result.len()).toBe(0);
+    });
+
+    it('should return empty cost models when costModels is empty string', () => {
+      const result = createCostModels('');
+      expect(result.len()).toBe(0);
+    });
+
+    it('should return empty cost models when costModels is invalid JSON', () => {
+      const result = createCostModels('not-valid-json');
+      // Should not throw - catch block handles it and returns empty
+      expect(result.len()).toBe(0);
+    });
+
+    it('should return empty cost models when costModels JSON has no matching version', () => {
+      const result = createCostModels(JSON.stringify({ 'plutus:v1': [1, 2, 3] }), 'v3');
+      expect(result.len()).toBe(0);
+    });
+
+    it('should parse valid PlutusV3 cost model with plutus:v3 key', () => {
+      const costs = Array(251).fill(0).map((_, i) => i);
+      const result = createCostModels(JSON.stringify({ 'plutus:v3': costs }));
+      expect(result.len()).toBe(1);
+    });
+
+    it('should parse valid PlutusV3 cost model with PlutusV3 key', () => {
+      const costs = Array(251).fill(0).map((_, i) => i);
+      const result = createCostModels(JSON.stringify({ 'PlutusV3': costs }));
+      expect(result.len()).toBe(1);
     });
   });
 });

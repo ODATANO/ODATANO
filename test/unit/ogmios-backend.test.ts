@@ -13,7 +13,7 @@ jest.mock('@cardano-ogmios/client', () => ({
   createTransactionSubmissionClient: jest.fn()
 }));
 
-import { OgmiosBackend } from '../../srv/blockchain/backends/ogmios-backend';
+import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight } from '../../srv/blockchain/backends/ogmios-backend';
 import { BackendInitError } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
@@ -585,4 +585,25 @@ describe('OgmiosBackend', () => {
   // Note: createInteractionContext, getAddressUtxos, and getProtocolParameters error handling
   // is tested through BackendInitError in init() tests - the underlying Ogmios client
   // errors are wrapped and thrown appropriately by the backend implementation.
+
+  describe('resolveOgmiosTip', () => {
+    it('should return slot and hash from a normal tip', () => {
+      const tip = { slot: 12345, id: 'abc123' };
+      expect(resolveOgmiosTip(tip)).toEqual({ slot: 12345, hash: 'abc123' });
+    });
+
+    it('should return zeros for origin (genesis block)', () => {
+      expect(resolveOgmiosTip('origin')).toEqual({ slot: 0, hash: '' });
+    });
+  });
+
+  describe('resolveOgmiosHeight', () => {
+    it('should return the height number directly', () => {
+      expect(resolveOgmiosHeight(999)).toBe(999);
+    });
+
+    it('should return 0 for origin (genesis block)', () => {
+      expect(resolveOgmiosHeight('origin')).toBe(0);
+    });
+  });
 });

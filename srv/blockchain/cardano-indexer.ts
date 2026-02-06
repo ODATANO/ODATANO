@@ -105,6 +105,8 @@ export class CardanoIndexer {
 
   /**
    * Index & return a single transaction with inputs/outputs/assets/UTxOs/addresses
+   * All UPSERTs execute within the same CAP transaction (cds.tx), which ensures
+   * atomicity: either all entities are persisted or none are (automatic rollback on error).
    * @param tx      CAP transaction (cds.tx(req))
    * @param txHash  Cardano transaction hash (hex)
    * @returns {Promise<CardanoTransaction>} transaction entity data
@@ -413,151 +415,56 @@ export class CardanoIndexer {
     return poolEntity;
   }
 
-  /** 
-   * Index & return the transaction build result data
-   * @param tx CAP transaction object
+  /**
+   * Common method: build a transaction, persist build result with inputs/outputs/address associations.
+   * All four public indexBuild*Result methods delegate to this to eliminate duplication.
+   * @param tx      CAP transaction object
    * @param buildreq transaction build request data
+   * @param buildFn  the specific builder method to call
    * @returns {Promise<TransactionBuild>} transaction build entity data
    */
-  async indexSimpleBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
-
-    // make sure we have protocol parameters indexed
+  private async _indexBuildResult(
+    tx: CapTransaction,
+    buildreq: TxBuildRequest,
+    buildFn: (req: TxBuildRequest, params: LedgerProtocolParameter) => Promise<any>
+  ): Promise<TransactionBuild> {
     const protocolParams = await this.indexProtocolParameters(tx);
-
-    const txbuildResult = await this.txBuilder.buildSimpleAdaTransaction(
-      buildreq,
-      protocolParams);
-
+    const txbuildResult = await buildFn(buildreq, protocolParams);
     const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
 
-    // Store inputs if available
     if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
       const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
       await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
     }
 
-    // Store outputs if available
     if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
     }
 
-    // Index address-build association for sender address
     if (buildResult.id && buildreq.senderAddress) {
       await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
     }
 
     return buildResult;
+  }
+
+  async indexSimpleBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildSimpleAdaTransaction(req, params));
   }
 
   async indexMetadataBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
-
-    // make sure we have protocol parameters indexed
-    const protocolParams = await this.indexProtocolParameters(tx);
-    const txbuildResult = await this.txBuilder.buildTransactionWithMetadata(
-      buildreq,
-      protocolParams);
-      
-    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
-    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
-
-    // Store inputs if available
-    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
-      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
-      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
-    }
-    // Store outputs if available
-    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
-      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
-      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
-    }
-
-    // Index address-build association for sender address
-    if (buildResult.id && buildreq.senderAddress) {
-      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
-    }
-
-    return buildResult;
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildTransactionWithMetadata(req, params));
   }
 
-  /**
-   * Index & return the multi-asset transaction build result data
-   * @param tx CAP transaction object
-   * @param buildreq transaction build request data
-   * @returns {Promise<TransactionBuild>} transaction build entity data
-   */
   async indexMultiAssetBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
-
-    // make sure we have protocol parameters indexed
-    const protocolParams = await this.indexProtocolParameters(tx);
-
-    const txbuildResult = await this.txBuilder.buildMultiAssetTransaction(
-      buildreq,
-      protocolParams);
-
-    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
-
-    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
-
-    // Store inputs if available
-    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
-      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
-      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
-    }
-
-    // Store outputs if available
-    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
-      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
-      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
-    }
-
-    // Index address-build association for sender address
-    if (buildResult.id && buildreq.senderAddress) {
-      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
-    }
-
-    return buildResult;
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildMultiAssetTransaction(req, params));
   }
 
-  /**
-   * Index & return the minting transaction build result data
-   * @param tx CAP transaction object
-   * @param buildreq transaction build request data
-   * @returns {Promise<TransactionBuild>} transaction build entity data
-   */
   async indexMintBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
-
-    // make sure we have protocol parameters indexed
-    const protocolParams = await this.indexProtocolParameters(tx);
-
-    const txbuildResult = await this.txBuilder.buildMintTransaction(
-      buildreq,
-      protocolParams);
-
-    const buildResult = mapBuildResult(txbuildResult, this.client.max_age_ms);
-
-    await tx.run(UPSERT.into(TransactionBuild).entries(buildResult));
-
-    // Store inputs if available
-    if (buildResult.id && txbuildResult.inputs && txbuildResult.inputs.length > 0) {
-      const inputRows = mapBuildInputs(buildResult.id, txbuildResult.inputs);
-      await tx.run(UPSERT.into(TransactionBuildInputs).entries(inputRows));
-    }
-
-    // Store outputs if available
-    if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
-      const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
-      await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
-    }
-
-    // Index address-build association for sender address
-    if (buildResult.id && buildreq.senderAddress) {
-      await this.indexAddressTransactionBuilds(tx, buildreq.senderAddress, buildResult.id);
-    }
-
-    return buildResult;
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildMintTransaction(req, params));
   }
 
   /**

@@ -23,12 +23,13 @@ export const DEFAULT_EXECUTION_UNITS = {
 
 /**
  * High execution units for initial transaction build (before evaluation)
+ * Set higher than DEFAULT to ensure fee estimation is sufficient before actual evaluation
  */
 export const HIGH_EXECUTION_UNITS = {
   /** Memory units - high for evaluation pass */
-  mem: 14_000_000,
+  mem: 28_000_000,
   /** CPU steps - high for evaluation pass */
-  cpu: 10_000_000_000,
+  cpu: 20_000_000_000,
 };
 
 /**
@@ -70,6 +71,8 @@ export const BECH32_MAX_LENGTH = 2000;
 export const MAX_EPOCH = 100_000;
 /** Standard pool ID payload length */
 export const POOL_ID_BYTES = 28;
+/** Standard DRep ID payload length (1 byte type prefix + 28 byte key hash) */
+export const DREP_ID_BYTES = 29;
 
 /** 
  * Transaction hash Regex - 64-character hexadecimal string

@@ -61,8 +61,8 @@ export interface Transaction {
   blockHeight: number;
   slot: number;
   index: number;
-  fee: Lovelace;
-  deposit: Lovelace;
+  fee: Lovelace | string;
+  deposit: Lovelace | string;
   size: number;
   blockTime: number;
   outputAmount?: Amount[];
@@ -192,15 +192,15 @@ export interface PoolData {
   vrfKeyHash: string;
   blocksMinted: number;
   blocksEpoch: number;
-  liveStake: Lovelace;
+  liveStake: string;
   liveSize: number;
   liveSaturation: number;
   liveDelegators: number;
-  activeStake: Lovelace;
+  activeStake: string;
   activeSize: number;
-  pledge: Lovelace;
+  pledge: string;
   margin: number;
-  fixedCost: Lovelace;
+  fixedCost: string;
   rewardAccount: string;
 }
 

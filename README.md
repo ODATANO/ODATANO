@@ -46,7 +46,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Transaction Building**: Cardano Serialization Library (CSL) & Buildooor for minting, ADA or Token transfers, and metadata transactions
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
-- **Comprehensive Testing**: 692 tests across 19 test suites, 96%+ statement coverage
+- **Comprehensive Testing**: 834 tests across 23 test suites, 96%+ statement coverage
 
 ## Quick Start
 

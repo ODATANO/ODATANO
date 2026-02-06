@@ -37,6 +37,9 @@ LABEL org.opencontainers.image.version="${VERSION}" \
 # Set version as environment variable (accessible at runtime)
 ENV APP_VERSION=${VERSION}
 
+# Run as non-root user for security
+USER node
+
 # Expose port
 EXPOSE 4004
 

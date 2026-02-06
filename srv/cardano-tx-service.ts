@@ -11,6 +11,21 @@ const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoTxService');
 
 /**
+ * Check if a signing request has expired and update its status.
+ * @returns true if expired, false otherwise
+ */
+async function checkAndExpireSigningRequest(
+  db: any, signingRequest: any, SigningRequests: any
+): Promise<boolean> {
+  if (new Date(signingRequest.expiresAt) < new Date()) {
+    await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequest.id }));
+    signingRequest.status = 'expired';
+    return true;
+  }
+  return false;
+}
+
+/**
  * Cardano Transaction Service Implementation
  * Handles transaction building and submission operations & some additional data queries.
  */
@@ -142,8 +157,11 @@ module.exports = (srv: cds.Service) => {
     );
     throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
 
-    // Parse assetsJson (already validated as valid JSON)
+    // Parse assetsJson (already validated as valid JSON by validateTransactionInputs)
     const parsedAssets = JSON.parse(assetsJson);
+    if (!Array.isArray(parsedAssets)) {
+      rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must be a JSON array', 'assetsJson');
+    }
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
@@ -177,7 +195,11 @@ module.exports = (srv: cds.Service) => {
     throwIfValidationErrors(req, 'BuildMintTransaction', errors);
 
     // Parse mintActionsJson and convert quantity strings to bigint
-    const parsedMintActions = JSON.parse(mintActionsJson).map((action: { assetName: string; quantity: string }) => ({
+    const parsedMintActionsRaw = JSON.parse(mintActionsJson);
+    if (!Array.isArray(parsedMintActionsRaw)) {
+      rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
+    }
+    const parsedMintActions = parsedMintActionsRaw.map((action: { assetName: string; quantity: string }) => ({
       ...action,
       quantity: BigInt(action.quantity)
     }));
@@ -213,11 +235,11 @@ module.exports = (srv: cds.Service) => {
     throwIfValidationErrors(req, 'GetBuildDetails', errors);
 
     // handle the request / fetching the build details
-    const existing = await cds.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-
-    if (!existing) rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
-
-    return existing;
+    return handleRequest(req, async (db) => {
+      const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+      if (!existing) rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+      return existing;
+    });
   });
 
   /**
@@ -422,17 +444,18 @@ module.exports = (srv: cds.Service) => {
     const errors = validateTransactionInputs({ signingRequestId }, ['signingRequestId']);
     throwIfValidationErrors(req, 'GetSigningRequest', errors);
 
-    // Fetch the signing request
-    const signingRequest = await cds.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
-    if (!signingRequest) rejectInvalid(req, 'GetSigningRequest', 'Signing request not found', 'signingRequestId');
+    // Fetch the signing request within transaction context
+    return handleRequest(req, async (db) => {
+      const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+      if (!signingRequest) rejectInvalid(req, 'GetSigningRequest', 'Signing request not found', 'signingRequestId');
 
-    // Check if expired and update status if needed
-    if (signingRequest.status === 'pending' && new Date(signingRequest.expiresAt) < new Date()) {
-      await cds.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
-      signingRequest.status = 'expired';
-    }
+      // Check if expired and update status if needed
+      if (signingRequest.status === 'pending') {
+        await checkAndExpireSigningRequest(db, signingRequest, SigningRequests);
+      }
 
-    return signingRequest;
+      return signingRequest;
+    });
   });
 
   /**
@@ -458,8 +481,7 @@ module.exports = (srv: cds.Service) => {
       if (!signingRequest) rejectInvalid(req, 'VerifySignature', 'Signing request not found', 'signingRequestId');
 
       // Check if expired
-      if (new Date(signingRequest.expiresAt) < new Date()) {
-        await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+      if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
       }
 
@@ -510,14 +532,16 @@ module.exports = (srv: cds.Service) => {
       if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
 
       // Check if expired
-      if (new Date(signingRequest.expiresAt) < new Date()) {
-        await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+      if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
       }
 
-      // Check if already submitted
+      // Check state machine: only 'pending' or 'verified' signing requests can be submitted
       if (signingRequest.status === 'submitted') {
         rejectInvalid(req, 'SubmitVerifiedTransaction', 'Transaction already submitted', 'signingRequestId');
+      }
+      if (signingRequest.status !== 'pending' && signingRequest.status !== 'verified') {
+        rejectInvalid(req, 'SubmitVerifiedTransaction', `Cannot submit signing request in '${signingRequest.status}' state`, 'signingRequestId');
       }
 
       // Check if build association exists
@@ -585,8 +609,9 @@ module.exports = (srv: cds.Service) => {
     if (!address) rejectMissing(req, 'GetSigningRequestsByAddress', 'address');
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetSigningRequestsByAddress', 'Invalid bech32 address format', 'address');
     // Fetch the address-signing request associations
-    const signingRequests = await cds.run(SELECT.from(AddressSigningRequests).where({ address_address: address }));
-    return signingRequests;
+    return handleRequest(req, async (db) => {
+      return db.run(SELECT.from(AddressSigningRequests).where({ address_address: address }));
+    });
   });
 
   /**
@@ -601,8 +626,9 @@ module.exports = (srv: cds.Service) => {
     if (!address) rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
     // Fetch the address-build associations
-    const txBuilds = await cds.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
-    return txBuilds;
+    return handleRequest(req, async (db) => {
+      return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
+    });
   });
 
 };

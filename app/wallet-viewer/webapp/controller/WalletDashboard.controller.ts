@@ -425,21 +425,27 @@ export default class WalletDashboard extends Controller {
      */
     public onRecipientAddressChange(event: any): void {
         const value = (event.getParameter("newValue") as string)?.trim();
+        // Bech32 charset: lowercase alphanumeric excluding 1, b, i, o
+        const bech32Charset = /^[a-z0-9_]+$/;
+        // Cardano base addresses are typically 98-114 chars
+        const MIN_ADDR_LENGTH = 58;
 
         if (!value) {
             this.sendModel.setProperty("/recipientAddressState", "None");
             this.sendModel.setProperty("/recipientAddressStateText", "");
-        } else if (value.startsWith("addr1") || value.startsWith("addr_test1")) {
-            if (value.length >= 50) {
-                this.sendModel.setProperty("/recipientAddressState", "Success");
-                this.sendModel.setProperty("/recipientAddressStateText", "");
-            } else {
-                this.sendModel.setProperty("/recipientAddressState", "Warning");
-                this.sendModel.setProperty("/recipientAddressStateText", "Address seems incomplete");
-            }
-        } else {
+        } else if (!value.startsWith("addr1") && !value.startsWith("addr_test1")) {
             this.sendModel.setProperty("/recipientAddressState", "Error");
             this.sendModel.setProperty("/recipientAddressStateText", "Must start with addr1 or addr_test1");
+        } else if (!bech32Charset.test(value)) {
+            this.sendModel.setProperty("/recipientAddressState", "Error");
+            this.sendModel.setProperty("/recipientAddressStateText", "Contains invalid characters");
+        } else if (value.length < MIN_ADDR_LENGTH) {
+            this.sendModel.setProperty("/recipientAddressState", "Warning");
+            this.sendModel.setProperty("/recipientAddressStateText", "Address seems incomplete");
+        } else {
+            // Client-side validation passed; server validates bech32 checksum on submit
+            this.sendModel.setProperty("/recipientAddressState", "Success");
+            this.sendModel.setProperty("/recipientAddressStateText", "");
         }
 
         this.validateSendForm();
@@ -484,8 +490,9 @@ export default class WalletDashboard extends Controller {
         const amount = this.sendModel.getProperty("/adaAmount") as string;
 
         const isValid =
-            recipientAddress?.length >= 50 &&
+            recipientAddress?.length >= 58 &&
             (recipientAddress.startsWith("addr1") || recipientAddress.startsWith("addr_test1")) &&
+            /^[a-z0-9_]+$/.test(recipientAddress) &&
             parseFloat(amount) > 0 &&
             recipientState !== "Error" &&
             amountState !== "Error";

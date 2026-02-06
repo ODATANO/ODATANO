@@ -593,19 +593,24 @@ export function mapAccount(providerAccountData: AccountProviderData, max_age: nu
   };
 }
 
-/** 
+/**
  * Map Backend Error
- * Converts BackendError into OData request rejection
+ * Converts BackendError or unknown error into OData request rejection
  * @param req OData request
- * @param err error object
+ * @param err error object (BackendError or unknown)
  * @param ctx context string for error message
  */
-export function mapError(req: Request, err: BackendError, ctx: string) {
-    return req.reject(
-      err.statusCode,
-      fmt(err.code, ctx, err.message),
-      err.target
-    );
+export function mapError(req: Request, err: unknown, ctx: string) {
+    if (err instanceof BackendError) {
+      return req.reject(
+        err.statusCode,
+        fmt(err.code, ctx, err.message),
+        err.target
+      );
+    }
+    // Handle non-BackendError (plain Error, string, etc.)
+    const message = err instanceof Error ? err.message : String(err);
+    return req.reject(500, fmt('INTERNAL_ERROR', ctx, message));
 }
 
 /** 

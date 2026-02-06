@@ -1,7 +1,7 @@
 import type { UTxO as OdatanoUtxo } from '../utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
-import { MixedAssetsError } from './errors';
+import { MixedAssetsError, InsufficientFundsError } from './errors';
 
 /**
  * Extract lovelace amount from UTxO
@@ -57,4 +57,36 @@ export function getTxHashFromCbor(signedTxCbor: string): string {
   }
 
   return tx.hash.toString();
+}
+
+/**
+ * Maps builder errors to typed BackendErrors
+ * Shared between CSL and Buildooor transaction builders
+ * @param err Error from builder
+ * @param assetUnit Asset unit that caused the error (default: 'lovelace')
+ * @throws {InsufficientFundsError} if error is related to insufficient funds
+ * @throws {Error} original error if not mappable
+ */
+export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+  const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
+
+  if (msg.includes('not enough') ||
+      msg.includes('insufficient') ||
+      msg.includes('balance')) {
+    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
+  }
+
+  throw err;
+}
+
+/**
+ * Parse asset unit string into policyId and assetName
+ * Format: policyId (56 hex chars) + assetName (remaining hex)
+ * Shared between CSL and Buildooor transaction builders
+ */
+export function parseAssetUnit(assetUnit: string): { policyId: string; assetName: string } {
+  return {
+    policyId: assetUnit.substring(0, 56),
+    assetName: assetUnit.substring(56)
+  };
 }

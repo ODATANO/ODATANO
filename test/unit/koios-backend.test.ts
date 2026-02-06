@@ -97,15 +97,15 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getNetworkInformation();
 
-      // Fallback uses mainnet epoch 608 snapshot as defaults
+      // Fallback uses genesis max supply for all supply fields
       expect(result).toEqual({
         supply: {
           max: '45000000000000000',
-          total: '38388567212743111',
-          circulating: '36035240284477897',
+          total: '45000000000000000',
+          circulating: '45000000000000000',
           locked: '0',
-          treasury: '1614459422162537',
-          reserves: '6611432787256889',
+          treasury: '0',
+          reserves: '0',
         },
         stake: {
           live: '0',

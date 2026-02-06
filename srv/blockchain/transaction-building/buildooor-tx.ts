@@ -2,10 +2,9 @@ import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { TxBuilder } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
-import { assertAdaOnly, getLovelace } from "../../utils/tx-build-helper";
+import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
-import { InsufficientFundsError } from "../../utils/errors";
 import {
   defaultProtocolParameters,
   Address,
@@ -30,27 +29,6 @@ import { CardanoClient } from "../cardano-client";
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS,EXECUTION_UNIT_BUFFER,WITNESS_BUFFER_BYTES} from '../../utils/const'
 
 const logger = cds.log('BuildooorTxBuilder');
-
-/**
- * Maps builder errors to typed BackendErrors
- * @param err Error from builder
- * @param assetUnit Asset unit that caused the error (default: 'lovelace')
- * @throws {InsufficientFundsError} if error is related to insufficient funds
- * @throws {Error} original error if not mappable
- */
-export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
-  const msg = err?.message?.toLowerCase() || '';
-
-  // Check for insufficient funds patterns
-  if (msg.includes('not enough') ||
-      msg.includes('insufficient') ||
-      msg.includes('balance')) {
-    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
-  }
-
-  // Re-throw original error if not mappable
-  throw err;
-}
 
 /**
  * BuildooorTxBuilder - Implementation of CardanoTxBuilder using Buildooor library
@@ -222,7 +200,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     for (const asset of req.assets) {
       // Parse policyId and assetName from unit (format: policyId.assetName or policyId+assetName)
-      const { policyId, assetName } = this._parseAssetUnit(asset.unit);
+      const { policyId, assetName } = parseAssetUnit(asset.unit);
       const policyHash = new Hash28(policyId);
       const assetValue = Value.singleAsset(policyHash, Buffer.from(assetName, 'hex'), BigInt(asset.quantity));
       outputValue = Value.add(outputValue, assetValue);
@@ -299,7 +277,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const buildMints = (exUnits: { mem: number; cpu: number }) => {
         const mints = [];
         for (const mintAction of req.mintActions) {
-          const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
+          const { policyId, assetName } = parseAssetUnit(mintAction.assetUnit);
           const policyHash = new Hash28(policyId);
           const assetValue = Value.singleAsset(
             policyHash,
@@ -324,7 +302,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       for (const mintAction of req.mintActions) {
         const quantity = BigInt(mintAction.quantity);
         if (quantity > 0n) {
-          const { policyId, assetName } = this._parseAssetUnit(mintAction.assetUnit);
+          const { policyId, assetName } = parseAssetUnit(mintAction.assetUnit);
           const policyHash = new Hash28(policyId);
           const assetValue = Value.singleAsset(
             policyHash,
@@ -529,7 +507,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     for (const amount of utxo.amount) {
       if (amount.unit.toLowerCase() !== 'lovelace') {
-        const { policyId, assetName } = this._parseAssetUnit(amount.unit);
+        const { policyId, assetName } = parseAssetUnit(amount.unit);
         const policyHash = new Hash28(policyId);
         const assetValue = Value.singleAsset(policyHash, Buffer.from(assetName, 'hex'), BigInt(amount.quantity));
         value = Value.add(value, assetValue);
@@ -545,19 +523,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         refScript: undefined
       })
     });
-  }
-
-  /**
-   * Parse asset unit string into policyId and assetName
-   * @param unit asset unit string (e.g., "policyId.assetName" or "policyIdAssetName")
-   * @returns {object} object with policyId and assetName
-   */
-  private _parseAssetUnit(unit: string): { policyId: string; assetName: string } {
-
-    return {
-      policyId: unit.substring(0, 56),
-      assetName: unit.substring(56)
-    }
   }
 
   /**

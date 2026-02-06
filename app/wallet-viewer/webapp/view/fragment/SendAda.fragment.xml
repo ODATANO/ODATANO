@@ -15,7 +15,7 @@
                     <core:Icon src="sap-icon://wallet" class="sapUiSmallMarginEnd"/>
                     <VBox>
                         <Label text="From" design="Bold"/>
-                        <Text text="{= ${sendModel>/senderAddress} ? ${sendModel>/senderAddress}.substring(0, 20) + '...' + ${sendModel>/senderAddress}.slice(-8) : '' }"/>
+                        <Text text="{parts: ['sendModel>/senderAddress'], formatter: '.formatter.truncateAddress'}"/>
                     </VBox>
                 </HBox>
 

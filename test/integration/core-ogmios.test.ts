@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import { shutdownAppContext } from '../../srv/server';
 import { TEST_FIXTURES } from './test-fixtures';
+import { simpleRequestBody } from './test-fixtures';
 
 jest.setTimeout(20000);
 
@@ -281,6 +282,31 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       const response = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 100 }).catch(err => err.response);
       expect(response.status).to.equal(404); // Historic epoch not supported
       expect(response.data).to.have.property('error');
+    });
+  });
+
+  describe('Ogimos Backend - Transaction Building Related Tests', () => {
+    // Test that collateralPercent is present and valid
+    it('POST /GetLedgerProtocolParameters - verify collateralPercent is valid', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetLedgerProtocolParameters', {});
+      expect(status).to.equal(200);
+      expect(data).to.have.property('collateralPercent');
+      const collateralPercent = Number(data.collateralPercent);
+      expect(collateralPercent).to.be.a('number');
+      expect(collateralPercent).to.be.greaterThan(0);
+    });
+
+    it('POST /BuildSimpleAdaTransaction - successfully build ADA transaction', async () => {
+
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody);
+
+      expect(status).to.equal(200);
+      expect(data).to.have.property('id');
+      expect(data).to.have.property('unsignedTxCbor');
+      expect(data).to.have.property('txBodyHash');
+      expect(data.wasSubmitted).to.equal(false);
+      expect(data.fee).to.be.greaterThan(0);
+      expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i); // Valid hex
     });
   });
 });

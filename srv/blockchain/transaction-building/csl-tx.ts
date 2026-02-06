@@ -3,35 +3,12 @@ import * as CSL from "@emurgo/cardano-serialization-lib-nodejs";
 import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
-import { getLovelace } from "../../utils/tx-build-helper";
+import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
-import { InsufficientFundsError } from "../../utils/errors";
 import { CardanoClient } from '../cardano-client';
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER } from '../../utils/const';
 
 const logger = cds.log('CSLTxBuilder');
-
-/**
- * Maps builder errors to typed BackendErrors
- * @param err Error from builder
- * @param assetUnit Asset unit that caused the error (default: 'lovelace')
- * @throws {InsufficientFundsError} if error is related to insufficient funds
- * @throws {Error} original error if not mappable
- */
-export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
-  // CSL throws String errors, not Error objects - need to handle both
-  const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
-
-  // Check for insufficient funds patterns
-  if (msg.includes('not enough') ||
-      msg.includes('insufficient') ||
-      msg.includes('balance')) {
-    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
-  }
-
-  // Re-throw original error if not mappable
-  throw err;
-}
 
 /**
  * CSLTxBuilder - Implementation of CardanoTxBuilder using cardano-serialization-lib (CSL)
@@ -231,7 +208,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         // Skip 'lovelace' unit (already handled above)
         if (asset.unit === 'lovelace') continue;
 
-        const { policyId, assetName } = this._parseAssetUnit(asset.unit);
+        const { policyId, assetName } = parseAssetUnit(asset.unit);
       
       // Get or create Assets for this policy
       const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
@@ -436,7 +413,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
     // Process each mint action
     for (const mintAction of req.mintActions) {
-      const { assetName } = this._parseAssetUnit(mintAction.assetUnit);
+      const { assetName } = parseAssetUnit(mintAction.assetUnit);
 
       // Create asset name
       const assetNameBytes = Buffer.from(assetName, 'hex');
@@ -553,7 +530,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         const multiAsset = CSL.MultiAsset.new();
         
         for (const asset of nonAdaAssets) {
-          const { policyId, assetName } = this._parseAssetUnit(asset.unit);
+          const { policyId, assetName } = parseAssetUnit(asset.unit);
           const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
           
           let assets = multiAsset.get(policyHash);
@@ -635,18 +612,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
     logger.info(`TransactionBuilderConfig created with Plutus execution unit prices.`);
     return cfg;
-  }
-
-  /**
-   * Parse asset unit string into policyId and assetName
-   * Format: policyId (56 hex chars) + assetName (remaining hex)
-   * This is the standard Cardano asset unit format
-   */
-  private _parseAssetUnit(assetUnit: string): { policyId: string; assetName: string } {
-      return {
-        policyId: assetUnit.substring(0, 56),
-        assetName: assetUnit.substring(56)
-    }
   }
 
   /**

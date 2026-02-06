@@ -8,6 +8,10 @@ import { env } from 'process';
 
 const logger = cds.log('server');
 
+const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
+const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios'];
+const VALID_TX_BUILDERS: TransactionBuilderName[] = ['csl', 'buildooor'];
+
 /**
  * Application context holding initialized blockchain components
  * These are created once during CAP bootstrap and shared across services
@@ -129,6 +133,59 @@ export async function shutdownAppContext(): Promise<void> {
 }
 
 
+/**
+ * Load and validate CardanoClientConfig from environment variables
+ * @returns validated CardanoClientConfig
+ * @throws {Error} if any environment variable has an invalid value
+ */
+export function loadConfigFromEnv(): CardanoClientConfig {
+  const network = (env.NETWORK || 'preview') as Network;
+  if (!VALID_NETWORKS.includes(network)) {
+    throw new Error(`Invalid NETWORK "${env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
+  }
+
+  const backendStrings = env.BACKENDS ? env.BACKENDS.split(',').map(b => b.trim()) : ['koios'];
+  const invalidBackends = backendStrings.filter(b => !(VALID_BACKENDS as readonly string[]).includes(b));
+  if (invalidBackends.length > 0) {
+    throw new Error(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
+  }
+  const backends = backendStrings as BackendName[];
+
+  const txBuilderStrings = env.TX_BUILDERS ? env.TX_BUILDERS.split(',').map(b => b.trim()) : ['csl'];
+  const invalidBuilders = txBuilderStrings.filter(b => !(VALID_TX_BUILDERS as readonly string[]).includes(b));
+  if (invalidBuilders.length > 0) {
+    throw new Error(`Invalid TX_BUILDERS: "${invalidBuilders.join(', ')}". Must be one of: ${VALID_TX_BUILDERS.join(', ')}`);
+  }
+  const txBuilders = txBuilderStrings as TransactionBuilderName[];
+
+  if (env.PRIMARY_TIMEOUT_MS && isNaN(Number(env.PRIMARY_TIMEOUT_MS))) {
+    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${env.PRIMARY_TIMEOUT_MS}". Must be a number.`);
+  }
+  if (env.FALLBACK_TIMEOUT_MS && isNaN(Number(env.FALLBACK_TIMEOUT_MS))) {
+    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${env.FALLBACK_TIMEOUT_MS}". Must be a number.`);
+  }
+
+  // Warn about missing API keys for selected backends
+  if (backends.includes('blockfrost') && !env.BLOCKFROST_API_KEY) {
+    logger.warn('BLOCKFROST_API_KEY is not set but blockfrost is listed in BACKENDS');
+  }
+  if (backends.includes('ogmios') && !env.OGMIOS_URL) {
+    logger.warn('OGMIOS_URL is not set but ogmios is listed in BACKENDS');
+  }
+
+  return {
+    network,
+    backends,
+    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+    koiosApiKey: env.KOIOS_API_KEY || '',
+    ogmiosUrl: env.OGMIOS_URL || '',
+    transactionBuilders: txBuilders,
+    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
+    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+  };
+}
+
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
   // Skip auto-initialization when SKIP_AUTO_INIT is set (e.g., for tests with mocked backends)
@@ -137,18 +194,7 @@ cds.on('served', async () => {
     return;
   }
 
-  // Read environment configuration for CardanoClient
-  const config: CardanoClientConfig = {
-      network: (env.NETWORK as Network) || 'preview',
-      backends: env.BACKENDS ? env.BACKENDS.split(',') as BackendName[] : ['koios'],
-      blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-      koiosApiKey: env.KOIOS_API_KEY || '',
-      ogmiosUrl: env.OGMIOS_URL || '',
-      transactionBuilders: env.TX_BUILDERS ? env.TX_BUILDERS.split(',') as TransactionBuilderName[] : ['csl'],
-      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
-      fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-      indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
-  };
+  const config = loadConfigFromEnv();
 
   try {
     appContext = await initializeAppContext(config);

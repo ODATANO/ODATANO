@@ -135,9 +135,21 @@ export class ExternalSignerModule {
   public verifySignedTransaction(
     signedTxCbor: string,
     expectedTxBodyHash: string,
-    options?: Omit<VerificationOptions, 'expectedTxBodyHash'>
+    options?: Omit<VerificationOptions, 'expectedTxBodyHash'> & { expiresAt?: string }
   ): SignatureVerificationResult {
     logger.debug({ expectedTxBodyHash }, 'Verifying signed transaction');
+
+    // Enforce signing TTL if expiresAt is provided
+    if (options?.expiresAt && this.isExpired(options.expiresAt)) {
+      return {
+        isValid: false,
+        txBodyHash: '',
+        witnessCount: 0,
+        signerKeyHashes: [],
+        warnings: [],
+        errorMessage: 'Signing request has expired',
+      };
+    }
 
     const result = this.verifier.verify(signedTxCbor, {
       ...options,

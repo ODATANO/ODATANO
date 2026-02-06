@@ -93,15 +93,15 @@ describe('BlockfrostBackend getPool mock test', () => {
       vrfKeyHash: 'vrf_vk1abc123',
       blocksMinted: 1000,
       blocksEpoch: 10,
-      liveStake: 50000000000000,
+      liveStake: '50000000000000',
       liveSize: 0.05,
       liveDelegators: 500,
       liveSaturation: 0.75,
-      activeStake: 45000000000000,
+      activeStake: '45000000000000',
       activeSize: 0.045,
-      pledge: 1000000000000,
+      pledge: '1000000000000',
       margin: 0.02,
-      fixedCost: 340000000,
+      fixedCost: '340000000',
       rewardAccount: 'stake1uxyz789'
     });
   });
@@ -136,10 +136,10 @@ describe('BlockfrostBackend getPool mock test', () => {
 
     const result = await backend.getPool('pool1minimal');
 
-    expect(result.liveStake).toBe(0);
-    expect(result.activeStake).toBe(0);
-    expect(result.pledge).toBe(0);
-    expect(result.fixedCost).toBe(0);
+    expect(result.liveStake).toBe('0');
+    expect(result.activeStake).toBe('0');
+    expect(result.pledge).toBe('0');
+    expect(result.fixedCost).toBe('0');
   });
 
   it('should throw NotFoundError when pool does not exist', async () => {
