@@ -379,6 +379,45 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
+      // BuildMintTransaction - requiredSignersJson Tests
+      // ============================================================================
+
+      describe('BuildMintTransaction requiredSignersJson', () => {
+
+        it('POST /BuildMintTransaction - build with requiredSignersJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            requiredSignersJson: JSON.stringify(['f0ff0a3d030cf34157f740c0584dc0662d4d96b6b6e1f69f02e637b9'])
+          };
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildMintTransaction - rejects invalid key hash format', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            requiredSignersJson: JSON.stringify(['not_a_valid_hash'])
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMintTransaction - rejects non-array requiredSignersJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            requiredSignersJson: JSON.stringify({ key: 'value' })
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+      });
+
+      // ============================================================================
       // BuildPlutusSpendTransaction Action Tests
       // ============================================================================
 
@@ -489,6 +528,47 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
+        });
+      });
+
+      // ============================================================================
+      // BuildPlutusSpendTransaction - requiredSignersJson Tests
+      // ============================================================================
+
+      describe('BuildPlutusSpendTransaction requiredSignersJson', () => {
+
+        it('POST /BuildPlutusSpendTransaction - build with requiredSignersJson', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            requiredSignersJson: JSON.stringify(['f0ff0a3d030cf34157f740c0584dc0662d4d96b6b6e1f69f02e637b9'])
+          };
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildPlutusSpendTransaction - rejects invalid key hash format', async () => {
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            requiredSignersJson: JSON.stringify(['tooshort'])
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - rejects non-array requiredSignersJson', async () => {
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            requiredSignersJson: '"not-an-array"'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
         });
       });
 

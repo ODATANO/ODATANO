@@ -318,6 +318,8 @@ export type TxBuildRequest = {
   plutusScriptExecution?: PlutusScriptExecution;
   /** Inline datum to attach to the recipient output (optional) - for locking at script addresses */
   outputDatum?: JSONValue;
+  /** Required signers - Ed25519 key hashes (hex, 28 bytes each) */
+  requiredSigners?: string[];
 };
 
 /**

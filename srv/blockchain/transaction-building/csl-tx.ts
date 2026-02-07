@@ -463,6 +463,13 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Set the mint builder on transaction
     txb.set_mint_builder(mintBuilder);
 
+    // Add required signers if specified (for Plutus validators checking extra_signatories)
+    if (req.requiredSigners?.length) {
+      for (const signerHex of req.requiredSigners) {
+        txb.add_required_signer(CSL.Ed25519KeyHash.from_bytes(Buffer.from(signerHex, 'hex')));
+      }
+    }
+
     // Create output with minted assets + minimum lovelace
     const minLovelace = CSL.BigNum.from_str(String(req.lovelaceAmount));
     const outputValue = CSL.Value.new(minLovelace);
@@ -665,6 +672,13 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     );
 
     txb.set_inputs(scriptInputsBuilder);
+
+    // Add required signers if specified (for Plutus validators checking extra_signatories)
+    if (req.requiredSigners?.length) {
+      for (const signerHex of req.requiredSigners) {
+        txb.add_required_signer(CSL.Ed25519KeyHash.from_bytes(Buffer.from(signerHex, 'hex')));
+      }
+    }
 
     // Add sender UTxOs for fee payment via coin selection
     const senderUtxos = ctx.utxos.filter(

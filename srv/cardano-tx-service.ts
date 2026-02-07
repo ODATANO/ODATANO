@@ -195,7 +195,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -214,6 +214,24 @@ module.exports = (srv: cds.Service) => {
       quantity: BigInt(action.quantity)
     }));
 
+    // Parse and validate optional requiredSignersJson
+    let requiredSigners: string[] | undefined;
+    if (requiredSignersJson) {
+      try {
+        requiredSigners = JSON.parse(requiredSignersJson);
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
+      }
+      if (!Array.isArray(requiredSigners)) {
+        return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
+      }
+      for (const signer of requiredSigners) {
+        if (typeof signer !== 'string' || !/^[a-f0-9]{56}$/i.test(signer)) {
+          return rejectInvalid(req, 'BuildMintTransaction', 'Invalid Ed25519 key hash: must be 56 hex chars', 'requiredSignersJson');
+        }
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
@@ -223,11 +241,13 @@ module.exports = (srv: cds.Service) => {
       // Create clean request object with parsed mintActions (remove mintActionsJson, add mintActions)
       const cleanData = { ...req.data };
       delete cleanData.mintActionsJson;
+      delete cleanData.requiredSignersJson;
 
       return await getCardanoIndexer().indexMintBuildResult(db, {
         ...cleanData,
         mintActions: parsedMintActions,
-        mintingPolicyScript
+        mintingPolicyScript,
+        requiredSigners
       });
     });
   });
@@ -238,7 +258,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -258,6 +278,24 @@ module.exports = (srv: cds.Service) => {
     // Parse optional datum JSON
     const parsedDatum = datumJson ? JSON.parse(datumJson) : undefined;
 
+    // Parse and validate optional requiredSignersJson
+    let requiredSigners: string[] | undefined;
+    if (requiredSignersJson) {
+      try {
+        requiredSigners = JSON.parse(requiredSignersJson);
+      } catch {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
+      }
+      if (!Array.isArray(requiredSigners)) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
+      }
+      for (const signer of requiredSigners) {
+        if (typeof signer !== 'string' || !/^[a-f0-9]{56}$/i.test(signer)) {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Invalid Ed25519 key hash: must be 56 hex chars', 'requiredSignersJson');
+        }
+      }
+    }
+
     return handleRequest(req, async (db) => {
       logger.info(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
@@ -274,8 +312,10 @@ module.exports = (srv: cds.Service) => {
           },
           redeemer: parsedRedeemer,
           datum: parsedDatum,
-        }
+        },
+        requiredSigners
       };
+      delete cleanData.requiredSignersJson;
 
       return await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
     });

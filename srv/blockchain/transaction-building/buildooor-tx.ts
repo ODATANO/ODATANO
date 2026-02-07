@@ -351,7 +351,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           outputs,
           changeAddress,
           mints: evalMints,
-          collaterals: collateralUtxos
+          collaterals: collateralUtxos,
+          requiredSigners: req.requiredSigners
         });
 
         const evalTxCbor = toHex(evalTx.toCbor().toBuffer());
@@ -388,7 +389,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         outputs,
         changeAddress,
         mints: mints,
-        collaterals: collateralUtxos
+        collaterals: collateralUtxos,
+        requiredSigners: req.requiredSigners
       });
 
       // Add minimal buffer for witness set CBOR overhead (signing adds ~44 bytes)
@@ -405,6 +407,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         changeAddress,
         mints: mints,
         collaterals: collateralUtxos,
+        requiredSigners: req.requiredSigners,
         fee: adjustedMinFee
       });
 
@@ -524,7 +527,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           inputs: evalInputs,
           outputs,
           changeAddress,
-          collaterals: collateralUtxos
+          collaterals: collateralUtxos,
+          requiredSigners: req.requiredSigners
         });
 
         const evalTxCbor = toHex(evalTx.toCbor().toBuffer());
@@ -556,7 +560,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         inputs,
         outputs,
         changeAddress,
-        collaterals: collateralUtxos
+        collaterals: collateralUtxos,
+        requiredSigners: req.requiredSigners
       });
 
       // Add minimal buffer for witness set CBOR overhead
@@ -572,6 +577,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         outputs,
         changeAddress,
         collaterals: collateralUtxos,
+        requiredSigners: req.requiredSigners,
         fee: adjustedMinFee
       });
 
