@@ -19,7 +19,7 @@ const suppressLogs = process.env.LOG_LEVEL === 'error' || process.env.NODE_ENV =
 
 if (suppressLogs) {
   // Suppress all console output in tests
-  //console.log = () => {};
+  console.log = () => {};
   console.info = () => {};
   console.warn = () => {};
   console.debug = () => {};
