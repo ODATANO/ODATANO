@@ -1,0 +1,3 @@
+# Cardano node config files must keep LF line endings
+# (blake2b-256 genesis hashes depend on exact byte content)
+config/preview/cardano-node/*.json eol=lf
