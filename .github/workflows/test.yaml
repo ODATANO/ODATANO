@@ -95,7 +95,11 @@ jobs:
           
           echo "Waiting for containers to start..."
           sleep 10
-          docker ps
+          docker ps -a
+          echo "=== Cardano Node Logs ==="
+          docker logs cardano-node-preview 2>&1 | tail -50 || true
+          echo "=== Ogmios Logs ==="
+          docker logs ogmios-preview 2>&1 | tail -30 || true
 
       - name: Wait for Ogmios sync
         id: ogmios-ready
