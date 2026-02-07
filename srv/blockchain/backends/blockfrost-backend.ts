@@ -2,6 +2,7 @@ import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { normalizeCostModels } from '../../utils/mappers';
 import {
   Transaction,
   BlockData,
@@ -393,7 +394,7 @@ export class BlockfrostBackend implements CardanoBackend {
           epoch: protocolParams.epoch,
           minUtxo: protocolParams.min_utxo,
           nonce: protocolParams.nonce,
-          costModels: JSON.stringify(protocolParams.cost_models),
+          costModels: JSON.stringify(normalizeCostModels(protocolParams.cost_models || {})),
           minFeeA: protocolParams.min_fee_a,
           minFeeB: protocolParams.min_fee_b,
           maxBlockSize: protocolParams.max_block_size,

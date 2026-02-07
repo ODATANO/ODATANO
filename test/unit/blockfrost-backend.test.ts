@@ -284,6 +284,58 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     expect(result).toHaveProperty('maxTxSize', 16384);
   });
 
+  it('should normalize object-format cost models to arrays', async () => {
+    const mockProtocolParams = {
+      epoch: 500,
+      min_utxo: '1000000',
+      nonce: 'nonce123',
+      min_fee_a: 44,
+      min_fee_b: 155381,
+      max_tx_size: 16384,
+      max_block_header_size: 1100,
+      max_block_size: 65536,
+      key_deposit: '2000000',
+      pool_deposit: '500000000',
+      e_max: 18,
+      n_opt: 500,
+      a0: 0.3,
+      rho: 0.003,
+      tau: 0.2,
+      protocol_major_ver: 8,
+      protocol_minor_ver: 0,
+      min_pool_cost: '340000000',
+      price_mem: 0.0577,
+      price_step: 0.0000721,
+      max_tx_ex_mem: '14000000',
+      max_tx_ex_steps: '10000000000',
+      max_block_ex_mem: '62000000',
+      max_block_ex_steps: '20000000000',
+      max_val_size: '5000',
+      collateral_percent: 150,
+      max_collateral_inputs: 3,
+      coins_per_utxo_size: '4310',
+      cost_models: {
+        PlutusV3: { 'b-param': 200, 'a-param': 100 }
+      }
+    };
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      epochsLatestParameters: jest.fn().mockResolvedValue(mockProtocolParams),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getProtocolParameters();
+    const costModels = JSON.parse(result.costModels);
+
+    expect(Array.isArray(costModels.PlutusV3)).toBe(true);
+    expect(costModels.PlutusV3).toEqual([100, 200]); // sorted by key: a-param, b-param
+  });
+
   it('should throw on API error', async () => {
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({

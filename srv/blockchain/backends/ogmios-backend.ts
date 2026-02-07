@@ -7,6 +7,7 @@ import {
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { normalizeCostModels } from '../../utils/mappers';
 import {
   Transaction,
   BlockData,
@@ -405,7 +406,7 @@ export class OgmiosBackend implements EvaluatingBackend {
         epoch: currentEpoch,
         minUtxo: params.minUtxoDepositCoefficient?.toString() || '0',
         nonce: '',
-        costModels: JSON.stringify(params.plutusCostModels || {}),
+        costModels: JSON.stringify(normalizeCostModels(params.plutusCostModels || {})),
         minFeeA: params.minFeeCoefficient || 0,
         minFeeB: Number(params.minFeeConstant?.ada?.lovelace || 0),
         maxBlockSize: params.maxBlockBodySize?.bytes || 0,

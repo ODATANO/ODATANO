@@ -778,6 +778,26 @@ export function mapAddressTransactionBuild(addr: string, buildId: string): Addre
 // Helper Functions
 //-----------------------------------------------------------------------
 
+/**
+ * Normalize cost models to array format.
+ * Blockfrost returns cost models as objects ({ "param-name": value, ... }),
+ * while CSL expects arrays of numbers. This converts each Plutus version's
+ * cost model from object to sorted-key array if needed.
+ * @param raw - Raw cost models object from any backend
+ * @returns Object with all cost model values as number arrays
+ */
+export function normalizeCostModels(raw: Record<string, unknown>): Record<string, number[]> {
+  const result: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (Array.isArray(value)) {
+      result[key] = value;
+    } else if (value && typeof value === 'object') {
+      result[key] = Object.keys(value as Record<string, number>).sort().map(k => (value as Record<string, number>)[k]);
+    }
+  }
+  return result;
+}
+
 /** 
  * Convert hex string to UTF-8 string, falling back to hex if conversion fails.
  * This helper reduces code duplication and improves performance by centralizing

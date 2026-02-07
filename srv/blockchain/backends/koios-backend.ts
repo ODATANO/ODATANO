@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 
 import {
@@ -613,7 +614,7 @@ export class KoiosBackend implements CardanoBackend {
           minUtxo: '0', // legacy, replaced by coinsPerUtxoSize
           nonce: '',
           // --- Plutus / Execution units ---
-          costModels: JSON.stringify(data.costModels),
+          costModels: JSON.stringify(normalizeCostModels(data.costModels || {})),
           priceMem: data.executionUnitPrices.priceMemory,
           priceStep: data.executionUnitPrices.priceSteps,
           maxTxExMem: data.maxTxExecutionUnits.memory.toString(),
