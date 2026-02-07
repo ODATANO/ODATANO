@@ -1,6 +1,8 @@
 import cds from '@sap/cds';
+import path from 'path';
 
 const logger = cds.log('ODATANO');
+const pluginRoot = path.resolve(__dirname, '..');
 
 let initialized = false;
 
@@ -40,6 +42,24 @@ if (req) {
 }
 
 logger.debug('Plugin registered');
+
+/**
+ * Rewrite @impl paths for plugin mode.
+ * CDS files use relative @impl (e.g. 'srv/cardano-service') which resolves from cds.root.
+ * In standalone mode cds.root IS the package root, so it works.
+ * In plugin mode cds.root is the consumer app — rewrite to package-qualified paths
+ * so CAP resolves via Node module resolution (node_modules/@odatano/core/srv/...).
+ */
+cds.on('loaded', (model: any) => {
+  if (path.resolve(cds.root) === pluginRoot) return;
+  for (const def of Object.values(model.definitions) as any[]) {
+    if (def['@impl'] === 'srv/cardano-service') {
+      def['@impl'] = '@odatano/core/srv/cardano-service';
+    } else if (def['@impl'] === 'srv/cardano-tx-service') {
+      def['@impl'] = '@odatano/core/srv/cardano-tx-service';
+    }
+  }
+});
 
 /**
  * Initialize blockchain components when services are served

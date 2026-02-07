@@ -7,7 +7,7 @@ using {odatano.cardano as db} from '../db/schema';
  * Separate from the read-only CardanoODataService to provide
  * clear separation between general query and command operations.
  */
-service CardanoTransactionService {
+service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections - Transaction Building & Submission
     // ---------------------------------------------------------------------------
