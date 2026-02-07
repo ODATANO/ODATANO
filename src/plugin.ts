@@ -20,7 +20,24 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
 
 (cds.env.requires as { kinds?: Record<string, unknown> }).kinds!['odatano-core'] = {
   impl: '@odatano/core',
+  model: [
+    '@odatano/core/db/schema',
+    '@odatano/core/srv/cardano-service',
+    '@odatano/core/srv/cardano-tx-service'
+  ]
 };
+
+// CRITICAL: Also set model directly on the requires entry.
+// CAP's _link_required_services() merges kind→requires BEFORE cds-plugin.js runs,
+// so the model array on the kind is never merged. Set it directly.
+const req = (cds.env.requires as Record<string, any>)['odatano-core'];
+if (req) {
+  req.model = [
+    '@odatano/core/db/schema',
+    '@odatano/core/srv/cardano-service',
+    '@odatano/core/srv/cardano-tx-service'
+  ];
+}
 
 logger.debug('Plugin registered');
 

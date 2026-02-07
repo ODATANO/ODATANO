@@ -72,8 +72,8 @@ db.sqlite-wal
 mta*
 *.mtar
 
-# Generated type models (consumer generates their own)
-@cds-models/
+# Generated type models (included for consumer type support)
+# @cds-models/ — DO NOT exclude, consumers need these
 
 # Lock files
 package-lock.json
