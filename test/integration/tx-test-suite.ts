@@ -418,6 +418,42 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
+      // BuildMintTransaction - scriptParamsJson Tests
+      // ============================================================================
+
+      describe('BuildMintTransaction scriptParamsJson', () => {
+
+        it('POST /BuildMintTransaction - rejects invalid scriptParamsJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            scriptParamsJson: 'not-valid-json{'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMintTransaction - rejects non-array scriptParamsJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            scriptParamsJson: JSON.stringify({ key: 'value' })
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMintTransaction - builds without scriptParamsJson (optional param)', async () => {
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', mintingRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('scriptHash');
+          expect(data.scriptHash).to.match(/^[a-f0-9]{56}$/);
+        });
+      });
+
+      // ============================================================================
       // BuildPlutusSpendTransaction Action Tests
       // ============================================================================
 
@@ -569,6 +605,33 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody).catch(err => err.response);
 
           expect(status).to.equal(400);
+        });
+      });
+
+      // ============================================================================
+      // BuildPlutusSpendTransaction - scriptParamsJson Tests
+      // ============================================================================
+
+      describe('BuildPlutusSpendTransaction scriptParamsJson', () => {
+
+        it('POST /BuildPlutusSpendTransaction - rejects non-array scriptParamsJson', async () => {
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            scriptParamsJson: JSON.stringify({ key: 'value' })
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - returns scriptHash in response', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('scriptHash');
+          expect(data.scriptHash).to.match(/^[a-f0-9]{56}$/);
         });
       });
 

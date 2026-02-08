@@ -360,6 +360,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         });
       }
 
+      // Compute script hash from the minting policy script (= policy ID)
+      const mintScriptBytes = Buffer.from(req.mintingPolicyScript, 'hex');
+      const mintPlutusScript = CSL.PlutusScript.new_v3(mintScriptBytes);
+      const mintScriptHash = Buffer.from(mintPlutusScript.hash().to_bytes()).toString('hex');
+
       logger.info(`[CSLTxBuilder] Built unsigned minting transaction successfully. Fee: ${feeLovelace}`);
 
       return {
@@ -376,6 +381,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
           lovelace: getLovelace(u).toString(),
         })),
         outputs,
+        scriptHash: mintScriptHash,
         warnings: [],
       };
     } catch (error: any) {
@@ -568,6 +574,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         });
       }
 
+      // Compute script hash from the validator script
+      const spendScriptBytes = Buffer.from(req.plutusScriptExecution!.validatorScript, 'hex');
+      const spendPlutusScript = CSL.PlutusScript.new_v3(spendScriptBytes);
+      const spendScriptHash = Buffer.from(spendPlutusScript.hash().to_bytes()).toString('hex');
+
       logger.info(`[CSLTxBuilder] Built unsigned Plutus spending transaction. Fee: ${feeLovelace}`);
 
       return {
@@ -584,6 +595,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
           lovelace: getLovelace(u).toString(),
         })),
         outputs,
+        scriptHash: spendScriptHash,
         warnings: [],
       };
     } catch (error: any) {

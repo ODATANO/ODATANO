@@ -320,6 +320,8 @@ export type TxBuildRequest = {
   outputDatum?: JSONValue;
   /** Required signers - Ed25519 key hashes (hex, 28 bytes each) */
   requiredSigners?: string[];
+  /** Script parameters — PlutusData JSON array applied to script before building */
+  scriptParams?: JSONValue[];
 };
 
 /**
@@ -384,6 +386,8 @@ export type TxBuildResult = {
   metaDataCborHex?: string;
   changeOutput?: { address: string; lovelace: string };
   warnings: string[];
+  /** Blake2b-224 hash of the script (= policy ID for minting), if a script was provided */
+  scriptHash?: string;
 };
 
 /**

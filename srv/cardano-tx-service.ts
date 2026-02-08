@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
-import { getTxHashFromCbor, getLovelace } from './utils/tx-build-helper';
+import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -195,7 +195,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -232,6 +232,19 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
+    // Parse and validate optional scriptParamsJson
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      try {
+        scriptParams = JSON.parse(scriptParamsJson);
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
+      }
+      if (!Array.isArray(scriptParams)) {
+        return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
@@ -242,11 +255,18 @@ module.exports = (srv: cds.Service) => {
       const cleanData = { ...req.data };
       delete cleanData.mintActionsJson;
       delete cleanData.requiredSignersJson;
+      delete cleanData.scriptParamsJson;
+
+      // Apply script parameters if provided (for parameterized validators)
+      let finalMintingPolicyScript = mintingPolicyScript;
+      if (scriptParams && scriptParams.length > 0) {
+        finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
+      }
 
       return await getCardanoIndexer().indexMintBuildResult(db, {
         ...cleanData,
         mintActions: parsedMintActions,
-        mintingPolicyScript,
+        mintingPolicyScript: finalMintingPolicyScript,
         requiredSigners
       });
     });
@@ -258,7 +278,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -296,16 +316,35 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
+    // Parse and validate optional scriptParamsJson
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      try {
+        scriptParams = JSON.parse(scriptParamsJson);
+      } catch {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
+      }
+      if (!Array.isArray(scriptParams)) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+    }
+
     return handleRequest(req, async (db) => {
       logger.info(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
         'Building Plutus spending transaction'
       );
 
+      // Apply script parameters if provided (for parameterized validators)
+      let finalValidatorScript = validatorScript;
+      if (scriptParams && scriptParams.length > 0) {
+        finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
+      }
+
       const cleanData = {
         ...req.data,
         plutusScriptExecution: {
-          validatorScript,
+          validatorScript: finalValidatorScript,
           scriptUtxo: {
             txHash: scriptTxHash,
             outputIndex: scriptOutputIndex,
@@ -316,6 +355,7 @@ module.exports = (srv: cds.Service) => {
         requiredSigners
       };
       delete cleanData.requiredSignersJson;
+      delete cleanData.scriptParamsJson;
 
       return await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
     });

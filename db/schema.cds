@@ -925,6 +925,10 @@ entity TransactionBuilds : temporal {
         @title      : 'Was Submitted'
         @description: 'Indicates if the build was submitted'
         wasSubmitted   : Boolean;
+
+        @title      : 'Script Hash'
+        @description: 'Blake2b-224 hash of the Plutus script used (= policy ID for minting transactions)'
+        scriptHash     : String(56);
 }
 
 @title      : 'Transaction Build Inputs'

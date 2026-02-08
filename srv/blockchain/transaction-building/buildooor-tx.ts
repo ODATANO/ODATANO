@@ -435,6 +435,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           address: o.address?.toString?.() ?? "",
           lovelace: o.value?.lovelaces?.toString?.() ?? "0"
         })),
+        scriptHash: script.hash.toString(),
         warnings: []
       };
     } catch (err: any) {
@@ -604,6 +605,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           address: o.address?.toString?.() ?? "",
           lovelace: o.value?.lovelaces?.toString?.() ?? "0"
         })),
+        scriptHash: script.hash.toString(),
         warnings: []
       };
     } catch (err: any) {

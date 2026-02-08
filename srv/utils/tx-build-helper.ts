@@ -3,6 +3,8 @@ import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { fromHex } from '@harmoniclabs/uint8array-utils';
 import { MixedAssetsError, InsufficientFundsError } from './errors';
 import { dataFromJson, type Data } from '@harmoniclabs/plutus-data';
+import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
+import { Cbor, CborBytes } from '@harmoniclabs/cbor';
 
 /**
  * Extract lovelace amount from UTxO
@@ -145,4 +147,38 @@ export function jsonToPlutusData(json: JSONValue): Data {
     return dataFromJson(normalized);
   }
   throw new Error(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);
+}
+
+/**
+ * Apply parameters to a parameterized PlutusV3 script (CBOR-wrapped flat UPLC).
+ * Each parameter is applied as a successive UPLC Application node wrapping the program body.
+ * @param scriptHex CBOR hex of the unapplied Plutus script (as output by Aiken/Plutus compilers)
+ * @param params Array of PlutusData JSON objects (DetailedSchema format) to apply in order
+ * @returns CBOR hex of the applied script (ready for transaction building)
+ */
+export function applyScriptParameters(scriptHex: string, params: JSONValue[]): string {
+  if (!Array.isArray(params) || params.length === 0) {
+    throw new Error('Script parameters must be a non-empty array');
+  }
+
+  // 1. CBOR-decode script hex → get inner flat UPLC bytes
+  const cborObj = Cbor.parse(scriptHex) as CborBytes;
+  const flatBytes = cborObj.bytes;
+
+  // 2. Flat-decode → UPLCProgram
+  const program = UPLCDecoder.parse(flatBytes, 'flat');
+
+  // 3. Apply each parameter as Application(body, UPLCConst.data(paramData))
+  let body = program.body;
+  for (const param of params) {
+    const paramData = jsonToPlutusData(param);
+    body = new Application(body, UPLCConst.data(paramData));
+  }
+
+  // 4. Create new program with applied body, flat-encode, CBOR-wrap
+  const applied = new UPLCProgram(program.version, body);
+  const flatBits = compileUPLC(applied);
+  const { buffer } = flatBits.toBuffer();
+  const cborEncoded = Cbor.encode(new CborBytes(buffer));
+  return cborEncoded.toString();
 }

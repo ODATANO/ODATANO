@@ -2,10 +2,11 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData } from '../../srv/utils/tx-build-helper';
-import type { UTxO as OdatanoUtxo } from '../../srv/utils/types';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters } from '../../srv/utils/tx-build-helper';
+import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
+import { Cbor, CborBytes } from '@harmoniclabs/cbor';
 
 jest.mock('@harmoniclabs/cardano-ledger-ts', () => ({
   Tx: {
@@ -280,6 +281,85 @@ describe('tx-build-helper utilities', () => {
 
     it('should throw for number input', () => {
       expect(() => jsonToPlutusData(42 as any)).toThrow('Unsupported PlutusData JSON format');
+    });
+  });
+
+  describe('applyScriptParameters', () => {
+    // Real Aiken-compiled PlutusV3 always-succeeds script (CBOR-wrapped flat UPLC)
+    const validScript = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+
+    it('should throw for non-array params', () => {
+      expect(() => applyScriptParameters(validScript, 'not-an-array' as any))
+        .toThrow('Script parameters must be a non-empty array');
+    });
+
+    it('should throw for empty array params', () => {
+      expect(() => applyScriptParameters(validScript, []))
+        .toThrow('Script parameters must be a non-empty array');
+    });
+
+    it('should throw for invalid CBOR hex', () => {
+      expect(() => applyScriptParameters('zzzz', [{ int: 1 }]))
+        .toThrow();
+    });
+
+    it('should apply a single bytes parameter', () => {
+      const params = [{ bytes: 'deadbeef' }];
+      const result = applyScriptParameters(validScript, params);
+
+      expect(typeof result).toBe('string');
+      expect(result).toMatch(/^[a-f0-9]+$/);
+      // Applied script must differ from unapplied
+      expect(result).not.toBe(validScript);
+    });
+
+    it('should apply a single integer parameter', () => {
+      const params = [{ int: 42 }];
+      const result = applyScriptParameters(validScript, params);
+
+      expect(typeof result).toBe('string');
+      expect(result).toMatch(/^[a-f0-9]+$/);
+      expect(result).not.toBe(validScript);
+    });
+
+    it('should apply multiple parameters', () => {
+      const params: JSONValue[] = [
+        { bytes: 'deadbeef' },
+        { int: 1 }
+      ];
+      const result = applyScriptParameters(validScript, params);
+
+      expect(typeof result).toBe('string');
+      expect(result).toMatch(/^[a-f0-9]+$/);
+      expect(result).not.toBe(validScript);
+    });
+
+    it('should apply a constructor parameter (cardano-cli format)', () => {
+      const params: JSONValue[] = [{
+        constructor: 0,
+        fields: [{ bytes: 'deadbeef' }, { int: 42 }]
+      }];
+      const result = applyScriptParameters(validScript, params);
+
+      expect(typeof result).toBe('string');
+      expect(result).toMatch(/^[a-f0-9]+$/);
+    });
+
+    it('should produce valid CBOR that can be re-parsed', () => {
+      const params = [{ bytes: 'deadbeef' }];
+      const result = applyScriptParameters(validScript, params);
+
+      // Verify the output is valid CBOR containing bytes
+      const parsed = Cbor.parse(result);
+      expect(parsed).toBeInstanceOf(CborBytes);
+      expect((parsed as CborBytes).bytes.length).toBeGreaterThan(0);
+    });
+
+    it('should produce different results for different parameters', () => {
+      const result1 = applyScriptParameters(validScript, [{ int: 1 }]);
+      const result2 = applyScriptParameters(validScript, [{ int: 2 }]);
+
+      expect(result1).not.toBe(result2);
     });
   });
 });

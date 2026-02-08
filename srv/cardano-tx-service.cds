@@ -128,7 +128,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 changeAddress: db.Bech32,
                                 @title: 'Required Signers JSON'
                                 @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction. Required for Plutus validators checking extra_signatories.'
-                                requiredSignersJson: String) returns TransactionBuilds;
+                                requiredSignersJson: String,
+                                @title: 'Script Parameters JSON'
+                                @description: 'Optional JSON array of PlutusData parameters to apply to the minting policy script before building. For parameterized validators.'
+                                scriptParamsJson: String) returns TransactionBuilds;
 
     @title : 'Build Plutus Spend Transaction'
     @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'
@@ -162,7 +165,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 changeAddress: db.Bech32,
                                 @title: 'Required Signers JSON'
                                 @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction. Required for Plutus validators checking extra_signatories.'
-                                requiredSignersJson: String) returns TransactionBuilds;
+                                requiredSignersJson: String,
+                                @title: 'Script Parameters JSON'
+                                @description: 'Optional JSON array of PlutusData parameters to apply to the validator script before building. For parameterized validators.'
+                                scriptParamsJson: String) returns TransactionBuilds;
 
     @title : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
