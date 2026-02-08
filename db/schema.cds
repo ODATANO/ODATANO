@@ -929,6 +929,10 @@ entity TransactionBuilds : temporal {
         @title      : 'Script Hash'
         @description: 'Blake2b-224 hash of the Plutus script used (= policy ID for minting transactions)'
         scriptHash     : String(56);
+
+        @title      : 'Asset Fingerprint'
+        @description: 'CIP-14 fingerprint of the first minted asset (e.g. asset1...). Convenience field for single-asset mints.'
+        fingerprint    : String(44);
 }
 
 @title      : 'Transaction Build Inputs'

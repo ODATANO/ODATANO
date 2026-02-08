@@ -1,3 +1,5 @@
+import blake2b from 'blake2b';
+import { bech32 } from 'bech32';
 import {
   Transaction as TransactionProviderData,
   Address as AddressProviderData,
@@ -831,7 +833,22 @@ function parseAssetUnit(unit: string): { policyId: string | null; assetName: str
   return { policyId, assetName };
 }
 
-/** 
+/**
+ * Compute CIP-14 asset fingerprint from policyId and assetName.
+ * Algorithm: bech32_encode("asset", blake2b_160(policyId_bytes + assetName_bytes))
+ * @param policyIdHex - Policy ID as hex string (56 chars / 28 bytes)
+ * @param assetNameHex - Asset name as hex string (variable length)
+ * @returns CIP-14 fingerprint string (e.g. "asset1...")
+ */
+export function computeCip14Fingerprint(policyIdHex: string, assetNameHex: string): string {
+  const input = Buffer.from(policyIdHex + assetNameHex, 'hex');
+  const out = Buffer.alloc(20);
+  blake2b(20).update(input).digest(out);
+  const words = bech32.toWords(out);
+  return bech32.encode('asset', words);
+}
+
+/**
  * Format error message
  * @param code error code
  * @param ctx context string

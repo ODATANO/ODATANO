@@ -4,6 +4,7 @@ import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/er
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
+import { computeCip14Fingerprint } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -296,7 +297,7 @@ module.exports = (srv: cds.Service) => {
         }
       }
 
-      return await getCardanoIndexer().indexMintBuildResult(db, {
+      const buildResult = await getCardanoIndexer().indexMintBuildResult(db, {
         ...cleanData,
         mintActions: parsedMintActions,
         mintingPolicyScript: finalMintingPolicyScript,
@@ -304,6 +305,19 @@ module.exports = (srv: cds.Service) => {
         inlineDatum,
         mintRedeemer
       });
+
+      // Compute CIP-14 asset fingerprint for the first minted asset
+      if (buildResult.scriptHash && parsedMintActions.length > 0) {
+        const policyId = buildResult.scriptHash;
+        const firstAssetUnit = parsedMintActions[0].assetUnit;
+        const assetNameHex = firstAssetUnit.length >= 57 ? firstAssetUnit.slice(56) : firstAssetUnit;
+        buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
+
+        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
+        await db.run(UPDATE.entity(TransactionBuilds).set({ fingerprint: buildResult.fingerprint }).where({ id: buildResult.id }));
+      }
+
+      return buildResult;
     });
   });
 
