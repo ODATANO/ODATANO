@@ -426,9 +426,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
     const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
 
-    // Map ODATANO UTxOs -> CSL TransactionUnspentOutputs (with multi-asset support for burn transactions)
-    const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
-
     // Create Transaction Builder
     const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 

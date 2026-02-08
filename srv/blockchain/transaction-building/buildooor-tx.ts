@@ -492,7 +492,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const senderUtxos = ctx.utxos.filter(
         u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
       );
-      const senderLedgerUtxos: LedgerUTxO[] = senderUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // Addresses
       const recipientAddress = Address.fromString(req.recipientAddress);
