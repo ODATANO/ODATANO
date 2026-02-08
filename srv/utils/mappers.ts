@@ -849,6 +849,24 @@ export function computeCip14Fingerprint(policyIdHex: string, assetNameHex: strin
 }
 
 /**
+ * Derive an enterprise script address from a script hash and network.
+ * Enterprise address = header_byte + 28-byte script hash, bech32-encoded.
+ * Header: 0x71 (mainnet, type 7 network 1) or 0x70 (testnet, type 7 network 0).
+ */
+export function scriptHashToEnterpriseAddress(
+  scriptHashHex: string,
+  network: 'mainnet' | 'preprod' | 'preview'
+): string {
+  const headerByte = network === 'mainnet' ? 0x71 : 0x70;
+  const payload = Buffer.alloc(29);
+  payload[0] = headerByte;
+  Buffer.from(scriptHashHex, 'hex').copy(payload, 1);
+  const words = bech32.toWords(payload);
+  const hrp = network === 'mainnet' ? 'addr' : 'addr_test';
+  return bech32.encode(hrp, words, 120);
+}
+
+/**
  * Format error message
  * @param code error code
  * @param ctx context string

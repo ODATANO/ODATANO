@@ -162,6 +162,40 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
+      // BuildSimpleAdaTransaction - assetsJson Tests
+      // ============================================================================
+
+      describe('BuildSimpleAdaTransaction assetsJson', () => {
+
+        it('POST /BuildSimpleAdaTransaction - rejects invalid assetsJson', async () => {
+          const requestBody = {
+            ...simpleRequestBody,
+            assetsJson: 'not-valid-json{'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildSimpleAdaTransaction - rejects non-array assetsJson', async () => {
+          const requestBody = {
+            ...simpleRequestBody,
+            assetsJson: JSON.stringify({ unit: 'lovelace', quantity: '1000000' })
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildSimpleAdaTransaction - builds without assetsJson (optional param)', async () => {
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+        });
+      });
+
+      // ============================================================================
       // BuildTransactionWithMetadata Action Tests
       // ============================================================================
 
@@ -268,6 +302,47 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           // Transaction should build successfully with change going to senderAddress
           expect(data.fee).to.be.greaterThan(0);
+        });
+      });
+
+      // ============================================================================
+      // BuildMultiAssetTransaction - outputDatumJson Tests
+      // ============================================================================
+
+      describe('BuildMultiAssetTransaction outputDatumJson', () => {
+
+        it('POST /BuildMultiAssetTransaction - rejects invalid outputDatumJson', async () => {
+          const requestBody = {
+            ...multiAssetRequestBody,
+            outputDatumJson: 'not-valid-json{'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMultiAssetTransaction - builds with outputDatumJson', async () => {
+          setupUtxoMock(mockUtxosWithAssets);
+
+          const requestBody = {
+            ...multiAssetRequestBody,
+            outputDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: 42 }] })
+          };
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildMultiAssetTransaction - builds without outputDatumJson (optional param)', async () => {
+          setupUtxoMock(mockUtxosWithAssets);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', multiAssetRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
         });
       });
 
@@ -667,6 +742,78 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('scriptHash');
           expect(data.scriptHash).to.match(/^[a-f0-9]{56}$/);
+        });
+      });
+
+      // ============================================================================
+      // BuildPlutusSpendTransaction - inlineDatumJson Tests
+      // ============================================================================
+
+      describe('BuildPlutusSpendTransaction inlineDatumJson', () => {
+
+        it('POST /BuildPlutusSpendTransaction - rejects invalid inlineDatumJson', async () => {
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            inlineDatumJson: 'not-valid-json{'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildPlutusSpendTransaction - builds with inlineDatumJson', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const requestBody = {
+            ...plutusSpendRequestBody,
+            inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: 42 }] })
+          };
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildPlutusSpendTransaction - builds without inlineDatumJson (optional param)', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+        });
+      });
+
+      // ============================================================================
+      // lockOnScript Tests (BuildMintTransaction + BuildPlutusSpendTransaction)
+      // ============================================================================
+
+      describe('lockOnScript', () => {
+
+        it('POST /BuildMintTransaction - lockOnScript=true without scriptParamsJson has no scriptAddress', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            lockOnScript: true
+          };
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data.scriptAddress).to.be.oneOf([null, undefined, '']);
+        });
+
+        it('POST /BuildMintTransaction - lockOnScript=false does not set scriptAddress', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            lockOnScript: false
+          };
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data.scriptAddress).to.be.oneOf([null, undefined, '']);
         });
       });
 

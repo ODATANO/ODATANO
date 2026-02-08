@@ -326,6 +326,8 @@ export type TxBuildRequest = {
   inlineDatum?: JSONValue;
   /** Optional custom redeemer for the minting policy (PlutusData JSON, parsed) */
   mintRedeemer?: JSONValue;
+  /** When true, route output to enterprise script address derived from applied script hash */
+  lockOnScript?: boolean;
 };
 
 /**
@@ -392,6 +394,8 @@ export type TxBuildResult = {
   warnings: string[];
   /** Blake2b-224 hash of the script (= policy ID for minting), if a script was provided */
   scriptHash?: string;
+  /** Enterprise script address derived from applied script hash (bech32). Set when lockOnScript=true. */
+  scriptAddress?: string;
 };
 
 /**

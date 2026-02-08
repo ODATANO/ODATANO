@@ -4,7 +4,7 @@ import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/er
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
-import { computeCip14Fingerprint } from './utils/mappers';
+import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -101,7 +101,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
@@ -120,9 +120,23 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
+    // parse optional assets JSON (for locking native assets at script addresses)
+    if (assetsJson) {
+      try {
+        const parsedAssets = JSON.parse(assetsJson);
+        if (!Array.isArray(parsedAssets)) {
+          return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be a JSON array', 'assetsJson');
+        }
+        cleanData.assets = parsedAssets;
+      } catch {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be valid JSON', 'assetsJson');
+      }
+      delete cleanData.assetsJson;
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson }, 'Building simple ADA transaction');
+      logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
       return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
     });
   });
@@ -160,7 +174,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson } = req.data;
 
     // validate inputs (includes JSON parsing validation)
     const errors = validateTransactionInputs(
@@ -178,12 +192,22 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
-        { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets },
+        { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets, hasDatum: !!outputDatumJson },
         'Building multi-asset transaction'
       );
       // Create clean request object with parsed assets (remove assetsJson, add assets)
       const cleanData = { ...req.data };
       delete cleanData.assetsJson;
+
+      // parse optional output datum (for locking assets at script addresses)
+      if (outputDatumJson) {
+        try {
+          cleanData.outputDatum = JSON.parse(outputDatumJson);
+        } catch {
+          return rejectInvalid(req, 'BuildMultiAssetTransaction', 'outputDatumJson must be valid JSON', 'outputDatumJson');
+        }
+        delete cleanData.outputDatumJson;
+      }
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
       logger.info({ result }, 'Multi-asset transaction build result');
@@ -197,7 +221,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -280,6 +304,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.scriptParamsJson;
       delete cleanData.inlineDatumJson;
       delete cleanData.mintRedeemerJson;
+      delete cleanData.lockOnScript;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
@@ -295,6 +320,13 @@ module.exports = (srv: cds.Service) => {
             action.assetUnit = appliedPolicyId + action.assetUnit;
           }
         }
+
+        // lockOnScript: route output to the enterprise script address derived from applied script hash
+        if (lockOnScript) {
+          const scriptAddr = scriptHashToEnterpriseAddress(appliedPolicyId, getCardanoClient().network);
+          cleanData.recipientAddress = scriptAddr;
+          logger.info({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
+        }
       }
 
       const buildResult = await getCardanoIndexer().indexMintBuildResult(db, {
@@ -306,15 +338,29 @@ module.exports = (srv: cds.Service) => {
         mintRedeemer
       });
 
-      // Compute CIP-14 asset fingerprint for the first minted asset
-      if (buildResult.scriptHash && parsedMintActions.length > 0) {
+      // Post-build: compute CIP-14 fingerprint and scriptAddress
+      if (buildResult.scriptHash) {
         const policyId = buildResult.scriptHash;
-        const firstAssetUnit = parsedMintActions[0].assetUnit;
-        const assetNameHex = firstAssetUnit.length >= 57 ? firstAssetUnit.slice(56) : firstAssetUnit;
-        buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
+        const updates: Record<string, string> = {};
 
-        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
-        await db.run(UPDATE.entity(TransactionBuilds).set({ fingerprint: buildResult.fingerprint }).where({ id: buildResult.id }));
+        // CIP-14 asset fingerprint for the first minted asset
+        if (parsedMintActions.length > 0) {
+          const firstAssetUnit = parsedMintActions[0].assetUnit;
+          const assetNameHex = firstAssetUnit.length >= 57 ? firstAssetUnit.slice(56) : firstAssetUnit;
+          buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
+          updates.fingerprint = buildResult.fingerprint;
+        }
+
+        // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
+        if (lockOnScript && scriptParams && scriptParams.length > 0) {
+          buildResult.scriptAddress = scriptHashToEnterpriseAddress(policyId, getCardanoClient().network);
+          updates.scriptAddress = buildResult.scriptAddress;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          const { TransactionBuilds } = cds.entities('CardanoTransactionService');
+          await db.run(UPDATE.entity(TransactionBuilds).set(updates).where({ id: buildResult.id }));
+        }
       }
 
       return buildResult;
@@ -327,7 +373,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -378,6 +424,16 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
+    // Parse and validate optional inlineDatumJson
+    let inlineDatum: any | undefined;
+    if (inlineDatumJson) {
+      try {
+        inlineDatum = JSON.parse(inlineDatumJson);
+      } catch {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
+      }
+    }
+
     return handleRequest(req, async (db) => {
       logger.info(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
@@ -390,7 +446,7 @@ module.exports = (srv: cds.Service) => {
         finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
       }
 
-      const cleanData = {
+      const cleanData: any = {
         ...req.data,
         plutusScriptExecution: {
           validatorScript: finalValidatorScript,
@@ -401,12 +457,34 @@ module.exports = (srv: cds.Service) => {
           redeemer: parsedRedeemer,
           datum: parsedDatum,
         },
-        requiredSigners
+        requiredSigners,
+        inlineDatum
       };
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
+      delete cleanData.inlineDatumJson;
+      delete cleanData.lockOnScript;
 
-      return await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
+      // lockOnScript: route continuing output to enterprise script address
+      if (lockOnScript && scriptParams && scriptParams.length > 0) {
+        const appliedScript = Script.fromCbor(Buffer.from(finalValidatorScript, 'hex'));
+        const derivedScriptHash = appliedScript.hash.toString();
+        const scriptAddr = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
+        cleanData.recipientAddress = scriptAddr;
+        logger.info({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
+      }
+
+      const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
+
+      // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
+      if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash) {
+        const scriptAddr = scriptHashToEnterpriseAddress(buildResult.scriptHash, getCardanoClient().network);
+        buildResult.scriptAddress = scriptAddr;
+        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
+        await db.run(UPDATE.entity(TransactionBuilds).set({ scriptAddress: scriptAddr }).where({ id: buildResult.id }));
+      }
+
+      return buildResult;
     });
   });
 

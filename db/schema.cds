@@ -933,6 +933,10 @@ entity TransactionBuilds : temporal {
         @title      : 'Asset Fingerprint'
         @description: 'CIP-14 fingerprint of the first minted asset (e.g. asset1...). Convenience field for single-asset mints.'
         fingerprint    : String(44);
+
+        @title      : 'Script Address'
+        @description: 'Enterprise script address derived from the applied script hash (bech32). Only set when lockOnScript=true.'
+        scriptAddress  : String(120);
 }
 
 @title      : 'Transaction Build Inputs'

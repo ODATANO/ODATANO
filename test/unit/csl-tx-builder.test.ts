@@ -186,13 +186,13 @@ describe('CSLTxBuilder', () => {
     });
 
     it('should parse valid PlutusV3 cost model with plutus:v3 key', () => {
-      const costs = Array(251).fill(0).map((_, i) => i);
+      const costs = Array(297).fill(0).map((_, i) => i);
       const result = createCostModels(JSON.stringify({ 'plutus:v3': costs }));
       expect(result.len()).toBe(1);
     });
 
     it('should parse valid PlutusV3 cost model with PlutusV3 key', () => {
-      const costs = Array(251).fill(0).map((_, i) => i);
+      const costs = Array(297).fill(0).map((_, i) => i);
       const result = createCostModels(JSON.stringify({ 'PlutusV3': costs }));
       expect(result.len()).toBe(1);
     });
@@ -203,7 +203,17 @@ describe('CSLTxBuilder', () => {
       for (let i = 0; i < 251; i++) {
         objectCosts[`param-${String(i).padStart(3, '0')}`] = i * 100;
       }
+      // Even with only 251 object entries, padding to 297 ensures correct scriptDataHash
       const result = createCostModels(JSON.stringify({ 'plutus:v3': objectCosts }));
+      expect(result.len()).toBe(1);
+    });
+
+    it('should pad 251-parameter PlutusV3 cost model to 297 (Chang 1 → Chang 2)', () => {
+      // Blockfrost may return only 251 params (Chang 1 era), but post-Chang 2
+      // the node expects 297 for scriptDataHash computation.
+      // toCostModelArrV3() fills missing params with default values.
+      const costs = Array(251).fill(0).map((_, i) => i * 100);
+      const result = createCostModels(JSON.stringify({ 'plutus:v3': costs }));
       expect(result.len()).toBe(1);
     });
 
@@ -222,7 +232,7 @@ describe('CSLTxBuilder', () => {
     it('should load all three Plutus versions when no version specified', () => {
       const v1Costs = Array(166).fill(0).map((_, i) => i);
       const v2Costs = Array(175).fill(0).map((_, i) => i);
-      const v3Costs = Array(251).fill(0).map((_, i) => i);
+      const v3Costs = Array(297).fill(0).map((_, i) => i);
       const result = createCostModels(JSON.stringify({
         'plutus:v1': v1Costs,
         'plutus:v2': v2Costs,
@@ -242,7 +252,7 @@ describe('CSLTxBuilder', () => {
       const result = createCostModels(JSON.stringify({
         'PlutusV1': makeObjectCosts(166),
         'PlutusV2': makeObjectCosts(175),
-        'PlutusV3': makeObjectCosts(251),
+        'PlutusV3': makeObjectCosts(297),
       }));
       expect(result.len()).toBe(3);
     });

@@ -58,18 +58,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SAP BTP Deployment Learnings**: `BTP-DEPLOYMENT-LEARNINGS.md` with deployment patterns
 
 - **2 New Transaction Actions** (Plutus Smart Contracts & Collateral):
-  - `BuildPlutusSpendTransaction` - Spend UTxO locked at a Plutus validator script address (supports PlutusV3, redeemer/datum JSON, Ogmios execution unit evaluation)
+  - `BuildPlutusSpendTransaction` - Spend UTxO locked at a Plutus validator script address (supports PlutusV3, redeemer/datum JSON, Ogmios execution unit evaluation, optional `inlineDatumJson` for state-machine continuing outputs)
   - `SetCollateral` - Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions (auto-checks address UTxOs, builds self-send if needed)
 
 - **End-to-End Plutus Scripts**:
   - `lock-ada-at-script-preview.ts` - Lock ADA at a PlutusV3 script address with inline datum
   - `plutus-spend-preview.ts` - Spend locked UTxO with redeemer, verified on Preview testnet
 
+- **Plutus Parameterized Validator Support**:
+  - `scriptParamsJson` on `BuildMintTransaction` and `BuildPlutusSpendTransaction` — apply UPLC parameters to unapplied validators, returns `scriptHash` (= policy ID)
+  - `requiredSignersJson` — set `required_signers` in tx body for Plutus `extra_signatories` checks
+  - `inlineDatumJson` on `BuildMintTransaction` — attach inline datum on minted token output (for spend validators that read `InlineDatum`)
+  - `inlineDatumJson` on `BuildPlutusSpendTransaction` — attach inline datum on continuing output (state-machine patterns)
+  - `mintRedeemerJson` — custom redeemer for minting policy (defaults to integer 0)
+  - `fingerprint` — CIP-14 asset fingerprint (`asset1...`) returned in `BuildMintTransaction` response
+
+- **`lockOnScript`** on `BuildMintTransaction` and `BuildPlutusSpendTransaction`:
+  - When `true` and `scriptParamsJson` is provided, routes the output to the enterprise script address derived from the applied script hash
+  - Returns `scriptAddress` (bech32) in the response — eliminates consumer-side script address computation
+  - New `scriptAddress` field on `TransactionBuilds` entity
+
+- **Extended Transaction Actions for Script Locking**:
+  - `BuildSimpleAdaTransaction` now supports optional `outputDatumJson` and `assetsJson` — send ADA + native assets with inline datum to script addresses
+  - `BuildMultiAssetTransaction` now supports optional `outputDatumJson` — attach inline datum when sending assets to script addresses
+
 ### Changed
 
 - Architecture refactored to centralized App Context pattern
 - Services now use `getCardanoIndexer()` instead of direct instantiation
-- Test suite updated: 25 test files, 978 tests across integration and unit tests
+- Test suite updated: 26 test files, 1001+ tests across integration and unit tests
 - Enhanced error handling with signing-specific error cases
 
 ### Security

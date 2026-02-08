@@ -327,11 +327,14 @@ Spend a UTxO locked at a Plutus validator script address.
 - Redeeming funds locked in a Plutus smart contract
 - Executing on-chain logic (validator scripts)
 - DeFi protocol interactions
+- State-machine patterns with continuing outputs (use `inlineDatumJson` to attach updated datum)
 
 **Workflow:**
 ```
-1. Lock:  BuildSimpleAdaTransaction (with outputDatumJson) → Sign → Submit
-2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemer + scriptUtxo) → Sign → Submit
+1. Lock:  BuildMintTransaction (with lockOnScript + inlineDatumJson) → Sign → Submit
+         OR BuildSimpleAdaTransaction (with outputDatumJson + assetsJson) → Sign → Submit
+         OR BuildMultiAssetTransaction (with outputDatumJson) → Sign → Submit
+2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemer + scriptUtxo + lockOnScript) → Sign → Submit
 ```
 
 ### 6. Collateral Setup
@@ -390,6 +393,8 @@ Both builders available, CSL used as primary.
 | recipientAddress | bech32 | Yes | Recipient address |
 | lovelaceAmount | Integer | Yes | Amount in lovelace (1 ADA = 1,000,000 lovelace) |
 | changeAddress | bech32 | No | Change address (defaults to sender) |
+| outputDatumJson | String | No | Inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address. |
+| assetsJson | String | No | JSON array of native assets to include in the output: `[{"unit":"policyId+assetName","quantity":"amount"}]`. Use when locking tokens at a script address. |
 
 **Returns:** `TransactionBuild` entity
 
@@ -430,6 +435,7 @@ Both builders available, CSL used as primary.
 | lovelaceAmount | Integer | Yes | Amount in lovelace |
 | assetsJson | String | Yes | JSON array of assets: `[{"unit":"policyId+assetName","quantity":"amount"}]` |
 | changeAddress | bech32 | No | Change address (defaults to sender) |
+| outputDatumJson | String | No | Inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address. |
 
 **Returns:** `TransactionBuild` entity
 
@@ -446,13 +452,18 @@ Both builders available, CSL used as primary.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | senderAddress | bech32 | Yes | Sender address (pays fees) |
-| recipientAddress | bech32 | Yes | Recipient address for minted assets |
+| recipientAddress | bech32 | Yes | Recipient address for minted assets (overridden when `lockOnScript=true`) |
 | lovelaceAmount | Integer | Yes | Amount in lovelace to send with minted assets |
 | mintActionsJson | String | Yes | JSON array of mint actions: `[{"assetUnit":"policyId+assetName","quantity":"amount"}]` |
 | mintingPolicyScript | String | Yes | Minting policy script in CBOR hex format |
 | changeAddress | bech32 | No | Change address (defaults to sender) |
+| requiredSignersJson | String | No | JSON array of Ed25519 key hashes (hex, 28 bytes each) for Plutus `extra_signatories` checks |
+| scriptParamsJson | String | No | JSON array of PlutusData parameters to apply to the minting policy script (for parameterized validators). Response includes `scriptHash`. |
+| inlineDatumJson | String | No | PlutusData JSON to attach as inline datum on the recipient output (for minted tokens that must carry on-chain state) |
+| mintRedeemerJson | String | No | PlutusData JSON for the minting policy redeemer (defaults to integer 0 if not specified) |
+| lockOnScript | Boolean | No | When `true` and `scriptParamsJson` is provided, routes the output to the enterprise script address derived from the applied script hash. Response includes `scriptAddress`. |
 
-**Returns:** `TransactionBuild` entity
+**Returns:** `TransactionBuild` entity (includes `scriptHash`, `fingerprint`, and `scriptAddress` when applicable)
 
 ---
 
@@ -467,7 +478,7 @@ Both builders available, CSL used as primary.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | senderAddress | bech32 | Yes | Sender address (pays fees) |
-| recipientAddress | bech32 | Yes | Recipient address for unlocked funds |
+| recipientAddress | bech32 | Yes | Recipient address for unlocked funds (overridden when `lockOnScript=true`) |
 | lovelaceAmount | Integer | Yes | Amount in lovelace to send to recipient |
 | validatorScript | String | Yes | Plutus validator script in CBOR hex format |
 | scriptTxHash | String | Yes | Transaction hash of the UTxO locked at the script address (64-char hex) |
@@ -475,8 +486,12 @@ Both builders available, CSL used as primary.
 | redeemerJson | String | Yes | Redeemer data as JSON string (converted to PlutusData) |
 | datumJson | String | No | Datum data as JSON string (for hash-based datums) |
 | changeAddress | bech32 | No | Change address (defaults to sender) |
+| requiredSignersJson | String | No | JSON array of Ed25519 key hashes (hex, 28 bytes each) for Plutus `extra_signatories` checks |
+| scriptParamsJson | String | No | JSON array of PlutusData parameters to apply to the validator script (for parameterized validators). Response includes `scriptHash`. |
+| inlineDatumJson | String | No | PlutusData JSON to attach as inline datum on the recipient output (for state-machine validators that require continuing output datum) |
+| lockOnScript | Boolean | No | When `true` and `scriptParamsJson` is provided, routes the continuing output to the enterprise script address derived from the applied script hash. Response includes `scriptAddress`. |
 
-**Returns:** `TransactionBuild` entity
+**Returns:** `TransactionBuild` entity (includes `scriptHash` and `scriptAddress` when applicable)
 
 ---
 

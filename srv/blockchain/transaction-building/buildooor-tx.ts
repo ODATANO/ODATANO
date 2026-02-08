@@ -72,10 +72,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // set Amount
       const amount = BigInt(String(req.lovelaceAmount));
 
-      // build new outputs for recipient
+      // build new outputs for recipient (lovelace + optional native assets)
+      let outputValue = Value.lovelaces(amount);
+      if (req.assets && req.assets.length > 0) {
+        for (const asset of req.assets) {
+          if (asset.unit === 'lovelace') continue;
+          const { policyId, assetName } = parseAssetUnit(asset.unit);
+          const assetValue = Value.singleAsset(new Hash28(policyId), Buffer.from(assetName, 'hex'), BigInt(asset.quantity));
+          outputValue = Value.add(outputValue, assetValue);
+        }
+      }
+
       const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
         address: recipientAddress,
-        value: Value.lovelaces(amount),
+        value: outputValue,
       };
       if (req.outputDatum) {
         txOutParams.datum = jsonToPlutusData(req.outputDatum);
@@ -209,13 +219,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       outputValue = Value.add(outputValue, assetValue);
     }
 
-    // Build output
-    const outputs = [
-      new TxOut({
-        address: recipientAddress,
-        value: outputValue
-      })
-    ];
+    // Build output (with optional inline datum for script addresses)
+    const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
+      address: recipientAddress,
+      value: outputValue,
+    };
+    if (req.outputDatum) {
+      txOutParams.datum = jsonToPlutusData(req.outputDatum);
+    }
+    const outputs = [new TxOut(txOutParams)];
 
     // Build the transaction
     const tx = await this.txBuilder.build({
@@ -260,13 +272,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
-
-      // Map all available UTxOs to ledger UTxOs (let builder handle selection)
-      // Use multi-asset mapper to support burn transactions
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-
-      // Buildooor TxIn objects for inputs
-      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       // Addresses
       const recipientAddress = Address.fromString(req.recipientAddress);
@@ -339,6 +344,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Use only 1 collateral to minimize tx size
       const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
+
+      // Exclude collateral UTxO from regular inputs so it is not consumed on successful tx.
+      // This preserves the dedicated collateral UTxO for future Plutus transactions.
+      const fundingUtxos = ctx.utxos.filter(
+        u => !(u.txHash === adaOnlyUtxo.txHash && u.outputIndex === adaOnlyUtxo.outputIndex)
+      );
+      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
+      const inputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
 
       // Determine execution units based on evaluator availability
       let finalExUnits = DEFAULT_EXECUTION_UNITS;
@@ -487,12 +500,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Build output
       const outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
-      const outputs = [
-        new TxOut({
-          address: recipientAddress,
-          value: outputValue
-        })
-      ];
+      const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
+        address: recipientAddress,
+        value: outputValue,
+      };
+      if (req.inlineDatum) {
+        txOutParams.datum = jsonToPlutusData(req.inlineDatum);
+      }
+      const outputs = [new TxOut(txOutParams)];
 
       // Find an ADA-only UTxO for collateral (from sender UTxOs only)
       const adaOnlyUtxo = senderUtxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
@@ -500,6 +515,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         throw new Error('[BuildooorTxBuilder] No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
       }
       const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
+
+      // Exclude collateral UTxO from regular inputs so it is not consumed on successful tx.
+      // This preserves the dedicated collateral UTxO for future Plutus transactions.
+      const fundingUtxos = senderUtxos.filter(
+        u => !(u.txHash === adaOnlyUtxo.txHash && u.outputIndex === adaOnlyUtxo.outputIndex)
+      );
+      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // Helper to build inputs with specified execution units
       const buildInputs = (exUnits: { mem: number; cpu: number }) => {
@@ -513,8 +535,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             executionUnits: exUnits
           }
         };
-        // Regular sender inputs for fees
-        const regularInputs = senderLedgerUtxos.map(utxo => ({ utxo }));
+        // Regular sender inputs for fees (excluding collateral)
+        const regularInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
         return [scriptInput, ...regularInputs];
       };
 

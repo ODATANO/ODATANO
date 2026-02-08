@@ -7,6 +7,7 @@ import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-bui
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER } from '../../utils/const';
+import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
 
 const logger = cds.log('CSLTxBuilder');
 
@@ -50,9 +51,25 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       // create Transaction Builder from stored config
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
-      // add recipient & output (lovelace), with optional inline datum
+      // add recipient & output (lovelace + optional assets), with optional inline datum
       const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
       const outValue = CSL.Value.new(amount);
+
+      // Optional: add native assets to the output (for locking tokens at script address)
+      if (req.assets && req.assets.length > 0) {
+        const multiAsset = CSL.MultiAsset.new();
+        for (const asset of req.assets) {
+          if (asset.unit === 'lovelace') continue;
+          const { policyId, assetName } = parseAssetUnit(asset.unit);
+          const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
+          let assets = multiAsset.get(policyHash);
+          if (!assets) assets = CSL.Assets.new();
+          assets.insert(CSL.AssetName.new(Buffer.from(assetName, 'hex')), CSL.BigNum.from_str(asset.quantity));
+          multiAsset.insert(policyHash, assets);
+        }
+        outValue.set_multiasset(multiAsset);
+      }
+
       const out = CSL.TransactionOutput.new(recipientAddress, outValue);
       if (req.outputDatum) {
         const plutusData = CSL.PlutusData.from_json(
@@ -237,8 +254,15 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Set multi-asset on output value
     outputValue.set_multiasset(multiAsset);
 
-      // Create output with all assets
+      // Create output with all assets + optional inline datum
       const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
+      if (req.outputDatum) {
+        const plutusData = CSL.PlutusData.from_json(
+          JSON.stringify(req.outputDatum),
+          CSL.PlutusDatumSchema.DetailedSchema
+        );
+        recipientOutput.set_plutus_data(plutusData);
+      }
       txb.add_output(recipientOutput);
 
       // add inputs via coin selection + add change
@@ -499,22 +523,30 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
     txb.add_output(recipientOutput);
 
-    // Add collateral for Plutus script execution
-    if (ctx.utxos.length > 0) {
-      const collateralUtxo = ctx.utxos[0];
+    // Find an ADA-only UTxO for collateral
+    const collateralOdatanoUtxo = ctx.utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
+
+    if (collateralOdatanoUtxo) {
       const collateralBuilder = CSL.TxInputsBuilder.new();
 
-      const txHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralUtxo.txHash, 'hex'));
-      const input = CSL.TransactionInput.new(txHash, collateralUtxo.outputIndex);
-      const address = CSL.Address.from_bech32(collateralUtxo.address);
-      const value = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralUtxo).toString()));
+      const txHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralOdatanoUtxo.txHash, 'hex'));
+      const input = CSL.TransactionInput.new(txHash, collateralOdatanoUtxo.outputIndex);
+      const address = CSL.Address.from_bech32(collateralOdatanoUtxo.address);
+      const value = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralOdatanoUtxo).toString()));
 
       collateralBuilder.add_regular_input(address, input, value);
       txb.set_collateral(collateralBuilder);
     }
 
-    // Add inputs via coin selection
-    txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+    // Exclude collateral UTxO from coin selection so it is not consumed on successful tx.
+    // This preserves the dedicated collateral UTxO for future Plutus transactions.
+    const fundingUtxos = collateralOdatanoUtxo
+      ? ctx.utxos.filter(u => !(u.txHash === collateralOdatanoUtxo.txHash && u.outputIndex === collateralOdatanoUtxo.outputIndex))
+      : ctx.utxos;
+    const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
+
+    // Add inputs via coin selection (excluding collateral)
+    txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
 
     // Calculate script data hash BEFORE add_change_if_needed
     // Always call calc_script_data_hash for Plutus transactions - CSL requires it
@@ -707,31 +739,45 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       }
     }
 
-    // Add sender UTxOs for fee payment via coin selection
+    // Separate sender UTxOs (excluding script UTxO)
     const senderUtxos = ctx.utxos.filter(
       u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
     );
-    const cslSenderUtxos = this._mapMultiAssetUtxosToCslUtxos(senderUtxos);
-    txb.add_inputs_from(cslSenderUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
 
-    // Create output for recipient
-    const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || 2_000_000)));
-    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
-    txb.add_output(recipientOutput);
+    // Find an ADA-only UTxO for collateral (from sender UTxOs only)
+    const collateralOdatanoUtxo = senderUtxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
 
-    // Add collateral (from sender UTxOs)
-    if (senderUtxos.length > 0) {
-      const collateralUtxo = senderUtxos[0];
+    if (collateralOdatanoUtxo) {
       const collateralBuilder = CSL.TxInputsBuilder.new();
 
-      const colTxHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralUtxo.txHash, 'hex'));
-      const colInput = CSL.TransactionInput.new(colTxHash, collateralUtxo.outputIndex);
-      const colAddress = CSL.Address.from_bech32(collateralUtxo.address);
-      const colValue = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralUtxo).toString()));
+      const colTxHash = CSL.TransactionHash.from_bytes(Buffer.from(collateralOdatanoUtxo.txHash, 'hex'));
+      const colInput = CSL.TransactionInput.new(colTxHash, collateralOdatanoUtxo.outputIndex);
+      const colAddress = CSL.Address.from_bech32(collateralOdatanoUtxo.address);
+      const colValue = CSL.Value.new(CSL.BigNum.from_str(getLovelace(collateralOdatanoUtxo).toString()));
 
       collateralBuilder.add_regular_input(colAddress, colInput, colValue);
       txb.set_collateral(collateralBuilder);
     }
+
+    // Exclude collateral UTxO from coin selection so it is not consumed on successful tx.
+    // This preserves the dedicated collateral UTxO for future Plutus transactions.
+    const fundingUtxos = collateralOdatanoUtxo
+      ? senderUtxos.filter(u => !(u.txHash === collateralOdatanoUtxo.txHash && u.outputIndex === collateralOdatanoUtxo.outputIndex))
+      : senderUtxos;
+    const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
+    txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+
+    // Create output for recipient
+    const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || 2_000_000)));
+    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
+    if (req.inlineDatum) {
+      const datumData = CSL.PlutusData.from_json(
+        JSON.stringify(req.inlineDatum),
+        CSL.PlutusDatumSchema.DetailedSchema
+      );
+      recipientOutput.set_plutus_data(datumData);
+    }
+    txb.add_output(recipientOutput);
 
     // Calculate script data hash
     const costModels = this._createCostModels('v3');
@@ -942,8 +988,13 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
       // PlutusV3 cost model (check both "plutus:v3" and "PlutusV3" formats)
       if (!version || version === 'v3') {
-        const plutusV3Costs = toArray(costModelsJson['plutus:v3'] || costModelsJson['PlutusV3']);
-        if (plutusV3Costs) {
+        const plutusV3CostsRaw = toArray(costModelsJson['plutus:v3'] || costModelsJson['PlutusV3']);
+        if (plutusV3CostsRaw) {
+          // Pad to 297 parameters (Conway Chang 2) using defaults from cardano-costmodels-ts.
+          // Blockfrost may return only 251 (Chang 1). The node expects 297 for scriptDataHash.
+          // toCostModelArrV3() fills missing params with default values — same as Buildooor.
+          const plutusV3Costs: number[] = Array.from(toCostModelArrV3(plutusV3CostsRaw as any)).map(Number);
+
           const plutusV3CostModel = CSL.CostModel.new();
           for (let i = 0; i < plutusV3Costs.length; i++) {
             plutusV3CostModel.set(i, CSL.Int.new_i32(plutusV3Costs[i]));

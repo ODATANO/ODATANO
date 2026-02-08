@@ -65,7 +65,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                      changeAddress: db.Bech32,
                                      @title: 'Output Datum JSON'
                                      @description: 'Optional inline datum to attach to the recipient output (JSON, cardano-cli DetailedSchema format). Required when sending to a script address.'
-                                     outputDatumJson: String) returns TransactionBuilds;
+                                     outputDatumJson: String,
+                                     @title: 'Assets JSON'
+                                     @description: 'Optional JSON array of native assets to include in the output ([{"unit":"policyId+assetName","quantity":"amount"}]). Use when locking tokens at a script address.'
+                                     assetsJson: String) returns TransactionBuilds;
 
     @title : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -103,7 +106,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                         assetsJson: String,
                                         @title: 'Change Address'
                                         @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-                                        changeAddress: db.Bech32) returns TransactionBuilds;
+                                        changeAddress: db.Bech32,
+                                        @title: 'Output Datum JSON'
+                                        @description: 'Optional inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address.'
+                                        outputDatumJson: String) returns TransactionBuilds;
 
     @title : 'Build Minting Transaction'
     @description: 'Build a transaction to mint or burn native assets'
@@ -137,7 +143,10 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 inlineDatumJson: String,
                                 @title: 'Mint Redeemer JSON'
                                 @description: 'Optional PlutusData JSON for the minting policy redeemer. Defaults to integer 0 if not specified.'
-                                mintRedeemerJson: String) returns TransactionBuilds;
+                                mintRedeemerJson: String,
+                                @title: 'Lock on Script Address'
+                                @description: 'When true and scriptParamsJson is provided, routes the output to the enterprise script address derived from the applied script hash instead of recipientAddress. Returns scriptAddress in the response.'
+                                lockOnScript: Boolean) returns TransactionBuilds;
 
     @title : 'Build Plutus Spend Transaction'
     @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'
@@ -174,7 +183,13 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 requiredSignersJson: String,
                                 @title: 'Script Parameters JSON'
                                 @description: 'Optional JSON array of PlutusData parameters to apply to the validator script before building. For parameterized validators.'
-                                scriptParamsJson: String) returns TransactionBuilds;
+                                scriptParamsJson: String,
+                                @title: 'Output Inline Datum JSON'
+                                @description: 'Optional PlutusData JSON to attach as inline datum on the recipient output. Used for state-machine validators that require continuing output datum.'
+                                inlineDatumJson: String,
+                                @title: 'Lock on Script Address'
+                                @description: 'When true and scriptParamsJson is provided, routes the output to the enterprise script address derived from the applied script hash instead of recipientAddress. Returns scriptAddress in the response.'
+                                lockOnScript: Boolean) returns TransactionBuilds;
 
     @title : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
