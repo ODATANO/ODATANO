@@ -898,15 +898,52 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   private _createCostModels(version?: 'v1' | 'v2' | 'v3'): CSL.Costmdls {
     const costModels = CSL.Costmdls.new();
 
+    // Blockfrost returns cost models as objects ({name: value}), CSL expects arrays.
+    // Convert object format to sorted-key array defensively (normalizeCostModels in mappers.ts
+    // already does this at the backend level, but handle it here too for robustness).
+    const toArray = (costs: unknown): number[] | null => {
+      if (Array.isArray(costs)) return costs;
+      if (costs && typeof costs === 'object') {
+        return Object.keys(costs as Record<string, number>).sort().map(k => (costs as Record<string, number>)[k]);
+      }
+      return null;
+    };
+
     try {
       // Parse cost models JSON from protocol parameters
       // Format: { "plutus:v1": [array of 166 numbers], "plutus:v2": [array of 175 numbers], ... }
       const costModelsJson = JSON.parse(this.protocolParameters.costModels || '{}');
 
+      // PlutusV1 cost model
+      if (!version || version === 'v1') {
+        const plutusV1Costs = toArray(costModelsJson['plutus:v1'] || costModelsJson['PlutusV1']);
+        if (plutusV1Costs) {
+          const plutusV1CostModel = CSL.CostModel.new();
+          for (let i = 0; i < plutusV1Costs.length; i++) {
+            plutusV1CostModel.set(i, CSL.Int.new_i32(plutusV1Costs[i]));
+          }
+          costModels.insert(CSL.Language.new_plutus_v1(), plutusV1CostModel);
+          logger.debug(`[CSLTxBuilder] Added PlutusV1 cost model with ${plutusV1Costs.length} parameters`);
+        }
+      }
+
+      // PlutusV2 cost model
+      if (!version || version === 'v2') {
+        const plutusV2Costs = toArray(costModelsJson['plutus:v2'] || costModelsJson['PlutusV2']);
+        if (plutusV2Costs) {
+          const plutusV2CostModel = CSL.CostModel.new();
+          for (let i = 0; i < plutusV2Costs.length; i++) {
+            plutusV2CostModel.set(i, CSL.Int.new_i32(plutusV2Costs[i]));
+          }
+          costModels.insert(CSL.Language.new_plutus_v2(), plutusV2CostModel);
+          logger.debug(`[CSLTxBuilder] Added PlutusV2 cost model with ${plutusV2Costs.length} parameters`);
+        }
+      }
+
       // PlutusV3 cost model (check both "plutus:v3" and "PlutusV3" formats)
       if (!version || version === 'v3') {
-        const plutusV3Costs = costModelsJson['plutus:v3'] || costModelsJson['PlutusV3'];
-        if (plutusV3Costs && Array.isArray(plutusV3Costs)) {
+        const plutusV3Costs = toArray(costModelsJson['plutus:v3'] || costModelsJson['PlutusV3']);
+        if (plutusV3Costs) {
           const plutusV3CostModel = CSL.CostModel.new();
           for (let i = 0; i < plutusV3Costs.length; i++) {
             plutusV3CostModel.set(i, CSL.Int.new_i32(plutusV3Costs[i]));
@@ -915,7 +952,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
           logger.debug(`[CSLTxBuilder] Added PlutusV3 cost model with ${plutusV3Costs.length} parameters`);
         }
       }
-      
+
     } catch (error) {
       logger.warn(`[CSLTxBuilder] Failed to parse cost models: ${error}. Using empty cost models.`);
     }

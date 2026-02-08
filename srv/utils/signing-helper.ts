@@ -33,12 +33,27 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
     const walletWitnessSet = cbor.decodeFirstSync(witnessSetBytes);
 
     // txArray[0] = body (preserved exactly as-is)
-    // txArray[1] = witness_set (will be replaced with wallet's witness set)
+    // txArray[1] = witness_set (CBOR Map: 0=vkeys, 3=plutus_v1, 5=redeemers, 6=datums, 7=plutus_v3)
     // txArray[2] = is_valid (boolean, usually true)
     // txArray[3] = auxiliary_data (preserved as-is)
 
-    // Replace the witness set with the wallet's witness set
-    txArray[1] = walletWitnessSet;
+    // MERGE wallet's VKey witnesses into existing witness set.
+    // CIP-30 signTx() only returns VKey witnesses (map key 0).
+    // The builder puts script witnesses (keys 3, 5, 6, 7) in the unsigned tx's witness set.
+    // We must preserve those and only add/replace the VKey witnesses.
+    const origWs = txArray[1];
+    const walletWs = walletWitnessSet;
+
+    if (walletWs instanceof Map && origWs instanceof Map) {
+      const vkeys = walletWs.get(0);
+      if (vkeys) {
+        origWs.set(0, vkeys);
+      }
+      txArray[1] = origWs;
+    } else {
+      // Fallback for non-Map witness sets (simple transactions)
+      txArray[1] = walletWitnessSet;
+    }
 
     // Re-encode to CBOR
     const signedTxBytes = cbor.encodeOne(txArray);
@@ -46,9 +61,11 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
 
     // Count witnesses for logging
     let witnessCount = 0;
-    if (walletWitnessSet instanceof Map) {
-      const vkeys = walletWitnessSet.get(0);
+    let witnessKeys: number[] = [];
+    if (txArray[1] instanceof Map) {
+      const vkeys = txArray[1].get(0);
       witnessCount = Array.isArray(vkeys) ? vkeys.length : 0;
+      witnessKeys = [...txArray[1].keys()];
     }
 
     logger.info({
@@ -56,6 +73,7 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
       witnessSetLength: witnessSetCbor.length,
       signedTxLength: signedTxCbor.length,
       witnessCount,
+      witnessKeys,
     }, 'Combined transaction with witness set (raw CBOR)');
 
     return signedTxCbor;

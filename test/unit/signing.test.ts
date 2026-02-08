@@ -640,6 +640,61 @@ describe('Utility Functions', () => {
       expect(Array.isArray(decoded)).toBe(true);
       expect(decoded.length).toBeGreaterThanOrEqual(2);
     });
+
+    it('should merge wallet VKeys into existing witness set, preserving script witnesses', () => {
+      // Build a Plutus-like unsigned tx with script witnesses in the witness set
+      // Witness set keys: 5=redeemers, 6=datums, 7=plutus_v3_scripts
+      const txBody = cbor.decodeFirstSync(Buffer.from(VALID_UNSIGNED_TX_CBOR, 'hex'))[0];
+      const fakeRedeemer = Buffer.from('redeemer-data');
+      const fakeDatum = Buffer.from('datum-data');
+      const fakeScript = Buffer.from('plutus-v3-script');
+
+      // Build witness set with script witnesses (no VKeys yet)
+      const origWitnessSet = new Map();
+      origWitnessSet.set(5, [fakeRedeemer]);   // redeemers
+      origWitnessSet.set(6, [fakeDatum]);       // datums
+      origWitnessSet.set(7, [fakeScript]);      // plutus_v3_scripts
+
+      const plutusTx = [txBody, origWitnessSet, true, null];
+      const plutusTxCbor = cbor.encodeOne(plutusTx).toString('hex');
+
+      // Combine with wallet witness set (only VKeys at key 0)
+      const result = combineTransactionWithWitnesses(plutusTxCbor, VALID_WITNESS_SET_CBOR);
+
+      // Verify result contains ALL witness keys
+      const decoded = cbor.decodeFirstSync(Buffer.from(result, 'hex'));
+      const resultWs = decoded[1];
+
+      expect(resultWs).toBeInstanceOf(Map);
+      expect(resultWs.has(0)).toBe(true);   // VKey witnesses (from wallet)
+      expect(resultWs.has(5)).toBe(true);   // redeemers (preserved from builder)
+      expect(resultWs.has(6)).toBe(true);   // datums (preserved from builder)
+      expect(resultWs.has(7)).toBe(true);   // plutus_v3_scripts (preserved from builder)
+
+      // VKeys should come from wallet (CBOR tag 258 wraps the array for sets)
+      const vkeys = resultWs.get(0);
+      expect(vkeys).toBeDefined();
+      // Script witnesses should be unchanged
+      expect(resultWs.get(5)).toEqual([fakeRedeemer]);
+      expect(resultWs.get(6)).toEqual([fakeDatum]);
+      expect(resultWs.get(7)).toEqual([fakeScript]);
+    });
+
+    it('should handle simple transaction without script witnesses (fallback path)', () => {
+      // Standard non-Plutus transaction — existing behavior should still work
+      const result = combineTransactionWithWitnesses(
+        VALID_UNSIGNED_TX_CBOR,
+        VALID_WITNESS_SET_CBOR
+      );
+
+      const decoded = cbor.decodeFirstSync(Buffer.from(result, 'hex'));
+      expect(Array.isArray(decoded)).toBe(true);
+      // Witness set should have VKeys
+      const ws = decoded[1];
+      if (ws instanceof Map) {
+        expect(ws.has(0)).toBe(true);
+      }
+    });
   });
 
   describe('isWitnessSetCbor()', () => {

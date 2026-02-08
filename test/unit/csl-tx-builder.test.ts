@@ -196,5 +196,55 @@ describe('CSLTxBuilder', () => {
       const result = createCostModels(JSON.stringify({ 'PlutusV3': costs }));
       expect(result.len()).toBe(1);
     });
+
+    it('should convert object-format cost models to arrays (Blockfrost format)', () => {
+      // Blockfrost returns cost models as { "paramName": value } objects, not arrays
+      const objectCosts: Record<string, number> = {};
+      for (let i = 0; i < 251; i++) {
+        objectCosts[`param-${String(i).padStart(3, '0')}`] = i * 100;
+      }
+      const result = createCostModels(JSON.stringify({ 'plutus:v3': objectCosts }));
+      expect(result.len()).toBe(1);
+    });
+
+    it('should parse valid PlutusV1 cost model', () => {
+      const costs = Array(166).fill(0).map((_, i) => i);
+      const result = createCostModels(JSON.stringify({ 'plutus:v1': costs }), 'v1');
+      expect(result.len()).toBe(1);
+    });
+
+    it('should parse valid PlutusV2 cost model', () => {
+      const costs = Array(175).fill(0).map((_, i) => i);
+      const result = createCostModels(JSON.stringify({ 'plutus:v2': costs }), 'v2');
+      expect(result.len()).toBe(1);
+    });
+
+    it('should load all three Plutus versions when no version specified', () => {
+      const v1Costs = Array(166).fill(0).map((_, i) => i);
+      const v2Costs = Array(175).fill(0).map((_, i) => i);
+      const v3Costs = Array(251).fill(0).map((_, i) => i);
+      const result = createCostModels(JSON.stringify({
+        'plutus:v1': v1Costs,
+        'plutus:v2': v2Costs,
+        'plutus:v3': v3Costs,
+      }));
+      expect(result.len()).toBe(3);
+    });
+
+    it('should convert object-format cost models for all Plutus versions', () => {
+      const makeObjectCosts = (count: number) => {
+        const obj: Record<string, number> = {};
+        for (let i = 0; i < count; i++) {
+          obj[`param-${String(i).padStart(3, '0')}`] = i;
+        }
+        return obj;
+      };
+      const result = createCostModels(JSON.stringify({
+        'PlutusV1': makeObjectCosts(166),
+        'PlutusV2': makeObjectCosts(175),
+        'PlutusV3': makeObjectCosts(251),
+      }));
+      expect(result.len()).toBe(3);
+    });
   });
 });
