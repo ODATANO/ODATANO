@@ -322,6 +322,10 @@ export type TxBuildRequest = {
   requiredSigners?: string[];
   /** Script parameters — PlutusData JSON array applied to script before building */
   scriptParams?: JSONValue[];
+  /** Optional inline datum for minted token output (PlutusData JSON, parsed) */
+  inlineDatum?: JSONValue;
+  /** Optional custom redeemer for the minting policy (PlutusData JSON, parsed) */
+  mintRedeemer?: JSONValue;
 };
 
 /**

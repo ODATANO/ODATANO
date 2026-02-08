@@ -3,6 +3,7 @@ import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
+import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -195,7 +196,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -245,6 +246,26 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
+    // Parse and validate optional inlineDatumJson
+    let inlineDatum: any | undefined;
+    if (inlineDatumJson) {
+      try {
+        inlineDatum = JSON.parse(inlineDatumJson);
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
+      }
+    }
+
+    // Parse and validate optional mintRedeemerJson
+    let mintRedeemer: any | undefined;
+    if (mintRedeemerJson) {
+      try {
+        mintRedeemer = JSON.parse(mintRedeemerJson);
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', 'mintRedeemerJson must be valid JSON', 'mintRedeemerJson');
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info(
@@ -256,18 +277,32 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.mintActionsJson;
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
+      delete cleanData.inlineDatumJson;
+      delete cleanData.mintRedeemerJson;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
       if (scriptParams && scriptParams.length > 0) {
         finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
+
+        // BUG 7 fix: expand assetName-only entries to full assetUnit using the applied script's policyId.
+        // A full assetUnit is >= 57 chars (56 hex policyId + at least 1 hex assetName). Shorter = assetName-only.
+        const appliedScript = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex'));
+        const appliedPolicyId = appliedScript.hash.toString();
+        for (const action of parsedMintActions) {
+          if (action.assetUnit.length < 57) {
+            action.assetUnit = appliedPolicyId + action.assetUnit;
+          }
+        }
       }
 
       return await getCardanoIndexer().indexMintBuildResult(db, {
         ...cleanData,
         mintActions: parsedMintActions,
         mintingPolicyScript: finalMintingPolicyScript,
-        requiredSigners
+        requiredSigners,
+        inlineDatum,
+        mintRedeemer
       });
     });
   });

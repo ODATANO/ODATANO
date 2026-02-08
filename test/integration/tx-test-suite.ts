@@ -454,6 +454,41 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
+      // BuildMintTransaction - inlineDatumJson / mintRedeemerJson Tests
+      // ============================================================================
+
+      describe('BuildMintTransaction inlineDatumJson/mintRedeemerJson', () => {
+
+        it('POST /BuildMintTransaction - rejects invalid inlineDatumJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            inlineDatumJson: 'not-valid-json{'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMintTransaction - rejects invalid mintRedeemerJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            mintRedeemerJson: '{bad json'
+          };
+          const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
+
+          expect(status).to.equal(400);
+        });
+
+        it('POST /BuildMintTransaction - builds without inlineDatumJson/mintRedeemerJson (optional params)', async () => {
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', mintingRequestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+      });
+
+      // ============================================================================
       // BuildPlutusSpendTransaction Action Tests
       // ============================================================================
 

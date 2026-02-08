@@ -434,7 +434,15 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const mintQuantity = CSL.Int.new_i32(Number(mintAction.quantity));
 
       // Create redeemer with specified execution units
-      const redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str(String(mintAction.redeemer ?? 0)));
+      let redeemerData;
+      if (req.mintRedeemer) {
+        redeemerData = CSL.PlutusData.from_json(
+          JSON.stringify(req.mintRedeemer),
+          CSL.PlutusDatumSchema.DetailedSchema
+        );
+      } else {
+        redeemerData = CSL.PlutusData.new_integer(CSL.BigInt.from_str(String(mintAction.redeemer ?? 0)));
+      }
       const redeemer = CSL.Redeemer.new(
         CSL.RedeemerTag.new_mint(),
         CSL.BigNum.from_str('0'),
@@ -482,6 +490,13 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     const finalOutputValue = outputValue.checked_add(totalMintedValue);
 
     const recipientOutput = CSL.TransactionOutput.new(recipientAddress, finalOutputValue);
+    if (req.inlineDatum) {
+      const datumData = CSL.PlutusData.from_json(
+        JSON.stringify(req.inlineDatum),
+        CSL.PlutusDatumSchema.DetailedSchema
+      );
+      recipientOutput.set_plutus_data(datumData);
+    }
     txb.add_output(recipientOutput);
 
     // Add collateral for Plutus script execution

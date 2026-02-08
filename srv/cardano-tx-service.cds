@@ -131,7 +131,13 @@ service CardanoTransactionService @(impl: 'srv/cardano-tx-service') {
                                 requiredSignersJson: String,
                                 @title: 'Script Parameters JSON'
                                 @description: 'Optional JSON array of PlutusData parameters to apply to the minting policy script before building. For parameterized validators.'
-                                scriptParamsJson: String) returns TransactionBuilds;
+                                scriptParamsJson: String,
+                                @title: 'Output Inline Datum JSON'
+                                @description: 'Optional PlutusData JSON to attach as inline datum on the recipient output. Used when minted tokens must carry on-chain state.'
+                                inlineDatumJson: String,
+                                @title: 'Mint Redeemer JSON'
+                                @description: 'Optional PlutusData JSON for the minting policy redeemer. Defaults to integer 0 if not specified.'
+                                mintRedeemerJson: String) returns TransactionBuilds;
 
     @title : 'Build Plutus Spend Transaction'
     @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'

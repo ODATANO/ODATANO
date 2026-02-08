@@ -280,10 +280,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const buildMints = (exUnits: { mem: number; cpu: number }) => {
         const mints = [];
         for (const mintAction of req.mintActions) {
-          const { policyId, assetName } = parseAssetUnit(mintAction.assetUnit);
-          const policyHash = new Hash28(policyId);
+          const { assetName } = parseAssetUnit(mintAction.assetUnit);
           const assetValue = Value.singleAsset(
-            policyHash,
+            script.hash,
             Buffer.from(assetName, 'hex'),
             BigInt(mintAction.quantity)
           );
@@ -292,7 +291,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             value: assetValue,
             script: {
               inline: script,
-              redeemer: new DataI(mintAction.redeemer ?? 0),
+              redeemer: req.mintRedeemer
+                ? jsonToPlutusData(req.mintRedeemer)
+                : new DataI(mintAction.redeemer ?? 0),
               executionUnits: exUnits
             }
           });
@@ -305,10 +306,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       for (const mintAction of req.mintActions) {
         const quantity = BigInt(mintAction.quantity);
         if (quantity > 0n) {
-          const { policyId, assetName } = parseAssetUnit(mintAction.assetUnit);
-          const policyHash = new Hash28(policyId);
+          const { assetName } = parseAssetUnit(mintAction.assetUnit);
           const assetValue = Value.singleAsset(
-            policyHash,
+            script.hash,
             Buffer.from(assetName, 'hex'),
             quantity
           );
@@ -321,12 +321,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       outputValue = Value.add(outputValue, mintValue);
 
       // Build output
-      const outputs = [
-        new TxOut({
-          address: recipientAddress,
-          value: outputValue
-        })
-      ];
+      const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
+        address: recipientAddress,
+        value: outputValue,
+      };
+      if (req.inlineDatum) {
+        txOutParams.datum = jsonToPlutusData(req.inlineDatum);
+      }
+      const outputs = [new TxOut(txOutParams)];
 
       // Find an ADA-only UTxO for collateral (Plutus scripts require ADA-only collateral)
       const adaOnlyUtxo = ctx.utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
