@@ -210,7 +210,7 @@ module.exports = (srv: cds.Service) => {
     if (!Array.isArray(parsedMintActionsRaw)) {
       rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
     }
-    const parsedMintActions = parsedMintActionsRaw.map((action: { assetName: string; quantity: string }) => ({
+    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => ({
       ...action,
       quantity: BigInt(action.quantity)
     }));
