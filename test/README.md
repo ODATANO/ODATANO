@@ -6,7 +6,7 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Test Files**: 20 test files across integration and unit tests
+- **Total Test Files**: 25 test files across integration and unit tests
 - **Statement Coverage**: 96%+
 - **Branch Coverage**: 81%+
 - **Networks**: Cardano Preview testnet
@@ -40,11 +40,17 @@ test/
 │   ├── cardano-client.test.ts          # CardanoClient configuration & evaluateTransaction
 │   ├── cardano-tx-builder.test.ts      # CardanoTransactionBuilder tests (M2)
 │   ├── blockfrost-backend.test.ts      # Blockfrost backend initialization
+│   ├── koios-backend.test.ts           # Koios backend unit tests
 │   ├── ogmios-backend.test.ts          # Ogmios backend tests (M2)
 │   ├── csl-tx-builder.test.ts          # CSL transaction builder tests (M2)
+│   ├── buildooor-tx-builder.test.ts    # Buildooor transaction builder tests (M2)
 │   ├── tx-builder-registry.test.ts     # Builder registry tests (M2)
 │   ├── tx-build-helper.test.ts         # Transaction helper utilities (M2)
-│   └── signing.test.ts                 # External signing unit tests (M3)
+│   ├── signing.test.ts                 # External signing unit tests (M3)
+│   ├── server.test.ts                  # Server initialization & config tests
+│   ├── circuit-breaker.test.ts         # Circuit breaker logic tests
+│   ├── concurrency.test.ts             # Concurrency & race condition tests
+│   └── error-paths.test.ts             # Error path coverage tests
 └── README.md                           # This file
 ```
 

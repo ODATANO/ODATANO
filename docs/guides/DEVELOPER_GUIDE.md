@@ -1,7 +1,7 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.3.0 (Milestone 3)\
+**Version:** 0.3.9\
 **Status:** Production-Ready - 25 test files, 96%+ coverage\
 **Last Updated:** February 2026
 
@@ -25,11 +25,11 @@
 
 ### Service Surface
 
-**25+ Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionSubmissions (M2), SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, AddressTransactions (M3)
+**29 Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors (M2), SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds (M3)
 
-**11 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress
+**15 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters
 
-**6 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
+**8 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus
 
 **8 External Signing & Plutus Actions (M3):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
 
@@ -126,9 +126,9 @@ srv/
     signing-helper.ts    # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds          # 25+ entities with temporal support
+db/schema.cds          # 29 entities with temporal support
 config/config.ts       # Timeouts, network, TTL, builders
-test/                  # 20 test files (integration + unit)
+test/                  # 25 test files (integration + unit)
 ```
 
 ---
@@ -167,7 +167,7 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── blockchain/            # Backends, indexer, tx builder, signing
 │   └── utils/                 # Validators, errors, mappers
 ├── db/
-│   └── schema.cds             # 30+ entities (namespace: odatano.cardano)
+│   └── schema.cds             # 29 entities (namespace: odatano.cardano)
 └── config/                    # Network genesis configurations
 ```
 

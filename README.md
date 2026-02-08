@@ -17,7 +17,7 @@ By abstracting blockchain complexity behind familiar SAP integration patterns, O
 **Funded by Cardano Catalyst Fund 14:** [Official Proposal](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk)
 
 ### Milestone 1 (Completed January 2026) ✅ 
-Cardano read operations with multi-provider failover (Blockfrost → Koios), 17 Entities defining Cardano Core Components & 11 Blockchain Read Actions with comprehensive input validation, full OData V4 query support, lazy on-demand indexing with TTL-based refresh, 340 tests across 11 test suites, CI/CD with Codecov integration
+Cardano read operations with multi-provider failover (Blockfrost → Koios), 18 Entities defining Cardano Core Components & 15 Blockchain Read Actions with comprehensive input validation, full OData V4 query support, lazy on-demand indexing with TTL-based refresh, 340 tests across 11 test suites, CI/CD with Codecov integration
 
 [Milestone 1: OData Service Foundation & Blockchain Read Access](https://milestones.projectcatalyst.io/projects/1400109/milestones/1)
 
@@ -46,7 +46,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Transaction Building**: Cardano Serialization Library (CSL) & Buildooor for minting, ADA or Token transfers, and metadata transactions
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
-- **Comprehensive Testing**: 932 tests across 25 test suites, 96%+ statement coverage
+- **Comprehensive Testing**: 978 tests across 25 test suites, 96%+ statement coverage
 
 ## Quick Start
 
@@ -146,7 +146,7 @@ See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
 ## Testing
 
 ```bash
-npm test                    # Run all 932 tests
+npm test                    # Run all 978 tests
 npm run test:coverage       # With coverage report
 npm run test:integration    # Integration tests only
 npm run test:unit           # Unit tests only
@@ -165,7 +165,7 @@ See [Test Documentation](test/README.md) for details.
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
-| [Test Documentation](test/README.md) | Test suite overview (932 tests) |
+| [Test Documentation](test/README.md) | Test suite overview (978 tests) |
 
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)
@@ -175,15 +175,15 @@ See [Test Documentation](test/README.md) for details.
 
 ### Read Service (`/odata/v4/cardano-odata`) - M1
 
-**17 Entities:** NetworkInformation, Blocks, Epochs, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, Pools, Accounts, Dreps
+**18 Entities:** NetworkInformation, Blocks, Epochs, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, Pools, Accounts, Dreps, LedgerProtocolParameters
 
-**11 Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetPoolById, GetAccountByStakeAddress, GetDrepById
+**15 Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetPoolById, GetAccountByStakeAddress, GetDrepById, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters
 
 ### Transaction Service (`/odata/v4/cardano-transaction`) - M2
 
 **7 Entities:** TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors
 
-**6 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction
+**8 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus
 
 ### External Signing & Plutus Smart Contracts (`/odata/v4/cardano-transaction`) - M3
 

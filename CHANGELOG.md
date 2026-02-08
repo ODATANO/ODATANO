@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Architecture refactored to centralized App Context pattern
 - Services now use `getCardanoIndexer()` instead of direct instantiation
-- Test suite updated: 25 test files, 932 tests across integration and unit tests
+- Test suite updated: 25 test files, 978 tests across integration and unit tests
 - Enhanced error handling with signing-specific error cases
 
 ### Security
@@ -146,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - SAP Fiori UI annotations for rapid UI development
   - Multi-network support: mainnet, preview, preprod
 
-- **17 Entities** defining Cardano Core Components:
+- **18 Entities** defining Cardano Core Components:
   - `NetworkInformation` - Network statistics (supply, stake)
   - `Blocks` - Block headers
   - `Epochs` - Epoch summaries
@@ -163,8 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Pools` - Stake pools
   - `Accounts` - Stake accounts
   - `Dreps` - Delegated representatives
+  - `AddressTransactions` - Address transaction history
+  - `LedgerProtocolParameters` - Protocol parameters
 
-- **11 Read Actions** (OData POST endpoints):
+- **15 Read Actions** (OData POST endpoints):
   - `GetNetworkInformation`
   - `GetBlockByHash`
   - `GetEpochByNumber`
@@ -176,6 +178,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `GetPoolById`
   - `GetAccountByStakeAddress`
   - `GetDrepById`
+  - `GetLatestTransactionsByAddress`
+  - `GetLatestBlock`
+  - `GetLatestEpoch`
+  - `GetLedgerProtocolParameters`
 
 - **Multi-Provider Architecture**
   - Blockfrost (primary, 8s timeout)

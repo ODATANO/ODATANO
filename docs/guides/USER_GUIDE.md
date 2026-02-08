@@ -1,7 +1,7 @@
 # ODATANO User Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.3.0 (Milestone 3 Complete)\
+**Version:** 0.3.9\
 **Last Updated:** February 2026
 
 ---
@@ -528,7 +528,7 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 20 test files, 96%+ coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 25 test files, 96%+ coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -537,5 +537,5 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ---
 
-**Version:** 0.3.0 (Milestone 3 Complete)\
+**Version:** 0.3.9\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

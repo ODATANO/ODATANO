@@ -321,7 +321,7 @@ See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete ex
 ## Testing
 
 ```bash
-# All tests (20 test files)
+# All tests (25 test files)
 npm test
 
 # Coverage report
