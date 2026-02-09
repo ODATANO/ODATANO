@@ -36,8 +36,8 @@ export function setupKoiosMocks(utxos = mockUtxosAdaOnly) {
 
 export function setupTxResponseMock() {
   nock('https://preview.koios.rest')
-    .post('/api/v1/submit_tx')
-    .reply(200, [{ tx_hash: TEST_FIXTURES.txHash }]);
+    .post('/api/v1/submittx')
+    .reply(200, TEST_FIXTURES.txHash);
 }
 
 export function setupUtxoMock(utxos: any[]) {

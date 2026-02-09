@@ -1,5 +1,6 @@
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
+import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
 import {
   Transaction as TransactionProviderData,
   Address as AddressProviderData,
@@ -782,23 +783,66 @@ export function mapAddressTransactionBuild(addr: string, buildId: string): Addre
 //-----------------------------------------------------------------------
 
 /**
- * Normalize cost models to array format.
- * Blockfrost returns cost models as objects ({ "param-name": value, ... }),
- * while CSL expects arrays of numbers. This converts each Plutus version's
- * cost model from object to sorted-key array if needed.
- * @param raw - Raw cost models object from any backend
- * @returns Object with all cost model values as number arrays
+ * Normalize cost models to array format in canonical Plutus parameter order.
+ *
+ * Blockfrost's cost_models (named keys) has known key-value mapping bugs for
+ * PlutusV3 (shifted values in the quotientInteger/remainderInteger region).
+ * The Blockfrost backend now prefers cost_models_raw (canonical arrays from the
+ * node) which bypasses this issue entirely.
+ *
+ * For V3 arrays: already in canonical order, just pad to 297 via toCostModelArrV3.
+ * For V3 objects (Ogmios named format): toCostModelArrV3(obj) maps via canonical keys.
+ * For V1/V2: alphabetical order IS the canonical order (no reordering needed).
+ *
+ * @param raw - Raw cost models from any backend (Blockfrost, Ogmios, Koios)
+ * @returns Object with all cost model values as number arrays in canonical order
  */
 export function normalizeCostModels(raw: Record<string, unknown>): Record<string, number[]> {
   const result: Record<string, number[]> = {};
   for (const [key, value] of Object.entries(raw)) {
+    const isV3 = key === 'PlutusV3' || key === 'plutus:v3';
     if (Array.isArray(value)) {
-      result[key] = value;
+      if (isV3) {
+        // V3 arrays (from cost_models_raw or Ogmios) are already in canonical Plutus V3 order.
+        // toCostModelArrV3 pads to 297 (Chang 2) with defaults if the array is shorter.
+        result[key] = Array.from(toCostModelArrV3(value as any)).map(Number);
+      } else {
+        // V1/V2: pass through (already in canonical order)
+        result[key] = value;
+      }
     } else if (value && typeof value === 'object') {
-      result[key] = Object.keys(value as Record<string, number>).sort().map(k => (value as Record<string, number>)[k]);
+      const obj = value as Record<string, unknown>;
+      if (isV3) {
+        // Fix Blockfrost key naming bug: Blockfrost returns "remainderInteger-memory-arguments-minimum"
+        // but the canonical Plutus V3 cost model name is "quotientInteger-memory-arguments-minimum".
+        // (remainderInteger uses LinearInBothArguments which has no minimum parameter;
+        //  quotientInteger uses SubtractedSizes which does have minimum.)
+        const fixedObj = _fixBlockfrostV3Keys(obj);
+        result[key] = Array.from(toCostModelArrV3(fixedObj as any)).map(Number);
+      } else {
+        // V1/V2: alphabetical sort IS correct for those versions
+        result[key] = Object.keys(obj as Record<string, number>).sort()
+            .map(k => (obj as Record<string, number>)[k]);
+      }
     }
   }
   return result;
+}
+
+/**
+ * Fix known Blockfrost API key naming discrepancies for PlutusV3 cost models.
+ * Blockfrost returns some parameter names that don't match the canonical Plutus spec.
+ */
+function _fixBlockfrostV3Keys(obj: Record<string, unknown>): Record<string, unknown> {
+  // Known Blockfrost bug: "remainderInteger-memory-arguments-minimum" should be
+  // "quotientInteger-memory-arguments-minimum" (the only integer division op with a minimum memory param)
+  if (!obj['quotientInteger-memory-arguments-minimum'] && obj['remainderInteger-memory-arguments-minimum'] !== undefined) {
+    const fixed = { ...obj };
+    fixed['quotientInteger-memory-arguments-minimum'] = fixed['remainderInteger-memory-arguments-minimum'];
+    delete fixed['remainderInteger-memory-arguments-minimum'];
+    return fixed;
+  }
+  return obj;
 }
 
 /** 

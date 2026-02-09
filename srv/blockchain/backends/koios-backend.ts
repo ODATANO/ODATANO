@@ -321,15 +321,13 @@ export class KoiosBackend implements CardanoBackend {
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/address_utxos', { _addresses: [address] });
-
+        const { data } = await this.api.post('/address_utxos', { _addresses: [address], _extended: true });
         return data.map((utxo: any) => {
-          // Build amount array from lovelace value and asset_list
           const amount: Amount[] = [
             { unit: 'lovelace', quantity: utxo.value }
           ];
 
-          // Add native assets if present
+          // add native asset(s) if present
           if (utxo.asset_list && Array.isArray(utxo.asset_list)) {
             for (const asset of utxo.asset_list) {
               amount.push({
@@ -347,6 +345,7 @@ export class KoiosBackend implements CardanoBackend {
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
             scriptRef: utxo.reference_script || null,
+            inlineDatum: utxo.inline_datum ? JSON.stringify(utxo.inline_datum) : null,
           };
         });
       },
@@ -384,7 +383,7 @@ export class KoiosBackend implements CardanoBackend {
           };
         }
         
-        // Fallback for preview/preprod networks where /totals doesn't work
+        // Fallback for preview/preprod network where /totals doesn't work
         // Use genesis endpoint to get max supply; remaining fields default to '0'
         const { data: genesisData } = await this.api.get('/genesis');
         const genesis = genesisData[0];
@@ -568,12 +567,23 @@ export class KoiosBackend implements CardanoBackend {
   async submitTransaction(signedTxCbor: string): Promise<string> {
     return handleBackendRequest(
       async () => {
-        const body = {
-          _txs: [signedTxCbor],
-        };
-        const { data } = await this.api.post('/submit_tx', body);
-
-        return data[0].tx_hash;
+        // Koios /submittx expects raw CBOR bytes with Content-Type: application/cbor
+        const cborBytes = Buffer.from(signedTxCbor, 'hex');
+        try {
+          const { data } = await this.api.post('/submittx', cborBytes, {
+            headers: { 'Content-Type': 'application/cbor' },
+            // Prevent axios from JSON-serializing the Buffer
+            transformRequest: [(d: unknown) => d],
+          });
+          // Koios returns the tx hash as a plain string
+          return typeof data === 'string' ? data.replace(/"/g, '') : data;
+        } catch (err: any) {
+          // Log the Koios error response for debugging
+          if (err.response?.data) {
+            return Promise.reject(new Error(`Koios error: ${JSON.stringify(err.response.data)}`));
+          }
+          throw err;
+        }
       },
       this.name
     );
@@ -606,7 +616,7 @@ export class KoiosBackend implements CardanoBackend {
           rho: data.monetaryExpansion,
           tau: data.treasuryCut,
           minPoolCost: data.minPoolCost.toString(),
-          // --- Legacy / Misc ---S
+          // --- Legacy / Misc ---
           decentralisationParam: 0, // deprecated in Conway era
           extraEntropy: null,
           protocolMajorVer: data.protocolVersion.major,

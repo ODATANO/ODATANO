@@ -24,7 +24,7 @@ import {
   TxMetadatumList,
   TxMetadatumMap
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
-import { DataI } from "@harmoniclabs/plutus-data";
+import { DataI, dataFromCbor } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS,EXECUTION_UNIT_BUFFER,WITNESS_BUFFER_BYTES} from '../../utils/const'
 
@@ -497,8 +497,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
 
-      // Build output
-      const outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      // Build output — include multi-assets from script UTxO in continuing output
+      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      for (const amount of scriptOdatanoUtxo.amount) {
+        if (amount.unit.toLowerCase() !== 'lovelace' && BigInt(amount.quantity) > 0n) {
+          const { policyId, assetName } = parseAssetUnit(amount.unit);
+          const policyHash = new Hash28(policyId);
+          const assetValue = Value.singleAsset(policyHash, Buffer.from(assetName, 'hex'), BigInt(amount.quantity));
+          outputValue = Value.add(outputValue, assetValue);
+        }
+      }
       const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
         address: recipientAddress,
         value: outputValue,
@@ -714,12 +722,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
     }
 
+    const datumValue = utxo.inlineDatum
+      ? dataFromCbor(utxo.inlineDatum)
+      : undefined;
+
     return new LedgerUTxO({
       utxoRef: outRef,
       resolved: new TxOut({
         address: addr,
         value,
-        datum: undefined,
+        datum: datumValue,
         refScript: undefined
       })
     });

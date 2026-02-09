@@ -7,7 +7,7 @@ import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-bui
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER } from '../../utils/const';
-import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
+import { toCostModelArrV3, costModelsToLanguageViewCbor } from '@harmoniclabs/cardano-costmodels-ts';
 
 const logger = cds.log('CSLTxBuilder');
 
@@ -535,15 +535,92 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       txb.set_collateral(collateralBuilder);
     }
 
-    // Exclude collateral UTxO from coin selection so it is not consumed on successful tx.
-    // This preserves the dedicated collateral UTxO for future Plutus transactions.
-    const fundingUtxos = collateralOdatanoUtxo
+    // Exclude collateral UTxO so it is not consumed on successful tx.
+    let fundingUtxos = collateralOdatanoUtxo
       ? ctx.utxos.filter(u => !(u.txHash === collateralOdatanoUtxo.txHash && u.outputIndex === collateralOdatanoUtxo.outputIndex))
       : ctx.utxos;
-    const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
+    if (fundingUtxos.length === 0 && ctx.utxos.length > 0) {
+      logger.debug('[CSLTxBuilder] No funding UTxOs after collateral exclusion, including collateral in funding pool');
+      fundingUtxos = ctx.utxos;
+    }
 
-    // Add inputs via coin selection (excluding collateral)
-    txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+    // Add all funding UTxOs as explicit inputs instead of using coin selection.
+    // CSL's add_inputs_from does not properly forward native tokens from selected
+    // inputs to the change output during Plutus minting transactions, causing
+    // ValueNotConservedUTxO when inputs contain existing native assets.
+    const fundingInputsBuilder = CSL.TxInputsBuilder.new();
+    for (const u of fundingUtxos) {
+      const fTxHash = CSL.TransactionHash.from_bytes(Buffer.from(u.txHash, 'hex'));
+      const fInput = CSL.TransactionInput.new(fTxHash, u.outputIndex);
+      const fAddress = CSL.Address.from_bech32(u.address);
+      const fLovelace = CSL.BigNum.from_str(getLovelace(u).toString());
+      const fValue = CSL.Value.new(fLovelace);
+      const fNonAdaAssets = u.amount.filter(a => a.unit.toLowerCase() !== 'lovelace' && BigInt(a.quantity) > 0n);
+      if (fNonAdaAssets.length > 0) {
+        const fMultiAsset = CSL.MultiAsset.new();
+        for (const asset of fNonAdaAssets) {
+          const { policyId, assetName } = parseAssetUnit(asset.unit);
+          const pH = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
+          let assets = fMultiAsset.get(pH);
+          if (!assets) assets = CSL.Assets.new();
+          assets.insert(CSL.AssetName.new(Buffer.from(assetName, 'hex')), CSL.BigNum.from_str(asset.quantity));
+          fMultiAsset.insert(pH, assets);
+        }
+        fValue.set_multiasset(fMultiAsset);
+      }
+      fundingInputsBuilder.add_regular_input(fAddress, fInput, fValue);
+    }
+    txb.set_inputs(fundingInputsBuilder);
+
+    // Create explicit change output for native tokens from funding UTxOs.
+    // CSL's add_change_if_needed does not forward native tokens from inputs
+    // to the change output during Plutus minting transactions.
+    const fundingNativeAssets = new Map<string, Map<string, bigint>>();
+    for (const u of fundingUtxos) {
+      for (const a of u.amount) {
+        if (a.unit.toLowerCase() === 'lovelace') continue;
+        if (BigInt(a.quantity) <= 0n) continue;
+        const { policyId: pid, assetName: an } = parseAssetUnit(a.unit);
+        if (!fundingNativeAssets.has(pid)) fundingNativeAssets.set(pid, new Map());
+        const policy = fundingNativeAssets.get(pid)!;
+        policy.set(an, (policy.get(an) || 0n) + BigInt(a.quantity));
+      }
+    }
+    // Adjust for burned tokens (negative mint quantities) — those tokens are
+    // destroyed, so the change output must not include them.
+    const scriptHashHex = Buffer.from(scriptHash.to_bytes()).toString('hex');
+    for (const mintAction of req.mintActions) {
+      const qty = BigInt(mintAction.quantity);
+      if (qty >= 0n) continue;
+      const { assetName: burnAssetName } = parseAssetUnit(mintAction.assetUnit);
+      const burnAmount = -qty;
+      const policyAssets = fundingNativeAssets.get(scriptHashHex);
+      if (policyAssets) {
+        const currentQty = policyAssets.get(burnAssetName) || 0n;
+        const newQty = currentQty - burnAmount;
+        if (newQty <= 0n) {
+          policyAssets.delete(burnAssetName);
+          if (policyAssets.size === 0) fundingNativeAssets.delete(scriptHashHex);
+        } else {
+          policyAssets.set(burnAssetName, newQty);
+        }
+      }
+    }
+    if (fundingNativeAssets.size > 0) {
+      const nativeChangeMA = CSL.MultiAsset.new();
+      for (const [pid, assets] of fundingNativeAssets) {
+        const ph = CSL.ScriptHash.from_bytes(Buffer.from(pid, 'hex'));
+        const cslAssets = CSL.Assets.new();
+        for (const [an, qty] of assets) {
+          cslAssets.insert(CSL.AssetName.new(Buffer.from(an, 'hex')), CSL.BigNum.from_str(qty.toString()));
+        }
+        nativeChangeMA.insert(ph, cslAssets);
+      }
+      const nativeChangeValue = CSL.Value.new(CSL.BigNum.from_str('2000000'));
+      nativeChangeValue.set_multiasset(nativeChangeMA);
+      txb.add_output(CSL.TransactionOutput.new(changeAddress, nativeChangeValue));
+      logger.debug('[CSLTxBuilder] Added explicit change output for existing native tokens from funding UTxOs');
+    }
 
     // Calculate script data hash BEFORE add_change_if_needed
     // Always call calc_script_data_hash for Plutus transactions - CSL requires it
@@ -553,8 +630,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Now add change
     txb.add_change_if_needed(changeAddress);
 
-    // Build and return transaction
-    return txb.build_tx();
+    // Build transaction and patch scriptDataHash (CSL's is incorrect for Conway PlutusV3)
+    const tx = txb.build_tx();
+    return this._patchScriptDataHash(tx);
   }
 
   public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
@@ -686,24 +764,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       )
     );
 
-    // Build datum source
-    let datumSource: CSL.DatumSource;
-    if (plutusScriptExecution.datum) {
-      // Datum provided explicitly (hash-based datum)
-      const datumPlutusData = CSL.PlutusData.from_json(
-        JSON.stringify(plutusScriptExecution.datum),
-        CSL.PlutusDatumSchema.DetailedSchema
-      );
-      datumSource = CSL.DatumSource.new(datumPlutusData);
-    } else {
-      // No datum provided - for inline datums, pass a unit datum placeholder.
-      // The node will validate against the actual inline datum on-chain.
-      const unitDatum = CSL.PlutusData.new_constr_plutus_data(
-        CSL.ConstrPlutusData.new(CSL.BigNum.from_str('0'), CSL.PlutusList.new())
-      );
-      datumSource = CSL.DatumSource.new(unitDatum);
-    }
-
     // Add the script input using TxInputsBuilder
     const scriptInputsBuilder = CSL.TxInputsBuilder.new();
 
@@ -718,11 +778,42 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       throw new Error(`[CSLTxBuilder] Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
     }
 
+    // Build full multi-asset value for the script UTxO (lovelace + native assets)
     const scriptUtxoValue = CSL.Value.new(CSL.BigNum.from_str(getLovelace(scriptOdatanoUtxo).toString()));
+    const scriptNonAdaAssets = scriptOdatanoUtxo.amount.filter(
+      a => a.unit.toLowerCase() !== 'lovelace' && BigInt(a.quantity) > 0n
+    );
+    if (scriptNonAdaAssets.length > 0) {
+      const scriptMultiAsset = CSL.MultiAsset.new();
+      for (const asset of scriptNonAdaAssets) {
+        const { policyId, assetName } = parseAssetUnit(asset.unit);
+        const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
+        let assets = scriptMultiAsset.get(policyHash);
+        if (!assets) assets = CSL.Assets.new();
+        assets.insert(CSL.AssetName.new(Buffer.from(assetName, 'hex')), CSL.BigNum.from_str(asset.quantity));
+        scriptMultiAsset.insert(policyHash, assets);
+      }
+      scriptUtxoValue.set_multiasset(scriptMultiAsset);
+    }
+
+    // Build PlutusWitness: datum handling depends on whether UTxO has inline datum
+    let plutusWitness: CSL.PlutusWitness;
+    if (plutusScriptExecution.datum) {
+      // Hash-based datum — add to witness set
+      const datumPlutusData = CSL.PlutusData.from_json(
+        JSON.stringify(plutusScriptExecution.datum),
+        CSL.PlutusDatumSchema.DetailedSchema
+      );
+      const datumSource = CSL.DatumSource.new(datumPlutusData);
+      plutusWitness = CSL.PlutusWitness.new_with_ref(scriptSource, datumSource, redeemer);
+    } else {
+      // Inline datum on UTxO — no datum witness needed
+      plutusWitness = CSL.PlutusWitness.new_with_ref_without_datum(scriptSource, redeemer);
+    }
 
     // Add Plutus script input
     scriptInputsBuilder.add_plutus_script_input(
-      CSL.PlutusWitness.new_with_ref(scriptSource, datumSource, redeemer),
+      plutusWitness,
       scriptInput,
       scriptUtxoValue
     );
@@ -756,16 +847,22 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       txb.set_collateral(collateralBuilder);
     }
 
-    // Exclude collateral UTxO from coin selection so it is not consumed on successful tx.
-    // This preserves the dedicated collateral UTxO for future Plutus transactions.
-    const fundingUtxos = collateralOdatanoUtxo
-      ? senderUtxos.filter(u => !(u.txHash === collateralOdatanoUtxo.txHash && u.outputIndex === collateralOdatanoUtxo.outputIndex))
-      : senderUtxos;
-    const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
-    txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
-
-    // Create output for recipient
+    // Create output for recipient BEFORE coin selection so CSL knows the full
+    // output requirements (lovelace + assets + fee) when selecting funding UTxOs.
+    // Include multi-assets from the script UTxO in the continuing output.
     const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || 2_000_000)));
+    if (scriptNonAdaAssets.length > 0) {
+      const outputMultiAsset = CSL.MultiAsset.new();
+      for (const asset of scriptNonAdaAssets) {
+        const { policyId, assetName } = parseAssetUnit(asset.unit);
+        const policyHash = CSL.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
+        let assets = outputMultiAsset.get(policyHash);
+        if (!assets) assets = CSL.Assets.new();
+        assets.insert(CSL.AssetName.new(Buffer.from(assetName, 'hex')), CSL.BigNum.from_str(asset.quantity));
+        outputMultiAsset.insert(policyHash, assets);
+      }
+      outputValue.set_multiasset(outputMultiAsset);
+    }
     const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
     if (req.inlineDatum) {
       const datumData = CSL.PlutusData.from_json(
@@ -776,6 +873,20 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
     txb.add_output(recipientOutput);
 
+    // Exclude collateral UTxO from coin selection so it is not consumed on successful tx.
+    // This preserves the dedicated collateral UTxO for future Plutus transactions.
+    // If no funding UTxOs remain after excluding collateral, fall back to including it —
+    // the same UTxO can appear in both inputs and collateral_inputs (consumed either way).
+    let fundingUtxos = collateralOdatanoUtxo
+      ? senderUtxos.filter(u => !(u.txHash === collateralOdatanoUtxo.txHash && u.outputIndex === collateralOdatanoUtxo.outputIndex))
+      : senderUtxos;
+    if (fundingUtxos.length === 0 && senderUtxos.length > 0) {
+      logger.debug('[CSLTxBuilder] No funding UTxOs after collateral exclusion, including collateral in funding pool');
+      fundingUtxos = senderUtxos;
+    }
+    const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
+    txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
+
     // Calculate script data hash
     const costModels = this._createCostModels('v3');
     txb.calc_script_data_hash(costModels);
@@ -783,8 +894,71 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Add change
     txb.add_change_if_needed(changeAddress);
 
-    // Build and return transaction
-    return txb.build_tx();
+    // Build transaction and patch scriptDataHash (CSL's is incorrect for Conway PlutusV3)
+    const tx = txb.build_tx();
+    return this._patchScriptDataHash(tx);
+  }
+
+  /**
+   * Post-process a CSL-built Plutus transaction to fix the scriptDataHash.
+   * CSL v15's calc_script_data_hash() produces incorrect language view CBOR
+   * for Conway-era PlutusV3 transactions. This method recomputes the correct
+   * hash using costModelsToLanguageViewCbor from @harmoniclabs/cardano-costmodels-ts.
+   */
+  private _patchScriptDataHash(tx: CSL.Transaction): CSL.Transaction {
+    const witnesses = tx.witness_set();
+    const redeemers = witnesses.redeemers();
+    if (!redeemers || redeemers.len() === 0) return tx;
+
+    // 1. Get redeemers CBOR from the built transaction
+    const redeemersBytes = Buffer.from(redeemers.to_bytes());
+
+    // 2. Get datums CBOR if any (hash-based datums in witness set)
+    const plutusData = witnesses.plutus_data();
+    const datumsBytes = plutusData && plutusData.len() > 0
+      ? Buffer.from(plutusData.to_bytes())
+      : Buffer.alloc(0);
+
+    // 3. Compute correct language views using costModelsToLanguageViewCbor
+    //    Cost models are already correctly ordered by normalizeCostModels (uses toCostModelArrV3)
+    const costModelsJson = JSON.parse(this.protocolParameters.costModels || '{}');
+    const costModelsObj: Record<string, number[]> = {};
+    const v3 = costModelsJson['plutus:v3'] || costModelsJson['PlutusV3'];
+    if (Array.isArray(v3) && v3.length > 0) {
+      costModelsObj.PlutusScriptV3 = Array.from(toCostModelArrV3(v3 as any)).map(Number);
+    }
+
+    const languageViews = Buffer.from(
+      costModelsToLanguageViewCbor(costModelsObj as any, { mustHaveV3: !!costModelsObj.PlutusScriptV3 }).toBuffer()
+    );
+
+    // 4. Compute: blake2b256(redeemers || datums || languageViews)
+    const hashInput = Buffer.concat([redeemersBytes, datumsBytes, languageViews]);
+    const hashOutput = Buffer.alloc(32);
+    blake2b(32).update(hashInput).digest(hashOutput);
+
+    // 5. Patch at raw byte level (CSL caches serialized bytes internally,
+    //    so set_script_data_hash + Transaction.new doesn't change the output)
+    const wrongHash = tx.body().script_data_hash();
+    if (!wrongHash) return tx;
+    const wrongHashBytes = Buffer.from(wrongHash.to_bytes());
+
+    if (wrongHashBytes.equals(hashOutput)) {
+      return tx;
+    }
+
+    const txBytes = Buffer.from(tx.to_bytes());
+    const idx = txBytes.indexOf(wrongHashBytes);
+    if (idx === -1) {
+      logger.warn('Could not find scriptDataHash in transaction bytes - skipping patch');
+      return tx;
+    }
+    hashOutput.copy(txBytes, idx);
+
+    logger.info(`_patchScriptDataHash: patched ${wrongHashBytes.toString('hex').slice(0, 16)}... → ${hashOutput.toString('hex').slice(0, 16)}...`);
+
+    // 6. Reconstruct transaction from patched bytes
+    return CSL.Transaction.from_bytes(txBytes);
   }
 
   //---------------------------------------------------------------------------

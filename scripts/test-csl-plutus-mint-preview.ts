@@ -96,6 +96,7 @@ const BUILD_BODY = {
   scriptParamsJson: JSON.stringify(scriptParams),
   requiredSignersJson: JSON.stringify([MANUFACTURER_VKH]),
   inlineDatumJson: JSON.stringify(INLINE_DATUM),
+  lockOnScript: true,
 };
 
 const tempDir = tmpdir();
@@ -147,6 +148,9 @@ async function main() {
     console.log(`  Fee:         ${(buildData.fee / 1_000_000).toFixed(6)} ADA`);
     console.log(`  Tx Hash:     ${txHash}`);
     console.log(`  Script Hash: ${buildData.scriptHash || '(not returned)'}`);
+    if (buildData.scriptAddress) {
+      console.log(`  Script Addr: ${buildData.scriptAddress}`);
+    }
     if (buildData.fingerprint) {
       console.log(`  Fingerprint: ${buildData.fingerprint}`);
     }

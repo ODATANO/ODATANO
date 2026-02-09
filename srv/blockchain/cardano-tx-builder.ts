@@ -225,6 +225,7 @@ export class CardanoTransactionBuilder {
                 outputIndex: scriptRef.outputIndex,
                 address: scriptOutput.address,
                 amount: scriptOutput.amount,
+                inlineDatum: scriptOutput.inlineDatum,
             });
         }
 

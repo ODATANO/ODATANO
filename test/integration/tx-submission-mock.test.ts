@@ -69,14 +69,10 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
   describe('Koios Backend - TX Submission Mock', () => {
     it('SubmitSignedTransaction - successful submission without prior build', async () => {
-      // Mock Koios TX Submit
+      // Mock Koios TX Submit (raw CBOR via /submittx)
       const scope = nock('https://preview.koios.rest')
-        .post('/api/v1/submit_tx', {
-          _txs: [TEST_FIXTURES.signedTxCbor2]
-        })
-        .reply(200, [
-          { tx_hash: TEST_FIXTURES.expectedTxHashCbor2 }
-        ]);
+        .post('/api/v1/submittx')
+        .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
 
       const submitResponse = await test.post(
         '/odata/v4/cardano-transaction/SubmitSignedTransaction',
@@ -114,14 +110,10 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         })
       );
 
-      // Mock Koios TX Submit
+      // Mock Koios TX Submit (raw CBOR via /submittx)
       const scope = nock('https://preview.koios.rest')
-        .post('/api/v1/submit_tx', {
-          _txs: [TEST_FIXTURES.signedTxCbor2]
-        })
-        .reply(200, [
-          { tx_hash: TEST_FIXTURES.expectedTxHashCbor2 }
-        ]);
+        .post('/api/v1/submittx')
+        .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
 
       // Submit with Build ID
       const submitResponse = await test.post(
@@ -148,7 +140,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       it('SubmitSignedTransaction - should return 400 for invalid signature', async () => {
         // Mock Koios TX Submit returning signature error
         const scope = nock('https://preview.koios.rest')
-          .post('/api/v1/submit_tx')
+          .post('/api/v1/submittx')
           .reply(400, {
             error: 'Transaction validation failed: signature verification failed for input 0'
           });
@@ -171,7 +163,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       it('SubmitSignedTransaction - should return 503 for network timeout', async () => {
         // Mock Koios TX Submit with 503 response (simulating backend unavailability)
         const scope = nock('https://preview.koios.rest')
-          .post('/api/v1/submit_tx')
+          .post('/api/v1/submittx')
           .reply(503, {
             error: 'Service temporarily unavailable: timeout exceeded'
           });
@@ -194,7 +186,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       it('SubmitSignedTransaction - should return 409 for duplicate transaction', async () => {
         // Mock Koios TX Submit returning already submitted error
         const scope = nock('https://preview.koios.rest')
-          .post('/api/v1/submit_tx')
+          .post('/api/v1/submittx')
           .reply(400, {
             error: `Transaction ${TEST_FIXTURES.expectedTxHashCbor2} already exists in mempool`
           });
@@ -217,7 +209,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       it('SubmitSignedTransaction - should return 503 for backend unavailable', async () => {
         // Mock Koios TX Submit with 502 Bad Gateway (simulating backend connection issues)
         const scope = nock('https://preview.koios.rest')
-          .post('/api/v1/submit_tx')
+          .post('/api/v1/submittx')
           .reply(502, {
             error: 'Bad Gateway: upstream connection refused'
           });
@@ -239,7 +231,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       it('SubmitSignedTransaction - should return 400 for malformed CBOR', async () => {
         // Mock Koios TX Submit returning deserialization error
         const scope = nock('https://preview.koios.rest')
-          .post('/api/v1/submit_tx')
+          .post('/api/v1/submittx')
           .reply(400, {
             error: 'Failed to deserialize transaction CBOR'
           });

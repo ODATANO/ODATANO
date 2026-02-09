@@ -284,7 +284,7 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     expect(result).toHaveProperty('maxTxSize', 16384);
   });
 
-  it('should normalize object-format cost models to arrays', async () => {
+  it('should normalize cost_models_raw arrays and pad V3 to 297 params', async () => {
     const mockProtocolParams = {
       epoch: 500,
       min_utxo: '1000000',
@@ -314,8 +314,9 @@ describe('BlockfrostBackend getProtocolParameters', () => {
       collateral_percent: 150,
       max_collateral_inputs: 3,
       coins_per_utxo_size: '4310',
-      cost_models: {
-        PlutusV3: { 'b-param': 200, 'a-param': 100 }
+      // Blockfrost now uses cost_models_raw (canonical arrays direct from node)
+      cost_models_raw: {
+        PlutusV3: [100, 200]
       }
     };
 
@@ -333,7 +334,10 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     const costModels = JSON.parse(result.costModels);
 
     expect(Array.isArray(costModels.PlutusV3)).toBe(true);
-    expect(costModels.PlutusV3).toEqual([100, 200]); // sorted by key: a-param, b-param
+    // toCostModelArrV3 pads short arrays to 297 (Chang 2) with defaults
+    expect(costModels.PlutusV3.length).toBe(297);
+    expect(costModels.PlutusV3[0]).toBe(100);
+    expect(costModels.PlutusV3[1]).toBe(200);
   });
 
   it('should throw on API error', async () => {

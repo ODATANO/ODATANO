@@ -394,7 +394,9 @@ export class BlockfrostBackend implements CardanoBackend {
           epoch: protocolParams.epoch,
           minUtxo: protocolParams.min_utxo,
           nonce: protocolParams.nonce,
-          costModels: JSON.stringify(normalizeCostModels(protocolParams.cost_models || {})),
+          costModels: JSON.stringify(normalizeCostModels(
+            (protocolParams as any).cost_models_raw || {}
+          )),
           minFeeA: protocolParams.min_fee_a,
           minFeeB: protocolParams.min_fee_b,
           maxBlockSize: protocolParams.max_block_size,

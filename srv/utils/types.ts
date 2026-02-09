@@ -95,6 +95,7 @@ export interface UTxO {
   blockHash?: Hex;
   datumHash?: Hex | null;
   scriptRef?: Hex | null;
+  inlineDatum?: string | null;
 }
 
 /** 
@@ -298,7 +299,7 @@ export type PlutusScriptExecution = {
 };
 
 /** 
- * Transaction Build Request Type - Parameters for building a simple ADA-only transaction 
+ * Transaction Build Request Type - Parameters for building a transaction, including optional minting and Plutus execution details
  */
 export type TxBuildRequest = {
   network: 'mainnet' | 'preprod' | 'preview';
