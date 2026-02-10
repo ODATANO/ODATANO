@@ -48,10 +48,7 @@ export class CardanoTransactionBuilder {
         if (!this.initialized || !this.txBuilder) {
             await this.init();
         }
-        if (!this.txBuilder) {
-            throw new Error('Transaction builder failed to initialize');
-        }
-        return this.txBuilder;
+        return this.txBuilder!;
     }
 
     /**
@@ -86,8 +83,8 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
-        // Build the unsigned ADA transfer transaction
-        const txBuildResult = await builder.buildUnsignedAdaTransfer(req, txContext);
+        // Build the unsigned transfer transaction
+        const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
         logger.info(`Built simple ADA transaction successfully.`);
         // Return the transaction build result
@@ -116,23 +113,21 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<TxBuildResult>} transaction build result
      */
     async buildMultiAssetTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
+        if (!req.assets || req.assets.length === 0) {
+            throw new Error('[CardanoTransactionBuilder] buildMultiAssetTransaction requires assets to be specified');
+        }
+
         const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
-        const utxos = await this._fetchUtxosForAddress(req.senderAddress);
-        logger.info(`Fetched ${utxos.length} UTxOs for multi-asset transaction`);
-        for (const u of utxos) {
-            logger.info(`UTxO ${u.txHash}:${u.outputIndex} amounts: ${JSON.stringify(u.amount)}`);
-        }
         const txContext: TxBuildContext = {
-            utxos,
+            utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
-        // Build the unsigned multi-asset transaction
-        const txBuildResult = await builder.buildUnsignedMultiAssetTransaction(req, txContext);
+        // Build the unsigned transfer transaction (unified with simple ADA transfer)
+        const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
         logger.info(`Built multi-asset transaction successfully.`);
-        // Return the transaction build result
         return txBuildResult;
     }
 

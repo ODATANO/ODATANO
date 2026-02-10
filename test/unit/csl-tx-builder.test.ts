@@ -9,7 +9,6 @@
 import { CSLTxBuilder } from '../../srv/blockchain/transaction-building/csl-tx';
 import { mapBuilderError } from '../../srv/utils/tx-build-helper';
 import { InsufficientFundsError } from '../../srv/utils/errors';
-import type { TxBuildRequest, TxBuildContext } from '../../srv/utils/types';
 
 // Mock cds.log
 jest.mock('@sap/cds', () => ({
@@ -36,51 +35,6 @@ describe('CSLTxBuilder', () => {
 
   // Note: buildUnsignedMintTransaction validation tests moved to cardano-tx-builder.test.ts
   // The CSLTxBuilder now expects TxBuildMintRequest with required mintActions and mintingPolicyScript
-
-  describe('buildUnsignedMultiAssetTransaction validation', () => {
-    const validCtx: TxBuildContext = {
-      utxos: [],
-      protocolParameters: {
-        minFeeA: 44,
-        minFeeB: 155381,
-        maxTxSize: 16384,
-        keyDeposit: '2000000',
-        poolDeposit: '500000000',
-        coinsPerUtxoByte: '4310',
-        maxValSize: '5000',
-        collateralPercentage: 150,
-        maxCollateralInputs: 3,
-        priceMem: 0.0577,
-        priceStep: 0.0000721,
-      } as any,
-    };
-
-    it('should throw error when assets is undefined', async () => {
-      const req: TxBuildRequest = {
-        network: 'preview',
-        senderAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        recipientAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        lovelaceAmount: 1000000,
-        // assets is undefined
-      };
-
-      await expect(builder.buildUnsignedMultiAssetTransaction(req, validCtx))
-        .rejects.toThrow('[CSLTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
-    });
-
-    it('should throw error when assets is empty array', async () => {
-      const req: TxBuildRequest = {
-        network: 'preview',
-        senderAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        recipientAddress: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
-        lovelaceAmount: 1000000,
-        assets: [],
-      };
-
-      await expect(builder.buildUnsignedMultiAssetTransaction(req, validCtx))
-        .rejects.toThrow('[CSLTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
-    });
-  });
 
   describe('mapBuilderError (CSL)', () => {
     it('should throw InsufficientFundsError for "not enough" error message', () => {

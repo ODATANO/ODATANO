@@ -410,6 +410,20 @@ describe('ExternalSignerModule', () => {
       expect(result.isValid).toBe(false);
       expect(result.errorMessage).toContain('mismatch');
     });
+
+    it('should reject expired signing request when expiresAt is in the past', () => {
+      const expectedHash = verifier.extractTxBodyHash(VALID_SIGNED_TX_CBOR);
+      const pastDate = new Date(Date.now() - 60000).toISOString();
+
+      const result = module.verifySignedTransaction(
+        VALID_SIGNED_TX_CBOR,
+        expectedHash,
+        { expiresAt: pastDate }
+      );
+
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain('expired');
+    });
   });
 
   describe('verifyOrThrow()', () => {
@@ -678,6 +692,27 @@ describe('Utility Functions', () => {
       expect(resultWs.get(5)).toEqual([fakeRedeemer]);
       expect(resultWs.get(6)).toEqual([fakeDatum]);
       expect(resultWs.get(7)).toEqual([fakeScript]);
+    });
+
+    it('should correctly count Conway-era CborTag(258, ...) wrapped VKey witnesses', () => {
+      // VALID_WITNESS_SET_CBOR starts with a100d90102... meaning:
+      // Map(1 entry): key=0, value=CborTag(258, CborArray([...]))
+      // This is Conway-era witness format
+      const result = combineTransactionWithWitnesses(
+        VALID_UNSIGNED_TX_CBOR,
+        VALID_WITNESS_SET_CBOR
+      );
+
+      // The result should be a valid hex string
+      expect(result).toBeDefined();
+      expect(typeof result).toBe('string');
+      expect(result).toMatch(/^[a-f0-9]+$/);
+
+      // Parse and verify witness structure is preserved as CborMap
+      const decoded = cbor.decodeFirstSync(Buffer.from(result, 'hex'));
+      const ws = decoded[1];
+      expect(ws).toBeInstanceOf(Map);
+      expect(ws.has(0)).toBe(true); // VKey witnesses present
     });
 
     it('should handle simple transaction without script witnesses (fallback path)', () => {

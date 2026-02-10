@@ -52,12 +52,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /**
-   * Build unsigned ADA transfer transaction
+   * Build unsigned transfer transaction (ADA-only or with native assets)
    * @param req transaction build request
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
-  public async buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+  public async buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       // mapping of ODATANO UTxO Type to ledger-ts UTxO objects (with multi-asset support)
       // This allows spending UTxOs that contain native assets - they will be returned in the change output
@@ -126,7 +126,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         warnings: []
       };
     } catch (err: any) {
-      mapBuilderError(err, 'lovelace');
+      const assetMatch = err?.message?.match(/not enough\s+([a-f0-9.]+)/i);
+      const assetUnit = assetMatch?.[1] || 'lovelace';
+      mapBuilderError(err, assetUnit);
     }
   }
 
@@ -192,84 +194,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  public async buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    if (!req.assets || req.assets.length === 0) {
-      throw new Error('[BuildooorTxBuilder] buildUnsignedMultiAssetTransaction requires assets to be specified');
-    }
-
-    try {
-      // Map all available UTxOs to ledger UTxOs for Buildooor (let builder handle selection)
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-
-    // Buildooor TxIn objects for inputs
-    const inputs = ledgerUtxos.map(utxo => ({ utxo }));
-
-    // Addresses
-    const recipientAddress = Address.fromString(req.recipientAddress);
-    const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
-
-    // Build output value with ADA + assets
-    let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount));
-
-    for (const asset of req.assets) {
-      // Parse policyId and assetName from unit (format: policyId.assetName or policyId+assetName)
-      const { policyId, assetName } = parseAssetUnit(asset.unit);
-      const policyHash = new Hash28(policyId);
-      const assetValue = Value.singleAsset(policyHash, Buffer.from(assetName, 'hex'), BigInt(asset.quantity));
-      outputValue = Value.add(outputValue, assetValue);
-    }
-
-    // Build output (with optional inline datum for script addresses)
-    const txOutParams: ConstructorParameters<typeof TxOut>[0] = {
-      address: recipientAddress,
-      value: outputValue,
-    };
-    if (req.outputDatum) {
-      txOutParams.datum = jsonToPlutusData(req.outputDatum);
-    }
-    const outputs = [new TxOut(txOutParams)];
-
-    // Build the transaction
-    const tx = await this.txBuilder.build({
-      inputs,
-      outputs,
-      changeAddress,
-    });
-
-    // Full unsigned tx cbor (4-tuple, witness empty)
-      const unsignedTxBytes = tx.toCbor().toBuffer();
-      const unsignedTxCbor = toHex(unsignedTxBytes);
-      const txBodyHash = tx.hash.toString();
-
-      logger.debug(`Built unsigned multi-asset transaction successfully.`);
-
-      return {
-        unsignedTxCbor: unsignedTxCbor,
-        txBodyHash: txBodyHash,
-        senderAddress: req.senderAddress,
-        network: this.cardanoClient.network,
-        sizeBytes: unsignedTxBytes.length,
-        builderEngine: this.name,
-        feeLovelace: tx.body.fee.toString(),
-        inputs: ctx.utxos.map(u => ({
-          txHash: u.txHash,
-          index: u.outputIndex,
-          lovelace: getLovelace(u).toString()
-        })),
-        outputs: tx.body.outputs.map((o: any) => ({
-          address: o.address?.toString?.() ?? "",
-          lovelace: o.value?.lovelaces?.toString?.() ?? "0"
-        })),
-        warnings: []
-      };
-    } catch (err: any) {
-      // Extract asset unit from error message if possible
-      const assetMatch = err?.message?.match(/not enough\s+([a-f0-9.]+)/i);
-      const assetUnit = assetMatch?.[1];
-      mapBuilderError(err, assetUnit);
-    }
-  }
-
   public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
 
@@ -322,7 +246,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
 
       // Build output value - recipient gets the minted assets + min ADA
-      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 1_000_000));
+      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount));
       outputValue = Value.add(outputValue, mintValue);
 
       // Build output

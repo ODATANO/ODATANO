@@ -20,10 +20,10 @@ class MockTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  async buildUnsignedAdaTransfer(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
+  async buildUnsignedTransfer(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
     return {
-      unsignedTxCbor: 'mock-ada-tx-cbor',
-      txBodyHash: 'mock-ada-tx-hash',
+      unsignedTxCbor: 'mock-transfer-tx-cbor',
+      txBodyHash: 'mock-transfer-tx-hash',
       feeLovelace: '200000',
       inputs: [],
       outputs: [],
@@ -36,17 +36,6 @@ class MockTxBuilder implements CardanoTxBuilder {
       unsignedTxCbor: 'mock-metadata-tx-cbor',
       txBodyHash: 'mock-metadata-tx-hash',
       feeLovelace: '250000',
-      inputs: [],
-      outputs: [],
-      warnings: [],
-    };
-  }
-
-  async buildUnsignedMultiAssetTransaction(_req: TxBuildRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
-    return {
-      unsignedTxCbor: 'mock-multi-asset-tx-cbor',
-      txBodyHash: 'mock-multi-asset-tx-hash',
-      feeLovelace: '300000',
       inputs: [],
       outputs: [],
       warnings: [],
@@ -120,6 +109,29 @@ describe('CardanoTransactionBuilder', () => {
       getAddressUtxos: jest.fn().mockResolvedValue(mockUtxos),
       hasOgmiosBackend: jest.fn().mockReturnValue(false),
       evaluateTransaction: jest.fn(),
+      getTransaction: jest.fn().mockResolvedValue({
+        hash: 'a'.repeat(64),
+        outputs: [
+          {
+            address: 'addr_test1script',
+            amount: [{ unit: 'lovelace', quantity: '2000000' }],
+            outputIndex: 0,
+            txHash: 'a'.repeat(64),
+            dataHash: null,
+            inlineDatum: null,
+            isCollateral: false,
+          },
+        ],
+        inputs: [],
+        blockHash: 'b'.repeat(64),
+        blockHeight: 1,
+        slot: 1,
+        index: 0,
+        fee: '200000',
+        deposit: '0',
+        size: 300,
+        blockTime: 1700000000,
+      }),
     } as unknown as jest.Mocked<CardanoClient>;
 
     // Create fresh instances - pass mock client to constructor
@@ -166,7 +178,7 @@ describe('CardanoTransactionBuilder', () => {
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
       expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(1);
-      expect(result.unsignedTxCbor).toBe('mock-ada-tx-cbor');
+      expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
 
     it('should not re-initialize if already initialized', async () => {
@@ -201,7 +213,7 @@ describe('CardanoTransactionBuilder', () => {
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
       expect(TxBuilderRegistry.createDefault).not.toHaveBeenCalled();
-      expect(result.unsignedTxCbor).toBe('mock-ada-tx-cbor');
+      expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
   });
 
@@ -212,8 +224,8 @@ describe('CardanoTransactionBuilder', () => {
     it('should build a simple ADA transaction', async () => {
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect(result.unsignedTxCbor).toBe('mock-ada-tx-cbor');
-      expect(result.txBodyHash).toBe('mock-ada-tx-hash');
+      expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
+      expect(result.txBodyHash).toBe('mock-transfer-tx-hash');
       expect(result.feeLovelace).toBe('200000');
       expect(mockCardanoClient.getAddressUtxos).toHaveBeenCalledWith(mockTxRequest.senderAddress);
     });
@@ -243,11 +255,26 @@ describe('CardanoTransactionBuilder', () => {
   // ============================================================================
   describe('buildMultiAssetTransaction()', () => {
     it('should build a multi-asset transaction', async () => {
-      const result = await builder.buildMultiAssetTransaction(mockTxRequest, mockProtocolParameters);
+      const reqWithAssets: TxBuildRequest = {
+        ...mockTxRequest,
+        assets: [{ unit: '1234567890abcdef1234567890abcdef1234567890abcdef12345678TestToken', quantity: '100' }],
+      };
+      const result = await builder.buildMultiAssetTransaction(reqWithAssets, mockProtocolParameters);
 
-      expect(result.unsignedTxCbor).toBe('mock-multi-asset-tx-cbor');
-      expect(result.txBodyHash).toBe('mock-multi-asset-tx-hash');
-      expect(result.feeLovelace).toBe('300000');
+      expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
+      expect(result.txBodyHash).toBe('mock-transfer-tx-hash');
+      expect(result.feeLovelace).toBe('200000');
+    });
+
+    it('should throw error when assets is missing', async () => {
+      await expect(builder.buildMultiAssetTransaction(mockTxRequest, mockProtocolParameters))
+        .rejects.toThrow('[CardanoTransactionBuilder] buildMultiAssetTransaction requires assets to be specified');
+    });
+
+    it('should throw error when assets is empty array', async () => {
+      const reqEmptyAssets: TxBuildRequest = { ...mockTxRequest, assets: [] };
+      await expect(builder.buildMultiAssetTransaction(reqEmptyAssets, mockProtocolParameters))
+        .rejects.toThrow('[CardanoTransactionBuilder] buildMultiAssetTransaction requires assets to be specified');
     });
   });
 
@@ -334,6 +361,32 @@ describe('CardanoTransactionBuilder', () => {
   });
 
   // ============================================================================
+  // buildPlutusSpendTransaction() Tests
+  // ============================================================================
+  describe('buildPlutusSpendTransaction()', () => {
+    it('should throw error when plutusScriptExecution is missing', async () => {
+      await expect(builder.buildPlutusSpendTransaction(mockTxRequest, mockProtocolParameters))
+        .rejects.toThrow('[CardanoTransactionBuilder] buildPlutusSpendTransaction requires plutusScriptExecution to be specified');
+    });
+
+    it('should build plutus spend transaction when plutusScriptExecution is provided', async () => {
+      const plutusRequest: TxBuildRequest = {
+        ...mockTxRequest,
+        plutusScriptExecution: {
+          validatorScript: 'abcdef',
+          redeemer: { int: 0 },
+          scriptUtxo: {
+            txHash: 'a'.repeat(64),
+            outputIndex: 0,
+          },
+        },
+      };
+      const result = await builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters);
+      expect(result.unsignedTxCbor).toBe('mock-plutus-spend-tx-cbor');
+    });
+  });
+
+  // ============================================================================
   // Error Handling Tests
   // ============================================================================
   describe('Error Handling', () => {
@@ -345,7 +398,7 @@ describe('CardanoTransactionBuilder', () => {
     });
 
     it('should propagate builder errors', async () => {
-      mockTxBuilder.buildUnsignedAdaTransfer = jest.fn().mockRejectedValue(
+      mockTxBuilder.buildUnsignedTransfer = jest.fn().mockRejectedValue(
         new Error('Insufficient funds')
       );
 

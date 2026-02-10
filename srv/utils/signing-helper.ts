@@ -61,12 +61,11 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
         } else if (vkeyValue instanceof CborTag && vkeyValue.data instanceof CborArray) {
           witnessCount = vkeyValue.data.array.length;
         } else {
-          witnessCount = 1;
+          throw new Error('Unexpected VKey witness format in witness set');
         }
       }
     } else {
-      // Fallback for non-Map witness sets (simple transactions)
-      txObj.array[1] = walletWsObj;
+      throw new Error('Witness set must be CBOR map per Cardano spec');
     }
 
     // Re-encode the tx array, preserving encoding metadata on body and all witness values.

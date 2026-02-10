@@ -17,29 +17,21 @@ export interface CardanoTxBuilder {
    */
   init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void>;
 
-  /** 
-   * Build unsigned ADA transfer transaction
+  /**
+   * Build unsigned transfer transaction (ADA-only or with native assets)
    * @param req transaction build request
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
-  buildUnsignedAdaTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
+  buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
-  /** 
+  /**
    * Build unsigned transaction with metadata
    * @param req transaction build request
    * @param ctx transaction build context
    * @returns {Promise<TxBuildResult>} transaction build result
    */
   buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
-
-  /** 
-   * Build unsigned multi-asset transaction
-   * @param req transaction build request
-   * @param ctx transaction build context
-   * @returns {Promise<TxBuildResult>} transaction build result
-   */
-  buildUnsignedMultiAssetTransaction(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
   /**
    * Build unsigned Plutus SC transaction

@@ -157,9 +157,9 @@ export function mapTransactionInputAssets(
  * @returns {TransactionOutputRow[]} mapped transaction output rows
  */
 export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
-  return txOutputs.map((output, idx: number) => {
+  return txOutputs.map((output) => {
 
-    const outputIndex = output.outputIndex ?? idx;
+    const outputIndex = output.outputIndex;
     const hasAddresses = !!output.address?.length;
     const hasAssets = Array.isArray(output.amount) && output.amount.length > 0;
 
@@ -187,9 +187,9 @@ export function mapTransactionOutputAssets(
   txHash: string,
   outputs: TxOutputProviderData[]
 ): TransactionOutputAssetRow[] {
-  return outputs.flatMap((output, idx) => {
+  return outputs.flatMap((output) => {
 
-    const outputIndex = output.outputIndex ?? idx;
+    const outputIndex = output.outputIndex;
     if (!Array.isArray(output.amount)) return [];
 
     return output.amount.map(a => {
@@ -290,9 +290,9 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   const assetBalances = new Map<string, bigint>(); // unit -> net quantity
 
   // Process inputs belonging to this address (subtract)
-  for (const input of tx.inputs || []) {
+  for (const input of tx.inputs) {
     if (input.address === addr) {
-      for (const amount of input.amount || []) {
+      for (const amount of input.amount) {
         if (amount.unit === 'lovelace') {
           inputLovelace += parseInt(amount.quantity, 10) || 0;
         } else {
@@ -305,9 +305,9 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   }
 
   // Process outputs going to this address (add)
-  for (const output of tx.outputs || []) {
+  for (const output of tx.outputs) {
     if (output.address === addr) {
-      for (const amount of output.amount || []) {
+      for (const amount of output.amount) {
         if (amount.unit === 'lovelace') {
           outputLovelace += parseInt(amount.quantity, 10) || 0;
         } else {
@@ -813,12 +813,7 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
     } else if (value && typeof value === 'object') {
       const obj = value as Record<string, unknown>;
       if (isV3) {
-        // Fix Blockfrost key naming bug: Blockfrost returns "remainderInteger-memory-arguments-minimum"
-        // but the canonical Plutus V3 cost model name is "quotientInteger-memory-arguments-minimum".
-        // (remainderInteger uses LinearInBothArguments which has no minimum parameter;
-        //  quotientInteger uses SubtractedSizes which does have minimum.)
-        const fixedObj = _fixBlockfrostV3Keys(obj);
-        result[key] = Array.from(toCostModelArrV3(fixedObj as any)).map(Number);
+        result[key] = Array.from(toCostModelArrV3(obj as any)).map(Number);
       } else {
         // V1/V2: alphabetical sort IS correct for those versions
         result[key] = Object.keys(obj as Record<string, number>).sort()
@@ -830,22 +825,6 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
 }
 
 /**
- * Fix known Blockfrost API key naming discrepancies for PlutusV3 cost models.
- * Blockfrost returns some parameter names that don't match the canonical Plutus spec.
- */
-function _fixBlockfrostV3Keys(obj: Record<string, unknown>): Record<string, unknown> {
-  // Known Blockfrost bug: "remainderInteger-memory-arguments-minimum" should be
-  // "quotientInteger-memory-arguments-minimum" (the only integer division op with a minimum memory param)
-  if (!obj['quotientInteger-memory-arguments-minimum'] && obj['remainderInteger-memory-arguments-minimum'] !== undefined) {
-    const fixed = { ...obj };
-    fixed['quotientInteger-memory-arguments-minimum'] = fixed['remainderInteger-memory-arguments-minimum'];
-    delete fixed['remainderInteger-memory-arguments-minimum'];
-    return fixed;
-  }
-  return obj;
-}
-
-/** 
  * Convert hex string to UTF-8 string, falling back to hex if conversion fails.
  * This helper reduces code duplication and improves performance by centralizing
  * the conversion logic.

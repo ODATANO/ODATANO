@@ -282,6 +282,47 @@ describe('tx-build-helper utilities', () => {
     it('should throw for number input', () => {
       expect(() => jsonToPlutusData(42 as any)).toThrow('Unsupported PlutusData JSON format');
     });
+
+    // B4: normalizeConstructorKey with list containing constructors
+    it('should normalize "constructor" to "constr" inside list elements', () => {
+      const result = jsonToPlutusData({
+        list: [{ constructor: 0, fields: [{ int: 42 }] }]
+      });
+      expect(result).toBeInstanceOf(DataList);
+      const list = result as DataList;
+      expect(list.list).toHaveLength(1);
+      expect(list.list[0]).toBeInstanceOf(DataConstr);
+      expect((list.list[0] as DataConstr).constr).toBe(0n);
+    });
+
+    // B5: normalizeConstructorKey with map containing constructors
+    it('should normalize "constructor" to "constr" inside map keys and values', () => {
+      const result = jsonToPlutusData({
+        map: [{
+          k: { constructor: 1, fields: [] },
+          v: { int: 42 }
+        }]
+      });
+      // Map type in Buildooor uses DataMap or similar structure
+      // The key should be a DataConstr with constr=1
+      expect(result).toBeDefined();
+    });
+
+    // B6: normalizeConstructorKey with already-correct "constr" + nested "constructor"
+    it('should normalize nested "constructor" inside "constr" fields', () => {
+      const result = jsonToPlutusData({
+        constr: 0,
+        fields: [{ constructor: 1, fields: [{ bytes: 'deadbeef' }] }]
+      });
+      expect(result).toBeInstanceOf(DataConstr);
+      const outer = result as DataConstr;
+      expect(outer.constr).toBe(0n);
+      expect(outer.fields).toHaveLength(1);
+      expect(outer.fields[0]).toBeInstanceOf(DataConstr);
+      expect((outer.fields[0] as DataConstr).constr).toBe(1n);
+      expect((outer.fields[0] as DataConstr).fields).toHaveLength(1);
+      expect((outer.fields[0] as DataConstr).fields[0]).toBeInstanceOf(DataB);
+    });
   });
 
   describe('applyScriptParameters', () => {

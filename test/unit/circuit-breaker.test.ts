@@ -150,6 +150,29 @@ describe('CircuitBreakerManager', () => {
   });
 
   // ==========================================================================
+  // Half-Open Probe Requests
+  // ==========================================================================
+
+  describe('Half-Open Probe Requests', () => {
+    it('should allow subsequent probe requests in half-open state', async () => {
+      // Transition to open
+      for (let i = 0; i < 3; i++) cb.recordFailure('koios');
+      expect(cb.getState('koios')).toBe('open');
+
+      // Wait for reset timeout
+      await new Promise(r => setTimeout(r, 1100));
+
+      // First shouldAttempt transitions to half-open
+      expect(cb.shouldAttempt('koios')).toBe(true);
+      expect(cb.getState('koios')).toBe('half-open');
+
+      // Second shouldAttempt in half-open should still return true (line 68)
+      expect(cb.shouldAttempt('koios')).toBe(true);
+      expect(cb.getState('koios')).toBe('half-open');
+    });
+  });
+
+  // ==========================================================================
   // Reset
   // ==========================================================================
 
