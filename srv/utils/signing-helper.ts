@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import * as cbor from 'cbor';
+import { Cbor, CborArray, CborMap, CborTag, CborUInt } from '@harmoniclabs/cbor';
+import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
 import { TransactionValidationError } from './errors';
 
 const logger = cds.log('SigningHelper');
@@ -11,8 +12,10 @@ const logger = cds.log('SigningHelper');
  * CIP-30 signTx() returns only the witness set, not a complete signed transaction.
  * This function combines the original unsigned transaction with the witness set
  * to create a complete signed transaction that can be submitted to the network.
- *
- * Cardano transaction structure: [body, witness_set, is_valid, auxiliary_data]
+ * 
+ * The @harmoniclabs/cbor parser preserves encoding metadata (indefinite flag, addInfos)
+ * on each CborObj, so re-encoding produces identical bytes for unchanged elements.
+ * Both Buildooor and this code use the same CBOR library, ensuring consistent encoding.
  *
  * @param unsignedTxCbor - The unsigned transaction CBOR (hex)
  * @param witnessSetCbor - The witness set CBOR from CIP-30 signTx() (hex)
@@ -20,61 +23,64 @@ const logger = cds.log('SigningHelper');
  */
 export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessSetCbor: string): string {
   try {
-    // Decode the unsigned transaction CBOR (array of 4 elements)
-    const unsignedTxBytes = Buffer.from(unsignedTxCbor, 'hex');
-    const txArray = cbor.decodeFirstSync(unsignedTxBytes);
+    // Parse at raw CBOR level — no Cardano type validation, preserves all encoding metadata
+    const txObj = Cbor.parse(fromHex(unsignedTxCbor));
 
-    if (!Array.isArray(txArray) || txArray.length < 2) {
+    if (!(txObj instanceof CborArray) || txObj.array.length < 2) {
       throw new Error('Invalid transaction CBOR structure');
     }
 
-    // Decode the wallet's witness set
-    const witnessSetBytes = Buffer.from(witnessSetCbor, 'hex');
-    const walletWitnessSet = cbor.decodeFirstSync(witnessSetBytes);
+    const walletWsObj = Cbor.parse(fromHex(witnessSetCbor));
 
-    // txArray[0] = body (preserved exactly as-is)
-    // txArray[1] = witness_set (CBOR Map: 0=vkeys, 3=plutus_v1, 5=redeemers, 6=datums, 7=plutus_v3)
-    // txArray[2] = is_valid (boolean, usually true)
-    // txArray[3] = auxiliary_data (preserved as-is)
+    // txObj.array[0] = body, [1] = witness_set, [2] = is_valid, [3] = auxiliary_data
+    const origWs = txObj.array[1];
 
-    // MERGE wallet's VKey witnesses into existing witness set.
-    // CIP-30 signTx() only returns VKey witnesses (map key 0).
-    // The builder puts script witnesses (keys 3, 5, 6, 7) in the unsigned tx's witness set.
-    // We must preserve those and only add/replace the VKey witnesses.
-    const origWs = txArray[1];
-    const walletWs = walletWitnessSet;
+    let witnessCount = 0;
 
-    if (walletWs instanceof Map && origWs instanceof Map) {
-      const vkeys = walletWs.get(0);
-      if (vkeys) {
-        origWs.set(0, vkeys);
+    if (origWs instanceof CborMap && walletWsObj instanceof CborMap) {
+      // Find wallet's VKey witnesses (map key 0)
+      const walletVkeyEntry = walletWsObj.map.find(
+        e => e.k instanceof CborUInt && Number(e.k.num) === 0
+      );
+
+      if (walletVkeyEntry) {
+        // Merge: keep all original entries (redeemers, datums, scripts at keys 3-7),
+        // remove any existing key 0, then add wallet's key 0 (VKey witnesses)
+        const mergedEntries = origWs.map
+          .filter(e => !(e.k instanceof CborUInt && Number(e.k.num) === 0))
+          .concat([walletVkeyEntry]);
+
+        // Construct new witness set CborMap preserving the original's encoding style
+        txObj.array[1] = new CborMap(mergedEntries, {
+          indefinite: origWs.indefinite,
+        });
+        // Count VKey witnesses — value may be CborArray or CborTag(258, CborArray) in Conway era
+        const vkeyValue = walletVkeyEntry.v;
+        if (vkeyValue instanceof CborArray) {
+          witnessCount = vkeyValue.array.length;
+        } else if (vkeyValue instanceof CborTag && vkeyValue.data instanceof CborArray) {
+          witnessCount = vkeyValue.data.array.length;
+        } else {
+          witnessCount = 1;
+        }
       }
-      txArray[1] = origWs;
     } else {
       // Fallback for non-Map witness sets (simple transactions)
-      txArray[1] = walletWitnessSet;
+      txObj.array[1] = walletWsObj;
     }
 
-    // Re-encode to CBOR
-    const signedTxBytes = cbor.encodeOne(txArray);
-    const signedTxCbor = signedTxBytes.toString('hex');
-
-    // Count witnesses for logging
-    let witnessCount = 0;
-    let witnessKeys: number[] = [];
-    if (txArray[1] instanceof Map) {
-      const vkeys = txArray[1].get(0);
-      witnessCount = Array.isArray(vkeys) ? vkeys.length : 0;
-      witnessKeys = [...txArray[1].keys()];
-    }
+    // Re-encode the tx array, preserving encoding metadata on body and all witness values.
+    // Construct a new CborArray to avoid stale subCborRef pointing to the old bytes.
+    const signedTxCbor = toHex(Cbor.encode(
+      new CborArray(txObj.array, { indefinite: txObj.indefinite })
+    ).toBuffer());
 
     logger.info({
       unsignedTxLength: unsignedTxCbor.length,
       witnessSetLength: witnessSetCbor.length,
       signedTxLength: signedTxCbor.length,
       witnessCount,
-      witnessKeys,
-    }, 'Combined transaction with witness set (raw CBOR)');
+    }, 'Combined transaction with witness set (harmoniclabs CBOR)');
 
     return signedTxCbor;
   } catch (error: any) {
