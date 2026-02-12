@@ -569,21 +569,12 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         // Koios /submittx expects raw CBOR bytes with Content-Type: application/cbor
         const cborBytes = Buffer.from(signedTxCbor, 'hex');
-        try {
-          const { data } = await this.api.post('/submittx', cborBytes, {
-            headers: { 'Content-Type': 'application/cbor' },
-            // Prevent axios from JSON-serializing the Buffer
-            transformRequest: [(d: unknown) => d],
-          });
-          // Koios returns the tx hash as a plain string
-          return typeof data === 'string' ? data.replace(/"/g, '') : data;
-        } catch (err: any) {
-          // Log the Koios error response for debugging
-          if (err.response?.data) {
-            return Promise.reject(new Error(`Koios error: ${JSON.stringify(err.response.data)}`));
-          }
-          throw err;
-        }
+        const { data } = await this.api.post('/submittx', cborBytes, {
+          headers: { 'Content-Type': 'application/cbor' },
+          // Prevent axios from JSON-serializing the Buffer
+          transformRequest: [(d: unknown) => d],
+        });
+        return data.trim().replace(/^"|"$/g, '');
       },
       this.name
     );

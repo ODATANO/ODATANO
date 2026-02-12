@@ -1,0 +1,79 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <VBox>
+        <!-- Busy state -->
+        <BusyIndicator visible="{flow>/verifyBusy}" size="3rem"
+            text="{i18n>verifyChecking}" class="sapUiMediumMarginTop" />
+
+        <!-- Verification Result -->
+        <VBox visible="{= !!${flow>/verification} &amp;&amp; !${flow>/verifyBusy}}">
+
+            <!-- Result Icon + Title -->
+            <VBox class="{= ${flow>/verification/isValid} ? 'verificationResult verificationSuccess' : 'verificationResult verificationFailed'}"
+                alignItems="Center">
+                <core:Icon
+                    src="{= ${flow>/verification/isValid} ? 'sap-icon://accept' : 'sap-icon://decline'}"
+                    size="4rem"
+                    color="{= ${flow>/verification/isValid} ? '#107e3e' : '#bb0000'}" />
+                <Title text="{= ${flow>/verification/isValid} ? 'Signature Verified' : 'Verification Failed'}"
+                    level="H2" class="sapUiSmallMarginTop" />
+                <ObjectStatus
+                    text="{= ${flow>/verification/isValid} ? 'Valid' : 'Invalid'}"
+                    state="{= ${flow>/verification/isValid} ? 'Success' : 'Error'}"
+                    icon="{= ${flow>/verification/isValid} ? 'sap-icon://shield' : 'sap-icon://error'}" />
+            </VBox>
+
+            <!-- Verification Details -->
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12"
+                class="sapUiSmallMarginTop">
+
+                <Label text="{i18n>verifyWitnessCount}" />
+                <ObjectNumber number="{flow>/verification/witnessCount}" unit="signature(s)"
+                    state="{= ${flow>/verification/witnessCount} > 0 ? 'Success' : 'Error'}" />
+
+                <Label text="{i18n>verifyTxBodyHash}" />
+                <HBox alignItems="Center">
+                    <Text text="{path: 'flow>/verification/txBodyHash', formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono" />
+                    <Button icon="sap-icon://copy" press=".onCopyVerifyTxHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+                </HBox>
+
+                <Label text="{i18n>verifySignerKeys}"
+                    visible="{= ${flow>/verification/signerKeyHashes} &amp;&amp; ${flow>/verification/signerKeyHashes}.length > 0}" />
+                <VBox visible="{= ${flow>/verification/signerKeyHashes} &amp;&amp; ${flow>/verification/signerKeyHashes}.length > 0}">
+                    <List items="{flow>/verification/signerKeyHashes}">
+                        <CustomListItem>
+                            <HBox alignItems="Center" class="sapUiTinyMargin">
+                                <core:Icon src="sap-icon://key" class="sapUiSmallMarginEnd" />
+                                <Text text="{flow>}" class="keyHashItem" />
+                                <Button icon="sap-icon://copy" press=".onCopyKeyHash"
+                                    type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+                            </HBox>
+                        </CustomListItem>
+                    </List>
+                </VBox>
+            </f:SimpleForm>
+
+            <!-- Error Message (when invalid) -->
+            <MessageStrip text="{flow>/verification/errorMessage}" type="Error"
+                visible="{= !!${flow>/verification/errorMessage}}"
+                class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd" />
+
+            <!-- Warnings -->
+            <VBox visible="{= ${flow>/verification/warnings} &amp;&amp; ${flow>/verification/warnings}.length > 0}"
+                class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd">
+                <Label text="{i18n>verifyWarnings}" class="sapUiSmallMarginBottom" />
+                <List items="{flow>/verification/warnings}">
+                    <CustomListItem>
+                        <MessageStrip text="{flow>}" type="Warning" showCloseButton="false" />
+                    </CustomListItem>
+                </List>
+            </VBox>
+        </VBox>
+    </VBox>
+</core:FragmentDefinition>

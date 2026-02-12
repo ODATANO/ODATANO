@@ -32,7 +32,7 @@ export class CardanoTransactionBuilder {
      */
     async init(protocolParams?: LedgerProtocolParameters): Promise<void> {
         if (this.initialized && this.txBuilder) return;
-        // Create transaction builder from registry
+        // create transaction builder from registry
         this.txBuilder = TxBuilderRegistry.createDefault();
         await this.txBuilder.init(this.client, protocolParams);
         this.initialized = true;
@@ -78,7 +78,7 @@ export class CardanoTransactionBuilder {
     async buildSimpleAdaTransaction(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         const builder = await this.ensureInitialized();
 
-        // Prepare the transaction build context
+        // prepare the transaction build context
         const txContext: TxBuildContext = {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
@@ -91,6 +91,12 @@ export class CardanoTransactionBuilder {
         return txBuildResult;
     }
 
+    /**
+     * Build a transaction with Metadata (for both simple and multi-asset transactions)
+     * @param req transaction build request
+     * @param protocolParameters current protocol parameters
+     * @returns {Promise<TxBuildResult>} transaction build result
+     */
     async buildTransactionWithMetadata(req: TxBuildRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         const builder = await this.ensureInitialized();
 

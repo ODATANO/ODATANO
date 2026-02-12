@@ -1,5 +1,5 @@
 import cds, { Request } from '@sap/cds';
-import { handleRequest } from './utils/backend-request-handler';
+import { handleRequest, passthroughRead } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
@@ -8,6 +8,7 @@ import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
+import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH } from './utils/const';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -46,54 +47,9 @@ module.exports = (srv: cds.Service) => {
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
 
-  /**
-   * READ handler for TransactionBuilds entity
-   * @param req - The incoming request data
-   * @returns {TransactionBuilds} The transaction builds fitting the request query
-   */
-  srv.on('READ', TransactionBuilds, async (req: Request) => {
-    logger.debug('TransactionBuilds READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for TransactionBuildInputs entity
-   * @param req - The incoming request data
-   * @returns {TransactionBuildInputs} The transaction build inputs fitting the request query
-   */
-  srv.on('READ', TransactionBuildInputs, async (req: Request) => {
-    logger.debug('TransactionBuildInputs READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for TransactionBuildOutputs entity
-   * @param req - The incoming request data
-   * @returns {TransactionBuildOutputs} The transaction build outputs fitting the request query
-   */
-  srv.on('READ', TransactionBuildOutputs, async (req: Request) => {
-    logger.debug('TransactionBuildOutputs READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-  /** 
-   * READ handler for TransactionSubmissions entity
-   * @param req - The incoming request data
-   * @returns {TransactionSubmissions} The transaction submissions fitting the request query
-   */
-  srv.on('READ', TransactionSubmissions, async (req: Request) => {
-    logger.debug('TransactionSubmissions READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for TransactionSubmissionErrors entity
-   * @param req - The incoming request data
-   * @returns {TransactionSubmissionErrors} The transaction submission errors fitting the request query
-   */
-  srv.on('READ', TransactionSubmissionErrors, async (req: Request) => {
-    logger.debug('TransactionSubmissionErrors READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
+  // Passthrough READ handlers — these entities are read directly from DB (no index-on-miss)
+  const readEntities = [TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionSubmissions, TransactionSubmissionErrors];
+  readEntities.forEach(entity => srv.on('READ', entity, passthroughRead()));
 
   /**
    * Build a simple ADA-only transaction
@@ -312,11 +268,10 @@ module.exports = (srv: cds.Service) => {
         finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
 
         // BUG 7 fix: expand assetName-only entries to full assetUnit using the applied script's policyId.
-        // A full assetUnit is >= 57 chars (56 hex policyId + at least 1 hex assetName). Shorter = assetName-only.
         const appliedScript = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex'));
         const appliedPolicyId = appliedScript.hash.toString();
         for (const action of parsedMintActions) {
-          if (action.assetUnit.length < 57) {
+          if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
             action.assetUnit = appliedPolicyId + action.assetUnit;
           }
         }
@@ -346,7 +301,7 @@ module.exports = (srv: cds.Service) => {
         // CIP-14 asset fingerprint for the first minted asset
         if (parsedMintActions.length > 0) {
           const firstAssetUnit = parsedMintActions[0].assetUnit;
-          const assetNameHex = firstAssetUnit.length >= 57 ? firstAssetUnit.slice(56) : firstAssetUnit;
+          const assetNameHex = firstAssetUnit.length >= MIN_FULL_ASSET_UNIT_LENGTH ? firstAssetUnit.slice(POLICY_ID_HEX_LENGTH) : firstAssetUnit;
           buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
           updates.fingerprint = buildResult.fingerprint;
         }
@@ -704,45 +659,9 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  /**
-   * READ handler for SigningRequests entity
-   * @param req - The incoming request data
-   * @returns {SigningRequest} The signing requests fitting the request query
-   */
-  srv.on('READ', SigningRequests, async (req: Request) => {
-    logger.debug('SigningRequests READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /**
-   * READ handler for SignatureVerifications entity
-   * @param req - The incoming request data
-   * @returns {SignatureVerification} The signature verifications fitting the request query
-   */
-  srv.on('READ', SignatureVerifications, async (req: Request) => {
-    logger.debug('SignatureVerifications READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for AddressSigningRequests entity
-   * @param req - The incoming request data
-   * @returns {AddressSigningRequest} The address signing requests fitting the request query
-   */
-  srv.on('READ', AddressSigningRequests, async (req: Request) => {
-    logger.debug('AddressSigningRequests READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
-
-  /** 
-   * READ handler for AddressTransactionBuilds entity
-   * @param req - The incoming request data
-   * @returns {AddressTransactionBuild} The address transaction builds fitting the request query
-   */
-  srv.on('READ', AddressTransactionBuilds, async (req: Request) => {
-    logger.debug('AddressTransactionBuilds READ handler called');
-    return handleRequest(req, (db) => db.run(req.query));
-  });
+  // M3 passthrough READ handlers
+  const m3ReadEntities = [SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds];
+  m3ReadEntities.forEach(entity => srv.on('READ', entity, passthroughRead()));
 
   /**
    * Create a new signing request for external signing
@@ -849,14 +768,25 @@ module.exports = (srv: cds.Service) => {
         rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
       }
 
+      // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
+      let fullSignedTxCbor: string;
+      if (isWitnessSetCbor(signedTxCbor)) {
+        // CIP-30 wallet returns only witness set — combine with unsigned tx
+        fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
+        logger.debug({ signingRequestId }, 'Combined witness set with unsigned transaction for verification');
+      } else {
+        // Full signed transaction provided (e.g., from cardano-cli)
+        fullSignedTxCbor = signedTxCbor;
+      }
+
       // Verify the signature
       const signerModule = getExternalSignerModule();
-      const result = signerModule.verifySignedTransaction(signedTxCbor, signingRequest.txBodyHash);
+      const result = signerModule.verifySignedTransaction(fullSignedTxCbor, signingRequest.txBodyHash);
 
-      // Delegate persistence to indexer
+      // Delegate persistence to indexer (store full signed tx for later submission)
       const verificationRecord = await getCardanoIndexer().persistSignatureVerification(db, {
         signingRequestId,
-        signedTxCbor,
+        signedTxCbor: fullSignedTxCbor,
         verificationResult: result,
         signerType,
         signerInfo,

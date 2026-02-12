@@ -4,6 +4,13 @@ import { mapError } from './mappers';
 
 const logger = cds.log('BackendRequestHandler');
 
+/**
+ * Factory: Simple passthrough READ handler (just runs req.query).
+ */
+export function passthroughRead() {
+  return async (req: Request) => handleRequest(req, (db) => db.run(req.query));
+}
+
 /** 
  * BackendRequestHandler - Provides standardized handling for backend requests 
  */

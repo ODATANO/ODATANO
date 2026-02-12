@@ -1,0 +1,140 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form"
+    xmlns:l="sap.ui.layout">
+
+    <VBox>
+        <!-- Transaction Type Selector -->
+        <SegmentedButton id="txTypeSelector" selectedKey="{flow>/txType}"
+            selectionChange=".onTransactionTypeChange" class="sapUiSmallMarginBottom">
+            <items>
+                <SegmentedButtonItem key="simple" text="{i18n>buildTxTypeSimple}" icon="sap-icon://money-bills" />
+                <SegmentedButtonItem key="metadata" text="{i18n>buildTxTypeMetadata}" icon="sap-icon://document-text" />
+            </items>
+        </SegmentedButton>
+
+        <!-- Build Form -->
+        <Title text="{i18n>stepBuildTitle}" level="H4" class="sapUiSmallMarginBottom" />
+
+        <f:SimpleForm editable="true" layout="ResponsiveGridLayout"
+            labelSpanXL="3" labelSpanL="3" labelSpanM="3" labelSpanS="12"
+            emptySpanXL="4" emptySpanL="4" emptySpanM="4" emptySpanS="0">
+
+            <Label text="{i18n>buildSenderAddress}" />
+            <Input value="{flow>/senderAddress}" editable="false" class="signingFlowMono" />
+
+            <Label text="{i18n>buildRecipientAddress}" required="true" />
+            <Input value="{flow>/recipientAddress}"
+                placeholder="{i18n>buildRecipientPlaceholder}"
+                liveChange=".onRecipientAddressChange"
+                valueState="{flow>/recipientAddressState}"
+                valueStateText="{flow>/recipientAddressStateText}"
+                class="signingFlowMono" />
+
+            <Label text="{i18n>buildAmount}" required="true" />
+            <Input value="{flow>/adaAmount}"
+                type="Number"
+                placeholder="{i18n>buildAmountPlaceholder}"
+                liveChange=".onAmountChange"
+                valueState="{flow>/amountState}"
+                valueStateText="{flow>/amountStateText}" />
+
+            <Label text="{i18n>buildChangeAddress}" />
+            <Input value="{flow>/changeAddress}" editable="false" class="signingFlowMono" />
+
+            <Label text="{i18n>buildMetadataJson}" visible="{= ${flow>/txType} === 'metadata'}" />
+            <TextArea value="{flow>/metadataJson}"
+                placeholder="{i18n>buildMetadataPlaceholder}"
+                rows="3" growing="true"
+                visible="{= ${flow>/txType} === 'metadata'}" />
+
+            <Label text="{i18n>buildAvailableBalance}" />
+            <ObjectNumber
+                number="{path: 'wallet>/balance/lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                unit="ADA" state="Information" />
+        </f:SimpleForm>
+
+        <!-- Build Button -->
+        <HBox justifyContent="End" class="sapUiSmallMarginTop">
+            <Button text="{i18n>buildButton}" icon="sap-icon://build"
+                type="Emphasized" press=".onBuildTransaction"
+                enabled="{flow>/canBuild}"
+                busyIndicatorDelay="0" busy="{flow>/buildBusy}" />
+        </HBox>
+
+        <!-- Error Message -->
+        <MessageStrip text="{flow>/buildError}" type="Error"
+            visible="{= !!${flow>/buildError}}" showCloseButton="true"
+            class="sapUiSmallMarginTop" />
+
+        <!-- Build Result -->
+        <Panel visible="{= !!${flow>/build}}" class="buildResultPanel sapUiSmallMarginTop">
+            <headerToolbar>
+                <Toolbar>
+                    <core:Icon src="sap-icon://accept" color="#107e3e" class="sapUiSmallMarginEnd" />
+                    <Title text="{i18n>buildResultTitle}" level="H4" />
+                </Toolbar>
+            </headerToolbar>
+
+            <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiSmallMargin">
+                <ObjectNumber number="{path: 'flow>/build/fee', formatter: '.formatter.formatLovelaceToAda'}"
+                    unit="ADA" state="Information" />
+                <HBox>
+                    <ObjectStatus text="{flow>/build/network}" state="Information"
+                        icon="sap-icon://connected" class="sapUiSmallMarginEnd" />
+                    <ObjectStatus text="{path: 'flow>/build/size', formatter: '.formatter.formatBytes'}"
+                        icon="sap-icon://measure" />
+                </HBox>
+            </HBox>
+
+            <!-- Inputs & Outputs -->
+            <l:Grid defaultSpan="L6 M12 S12" class="txDetailGrid">
+                <Panel headerText="Inputs">
+                    <List items="{flow>/buildInputs}">
+                        <CustomListItem>
+                            <VBox class="sapUiTinyMargin">
+                                <Text text="{path: 'flow>txHash', formatter: '.formatter.truncateHash'}"
+                                    class="signingFlowMono" />
+                                <Text text="{path: 'flow>lovelace', formatter: '.formatter.formatLovelaceToAdaWithUnit'}"
+                                    class="sapUiTinyMarginTop" />
+                            </VBox>
+                        </CustomListItem>
+                    </List>
+                </Panel>
+                <Panel headerText="Outputs">
+                    <List items="{flow>/buildOutputs}">
+                        <CustomListItem>
+                            <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiTinyMargin">
+                                <VBox>
+                                    <Text text="{path: 'flow>address', formatter: '.formatter.truncateAddress'}"
+                                        class="signingFlowMono" />
+                                    <Text text="{path: 'flow>lovelace', formatter: '.formatter.formatLovelaceToAdaWithUnit'}"
+                                        class="sapUiTinyMarginTop" />
+                                </VBox>
+                                <ObjectStatus text="Change" state="Information"
+                                    visible="{flow>isChange}" />
+                            </HBox>
+                        </CustomListItem>
+                    </List>
+                </Panel>
+            </l:Grid>
+
+            <!-- CBOR Preview -->
+            <HBox alignItems="Center" class="sapUiSmallMargin">
+                <Label text="{i18n>buildResultCbor}:" class="sapUiSmallMarginEnd" />
+                <Text text="{path: 'flow>/build/unsignedTxCbor', formatter: '.formatter.formatCborPreview'}"
+                    class="signingFlowMono" />
+                <Button icon="sap-icon://copy" press=".onCopyBuildCbor"
+                    type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+            </HBox>
+
+            <!-- Continue Button -->
+            <HBox justifyContent="End" class="sapUiSmallMarginTop">
+                <Button text="{i18n>buildContinue}" icon="sap-icon://arrow-right"
+                    type="Emphasized" press=".onContinueToSigning"
+                    busyIndicatorDelay="0" busy="{flow>/signingBusy}" />
+            </HBox>
+        </Panel>
+    </VBox>
+</core:FragmentDefinition>

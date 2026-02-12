@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { getCardanoIndexer } from './server';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
-import { handleRequest } from './utils/backend-request-handler';
+import { handleRequest, passthroughRead } from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
 
@@ -69,13 +69,6 @@ function indexOnMissAction(
       return existing;
     });
   };
-}
-
-/**
- * Factory: Simple passthrough READ handler (just runs req.query).
- */
-function passthroughRead() {
-  return async (req: Request) => handleRequest(req, (db) => db.run(req.query));
 }
 
 // ---------------------------------------------------------------------------

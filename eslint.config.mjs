@@ -75,13 +75,14 @@ export default [
     },
   },
 
-  // Browser globals for wallet-viewer app
+  // Browser globals for UI5 apps (signing-flow + wallet-viewer)
   {
-    files: ['app/wallet-viewer/**/*.ts'],
+    files: ['app/signing-flow/**/*.{ts,js}', 'app/wallet-viewer/**/*.{ts,js}'],
     languageOptions: {
       globals: {
         navigator: 'readonly',
         window: 'readonly',
+        TextDecoder: 'readonly',
       },
     },
   },

@@ -17,20 +17,6 @@ const logger = cds.log('SignatureVerifier');
  * 2. The transaction body hash matches the expected hash (integrity check)
  * 3. Required signatures are present (when specified)
  * 4. No tampering occurred between build and sign steps
- *
- * ARCHITECTURE NOTE - Dual-Library Approach:
- * This verifier deliberately uses two Cardano libraries:
- * - Harmoniclabs (@harmoniclabs/cardano-ledger-ts): For CBOR parsing and transaction body
- *   hash computation. Harmoniclabs preserves the original CBOR byte encoding, producing
- *   correct Blake2b-256 hashes. CSL's parse/re-serialize round-trip normalizes CBOR,
- *   which changes the bytes and produces incorrect hashes.
- * - CSL (@emurgo/cardano-serialization-lib-nodejs): For witness set extraction and
- *   Ed25519 cryptographic signature verification. CSL provides a well-tested Ed25519
- *   verify() API. Witness extraction is independent of body hash computation.
- *
- * This is safe because: the hash is computed from original bytes (Harmoniclabs),
- * witnesses are structural data extracted separately (CSL), and Ed25519 verify is a
- * pure cryptographic operation on raw bytes unaffected by CBOR encoding differences.
  */
 export class SignatureVerifier {
   /**
@@ -50,9 +36,7 @@ export class SignatureVerifier {
     };
 
     try {
-      // Parse the signed transaction CBOR using harmoniclabs
-      // IMPORTANT: We use harmoniclabs for hash computation because CSL's
-      // parse/re-serialize round-trip changes CBOR encoding, producing wrong hashes.
+      // Parse the signed transaction CBOR using harmoniclabs.
       const txBytesHarmonic = fromHex(signedTxCbor);
       const txHarmonic = Tx.fromCbor(txBytesHarmonic);
       const computedHash = txHarmonic.hash.toString();
@@ -61,11 +45,10 @@ export class SignatureVerifier {
       logger.debug(`Computed transaction body hash (harmoniclabs): ${computedHash}`);
 
       // Also parse with CSL for witness extraction and Ed25519 verification
-      // (structural extraction independent of body hash computation - see class doc)
       const txBytes = Buffer.from(signedTxCbor, 'hex');
       const tx = CSL.Transaction.from_bytes(txBytes);
 
-      // Verify transaction body hash matches expected (if provided)
+      // verify transaction body hash matches expected
       if (options.expectedTxBodyHash) {
         if (computedHash.toLowerCase() !== options.expectedTxBodyHash.toLowerCase()) {
           result.errorMessage = `Transaction body hash mismatch. Expected: ${options.expectedTxBodyHash}, Got: ${computedHash}. The transaction may have been tampered with.`;
@@ -82,7 +65,7 @@ export class SignatureVerifier {
       if (vkeyWitnesses) {
         result.witnessCount = vkeyWitnesses.len();
 
-        // Extract signer public key hashes
+        // extract signer public key hashes
         for (let i = 0; i < vkeyWitnesses.len(); i++) {
           const witness = vkeyWitnesses.get(i);
           const vkey = witness.vkey();
@@ -93,14 +76,14 @@ export class SignatureVerifier {
         logger.debug(`Found ${result.witnessCount} witness(es): ${result.signerKeyHashes.join(', ')}`);
       }
 
-      // Check if signature is required but missing
+      // check if signature is required but missing
       if (options.requireSignature !== false && result.witnessCount === 0) {
         result.errorMessage = 'No signatures found in transaction. The transaction must be signed before submission.';
         logger.warn(result.errorMessage);
         return result;
       }
 
-      // Verify required signers (if specified)
+      // verify required signers (if specified)
       if (options.requiredSigners && options.requiredSigners.length > 0) {
         const missingSigners = options.requiredSigners.filter(
           required => !result.signerKeyHashes.some(
@@ -116,7 +99,7 @@ export class SignatureVerifier {
         }
       }
 
-      // Verify each signature cryptographically
+      // verify each signature cryptographically
       if (vkeyWitnesses && vkeyWitnesses.len() > 0) {
         const bodyHash = CSL.TransactionHash.from_bytes(Buffer.from(computedHash, 'hex'));
 
@@ -126,7 +109,7 @@ export class SignatureVerifier {
           const signature = witness.signature();
           const publicKey = vkey.public_key();
 
-          // Verify the signature against the transaction body hash
+          // verify the signature against the transaction body hash
           const isValidSig = publicKey.verify(bodyHash.to_bytes(), signature);
 
           if (!isValidSig) {
@@ -180,7 +163,6 @@ export class SignatureVerifier {
    */
   public extractTxBodyHash(txCbor: string): string {
     try {
-      // Use harmoniclabs for consistent hash computation
       const txBytes = fromHex(txCbor);
       const tx = Tx.fromCbor(txBytes);
       return tx.hash.toString();

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cardano Wallet Viewer</title>
+    <title>Cardano Signing Flow</title>
     <style>
         html, body, body > div, #container, #container-uiarea {
             height: 100%;
@@ -14,7 +14,7 @@
         src="https://sdk.openui5.org/resources/sap-ui-core.js"
         data-sap-ui-theme="sap_horizon"
         data-sap-ui-resource-roots='{
-            "odatanoview.walletviewer": "./"
+            "odatanoview.signingflow": "./"
         }'
         data-sap-ui-on-init="module:sap/ui/core/ComponentSupport"
         data-sap-ui-compat-version="edge"
@@ -24,9 +24,9 @@
 <body class="sapUiBody sapUiSizeCompact" id="content">
     <div
         data-sap-ui-component
-        data-name="odatanoview.walletviewer"
+        data-name="odatanoview.signingflow"
         data-id="container"
-        data-settings='{"id" : "odatanoview.walletviewer"}'
+        data-settings='{"id" : "odatanoview.signingflow"}'
         data-handle-validation="true"
     ></div>
 </body>

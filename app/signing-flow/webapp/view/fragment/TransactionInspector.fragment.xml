@@ -1,0 +1,64 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <IconTabBar class="inspectorContent">
+        <items>
+            <!-- Raw CBOR Tab -->
+            <IconTabFilter text="{i18n>inspectorRawCbor}" icon="sap-icon://syntax" key="cbor">
+                <VBox>
+                    <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMarginBottom">
+                        <Text text="{i18n>inspectorByteCount}: {flow>/inspectorByteCount}" />
+                        <Button icon="sap-icon://copy" text="{i18n>copy}"
+                            press=".onCopyInspectorCbor" type="Transparent" />
+                    </HBox>
+                    <TextArea value="{flow>/build/unsignedTxCbor}"
+                        editable="false" rows="8" width="100%"
+                        growing="true" class="signingFlowMono" />
+                </VBox>
+            </IconTabFilter>
+
+            <!-- Transaction Body Tab -->
+            <IconTabFilter text="{i18n>inspectorTxBody}" icon="sap-icon://detail-view" key="body">
+                <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                    labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12">
+
+                    <Label text="{i18n>inspectorInputCount}" />
+                    <Text text="{flow>/inspectorInputCount}" />
+
+                    <Label text="{i18n>inspectorOutputCount}" />
+                    <Text text="{flow>/inspectorOutputCount}" />
+
+                    <Label text="Transaction Body Hash" />
+                    <HBox alignItems="Center">
+                        <Text text="{path: 'flow>/build/txBodyHash', formatter: '.formatter.truncateHash'}"
+                            class="signingFlowMono" />
+                        <Button icon="sap-icon://copy" press=".onCopyBuildTxHash"
+                            type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+                    </HBox>
+
+                    <Label text="Builder Engine" />
+                    <Text text="{flow>/build/builderEngine}" />
+                </f:SimpleForm>
+            </IconTabFilter>
+
+            <!-- Fee Breakdown Tab -->
+            <IconTabFilter text="{i18n>inspectorFee}" icon="sap-icon://money-bills" key="fee">
+                <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                    labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12">
+
+                    <Label text="{i18n>inspectorFeeLovelace}" />
+                    <Text text="{flow>/build/fee} lovelace" class="signingFlowMono" />
+
+                    <Label text="{i18n>inspectorFeeAda}" />
+                    <ObjectNumber number="{path: 'flow>/build/fee', formatter: '.formatter.formatLovelaceToAda'}"
+                        unit="ADA" state="Information" />
+
+                    <Label text="{i18n>inspectorTxSize}" />
+                    <Text text="{path: 'flow>/build/size', formatter: '.formatter.formatBytes'}" />
+                </f:SimpleForm>
+            </IconTabFilter>
+        </items>
+    </IconTabBar>
+</core:FragmentDefinition>

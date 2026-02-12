@@ -77,6 +77,8 @@ export class CardanoClient {
   private circuitBreaker: CircuitBreakerManager;
   network: Network;
   max_age_ms: number = 60000; // default 1 minute for temporary caching
+  private protocolParamsCache?: { data: LedgerProtocolParameters; fetchedAt: number };
+  private static readonly PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   /** 
    * Constructor for CardanoClient
@@ -376,9 +378,16 @@ export class CardanoClient {
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
    */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
-    // Fetch fresh parameters
+    const now = Date.now();
+    if (this.protocolParamsCache && (now - this.protocolParamsCache.fetchedAt) < CardanoClient.PROTOCOL_PARAMS_TTL_MS) {
+      logger.debug('Returning cached protocol parameters');
+      return this.protocolParamsCache.data;
+    }
+
     logger.debug('Fetching fresh protocol parameters');
-    return this.route('getProtocolParameters', b => b.getProtocolParameters());
+    const params = await this.route('getProtocolParameters', b => b.getProtocolParameters());
+    this.protocolParamsCache = { data: params, fetchedAt: now };
+    return params;
   }
 
   /**

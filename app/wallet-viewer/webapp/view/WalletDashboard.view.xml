@@ -30,26 +30,24 @@
                 id="notConnectedBox"
                 alignItems="Center"
                 justifyContent="Center"
-                class="sapUiLargeMargin">
+                visible="{= !${wallet>/isConnected}}"
+                class="sapUiMediumMargin">
 
                 <core:Icon
                     src="sap-icon://card"
-                    size="5rem"
+                    size="3rem"
                     color="#0854a0"
-                    class="sapUiMediumMarginBottom"
-                    visible="{= !${wallet>/isConnected}}"/>
+                    class="sapUiSmallMarginBottom"/>
 
                 <Title
                     text="Connect Your Wallet"
-                    level="H1"
-                    class="sapUiSmallMarginBottom"
-                    visible="{= !${wallet>/isConnected}}"/>
+                    level="H3"
+                    class="sapUiTinyMarginBottom"/>
 
                 <Text
                     text="Connect a Cardano browser wallet to view your balance and send ADA"
                     textAlign="Center"
-                    class="sapUiMediumMarginBottom"
-                    visible="{= !${wallet>/isConnected}}"/>
+                    class="sapUiSmallMarginBottom"/>
 
                 <!-- Wallet List -->
                 <List
@@ -58,8 +56,7 @@
                     mode="SingleSelectMaster"
                     selectionChange=".onWalletSelect"
                     noDataText="No Cardano wallets detected. Install Nami, Eternl or Lace."
-                    width="350px"
-                    visible="{= !${wallet>/isConnected}}">
+                    width="350px">
                     <CustomListItem type="Active">
                         <HBox alignItems="Center" class="sapUiSmallMargin">
                             <Image
@@ -79,7 +76,7 @@
                 <BusyIndicator
                     text="Connecting to wallet..."
                     visible="{wallet>/isConnecting}"
-                    class="sapUiLargeMarginTop"/>
+                    class="sapUiSmallMarginTop"/>
 
                 <!-- Error display -->
                 <MessageStrip
@@ -87,7 +84,7 @@
                     type="Error"
                     showIcon="true"
                     visible="{= !!${wallet>/error}}"
-                    class="sapUiMediumMarginTop"/>
+                    class="sapUiSmallMarginTop"/>
             </VBox>
 
             <!-- Connected State - Wallet Dashboard -->
@@ -96,27 +93,36 @@
                 visible="{wallet>/isConnected}"
                 class="sapUiSmallMargin">
 
-                <!-- Wallet Info Header -->
-                <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                <!-- Wallet Info Header with Address -->
+                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
                     <Image
                         src="{wallet>/walletIcon}"
-                        width="48px"
-                        height="48px"
+                        width="36px"
+                        height="36px"
                         class="sapUiSmallMarginEnd"/>
                     <VBox>
-                        <Title text="{wallet>/walletName}" level="H2"/>
-                        <ObjectStatus
-                            text="{wallet>/networkName}"
-                            state="{= ${wallet>/networkId} === 1 ? 'Success' : 'Warning'}"/>
+                        <HBox alignItems="Center">
+                            <Title text="{wallet>/walletName}" level="H4" class="sapUiTinyMarginEnd"/>
+                            <ObjectStatus
+                                text="{wallet>/networkName}"
+                                state="{= ${wallet>/networkId} === 1 ? 'Success' : 'Warning'}"/>
+                        </HBox>
+                        <HBox alignItems="Center">
+                            <Text text="{parts: ['wallet>/addresses/0/bech32'], formatter: '.formatter.truncateAddress'}"/>
+                            <Button
+                                icon="sap-icon://copy"
+                                type="Transparent"
+                                press=".onAddressPress"
+                                tooltip="Copy address"
+                                class="sapUiTinyMarginBegin"/>
+                        </HBox>
                     </VBox>
                     <ToolbarSpacer/>
                     <Button
                         icon="sap-icon://refresh"
                         type="Transparent"
                         press=".onRefreshWallet"
-                        tooltip="Refresh"
-                        ariaLabelledBy="__refreshLabel"/>
-                    <core:InvisibleText id="__refreshLabel" text="Refresh wallet data"/>
+                        tooltip="Refresh"/>
                 </HBox>
 
                 <!-- Balance Card -->
@@ -137,25 +143,30 @@
                                 type="Emphasized"
                                 press=".onSendAda"/>
                         </HBox>
+
                     </content>
                 </Panel>
 
-                <!-- Primary Address -->
-                <Panel headerText="Your Address" expandable="false" class="sapUiTinyMarginTop">
+                <!-- Native Assets -->
+                <Panel
+                    headerText="{= 'Native Assets (' + (${wallet>/balance/assets}.length || 0) + ')'}"
+                    expandable="true"
+                    expanded="false"
+                    visible="{= ${wallet>/balance/assets}.length > 0 }"
+                    class="sapUiTinyMarginTop">
                     <content>
-                        <HBox alignItems="Center" class="sapUiSmallMargin">
-                            <Text text="{parts: ['wallet>/addresses/0/bech32'], formatter: '.formatter.truncateAddress'}"/>
-                            <ToolbarSpacer/>
-                            <Button
-                                icon="sap-icon://copy"
-                                type="Transparent"
-                                press=".onAddressPress"
-                                tooltip="Copy address"
-                                ariaLabelledBy="__copyAddrLabel"/>
-                            <core:InvisibleText id="__copyAddrLabel" text="Copy address to clipboard"/>
-                        </HBox>
+                        <List items="{wallet>/balance/assets}" noDataText="No native assets">
+                            <StandardListItem
+                                type="Active"
+                                press=".onAssetItemPress"
+                                title="{wallet>displayName}"
+                                description="{= 'Policy: ' + ${wallet>policyId}.substring(0, 12) + '...' + ${wallet>policyId}.slice(-8)}"
+                                info="{wallet>quantity}"
+                                infoState="Success"/>
+                        </List>
                     </content>
                 </Panel>
+
 
                 <Panel headerText="Wallet Transactions" expandable="true" expanded="false" class="sapUiTinyMarginTop"
                     visible="{= ${wallet>/transactions}.length > 0 }">
@@ -251,19 +262,6 @@
                     </content>
                 </Panel>
 
-                <!-- All Addresses -->
-                <Panel headerText="All Addresses" expandable="true" expanded="false" class="sapUiTinyMarginTop">
-                    <content>
-                        <List items="{wallet>/addresses}" noDataText="No addresses">
-                            <StandardListItem
-                                title="{wallet>bech32}"
-                                description="{= ${wallet>isUsed} ? 'Used' : 'Unused'}"
-                                type="Active"
-                                press=".onAddressItemPress"
-                                wrapping="true"/>
-                        </List>
-                    </content>
-                </Panel>
             </VBox>
         </content>
 

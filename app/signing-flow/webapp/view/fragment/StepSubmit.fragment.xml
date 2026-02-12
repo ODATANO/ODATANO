@@ -1,0 +1,99 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <VBox>
+        <!-- Pre-Submit Summary -->
+        <VBox visible="{= !${flow>/submission} &amp;&amp; !${flow>/submitBusy}}" class="submitSummary">
+            <Title text="{i18n>submitSummaryTitle}" level="H4" class="sapUiSmallMarginBottom" />
+
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12">
+
+                <Label text="{i18n>submitRecipient}" />
+                <Text text="{path: 'flow>/recipientAddress', formatter: '.formatter.truncateAddress'}"
+                    class="signingFlowMono" />
+
+                <Label text="{i18n>submitAmount}" />
+                <ObjectNumber number="{path: 'flow>/lovelaceAmount', formatter: '.formatter.formatLovelaceToAda'}"
+                    unit="ADA" />
+
+                <Label text="{i18n>submitFee}" />
+                <ObjectNumber number="{path: 'flow>/build/fee', formatter: '.formatter.formatLovelaceToAda'}"
+                    unit="ADA" state="Information" />
+
+                <Label text="{i18n>submitNetwork}" />
+                <ObjectStatus text="{flow>/build/network}"
+                    state="{= ${flow>/build/network} === 'mainnet' ? 'Success' : 'Warning'}" />
+
+                <Label text="{i18n>submitWitnesses}" />
+                <ObjectNumber number="{flow>/verification/witnessCount}" unit="signature(s)" />
+            </f:SimpleForm>
+
+            <HBox justifyContent="Center" class="sapUiMediumMarginTop">
+                <Button text="{i18n>submitButton}" icon="sap-icon://upload-to-cloud"
+                    type="Emphasized" press=".onSubmitTransaction"
+                    enabled="{= ${flow>/verification/isValid} === true}" />
+            </HBox>
+        </VBox>
+
+        <!-- Submitting State -->
+        <VBox visible="{flow>/submitBusy}" alignItems="Center" class="sapUiLargeMarginTop">
+            <BusyIndicator size="3rem" text="{i18n>submitSubmitting}" />
+        </VBox>
+
+        <!-- Submission Success -->
+        <VBox visible="{= !!${flow>/submission} &amp;&amp; !${flow>/submitError}}"
+            class="{= ${flow>/submissionPolling} ? 'submissionSuccess statusPolling' : 'submissionSuccess'}"
+            alignItems="Center">
+
+            <core:Icon src="sap-icon://complete" size="5rem" color="#107e3e"
+                class="sapUiSmallMarginBottom" />
+            <Title text="{i18n>submitSuccess}" level="H2" class="sapUiSmallMarginBottom" />
+
+            <!-- Transaction Hash -->
+            <Label text="{i18n>submitTxHash}" class="sapUiSmallMarginTop" />
+            <HBox alignItems="Center">
+                <Text text="{flow>/submission/txHash}" class="signingFlowMono" wrapping="true" />
+                <Button icon="sap-icon://copy" press=".onCopyTxHash"
+                    type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+            </HBox>
+
+            <!-- Cardanoscan Link -->
+            <Link text="{i18n>submitViewExplorer}" press=".onViewOnCardanoscan"
+                class="sapUiSmallMarginTop" />
+
+            <!-- Submission Status -->
+            <HBox alignItems="Center" class="sapUiMediumMarginTop">
+                <Label text="{i18n>submitStatus}:" class="sapUiSmallMarginEnd" />
+                <ObjectStatus text="{flow>/submission/status}"
+                    state="{path: 'flow>/submission/status', formatter: '.formatter.getSubmissionStatusState'}" />
+            </HBox>
+
+            <Text text="{i18n>submitPolling}" visible="{flow>/submissionPolling}"
+                class="sapUiSmallMarginTop" />
+            <Text text="{i18n>submitConfirmed}"
+                visible="{= ${flow>/submission/status} === 'confirmed'}"
+                class="sapUiSmallMarginTop" />
+
+            <!-- New Transaction Button -->
+            <Button text="{i18n>submitNew}" icon="sap-icon://create"
+                type="Ghost" press=".onNewTransaction"
+                class="sapUiLargeMarginTop" />
+        </VBox>
+
+        <!-- Submit Error -->
+        <VBox visible="{= !!${flow>/submitError}}" alignItems="Center"
+            class="sapUiLargeMarginTop">
+            <core:Icon src="sap-icon://error" size="4rem" color="#bb0000"
+                class="sapUiSmallMarginBottom" />
+            <Title text="{i18n>submitFailed}" level="H3" />
+            <MessageStrip text="{flow>/submitError}" type="Error"
+                showCloseButton="false" class="sapUiSmallMarginTop" />
+            <Button text="{i18n>submitRetry}" icon="sap-icon://refresh"
+                type="Emphasized" press=".onSubmitTransaction"
+                class="sapUiMediumMarginTop" />
+        </VBox>
+    </VBox>
+</core:FragmentDefinition>

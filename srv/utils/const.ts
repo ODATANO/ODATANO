@@ -74,7 +74,12 @@ export const POOL_ID_BYTES = 28;
 /** Standard DRep ID payload length (1 byte type prefix + 28 byte key hash) */
 export const DREP_ID_BYTES = 29;
 
-/** 
+/** Length of a hex-encoded Cardano policy ID (28 bytes = 56 hex chars) */
+export const POLICY_ID_HEX_LENGTH = 56;
+/** Minimum length of a full asset unit (policyId + at least 1 char assetName) */
+export const MIN_FULL_ASSET_UNIT_LENGTH = POLICY_ID_HEX_LENGTH + 1; // 57
+
+/**
  * Transaction hash Regex - 64-character hexadecimal string
  */
 export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;

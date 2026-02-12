@@ -12,10 +12,6 @@ const logger = cds.log('SigningHelper');
  * CIP-30 signTx() returns only the witness set, not a complete signed transaction.
  * This function combines the original unsigned transaction with the witness set
  * to create a complete signed transaction that can be submitted to the network.
- * 
- * The @harmoniclabs/cbor parser preserves encoding metadata (indefinite flag, addInfos)
- * on each CborObj, so re-encoding produces identical bytes for unchanged elements.
- * Both Buildooor and this code use the same CBOR library, ensuring consistent encoding.
  *
  * @param unsignedTxCbor - The unsigned transaction CBOR (hex)
  * @param witnessSetCbor - The witness set CBOR from CIP-30 signTx() (hex)
@@ -27,7 +23,7 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
     const txObj = Cbor.parse(fromHex(unsignedTxCbor));
 
     if (!(txObj instanceof CborArray) || txObj.array.length < 2) {
-      throw new Error('Invalid transaction CBOR structure');
+      throw new TransactionValidationError('Invalid transaction CBOR structure');
     }
 
     const walletWsObj = Cbor.parse(fromHex(witnessSetCbor));
@@ -61,11 +57,11 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
         } else if (vkeyValue instanceof CborTag && vkeyValue.data instanceof CborArray) {
           witnessCount = vkeyValue.data.array.length;
         } else {
-          throw new Error('Unexpected VKey witness format in witness set');
+          throw new TransactionValidationError('Unexpected VKey witness format in witness set');
         }
       }
     } else {
-      throw new Error('Witness set must be CBOR map per Cardano spec');
+      throw new TransactionValidationError('Witness set must be CBOR map per Cardano spec');
     }
 
     // Re-encode the tx array, preserving encoding metadata on body and all witness values.
