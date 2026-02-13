@@ -16,6 +16,12 @@
       "authenticationType": "xsuaa"
     },
     {
+      "source": "^/odatanoviewsigningflow/(.*)$",
+      "target": "/odatanoviewsigningflow/$1",
+      "service": "html5-apps-repo-rt",
+      "authenticationType": "xsuaa"
+    },
+    {
       "source": "^/(.*)$",
       "target": "$1",
       "destination": "srv-api",

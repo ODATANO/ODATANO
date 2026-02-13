@@ -50,6 +50,12 @@
     "typescript": "^5.9.3"
   },
   "cds": {
+    "build": {
+      "tasks": [
+        { "for": "node-cf", "src": "srv", "dest": "../gen/srv" },
+        { "for": "hana", "src": "db", "dest": "../gen/db" }
+      ]
+    },
     "requires": {
       "db": {
         "kind": "sqlite",

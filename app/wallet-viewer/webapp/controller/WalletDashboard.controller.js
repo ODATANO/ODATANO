@@ -544,8 +544,7 @@ sap.ui.define([
                 that._signingModel.setProperty("/statusMessage", "Submitting transaction...");
 
                 var oTxModel = that.getView().getModel("tx");
-                var oSubmitAction = oTxModel.bindContext("/SubmitVerifiedTransaction(...)");
-                oSubmitAction.setParameter("signingRequestId", oSigningRequest.signingRequestId);
+                var oSubmitAction = oTxModel.bindContext("/SigningRequests('" + oSigningRequest.signingRequestId + "')/CardanoTransactionService.SubmitVerifiedTransaction(...)");
                 oSubmitAction.setParameter("signedTxCbor", oResult.signedTxCbor);
                 oSubmitAction.setParameter("signerType", "browser-wallet");
                 oSubmitAction.setParameter("signerInfo", that._walletService.getModel().getProperty("/walletName"));

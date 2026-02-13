@@ -10,7 +10,10 @@ build-parameters:
     - builder: custom
       commands:
         - npm ci
-        - npx cds build --production --ws-pack
+        - npx cds-typer "*" --outputDirectory @cds-models
+        - npx tsc -p tsconfig.build.json
+        - npx cds build --production
+        - node scripts/gen-srv-package.js
 modules:
   - name: odatano-srv
     type: nodejs
@@ -21,7 +24,7 @@ modules:
     build-parameters:
       builder: custom
       commands:
-        - npm ci --ignore-scripts
+        - npm install --production
     provides:
       - name: srv-api # required by consumers of CAP services (e.g. approuter)
         properties:
@@ -67,7 +70,11 @@ modules:
       requires:
         - name: odatanowalletviewer
           artifacts:
-            - wallet-viewer.zip
+            - odatanowalletviewer.zip
+          target-path: app/
+        - name: odatanosigningflow
+          artifacts:
+            - odatanosigningflow.zip
           target-path: app/
 
   - name: odatanowalletviewer
@@ -77,7 +84,19 @@ modules:
       build-result: dist
       builder: custom
       commands:
-        - npm ci
+        - npm install
+        - npm run build
+      supported-platforms:
+        []
+
+  - name: odatanosigningflow
+    type: html5
+    path: app/signing-flow
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npm install
         - npm run build
       supported-platforms:
         []
