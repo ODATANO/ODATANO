@@ -1,0 +1,63 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <!-- Wallet Connect Panel — shown when no wallet is connected -->
+    <VBox
+        alignItems="Center"
+        visible="{= !${wallet>/isConnected}}"
+        class="sapUiMediumMarginTop">
+
+        <Image
+            src="/common/img/logo.svg"
+            width="550px"
+            class="sapUiSmallMarginBottom"/>
+
+        <Title
+            text="Connect Your Wallet"
+            level="H3"
+            class="sapUiTinyMarginBottom"/>
+
+        <Text
+            text="Connect a Cardano browser wallet to get started"
+            textAlign="Center"
+            class="sapUiSmallMarginBottom"/>
+
+        <!-- Connecting indicator -->
+        <BusyIndicator
+            text="Connecting to wallet..."
+            visible="{wallet>/isConnecting}"
+            class="sapUiSmallMarginTop"/>
+
+        <!-- Error display -->
+        <MessageStrip
+            text="{wallet>/error}"
+            type="Error"
+            showIcon="true"
+            showCloseButton="true"
+            visible="{= !!${wallet>/error}}"
+            class="sapUiSmallMarginTop"/>
+
+        <!-- Wallet List -->
+        <List
+            items="{wallet>/availableWallets}"
+            mode="SingleSelectMaster"
+            selectionChange=".onWalletSelect"
+            visible="{= !${wallet>/isConnecting}}"
+            noDataText="No Cardano wallets detected. Install Nami, Eternl or Lace."
+            width="550px">
+            <CustomListItem type="Active">
+                <HBox alignItems="Center" class="sapUiSmallMargin">
+                    <Image
+                        src="{wallet>icon}"
+                        width="32px"
+                        height="32px"
+                        class="sapUiSmallMarginEnd"
+                        visible="{= !!${wallet>icon}}"/>
+                    <Text text="{wallet>name}" class="sapMTextBold"/>
+                </HBox>
+            </CustomListItem>
+        </List>
+    </VBox>
+
+</core:FragmentDefinition>

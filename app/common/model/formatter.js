@@ -29,6 +29,8 @@ sap.ui.define([], function () {
     }
 
     return {
+        // --- Lovelace / ADA ---
+
         formatLovelaceToAda: function (lovelace) {
             return _toAda(lovelace);
         },
@@ -40,6 +42,20 @@ sap.ui.define([], function () {
                 maximumFractionDigits: 6
             }).format(ada) + " ADA";
         },
+
+        formatLargeNumber: function (value) {
+            if (value === null || value === undefined || value === "") return "0";
+            var num = typeof value === "string" ? parseFloat(value) : value;
+            if (isNaN(num)) return "0";
+
+            if (num >= 1000000000000) return (num / 1000000000000).toFixed(2) + "T";
+            if (num >= 1000000000) return (num / 1000000000).toFixed(2) + "B";
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + "M";
+            if (num >= 1000) return (num / 1000).toFixed(2) + "K";
+            return num.toFixed(2);
+        },
+
+        // --- Hash / Address ---
 
         truncateHash: function (hash, prefixLength, suffixLength) {
             return _truncHash(hash, prefixLength, suffixLength);
@@ -54,6 +70,8 @@ sap.ui.define([], function () {
             return _truncHash(address);
         },
 
+        // --- Timestamps ---
+
         formatTimestamp: function (timestamp) {
             if (!timestamp) return "";
             try {
@@ -63,14 +81,56 @@ sap.ui.define([], function () {
             }
         },
 
+        formatBlockTime: function (timestamp) {
+            if (!timestamp) return "";
+            var ts = typeof timestamp === "string" ? parseInt(timestamp, 10) : timestamp;
+            if (isNaN(ts)) return "";
+            return new Date(ts * 1000).toLocaleString();
+        },
+
+        formatBlockTimeISO: function (timestamp) {
+            if (!timestamp) return "";
+            var ts = typeof timestamp === "string" ? parseInt(timestamp, 10) : timestamp;
+            if (isNaN(ts)) return "";
+            return new Date(ts * 1000).toISOString();
+        },
+
+        // --- Bytes ---
+
         formatBytes: function (bytes) {
             if (bytes === null || bytes === undefined) return "0 B";
             var b = typeof bytes === "string" ? parseInt(bytes, 10) : bytes;
             if (isNaN(b)) return "0 B";
             if (b < 1024) return b + " B";
             if (b < 1024 * 1024) return (b / 1024).toFixed(2) + " KB";
-            return (b / (1024 * 1024)).toFixed(2) + " MB";
+            if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(2) + " MB";
+            return (b / (1024 * 1024 * 1024)).toFixed(2) + " GB";
         },
+
+        // --- Address / Boolean helpers ---
+
+        getAddressTypeText: function (type) {
+            var types = {
+                "base": "Base Address",
+                "enterprise": "Enterprise Address",
+                "pointer": "Pointer Address",
+                "reward": "Reward Address",
+                "script": "Script Address",
+                "unknown": "Unknown Type"
+            };
+            return types[type || "unknown"] || type || "Unknown";
+        },
+
+        getBooleanState: function (value) {
+            return value === true ? "Success" : "None";
+        },
+
+        formatBoolean: function (value) {
+            if (value === null || value === undefined) return "-";
+            return value ? "Yes" : "No";
+        },
+
+        // --- Signing request status ---
 
         getSigningRequestStatusState: function (status) {
             var states = {
@@ -98,6 +158,8 @@ sap.ui.define([], function () {
             return icons[status || ""] || "";
         },
 
+        // --- Submission status ---
+
         getSubmissionStatusState: function (status) {
             var states = {
                 "pending": "Warning",
@@ -108,6 +170,8 @@ sap.ui.define([], function () {
             };
             return states[status || ""] || "None";
         },
+
+        // --- CBOR / Verification ---
 
         formatCborPreview: function (cbor) {
             if (!cbor) return "";
@@ -126,6 +190,8 @@ sap.ui.define([], function () {
         getVerificationText: function (isValid) {
             return isValid ? "Signature Verified" : "Verification Failed";
         },
+
+        // --- Network / Explorer ---
 
         getCardanoscanUrl: function (txHash, network) {
             if (!txHash) return "";

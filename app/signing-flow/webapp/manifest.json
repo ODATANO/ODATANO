@@ -38,6 +38,9 @@
   },
   "sap.ui5": {
     "flexEnabled": false,
+    "resourceRoots": {
+      "odatano.common": "/common"
+    },
     "dependencies": {
       "minUI5Version": "1.144.0",
       "libs": {

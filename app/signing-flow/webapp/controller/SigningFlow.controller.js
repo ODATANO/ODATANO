@@ -3,8 +3,8 @@ sap.ui.define([
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageBox",
     "sap/m/MessageToast",
-    "../wallet/WalletService",
-    "../model/formatter"
+    "odatano/common/wallet/WalletService",
+    "odatano/common/model/formatter"
 ], function (Controller, JSONModel, MessageBox, MessageToast, WalletService, formatter) {
     "use strict";
 

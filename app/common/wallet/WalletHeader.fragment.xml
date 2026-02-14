@@ -1,0 +1,38 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <!-- Wallet info bar — reused across all apps -->
+    <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+        <Image
+            src="{wallet>/walletIcon}"
+            width="36px"
+            height="36px"
+            class="sapUiSmallMarginEnd"
+            visible="{= !!${wallet>/walletIcon}}"/>
+        <VBox>
+            <HBox alignItems="Center">
+                <Title text="{wallet>/walletName}" level="H4" class="sapUiTinyMarginEnd"/>
+                <ObjectStatus
+                    text="{wallet>/networkName}"
+                    state="{= ${wallet>/networkId} === 1 ? 'Success' : 'Warning'}"/>
+            </HBox>
+            <HBox alignItems="Center">
+                <Text text="{parts: ['wallet>/addresses/0/bech32'], formatter: '.formatter.truncateAddress'}"/>
+                <Button
+                    icon="sap-icon://copy"
+                    type="Transparent"
+                    press=".onCopyAddress"
+                    tooltip="Copy address"
+                    class="sapUiTinyMarginBegin"/>
+            </HBox>
+        </VBox>
+        <ToolbarSpacer/>
+        <Button
+            icon="sap-icon://refresh"
+            type="Transparent"
+            press=".onRefreshWallet"
+            tooltip="Refresh"/>
+    </HBox>
+
+</core:FragmentDefinition>

@@ -4,8 +4,8 @@ sap.ui.define([
     "sap/m/MessageBox",
     "sap/m/MessageToast",
     "sap/ui/core/Fragment",
-    "../wallet/WalletService",
-    "../model/formatter"
+    "odatano/common/wallet/WalletService",
+    "odatano/common/model/formatter"
 ], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, WalletService, formatter) {
     "use strict";
 
@@ -236,7 +236,7 @@ sap.ui.define([
 
         // --- Address Actions ---
 
-        onAddressPress: function () {
+        onCopyAddress: function () {
             var sAddress = this._walletService.getPrimaryAddress();
             if (sAddress) {
                 navigator.clipboard.writeText(sAddress).then(function () {

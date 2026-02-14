@@ -26,66 +26,7 @@
 
         <content>
             <!-- Not Connected State -->
-            <VBox
-                id="notConnectedBox"
-                alignItems="Center"
-                justifyContent="Center"
-                visible="{= !${wallet>/isConnected}}"
-                class="sapUiMediumMargin">
-
-                <core:Icon
-                    src="sap-icon://card"
-                    size="3rem"
-                    color="#0854a0"
-                    class="sapUiSmallMarginBottom"/>
-
-                <Title
-                    text="Connect Your Wallet"
-                    level="H3"
-                    class="sapUiTinyMarginBottom"/>
-
-                <Text
-                    text="Connect a Cardano browser wallet to view your balance and send ADA"
-                    textAlign="Center"
-                    class="sapUiSmallMarginBottom"/>
-
-                <!-- Wallet List -->
-                <List
-                    id="walletList"
-                    items="{wallet>/availableWallets}"
-                    mode="SingleSelectMaster"
-                    selectionChange=".onWalletSelect"
-                    noDataText="No Cardano wallets detected. Install Nami, Eternl or Lace."
-                    width="350px">
-                    <CustomListItem type="Active">
-                        <HBox alignItems="Center" class="sapUiSmallMargin">
-                            <Image
-                                src="{wallet>icon}"
-                                width="40px"
-                                height="40px"
-                                class="sapUiSmallMarginEnd"/>
-                            <VBox>
-                                <Text text="{wallet>name}" class="sapMTextBold"/>
-                                <Text text="v{wallet>apiVersion}"/>
-                            </VBox>
-                        </HBox>
-                    </CustomListItem>
-                </List>
-
-                <!-- Connecting indicator -->
-                <BusyIndicator
-                    text="Connecting to wallet..."
-                    visible="{wallet>/isConnecting}"
-                    class="sapUiSmallMarginTop"/>
-
-                <!-- Error display -->
-                <MessageStrip
-                    text="{wallet>/error}"
-                    type="Error"
-                    showIcon="true"
-                    visible="{= !!${wallet>/error}}"
-                    class="sapUiSmallMarginTop"/>
-            </VBox>
+            <core:Fragment fragmentName="odatano.common.wallet.WalletConnect" type="XML"/>
 
             <!-- Connected State - Wallet Dashboard -->
             <VBox
@@ -94,36 +35,7 @@
                 class="sapUiSmallMargin">
 
                 <!-- Wallet Info Header with Address -->
-                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
-                    <Image
-                        src="{wallet>/walletIcon}"
-                        width="36px"
-                        height="36px"
-                        class="sapUiSmallMarginEnd"/>
-                    <VBox>
-                        <HBox alignItems="Center">
-                            <Title text="{wallet>/walletName}" level="H4" class="sapUiTinyMarginEnd"/>
-                            <ObjectStatus
-                                text="{wallet>/networkName}"
-                                state="{= ${wallet>/networkId} === 1 ? 'Success' : 'Warning'}"/>
-                        </HBox>
-                        <HBox alignItems="Center">
-                            <Text text="{parts: ['wallet>/addresses/0/bech32'], formatter: '.formatter.truncateAddress'}"/>
-                            <Button
-                                icon="sap-icon://copy"
-                                type="Transparent"
-                                press=".onAddressPress"
-                                tooltip="Copy address"
-                                class="sapUiTinyMarginBegin"/>
-                        </HBox>
-                    </VBox>
-                    <ToolbarSpacer/>
-                    <Button
-                        icon="sap-icon://refresh"
-                        type="Transparent"
-                        press=".onRefreshWallet"
-                        tooltip="Refresh"/>
-                </HBox>
+                <core:Fragment fragmentName="odatano.common.wallet.WalletHeader" type="XML"/>
 
                 <!-- Balance Card -->
                 <Panel headerText="Balance" expandable="false" class="sapUiTinyMarginTop">

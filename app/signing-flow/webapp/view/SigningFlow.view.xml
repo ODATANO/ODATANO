@@ -10,27 +10,10 @@
     <Page id="signingFlowPage" showHeader="true" enableScrolling="true">
         <customHeader>
             <Bar>
-                <contentLeft>
-                    <HBox alignItems="Center" visible="{wallet>/isConnected}">
-                        <core:Icon src="{wallet>/walletIcon}" size="1.5rem" class="sapUiSmallMarginEnd"
-                            visible="{= !!${wallet>/walletIcon}}" />
-                        <Title text="{wallet>/walletName}" level="H5" class="sapUiSmallMarginEnd" />
-                        <ObjectStatus text="{wallet>/networkName}"
-                            state="{= ${wallet>/networkName} === 'Mainnet' ? 'Success' : 'Warning'}"
-                            icon="sap-icon://connected" class="sapUiSmallMarginEnd" />
-                    </HBox>
-                    <Title text="{i18n>headerTitle}" level="H5" visible="{= !${wallet>/isConnected}}" />
-                </contentLeft>
                 <contentMiddle>
-                    <Text text="{path: 'wallet>/addresses/0/bech32', formatter: '.formatter.truncateAddress'}"
-                        class="signingFlowMono"
-                        visible="{wallet>/isConnected}" />
+                    <Title text="{i18n>headerTitle}"/>
                 </contentMiddle>
                 <contentRight>
-                    <Button icon="sap-icon://copy" tooltip="{i18n>copy}" press=".onCopyAddress"
-                        type="Transparent" visible="{wallet>/isConnected}" />
-                    <Button icon="sap-icon://refresh" tooltip="{i18n>headerRefresh}" press=".onRefreshWallet"
-                        type="Transparent" visible="{wallet>/isConnected}" />
                     <Button text="{i18n>headerDisconnect}" press=".onDisconnect"
                         type="Transparent" visible="{wallet>/isConnected}" />
                 </contentRight>
@@ -39,45 +22,13 @@
 
         <content>
             <!-- Wallet Connect Panel (not connected) -->
-            <VBox visible="{= !${wallet>/isConnected}}" class="walletConnectPanel">
-                <core:Icon src="sap-icon://key-user-settings" size="4rem" color="#0854a0"
-                    class="sapUiMediumMarginBottom" />
-                <Title text="{i18n>walletConnectTitle}" level="H2" class="sapUiSmallMarginBottom" />
-                <Text text="{i18n>walletConnectDescription}" class="sapUiSmallMarginBottom" />
-
-                <BusyIndicator visible="{wallet>/isConnecting}" size="2rem"
-                    text="{i18n>walletConnecting}" class="sapUiMediumMarginTop" />
-
-                <MessageStrip text="{wallet>/error}" type="Error"
-                    visible="{= !!${wallet>/error}}" showCloseButton="true"
-                    class="sapUiSmallMarginTop" />
-
-                <List items="{wallet>/availableWallets}" mode="SingleSelectMaster"
-                    selectionChange=".onWalletSelect" visible="{= !${wallet>/isConnecting}}"
-                    noDataText="{i18n>walletConnectHint}">
-                    <CustomListItem type="Active">
-                        <HBox alignItems="Center" class="sapUiSmallMargin">
-                            <core:Icon src="{wallet>icon}" size="1.5rem" class="sapUiSmallMarginEnd"
-                                visible="{= !!${wallet>icon}}" />
-                            <VBox>
-                                <Text text="{wallet>name}" class="sapUiSmallMarginEnd" />
-                                <Text text="CIP-30 v{wallet>apiVersion}" class="sapUiTinyMarginTop" />
-                            </VBox>
-                        </HBox>
-                    </CustomListItem>
-                </List>
-            </VBox>
+            <core:Fragment fragmentName="odatano.common.wallet.WalletConnect" type="XML"/>
 
             <!-- Connected: Wizard + Panels -->
-            <VBox visible="{wallet>/isConnected}">
+            <VBox visible="{wallet>/isConnected}" class="sapUiSmallMargin">
 
-                <!-- Balance info bar -->
-                <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
-                    <ObjectNumber number="{path: 'wallet>/balance/lovelace', formatter: '.formatter.formatLovelaceToAda'}"
-                        unit="ADA" state="Success" />
-                    <ObjectStatus text="{wallet>/networkName}"
-                        state="{= ${wallet>/networkName} === 'Mainnet' ? 'Success' : 'Warning'}" />
-                </HBox>
+                <!-- Wallet Info Header with Address -->
+                <core:Fragment fragmentName="odatano.common.wallet.WalletHeader" type="XML"/>
 
                 <!-- Main Wizard -->
                 <Wizard id="signingWizard" class="signingFlowWizard"
