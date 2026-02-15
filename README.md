@@ -1,6 +1,6 @@
-# ODATANO
+![alt text](docs/assets/odatano_logo/logo_odatano_white.png)
 
-**OData Service for the Cardano Blockchain**
+# Enterprise OData Services for the Cardano Blockchain
 
 **ODATANO** is an SAP CAP–based service that exposes the Cardano blockchain via a standardized **OData V4** interface, enabling seamless enterprise-grade read and write access.
 It provides unified REST/OData access to on-chain data while supporting native transaction building and submission directly from business applications.
@@ -47,6 +47,10 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
 - **Comprehensive Testing**: 978 tests across 25 test suites, 96%+ statement coverage
+
+## Architecture Overview
+
+![alt text](docs/assets/draw_io/odatano-ad.png)
 
 ## Quick Start
 
