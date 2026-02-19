@@ -3,33 +3,7 @@
 ABAP Cloud examples demonstrating real SAP business process integration with the Cardano blockchain through the [ODATANO](https://github.com/ODATANO/ODATANO) OData V4 API. All examples target **SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
 
 ## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│          SAP BTP ABAP Environment            │
-│                                              │
-│  ┌──────────────┐   ┌────────────────────┐   │
-│  │ Goods Receipt│──>│ ZCL_ODATANO_CLIENT │   │
-│  │ (RAP BO)     │   │ (HTTP Client)      │   │
-│  └──────────────┘   └────────┬───────────┘   │
-│                              │ HTTPS         │
-│  ┌──────────────┐            │               │
-│  │ Blockchain   │<───────────┘               │
-│  │ Audit Log    │                            │
-│  └──────────────┘                            │
-└──────────────────────────────┬───────────────┘
-                               │
-                               ▼
-                   ┌───────────────────────┐
-                   │   ODATANO Service     │
-                   │   (CAP OData V4)      │
-                   └───────────┬───────────┘
-                               │
-                               ▼
-                   ┌───────────────────────┐
-                   │  Cardano Blockchain   │
-                   └───────────────────────┘
-```
+![alt text](../assets/draw_io/abapbtp-ad.png)
 
 ## Objects Overview
 
@@ -115,28 +89,4 @@ Tests 2–4 gracefully handle connection errors when ODATANO is not reachable.
 
 ## Example Output
 
-```
-=== ODATANO M3 Integration Test ===
-
---- Test 1: Goods Receipt Hash & Audit Log ---
-Document Hash (SHA256): A3F8B2C1D4E5...
-
---- Test 2: Cardano Network Health ---
-Network:  preview
-Healthy:  X
-Epoch:    72
-Slot:     48291037
-Response: 342ms
-
---- Test 3: Record Goods Receipt on Blockchain ---
-Build ID: 8f3a1b2c-...
-Doc Hash: A3F8B2C1D4E5...
-Status:   BUILT
-
---- Test 4: Address Verification ---
-Valid:   X
-Balance: 1500.234521 ADA
-Message: Address verified. Balance: 1500.234521 ADA
-
-=== Tests Complete ===
-```
+![alt text](image.png)

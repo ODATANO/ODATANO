@@ -20,7 +20,10 @@ CLASS zcl_gr_blockchain DEFINITION
     METHODS constructor
       IMPORTING iv_odatano_url       TYPE string
                 iv_sender_address    TYPE string
-                iv_recipient_address TYPE string.
+                iv_recipient_address TYPE string
+                iv_token_url         TYPE string OPTIONAL
+                iv_client_id         TYPE string OPTIONAL
+                iv_client_secret     TYPE string OPTIONAL.
 
     METHODS record_goods_receipt
       IMPORTING is_goods_receipt      TYPE ty_goods_receipt
@@ -55,8 +58,13 @@ ENDCLASS.
 
 CLASS zcl_gr_blockchain IMPLEMENTATION.
 
-  METHOD constructor.
-    mo_client = NEW zcl_odatano_client( iv_odatano_url ).
+    METHOD constructor.
+    mo_client = NEW zcl_odatano_client(
+      iv_base_url      = iv_odatano_url
+      iv_token_url     = iv_token_url
+      iv_client_id     = iv_client_id
+      iv_client_secret = iv_client_secret
+    ).
     mv_sender_address = iv_sender_address.
     mv_recipient_address = iv_recipient_address.
   ENDMETHOD.
@@ -79,6 +87,11 @@ CLASS zcl_gr_blockchain IMPLEMENTATION.
       iv_metadata_json     = lv_metadata_json
     ).
 
+    if ls_build is not initial.
+    Data(ls_req) = mo_client->post_signing_request(
+    iv_build_id = ls_build-id
+    iv_message = 'ABAP Signing Example' ).
+
     " Step 4: Create audit log entry
     rs_audit_entry-audit_uuid        = cl_system_uuid=>create_uuid_x16_static( ).
     rs_audit_entry-sap_document_no   = is_goods_receipt-document_no.
@@ -89,15 +102,19 @@ CLASS zcl_gr_blockchain IMPLEMENTATION.
     rs_audit_entry-quantity          = is_goods_receipt-quantity.
     rs_audit_entry-unit              = is_goods_receipt-unit.
     rs_audit_entry-document_hash     = lv_hash.
-    rs_audit_entry-build_id          = ls_build-build_id.
-    rs_audit_entry-blockchain_network = 'PREVIEW'.
-    rs_audit_entry-blockchain_status  = 'BUILT'.
+    rs_audit_entry-build_id          = ls_build-id.
+    rs_audit_entry-blockchain_tx_hash = ls_build-txBodyHash.
+    rs_audit_entry-blockchain_network = ls_req-network.
+    rs_audit_entry-blockchain_status  = ls_req-status.
     rs_audit_entry-created_by        = sy-uname.
     GET TIME STAMP FIELD rs_audit_entry-created_at.
 
     " Step 5: Persist audit entry
     INSERT zodatano_bc_log FROM @rs_audit_entry.
+  endif.
   ENDMETHOD.
+
+
 
   METHOD verify_goods_receipt.
     DATA(lv_current_hash) = compute_document_hash( is_goods_receipt ).
@@ -129,7 +146,7 @@ CLASS zcl_gr_blockchain IMPLEMENTATION.
     ENDTRY.
   ENDMETHOD.
 
-  METHOD build_metadata_json.
+ METHOD build_metadata_json.
     rv_json = |\{| &&
       |"674":\{| &&
       |"msg":["SAP Goods Receipt Anchor"],| &&

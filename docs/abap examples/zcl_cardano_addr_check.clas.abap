@@ -9,15 +9,18 @@ CLASS zcl_cardano_addr_check DEFINITION
     TYPES:
       BEGIN OF ty_verification_result,
         address         TYPE string,
-        is_valid        TYPE abap_bool,
+        type       TYPE string,
         has_min_balance TYPE abap_bool,
         balance_ada     TYPE ty_ada_amount,
         message         TYPE string,
         checked_at      TYPE timestampl,
       END OF ty_verification_result.
 
-    METHODS constructor
-      IMPORTING iv_odatano_url TYPE string.
+   METHODS constructor
+      IMPORTING iv_odatano_url   TYPE string
+                iv_token_url     TYPE string OPTIONAL
+                iv_client_id     TYPE string OPTIONAL
+                iv_client_secret TYPE string OPTIONAL.
 
     METHODS verify_address_for_payment
       IMPORTING iv_address         TYPE string
@@ -33,8 +36,13 @@ ENDCLASS.
 
 CLASS zcl_cardano_addr_check IMPLEMENTATION.
 
-  METHOD constructor.
-    mo_client = NEW zcl_odatano_client( iv_odatano_url ).
+   METHOD constructor.
+    mo_client = NEW zcl_odatano_client(
+      iv_base_url      = iv_odatano_url
+      iv_token_url     = iv_token_url
+      iv_client_id     = iv_client_id
+      iv_client_secret = iv_client_secret
+    ).
   ENDMETHOD.
 
   METHOD verify_address_for_payment.
@@ -42,34 +50,11 @@ CLASS zcl_cardano_addr_check IMPLEMENTATION.
     GET TIME STAMP FIELD rs_result-checked_at.
 
     TRY.
-        DATA(lo_destination) = cl_http_destination_provider=>create_by_url( mo_client->mv_base_url ).
-        DATA(lo_client) = cl_web_http_client_manager=>create_by_http_destination( lo_destination ).
-        DATA(lo_request) = lo_client->get_http_request( ).
-        lo_request->set_uri_path(
-          |/odata/v4/cardano-odata/GetAddressByBech32(bech32Address='{ iv_address }')|
-        ).
-        lo_request->set_header_field( i_name = 'Accept' i_value = 'application/json' ).
 
-        DATA(lo_response) = lo_client->execute( if_web_http_client=>get ).
-        DATA(lv_status) = lo_response->get_status( )-code.
-        DATA(lv_json) = lo_response->get_text( ).
-        lo_client->close( ).
+         data(ls_address_info) = mo_client->get_address_info( iv_address ).
 
-        IF lv_status = 200.
-          rs_result-is_valid = abap_true.
-
-          " Parse balance (lovelace to ADA: divide by 1,000,000)
-          DATA: BEGIN OF ls_address,
-                  balance TYPE string,
-                END OF ls_address.
-          /ui2/cl_json=>deserialize(
-            EXPORTING json = lv_json
-            CHANGING  data = ls_address
-          ).
-
-          IF ls_address-balance IS NOT INITIAL.
-            rs_result-balance_ada = ls_address-balance / 1000000.
-          ENDIF.
+          IF ls_address_info IS NOT INITIAL.
+            rs_result-balance_ada = ls_address_info-totallovelace / 1000000.
 
           " Check minimum balance
           IF iv_min_balance_ada > 0.
@@ -84,16 +69,15 @@ CLASS zcl_cardano_addr_check IMPLEMENTATION.
             ).
           ELSE.
             rs_result-has_min_balance = abap_true.
+            rs_result-type = ls_address_info-type.
             rs_result-message = |Address verified. Balance: { rs_result-balance_ada } ADA|.
           ENDIF.
 
         ELSE.
-          rs_result-is_valid = abap_false.
           rs_result-message = |Address not found on Cardano network|.
         ENDIF.
 
       CATCH cx_root INTO DATA(lx_error).
-        rs_result-is_valid = abap_false.
         rs_result-message = |Verification failed: { lx_error->get_text( ) }|.
     ENDTRY.
   ENDMETHOD.

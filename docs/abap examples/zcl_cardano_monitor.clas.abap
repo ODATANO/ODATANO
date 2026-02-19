@@ -1,62 +1,162 @@
-CLASS zcl_cardano_monitor DEFINITION
+CLASS zcl_gr_blockchain DEFINITION
   PUBLIC FINAL
   CREATE PUBLIC.
 
   PUBLIC SECTION.
 
     TYPES:
-      BEGIN OF ty_health_status,
-        network          TYPE string,
-        is_healthy       TYPE abap_bool,
-        current_epoch    TYPE i,
-        current_slot     TYPE i,
-        latest_block     TYPE string,
-        total_supply     TYPE string,
-        active_stake     TYPE string,
-        check_timestamp  TYPE timestampl,
-        response_time_ms TYPE i,
-      END OF ty_health_status.
+      BEGIN OF ty_goods_receipt,
+        document_no   TYPE string,
+        document_type TYPE string,
+        document_year TYPE string,
+        plant         TYPE string,
+        material      TYPE string,
+        quantity      TYPE p LENGTH 13 DECIMALS 3,
+        unit          TYPE string,
+        posting_date  TYPE d,
+        vendor        TYPE string,
+      END OF ty_goods_receipt.
 
-    METHODS get_health_status
-      IMPORTING iv_odatano_url   TYPE string
-      RETURNING VALUE(rs_status) TYPE ty_health_status.
+    METHODS constructor
+      IMPORTING iv_odatano_url       TYPE string
+                iv_sender_address    TYPE string
+                iv_recipient_address TYPE string
+                iv_token_url         TYPE string OPTIONAL
+                iv_client_id         TYPE string OPTIONAL
+                iv_client_secret     TYPE string OPTIONAL.
+
+    METHODS record_goods_receipt
+      IMPORTING is_goods_receipt      TYPE ty_goods_receipt
+      RETURNING VALUE(rs_audit_entry) TYPE zodatano_bc_log
+      RAISING   cx_http_dest_provider_error
+                cx_web_http_client_error.
+
+    METHODS verify_goods_receipt
+      IMPORTING is_goods_receipt   TYPE ty_goods_receipt
+                iv_tx_hash         TYPE string
+      RETURNING VALUE(rv_verified) TYPE abap_bool
+      RAISING   cx_http_dest_provider_error
+                cx_web_http_client_error.
+
+  PRIVATE SECTION.
+
+    DATA mo_client            TYPE REF TO zcl_odatano_client.
+    DATA mv_sender_address    TYPE string.
+    DATA mv_recipient_address TYPE string.
+
+    METHODS compute_document_hash
+      IMPORTING is_goods_receipt TYPE ty_goods_receipt
+      RETURNING VALUE(rv_hash)   TYPE string.
+
+    METHODS build_metadata_json
+      IMPORTING is_goods_receipt TYPE ty_goods_receipt
+                iv_document_hash TYPE string
+      RETURNING VALUE(rv_json)   TYPE string.
 
 ENDCLASS.
 
 
-CLASS zcl_cardano_monitor IMPLEMENTATION.
+CLASS zcl_gr_blockchain IMPLEMENTATION.
 
-  METHOD get_health_status.
-    DATA lv_start TYPE timestampl.
-    DATA lv_end   TYPE timestampl.
+    METHOD constructor.
+    mo_client = NEW zcl_odatano_client(
+      iv_base_url      = iv_odatano_url
+      iv_token_url     = iv_token_url
+      iv_client_id     = iv_client_id
+      iv_client_secret = iv_client_secret
+    ).
+    mv_sender_address = iv_sender_address.
+    mv_recipient_address = iv_recipient_address.
+  ENDMETHOD.
 
-    GET TIME STAMP FIELD lv_start.
+  METHOD record_goods_receipt.
+    " Step 1: Compute hash of goods receipt data
+    DATA(lv_hash) = compute_document_hash( is_goods_receipt ).
+
+    " Step 2: Build metadata JSON for Cardano transaction
+    DATA(lv_metadata_json) = build_metadata_json(
+      is_goods_receipt = is_goods_receipt
+      iv_document_hash = lv_hash
+    ).
+
+    " Step 3: Call ODATANO to build a metadata transaction
+    DATA(ls_build) = mo_client->build_metadata_transaction(
+      iv_sender_address    = mv_sender_address
+      iv_recipient_address = mv_recipient_address
+      iv_lovelace_amount   = 2000000
+      iv_metadata_json     = lv_metadata_json
+    ).
+
+    if ls_build is not initial.
+    Data(ls_req) = mo_client->post_signing_request(
+    iv_build_id = ls_build-id
+    iv_message = 'ABAP Signing Example' ).
+
+    " Step 4: Create audit log entry
+    rs_audit_entry-audit_uuid        = cl_system_uuid=>create_uuid_x16_static( ).
+    rs_audit_entry-sap_document_no   = is_goods_receipt-document_no.
+    rs_audit_entry-sap_document_type = is_goods_receipt-document_type.
+    rs_audit_entry-sap_document_year = is_goods_receipt-document_year.
+    rs_audit_entry-plant             = is_goods_receipt-plant.
+    rs_audit_entry-material          = is_goods_receipt-material.
+    rs_audit_entry-quantity          = is_goods_receipt-quantity.
+    rs_audit_entry-unit              = is_goods_receipt-unit.
+    rs_audit_entry-document_hash     = lv_hash.
+    rs_audit_entry-build_id          = ls_build-id.
+    rs_audit_entry-blockchain_tx_hash = ls_build-txBodyHash.
+    rs_audit_entry-blockchain_network = ls_req-network.
+    rs_audit_entry-blockchain_status  = ls_req-status.
+    rs_audit_entry-created_by        = sy-uname.
+    GET TIME STAMP FIELD rs_audit_entry-created_at.
+
+    " Step 5: Persist audit entry
+    INSERT zodatano_bc_log FROM @rs_audit_entry.
+  endif.
+  ENDMETHOD.
+
+
+
+  METHOD verify_goods_receipt.
+    DATA(lv_current_hash) = compute_document_hash( is_goods_receipt ).
+    rv_verified = mo_client->verify_transaction( iv_tx_hash ).
+  ENDMETHOD.
+
+  METHOD compute_document_hash.
+    DATA(lv_canonical) =
+      |{ is_goods_receipt-document_no }| &&
+      |{ is_goods_receipt-document_type }| &&
+      |{ is_goods_receipt-document_year }| &&
+      |{ is_goods_receipt-plant }| &&
+      |{ is_goods_receipt-material }| &&
+      |{ is_goods_receipt-quantity }| &&
+      |{ is_goods_receipt-unit }| &&
+      |{ is_goods_receipt-posting_date }| &&
+      |{ is_goods_receipt-vendor }|.
 
     TRY.
-        DATA(lo_client) = NEW zcl_odatano_client( iv_odatano_url ).
-        DATA(ls_info) = lo_client->get_network_info( ).
-
-        GET TIME STAMP FIELD lv_end.
-
-        rs_status-network          = ls_info-network.
-        rs_status-is_healthy       = abap_true.
-        rs_status-current_epoch    = ls_info-epoch.
-        rs_status-current_slot     = ls_info-slot.
-        rs_status-latest_block     = ls_info-block.
-        rs_status-total_supply     = ls_info-supply.
-        rs_status-active_stake     = ls_info-stake.
-        rs_status-check_timestamp  = lv_end.
-
-        rs_status-response_time_ms = cl_abap_tstmp=>subtract(
-          tstmp1 = lv_end
-          tstmp2 = lv_start
-        ) * 1000.
-
-      CATCH cx_root.
-        GET TIME STAMP FIELD rs_status-check_timestamp.
-        rs_status-is_healthy = abap_false.
-        rs_status-network    = 'UNREACHABLE'.
+        cl_abap_message_digest=>calculate_hash_for_char(
+          EXPORTING
+            if_algorithm  = 'SHA256'
+            if_data       = lv_canonical
+          IMPORTING
+            ef_hashstring = rv_hash
+        ).
+      CATCH cx_abap_message_digest.
+        rv_hash = 'HASH_ERROR'.
     ENDTRY.
+  ENDMETHOD.
+
+ METHOD build_metadata_json.
+    rv_json = |\{| &&
+      |"674":\{| &&
+      |"msg":["SAP Goods Receipt Anchor"],| &&
+      |"sap_doc":"{ is_goods_receipt-document_no }",| &&
+      |"plant":"{ is_goods_receipt-plant }",| &&
+      |"material":"{ is_goods_receipt-material }",| &&
+      |"hash":"{ iv_document_hash }",| &&
+      |"ts":"{ sy-datum }{ sy-uzeit }"| &&
+      |\}| &&
+      |\}|.
   ENDMETHOD.
 
 ENDCLASS.

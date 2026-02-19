@@ -232,6 +232,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     @title      : 'Signing Requests'
     @description: 'Projection for Signing Requests - tracks external signing workflow'
     entity SigningRequests              as projection on db.SigningRequests actions {
+        
         @title      : 'Verify Signature'
         @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
         action VerifySignature(

@@ -10,26 +10,20 @@ ENDCLASS.
 
 CLASS zcl_odatano_test IMPLEMENTATION.
 
-  METHOD if_oo_adt_classrun~main.
+METHOD if_oo_adt_classrun~main.
 
-    " ============================================================
-    " ODATANO Service URL - change this to your deployed instance
-    " ============================================================
-    DATA(lv_url) = |https://your-odatano.cfapps.us10.hana.ondemand.com|.
+    DATA(lv_url) = |your_odatano_url|.
+    DATA(lv_token_url) = |your_oauth_token_url|.
+    DATA(lv_client_id) = |your_client_id|.
+    DATA(lv_client_secret) = |your_client_secret|.
 
-    out->write( |=== ODATANO M3 Integration Test ===| ).
+    out->write( |=== ODATANO M3 ABAP Integration Tests ===| ).
     out->write( | | ).
 
     " -----------------------------------------------------------
-    " TEST 1: Goods Receipt Hashing & Audit Log (works offline)
+    " TEST 1: Goods Receipt Hashing (offline)
     " -----------------------------------------------------------
-    out->write( |--- Test 1: Goods Receipt Hash & Audit Log ---| ).
-
-    DATA(lo_gr) = NEW zcl_gr_blockchain(
-      iv_odatano_url       = lv_url
-      iv_sender_address    = 'addr_test1qzexample...'
-      iv_recipient_address = 'addr_test1qzexample...'
-    ).
+    out->write( |--- Test 1: Goods Receipt Hash ---| ).
 
     DATA(ls_receipt) = VALUE zcl_gr_blockchain=>ty_goods_receipt(
       document_no   = '5000000001'
@@ -43,7 +37,6 @@ CLASS zcl_odatano_test IMPLEMENTATION.
       vendor        = 'SUPPLIER-DE-42'
     ).
 
-    " Test hashing only (no HTTP call needed)
     DATA(lv_canonical) =
       |{ ls_receipt-document_no }| &&
       |{ ls_receipt-document_type }| &&
@@ -70,59 +63,81 @@ CLASS zcl_odatano_test IMPLEMENTATION.
     out->write( | | ).
 
     " -----------------------------------------------------------
-    " TEST 2: Network Health Check (requires running ODATANO)
+    " TEST 2: Network Health Check
     " -----------------------------------------------------------
     out->write( |--- Test 2: Cardano Network Health ---| ).
 
     DATA(lo_monitor) = NEW zcl_cardano_monitor( ).
-
     TRY.
-        DATA(ls_health) = lo_monitor->get_health_status( lv_url ).
-        out->write( |Network:  { ls_health-network }| ).
-        out->write( |Healthy:  { ls_health-is_healthy }| ).
-        out->write( |Epoch:    { ls_health-current_epoch }| ).
-        out->write( |Slot:     { ls_health-current_slot }| ).
-        out->write( |Block:    { ls_health-latest_block }| ).
-        out->write( |Response: { ls_health-response_time_ms }ms| ).
+        DATA(ls_health) = lo_monitor->get_health_status(
+          iv_odatano_url   = lv_url
+          iv_token_url     = lv_token_url
+          iv_client_id     = lv_client_id
+          iv_client_secret = lv_client_secret
+        ).
+        out->write( |Network:   { ls_health-network }| ).
+        out->write( |Healthy:   { ls_health-is_healthy }| ).
+        out->write( |Epoch:     { ls_health-current_epoch }| ).
+        out->write( |Epoch Txs: { ls_health-tx_count }| ).
+        out->write( |Response:  { ls_health-response_time_ms }ms| ).
       CATCH cx_root INTO DATA(lx_net).
-        out->write( |Network check failed (ODATANO not reachable): { lx_net->get_text( ) }| ).
+        out->write( |Network check failed: { lx_net->get_text( ) }| ).
     ENDTRY.
 
     out->write( | | ).
 
     " -----------------------------------------------------------
-    " TEST 3: Full Goods Receipt → Blockchain (requires ODATANO)
+    " TEST 3: Goods Receipt → Transaction Build with Document Hash Metadata
     " -----------------------------------------------------------
-    out->write( |--- Test 3: Record Goods Receipt on Blockchain ---| ).
+    out->write( |--- Test 3: Record Goods Receipt with Metadata Hash ---| ).
+
+    DATA(lo_gr) = NEW zcl_gr_blockchain(
+      iv_odatano_url       = lv_url
+      iv_sender_address    = 'addr_test1qrvzl5l0aq56ha2vqjmj04562jckr9ruqqtckvalcugprq79ypxttd5pkvqnvs33dvs6jrtrcr3cqf654gvze2nj35ksu2dtx5'
+      iv_recipient_address = 'addr_test1qrgfq5jeznaehnf4zs02laas2juuuyzlz48tkue50luuws2nrznmesueg7drstsqaaenq6qpcnvqvn0kessd9fw2wxys6tv622'
+      iv_token_url         = lv_token_url
+      iv_client_id         = lv_client_id
+      iv_client_secret     = lv_client_secret
+    ).
 
     TRY.
         DATA(ls_audit) = lo_gr->record_goods_receipt( ls_receipt ).
-        out->write( |Build ID: { ls_audit-build_id }| ).
-        out->write( |Doc Hash: { ls_audit-document_hash }| ).
-        out->write( |Status:   { ls_audit-blockchain_status }| ).
-        out->write( |Audit UUID: { ls_audit-audit_uuid }| ).
+        out->write( |Build ID:         { ls_audit-build_id }| ).
+        out->write( |Doc Hash:         { ls_audit-document_hash }| ).
+        out->write( |Transaction Hash: { ls_audit-blockchain_tx_hash }| ).
+        out->write( |Status:           { ls_audit-blockchain_status }| ).
       CATCH cx_root INTO DATA(lx_gr).
-        out->write( |Goods Receipt recording failed (ODATANO not reachable): { lx_gr->get_text( ) }| ).
+        out->write( |GR recording failed: { lx_gr->get_text( ) }| ).
     ENDTRY.
+
+    if ( ls_audit-build_id is not initial ).
+
+
+    endif.
 
     out->write( | | ).
 
     " -----------------------------------------------------------
-    " TEST 4: Address Verification (requires ODATANO)
+    " TEST 4: Address Verification
     " -----------------------------------------------------------
     out->write( |--- Test 4: Address Verification ---| ).
 
-    DATA(lo_check) = NEW zcl_cardano_addr_check( lv_url ).
+    DATA(lo_check) = NEW zcl_cardano_addr_check(
+      iv_odatano_url   = lv_url
+      iv_token_url     = lv_token_url
+      iv_client_id     = lv_client_id
+      iv_client_secret = lv_client_secret
+    ).
 
     TRY.
         DATA(ls_result) = lo_check->verify_address_for_payment(
-          iv_address = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae'
+          iv_address = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8'
         ).
-        out->write( |Valid:   { ls_result-is_valid }| ).
+        out->write( |Type:    { ls_result-type }| ).
         out->write( |Balance: { ls_result-balance_ada } ADA| ).
         out->write( |Message: { ls_result-message }| ).
       CATCH cx_root INTO DATA(lx_addr).
-        out->write( |Address check failed (ODATANO not reachable): { lx_addr->get_text( ) }| ).
+        out->write( |Address check failed: { lx_addr->get_text( ) }| ).
     ENDTRY.
 
     out->write( | | ).
