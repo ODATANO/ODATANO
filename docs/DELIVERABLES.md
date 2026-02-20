@@ -498,14 +498,14 @@ Implementation of OData endpoints to export unsigned Cardano transactions for ex
 
 - External Signer Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/external-signer.ts
 - Signing Helper Utilities: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/signing-helper.ts
-- Transaction Service (Signing Actions): https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-tx-service.ts
+- Sign Service (Signing Actions): https://github.com/ODATANO/ODATANO/blob/main/srv/cardano-sign-service.ts
 
 **Data Model**
 
 - SigningRequests Entity: https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
 - AddressSigningRequests Entity: https://github.com/ODATANO/ODATANO/blob/main/db/schema.cds
 
-**OData Actions**
+**OData Actions (CardanoSignService at `/odata/v4/cardano-sign/`)**
 
 - `CreateSigningRequest` - Create signing request from transaction build
 - `GetSigningRequest` - Retrieve signing request status (auto-marks expired)
@@ -535,7 +535,7 @@ Integration module enabling external signing of transactions through CIP-30 brow
 - External Signer Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/external-signer.ts
 - CIP-30 Witness Combination: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/signing-helper.ts
 
-**OData Actions**
+**OData Actions (CardanoSignService at `/odata/v4/cardano-sign/`)**
 
 - `VerifySignature` - Cryptographically verify signed transaction
 - `SubmitVerifiedTransaction` - Verify and submit in one step (supports CIP-30 witness sets)

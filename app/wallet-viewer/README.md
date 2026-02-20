@@ -33,18 +33,19 @@ The Wallet Viewer is a proof-of-concept application that showcases ODATANO's ext
 - ✅ Recipient address input with validation
 - ✅ Amount input with balance check
 - ✅ Build transaction via OData API (`BuildSimpleAdaTransaction`)
-- ✅ Create signing request (`CreateSigningRequest`)
+- ✅ Create signing request via CardanoSignService (`CreateSigningRequest`)
 - ✅ Sign via CIP-30 wallet (`api.signTx()`)
-- ✅ Submit via `SubmitVerifiedTransaction`
+- ✅ Submit via CardanoSignService (`SubmitVerifiedTransaction`)
 - ✅ Success/Error feedback with transaction hash
 
 ### OData Service Integration
 - ✅ Main Service: `/odata/v4/cardano-odata/`
 - ✅ TX Service: `/odata/v4/cardano-transaction/`
+- ✅ Sign Service: `/odata/v4/cardano-sign/`
 - ✅ `GetAddressByBech32` for on-demand indexing
-- ✅ `BuildSimpleAdaTransaction` for transaction building
-- ✅ `CreateSigningRequest` for external signing
-- ✅ `SubmitVerifiedTransaction` for signature verification and submission
+- ✅ `BuildSimpleAdaTransaction` for transaction building (CardanoTransactionService)
+- ✅ `CreateSigningRequest` for external signing (CardanoSignService)
+- ✅ `SubmitVerifiedTransaction` for signature verification and submission (CardanoSignService)
 
 ## TODOs bevor final Release (Roadmap)
 
@@ -136,7 +137,8 @@ The application uses two OData V4 services:
 | Model | Data Source | Purpose |
 |-------|-------------|---------|
 | `default` | `/odata/v4/cardano-odata/` | Read operations (addresses, transactions, blocks) |
-| `tx` | `/odata/v4/cardano-transaction/` | Transaction building and signing operations |
+| `tx` | `/odata/v4/cardano-transaction/` | Transaction building and submission operations |
+| `sign` | `/odata/v4/cardano-sign/` | External signing workflow (signing requests, verification) |
 
 ## CIP-30 Wallet Integration
 
@@ -159,20 +161,20 @@ const witnessSet = await api.signTx(unsignedTxCbor, partialSign=true);
 ## External Signing Workflow
 
 ```
-1. Build Transaction (Server)
-   POST /cardano-transaction/BuildSimpleAdaTransaction
+1. Build Transaction (CardanoTransactionService)
+   POST /odata/v4/cardano-transaction/BuildSimpleAdaTransaction
    → Returns buildId, unsignedTxCbor
 
-2. Create Signing Request (Server)
-   POST /cardano-transaction/CreateSigningRequest
+2. Create Signing Request (CardanoSignService)
+   POST /odata/v4/cardano-sign/CreateSigningRequest
    → Returns signingRequestId, signing instructions
 
 3. Sign Externally (Browser Wallet)
    api.signTx(unsignedTxCbor, true)
    → Returns witness set CBOR
 
-4. Verify & Submit (Server)
-   POST /cardano-transaction/SubmitVerifiedTransaction
+4. Verify & Submit (CardanoSignService)
+   POST /odata/v4/cardano-sign/SubmitVerifiedTransaction
    → Verifies signature, submits to network, returns txHash
 ```
 ## Related Documentation

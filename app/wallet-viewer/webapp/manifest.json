@@ -31,6 +31,14 @@
           "annotations": [],
           "odataVersion": "4.0"
         }
+      },
+      "signService": {
+        "uri": "/odata/v4/cardano-sign/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
       }
     }
   },
@@ -85,6 +93,15 @@
       },
       "tx": {
         "dataSource": "txService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": false
+        }
+      },
+      "sign": {
+        "dataSource": "signService",
         "preload": true,
         "settings": {
           "operationMode": "Server",

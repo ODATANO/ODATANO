@@ -24,72 +24,46 @@
             <!-- Wallet Connect Panel (not connected) -->
             <core:Fragment fragmentName="odatano.common.wallet.WalletConnect" type="XML"/>
 
-            <!-- Connected: Wizard + Panels -->
+            <!-- Connected: Tab-based Signing Request Management -->
             <VBox visible="{wallet>/isConnected}" class="sapUiSmallMargin">
 
                 <!-- Wallet Info Header with Address -->
                 <core:Fragment fragmentName="odatano.common.wallet.WalletHeader" type="XML"/>
 
-                <!-- Main Wizard -->
-                <Wizard id="signingWizard" class="signingFlowWizard"
-                    renderMode="Page" backgroundDesign="Standard">
+                <!-- Main Tab Bar -->
+                <IconTabBar id="mainTabBar" select=".onTabSelect"
+                    selectedKey="{flow>/selectedTab}"
+                    class="signingFlowTabs"
+                    stretchContentHeight="false">
+                    <items>
+                        <!-- Build Tab -->
+                        <IconTabFilter text="{i18n>tabBuild}" icon="sap-icon://build" key="build">
+                            <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TabBuild" type="XML" />
+                        </IconTabFilter>
 
-                    <WizardStep id="stepBuild"
-                        title="{i18n>stepBuildTitle}"
-                        icon="sap-icon://build"
-                        validated="{flow>/buildCompleted}">
-                        <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.StepBuild" type="XML" />
-                    </WizardStep>
+                        <!-- Pending Tab -->
+                        <IconTabFilter text="{i18n>tabPending}" icon="sap-icon://pending" key="pending"
+                            count="{flow>/counts/pending}">
+                            <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TabPending" type="XML" />
+                        </IconTabFilter>
 
-                    <WizardStep id="stepSign"
-                        title="{i18n>stepSignTitle}"
-                        icon="sap-icon://signature"
-                        validated="{flow>/signCompleted}"
-                        activate=".onStepSignActivate">
-                        <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.StepSign" type="XML" />
-                    </WizardStep>
+                        <!-- Verified Tab -->
+                        <IconTabFilter text="{i18n>tabVerified}" icon="sap-icon://accept" key="verified"
+                            count="{flow>/counts/verified}">
+                            <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TabVerified" type="XML" />
+                        </IconTabFilter>
 
-                    <WizardStep id="stepVerify"
-                        title="{i18n>stepVerifyTitle}"
-                        icon="sap-icon://accept"
-                        validated="{flow>/verifyCompleted}"
-                        activate=".onStepVerifyActivate">
-                        <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.StepVerify" type="XML" />
-                    </WizardStep>
-
-                    <WizardStep id="stepSubmit"
-                        title="{i18n>stepSubmitTitle}"
-                        icon="sap-icon://upload-to-cloud">
-                        <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.StepSubmit" type="XML" />
-                    </WizardStep>
-                </Wizard>
-
-                <!-- Signing Request History -->
-                <Panel headerText="{i18n>historyTitle}" expandable="true" expanded="false"
-                    class="sapUiSmallMarginTop sapUiSmallMarginBeginEnd">
-                    <List items="{flow>/signingRequests}" noDataText="{i18n>historyEmpty}"
-                        class="historyList">
-                        <CustomListItem type="Active" press=".onHistoryItemPress">
-                            <HBox alignItems="Center" justifyContent="SpaceBetween"
-                                width="100%" class="sapUiTinyMargin">
-                                <VBox>
-                                    <Text text="{path: 'flow>id', formatter: '.formatter.truncateHash'}"
-                                        class="signingFlowMono" />
-                                    <Text text="{path: 'flow>createdAt', formatter: '.formatter.formatTimestamp'}"
-                                        class="sapUiTinyMarginTop" />
-                                </VBox>
-                                <ObjectStatus
-                                    text="{flow>status}"
-                                    state="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusState'}"
-                                    icon="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusIcon'}" />
-                            </HBox>
-                        </CustomListItem>
-                    </List>
-                </Panel>
+                        <!-- Submitted Tab -->
+                        <IconTabFilter text="{i18n>tabSubmitted}" icon="sap-icon://upload-to-cloud" key="submitted"
+                            count="{flow>/counts/submitted}">
+                            <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TabSubmitted" type="XML" />
+                        </IconTabFilter>
+                    </items>
+                </IconTabBar>
 
                 <!-- Transaction Inspector -->
                 <Panel headerText="{i18n>inspectorTitle}" expandable="true" expanded="false"
-                    visible="{= !!${flow>/build}}"
+                    visible="{= !!${flow>/build} || !!${flow>/selectedRequest}}"
                     class="sapUiTinyMarginTop sapUiSmallMarginBeginEnd sapUiSmallMarginBottom">
                     <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TransactionInspector" type="XML" />
                 </Panel>

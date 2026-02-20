@@ -1,0 +1,148 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <VBox>
+        <!-- Refresh Bar -->
+        <Toolbar class="sapUiSmallMarginBottom">
+            <Title text="{i18n>tabPending}" level="H4" />
+            <ToolbarSpacer/>
+            <Button icon="sap-icon://refresh" press=".onRefreshRequests"
+                type="Transparent" tooltip="{i18n>refreshRequests}" />
+        </Toolbar>
+
+        <!-- Empty State -->
+        <VBox visible="{= !${flow>/requests/pending} || ${flow>/requests/pending}.length === 0}"
+            alignItems="Center" class="sapUiLargeMarginTop">
+            <core:Icon src="sap-icon://pending" size="3rem" color="#6a6d70" class="sapUiSmallMarginBottom" />
+            <Title text="{i18n>pendingEmpty}" level="H4" />
+            <Text text="{i18n>pendingEmptyDescription}" class="sapUiSmallMarginTop" />
+        </VBox>
+
+        <!-- Request List -->
+        <List id="pendingList"
+            items="{flow>/requests/pending}"
+            mode="SingleSelectMaster"
+            selectionChange=".onPendingRequestSelect"
+            visible="{= ${flow>/requests/pending}.length > 0}"
+            noDataText="{i18n>pendingEmpty}">
+            <CustomListItem type="Active">
+                <HBox alignItems="Center" justifyContent="SpaceBetween"
+                    width="100%" class="sapUiTinyMargin">
+                    <VBox>
+                        <Text text="{path: 'flow>id', formatter: '.formatter.truncateHash'}"
+                            class="signingFlowMono" />
+                        <Text text="{path: 'flow>createdAt', formatter: '.formatter.formatTimestamp'}"
+                            class="sapUiTinyMarginTop" />
+                    </VBox>
+                    <VBox alignItems="End">
+                        <ObjectStatus text="{flow>status}"
+                            state="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusState'}"
+                            icon="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusIcon'}" />
+                        <Text text="{path: 'flow>network'}" class="sapUiTinyMarginTop" />
+                    </VBox>
+                </HBox>
+            </CustomListItem>
+        </List>
+
+        <!-- Detail Area: shown when a pending request is selected -->
+        <VBox visible="{= !!${flow>/selectedRequest} &amp;&amp; ${flow>/selectedRequest/status} === 'pending'}"
+            class="sapUiSmallMarginTop requestDetail">
+
+            <!-- Request Header -->
+            <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin stepHeader">
+                <HBox alignItems="Center">
+                    <Label text="{i18n>signRequestId}:" class="sapUiSmallMarginEnd" />
+                    <Text text="{path: 'flow>/selectedRequest/id', formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono" />
+                    <Button icon="sap-icon://copy" press=".onCopySelectedRequestId"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+                </HBox>
+                <HBox alignItems="Center">
+                    <ObjectStatus text="{flow>/selectedRequest/network}"
+                        state="{= ${flow>/selectedRequest/network} === 'mainnet' ? 'Success' : 'Warning'}"
+                        icon="sap-icon://connected"
+                        class="sapUiSmallMarginEnd" />
+                    <ObjectStatus text="{flow>/expirationText}"
+                        state="{flow>/expirationState}"
+                        icon="sap-icon://fob-watch"
+                        class="expirationCountdown" />
+                </HBox>
+            </HBox>
+
+            <!-- Network Mismatch Warning -->
+            <MessageStrip type="Warning"
+                text="{i18n>signNetworkMismatch}"
+                visible="{flow>/networkMismatch}"
+                class="sapUiSmallMarginBottom sapUiSmallMarginBeginEnd" />
+
+            <!-- Signing Tabs (Wallet vs CLI) -->
+            <IconTabBar id="signMethodTabBar" selectedKey="wallet">
+                <items>
+                    <!-- Browser Wallet Tab -->
+                    <IconTabFilter text="{i18n>signWalletTab}" icon="sap-icon://iphone" key="wallet">
+                        <VBox class="signTabContent">
+                            <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                                <core:Icon src="{wallet>/walletIcon}" size="2rem" class="sapUiSmallMarginEnd"
+                                    visible="{= !!${wallet>/walletIcon}}" />
+                                <VBox>
+                                    <Text text="{wallet>/walletName}" />
+                                    <ObjectStatus text="{wallet>/networkName}"
+                                        state="{= ${wallet>/networkName} === 'Mainnet' ? 'Success' : 'Warning'}" />
+                                </VBox>
+                            </HBox>
+
+                            <Button text="{= 'Sign with ' + ${wallet>/walletName}}"
+                                icon="sap-icon://signature"
+                                type="Emphasized"
+                                press=".onSignSelectedWithWallet"
+                                enabled="{= !${flow>/signBusy} &amp;&amp; ${flow>/expirationState} !== 'Error'}"
+                                busyIndicatorDelay="0"
+                                busy="{flow>/signBusy}"
+                                class="sapUiSmallMarginBottom" />
+
+                            <MessageStrip text="{flow>/signMessage}" type="{flow>/signMessageType}"
+                                visible="{= !!${flow>/signMessage}}" showCloseButton="true" />
+                        </VBox>
+                    </IconTabFilter>
+
+                    <!-- Manual / CLI Tab -->
+                    <IconTabFilter text="{i18n>signCliTab}" icon="sap-icon://terminal" key="cli">
+                        <VBox class="signTabContent">
+                            <Title text="{i18n>signCliTitle}" level="H5" class="sapUiSmallMarginBottom" />
+                            <Text text="{i18n>signCliDescription}" class="sapUiSmallMarginBottom" />
+
+                            <VBox class="cliCommandBox">
+                                <TextArea value="{flow>/selectedRequest/cardanoCliCommand}"
+                                    editable="false" rows="3" width="100%" growing="true" />
+                            </VBox>
+                            <Button text="{i18n>signCliCopy}" icon="sap-icon://copy"
+                                press=".onCopyCliCommand" type="Transparent"
+                                class="sapUiSmallMarginBottom" />
+
+                            <Title text="{i18n>signPasteTitle}" level="H5"
+                                class="sapUiMediumMarginTop sapUiSmallMarginBottom" />
+                            <TextArea value="{flow>/manualCborInput}"
+                                placeholder="{i18n>signPastePlaceholder}"
+                                rows="5" width="100%" growing="true"
+                                class="signingFlowMono"
+                                enabled="{= ${flow>/expirationState} !== 'Error'}" />
+                            <Button text="{i18n>signPasteButton}" icon="sap-icon://accept"
+                                type="Emphasized" press=".onSubmitManualCborForSelected"
+                                enabled="{= !!${flow>/manualCborInput} &amp;&amp; ${flow>/expirationState} !== 'Error'}"
+                                class="sapUiSmallMarginTop" />
+
+                            <MessageStrip text="{flow>/manualCborError}" type="Error"
+                                visible="{= !!${flow>/manualCborError}}" showCloseButton="true"
+                                class="sapUiSmallMarginTop" />
+                        </VBox>
+                    </IconTabFilter>
+                </items>
+            </IconTabBar>
+
+            <!-- Verify Busy -->
+            <BusyIndicator visible="{flow>/verifyBusy}" size="2rem"
+                text="{i18n>verifyChecking}" class="sapUiSmallMarginTop" />
+        </VBox>
+    </VBox>
+</core:FragmentDefinition>

@@ -31,12 +31,14 @@
 
 **8 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus
 
-**8 External Signing & Plutus Actions (M3):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
+**2 Plutus Actions (M3, CardanoTransactionService):** BuildPlutusSpendTransaction, SetCollateral
+
+**6 External Signing Actions (M3, CardanoSignService):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
 
 ### Layered Architecture
 
 ```
-HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts)
+HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts / cardano-sign-service.ts)
     ↓
 App Context (server.ts: getCardanoIndexer(), getCardanoClient())
     ↓
@@ -101,8 +103,10 @@ srv/
   server.ts              # App Context initialization (M3)
   cardano-service.cds    # Read entity/action definitions
   cardano-service.ts     # Read handler implementations
-  cardano-tx-service.cds # Transaction + Signing service definitions
-  cardano-tx-service.ts  # Transaction + Signing handler implementations
+  cardano-tx-service.cds # Transaction service definitions (build, submit)
+  cardano-tx-service.ts  # Transaction handler implementations (build, submit)
+  cardano-sign-service.cds # Signing service definitions (signing requests, verification)
+  cardano-sign-service.ts  # Signing handler implementations
   blockchain/
     cardano-client.ts    # Multi-backend orchestrator
     cardano-indexer.ts   # Lazy indexing & caching
@@ -163,6 +167,8 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── cardano-service.js     # Compiled handler
 │   ├── cardano-tx-service.cds # CardanoTransactionService definition
 │   ├── cardano-tx-service.js  # Compiled handler
+│   ├── cardano-sign-service.cds # CardanoSignService definition
+│   ├── cardano-sign-service.js  # Compiled handler
 │   ├── server.js              # AppContext, loadConfigFromEnv()
 │   ├── blockchain/            # Backends, indexer, tx builder, signing
 │   └── utils/                 # Validators, errors, mappers
@@ -425,6 +431,7 @@ srv.on('GetTransactionByHash', async (req: Request) => {
   });
 });
 
+// In cardano-sign-service.ts (CardanoSignService)
 srv.on('SubmitVerifiedTransaction', async (req: Request) => {
   return handleRequest(req, async (db) => {
     // Use shared client instance

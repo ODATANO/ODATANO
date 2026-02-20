@@ -132,12 +132,12 @@ sap.ui.define([
             var sPrimaryAddress = this._walletService.getPrimaryAddress();
             if (!sPrimaryAddress) return;
 
-            var oTxModel = this.getView().getModel("tx");
-            if (!oTxModel) return;
+            var oSignModel = this.getView().getModel("sign");
+            if (!oSignModel) return;
 
             var that = this;
 
-            var oAction = oTxModel.bindContext("/GetSigningRequestsByAddress(...)");
+            var oAction = oSignModel.bindContext("/GetSigningRequestsByAddress(...)");
             oAction.setParameter("address", sPrimaryAddress);
             oAction.invoke().then(function () {
                 var oResult = oAction.getBoundContext().getObject();
@@ -145,7 +145,7 @@ sap.ui.define([
 
                 Promise.all(aAssociations.map(function (oAsr) {
                     return new Promise(function (resolve) {
-                        var oSrBinding = oTxModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
+                        var oSrBinding = oSignModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
                         oSrBinding.requestObject().then(function () {
                             var oSr = oSrBinding.getBoundContext().getObject();
                             resolve({
@@ -435,7 +435,8 @@ sap.ui.define([
 
         _buildAndSign: function (sSenderAddress, sRecipientAddress, sLovelaceAmount) {
             var oTxModel = this.getView().getModel("tx");
-            if (!oTxModel) return;
+            var oSignModel = this.getView().getModel("sign");
+            if (!oTxModel || !oSignModel) return;
 
             this._signingModel.setData({
                 busy: true,
@@ -472,7 +473,7 @@ sap.ui.define([
                     that._signingModel.setProperty("/buildId", oBuildResult.id);
                     that._signingModel.setProperty("/statusMessage", "Creating signing request...");
 
-                    var oSigningAction = oTxModel.bindContext("/CreateSigningRequest(...)");
+                    var oSigningAction = oSignModel.bindContext("/CreateSigningRequest(...)");
                     oSigningAction.setParameter("buildId", oBuildResult.id);
 
                     return oSigningAction.execute().then(function () {
@@ -543,8 +544,8 @@ sap.ui.define([
 
                 that._signingModel.setProperty("/statusMessage", "Submitting transaction...");
 
-                var oTxModel = that.getView().getModel("tx");
-                var oSubmitAction = oTxModel.bindContext("/SigningRequests('" + oSigningRequest.signingRequestId + "')/CardanoTransactionService.SubmitVerifiedTransaction(...)");
+                var oSignModel = that.getView().getModel("sign");
+                var oSubmitAction = oSignModel.bindContext("/SigningRequests('" + oSigningRequest.signingRequestId + "')/CardanoSignService.SubmitVerifiedTransaction(...)");
                 oSubmitAction.setParameter("signedTxCbor", oResult.signedTxCbor);
                 oSubmitAction.setParameter("signerType", "browser-wallet");
                 oSubmitAction.setParameter("signerInfo", that._walletService.getModel().getProperty("/walletName"));

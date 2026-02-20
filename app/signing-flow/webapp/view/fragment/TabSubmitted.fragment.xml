@@ -1,0 +1,109 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <VBox>
+        <!-- Refresh Bar -->
+        <Toolbar class="sapUiSmallMarginBottom">
+            <Title text="{i18n>tabSubmitted}" level="H4" />
+            <ToolbarSpacer/>
+            <Button icon="sap-icon://refresh" press=".onRefreshRequests"
+                type="Transparent" tooltip="{i18n>refreshRequests}" />
+        </Toolbar>
+
+        <!-- Empty State -->
+        <VBox visible="{= !${flow>/requests/submitted} || ${flow>/requests/submitted}.length === 0}"
+            alignItems="Center" class="sapUiLargeMarginTop">
+            <core:Icon src="sap-icon://upload-to-cloud" size="3rem" color="#6a6d70" class="sapUiSmallMarginBottom" />
+            <Title text="{i18n>submittedEmpty}" level="H4" />
+        </VBox>
+
+        <!-- Request List -->
+        <List id="submittedList"
+            items="{flow>/requests/submitted}"
+            mode="SingleSelectMaster"
+            selectionChange=".onSubmittedRequestSelect"
+            visible="{= ${flow>/requests/submitted}.length > 0}">
+            <CustomListItem type="Active">
+                <HBox alignItems="Center" justifyContent="SpaceBetween"
+                    width="100%" class="sapUiTinyMargin">
+                    <VBox>
+                        <Text text="{path: 'flow>id', formatter: '.formatter.truncateHash'}"
+                            class="signingFlowMono" />
+                        <Text text="{path: 'flow>createdAt', formatter: '.formatter.formatTimestamp'}"
+                            class="sapUiTinyMarginTop" />
+                    </VBox>
+                    <VBox alignItems="End">
+                        <ObjectStatus text="{flow>status}"
+                            state="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusState'}"
+                            icon="{path: 'flow>status', formatter: '.formatter.getSigningRequestStatusIcon'}" />
+                    </VBox>
+                </HBox>
+            </CustomListItem>
+        </List>
+
+        <!-- Detail Area: shown when a submitted/confirmed request is selected -->
+        <VBox visible="{= !!${flow>/selectedRequest} &amp;&amp; (${flow>/selectedRequest/status} === 'submitted' || ${flow>/selectedRequest/status} === 'confirmed')}"
+            class="sapUiSmallMarginTop requestDetail">
+
+            <!-- Submission Success Display -->
+            <VBox class="{= ${flow>/submissionPolling} ? 'submissionSuccess statusPolling' : 'submissionSuccess'}"
+                alignItems="Center">
+
+                <core:Icon
+                    src="{= ${flow>/selectedRequest/status} === 'confirmed' ? 'sap-icon://shield' : 'sap-icon://complete'}"
+                    size="4rem" color="#107e3e"
+                    class="sapUiSmallMarginBottom" />
+                <Title
+                    text="{= ${flow>/selectedRequest/status} === 'confirmed' ? 'Transaction Confirmed' : 'Transaction Submitted'}"
+                    level="H2" class="sapUiSmallMarginBottom" />
+
+                <!-- Transaction Hash -->
+                <Label text="{i18n>submitTxHash}" class="sapUiSmallMarginTop" />
+                <HBox alignItems="Center">
+                    <Text text="{flow>/selectedRequest/submission/txHash}" class="signingFlowMono" wrapping="true" />
+                    <Button icon="sap-icon://copy" press=".onCopySelectedSubmissionTxHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
+                </HBox>
+
+                <!-- Cardanoscan Link -->
+                <Link text="{i18n>submitViewExplorer}" press=".onViewSelectedOnCardanoscan"
+                    class="sapUiSmallMarginTop" />
+
+                <!-- Submission Status -->
+                <HBox alignItems="Center" class="sapUiMediumMarginTop">
+                    <Label text="{i18n>submitStatus}:" class="sapUiSmallMarginEnd" />
+                    <ObjectStatus text="{flow>/selectedRequest/submission/status}"
+                        state="{path: 'flow>/selectedRequest/submission/status', formatter: '.formatter.getSubmissionStatusState'}" />
+                </HBox>
+
+                <Text text="{i18n>submitPolling}" visible="{flow>/submissionPolling}"
+                    class="sapUiSmallMarginTop" />
+                <Text text="{i18n>submitConfirmed}"
+                    visible="{= ${flow>/selectedRequest/status} === 'confirmed'}"
+                    class="sapUiSmallMarginTop" />
+            </VBox>
+        </VBox>
+
+        <!-- Detail for expired/failed requests -->
+        <VBox visible="{= !!${flow>/selectedRequest} &amp;&amp; (${flow>/selectedRequest/status} === 'expired' || ${flow>/selectedRequest/status} === 'failed')}"
+            class="sapUiSmallMarginTop requestDetail" alignItems="Center">
+            <core:Icon
+                src="{= ${flow>/selectedRequest/status} === 'expired' ? 'sap-icon://lateness' : 'sap-icon://error'}"
+                size="3rem" color="#bb0000"
+                class="sapUiSmallMarginBottom" />
+            <Title
+                text="{= ${flow>/selectedRequest/status} === 'expired' ? 'Request Expired' : 'Request Failed'}"
+                level="H3" />
+            <Text text="{path: 'flow>/selectedRequest/createdAt', formatter: '.formatter.formatTimestamp'}"
+                class="sapUiSmallMarginTop" />
+        </VBox>
+
+        <!-- New Transaction Button -->
+        <HBox justifyContent="Center" class="sapUiLargeMarginTop"
+            visible="{= !!${flow>/selectedRequest}}">
+            <Button text="{i18n>submitNew}" icon="sap-icon://create"
+                type="Ghost" press=".onNewTransaction" />
+        </HBox>
+    </VBox>
+</core:FragmentDefinition>

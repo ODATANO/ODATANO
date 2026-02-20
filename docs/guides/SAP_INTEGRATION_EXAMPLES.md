@@ -32,7 +32,8 @@ ODATANO exposes Cardano blockchain data and transaction capabilities as standard
 │                      ODATANO Service                   │
 ├────────────────────────────────────────────────────────┤
 │  /odata/v4/cardano-odata/      (Read Operations)       │
-│  /odata/v4/cardano-transaction/ (TX Build & Sign)      │
+│  /odata/v4/cardano-transaction/ (TX Build & Submit)    │
+│  /odata/v4/cardano-sign/        (External Signing)     │
 └───────────────────────────┬────────────────────────────┘
                             │
                             ▼
@@ -304,7 +305,7 @@ Automated payment recording for cross-border purchase orders:
 1. Purchase Order released in S/4HANA
 2. Background job calls ODATANO `BuildSimpleAdaTransaction`
 3. Treasury signs via external wallet (hardware wallet)
-4. Transaction submitted via `SubmitVerifiedTransaction`
+4. Transaction submitted via `SubmitVerifiedTransaction` (CardanoSignService)
 5. TX hash stored in custom field on FI document
 
 ### Use Case 2: CO₂ Certificate Tracking

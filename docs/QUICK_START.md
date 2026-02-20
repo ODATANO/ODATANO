@@ -58,6 +58,7 @@ cds watch
 Both services auto-register:
 - **CardanoODataService** at `/odata/v4/cardano-odata/` — read blockchain data
 - **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
+- **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
 
 ### 4) Verify
 
@@ -293,7 +294,7 @@ BUILD_RESPONSE=$(curl -s -X POST http://localhost:4004/odata/v4/cardano-transact
   }')
 
 # 2. Create signing request (returns signing instructions)
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest \
   -H "Content-Type: application/json" \
   -d '{
     "buildId": "<buildId-from-step-1>",
@@ -301,7 +302,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningReq
   }'
 
 # 3. After signing externally, verify and submit
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransaction \
   -H "Content-Type: application/json" \
   -d '{
     "signingRequestId": "<signingRequestId-from-step-2>",

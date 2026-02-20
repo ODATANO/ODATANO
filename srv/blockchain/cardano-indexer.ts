@@ -36,11 +36,14 @@ import {
   TransactionBuildOutputs,
   TransactionSubmission,
   TransactionSubmissions,
+  AddressTransactionBuilds,
+} from '#cds-models/CardanoTransactionService';
+
+import {
   SigningRequests,
   SignatureVerifications,
   AddressSigningRequests,
-  AddressTransactionBuilds
-} from '#cds-models/CardanoTransactionService';
+} from '#cds-models/CardanoSignService';
 
 import {
   mapTransaction,

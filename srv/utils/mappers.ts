@@ -45,9 +45,12 @@ import type {
   TransactionBuildInput as TransactionBuildInputRow,
   TransactionBuildOutput as TransactionBuildOutputRow,
   TransactionSubmission as TransactionSubmissionRow,
-  AddressSigningRequest as AddressSigningRequestRow,
-  AddressTransactionBuild as AddressTransactionBuildRow
+  AddressTransactionBuild as AddressTransactionBuildRow,
 } from '#cds-models/CardanoTransactionService';
+
+import type {
+  AddressSigningRequest as AddressSigningRequestRow,
+} from '#cds-models/CardanoSignService';
 
 
 import type { Request } from '@sap/cds';

@@ -163,7 +163,7 @@ describe('CardanoTransactionService Handler Validations', () => {
     it('should reject when signing request does not exist', async () => {
       const fakeId = 'nonexistent-sr-id';
 
-      const { status } = await test.post(`/odata/v4/cardano-transaction/SigningRequests(id='${fakeId}')/CardanoTransactionService.VerifySignature`, {
+      const { status } = await test.post(`/odata/v4/cardano-sign/SigningRequests(id='${fakeId}')/CardanoSignService.VerifySignature`, {
         signedTxCbor: TEST_FIXTURES.signedTxCbor1 || 'deadbeef',
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
@@ -179,7 +179,7 @@ describe('CardanoTransactionService Handler Validations', () => {
     it('should reject when signing request does not exist', async () => {
       const fakeId = 'nonexistent-submit-id';
 
-      const { status } = await test.post(`/odata/v4/cardano-transaction/SigningRequests(id='${fakeId}')/CardanoTransactionService.SubmitVerifiedTransaction`, {})
+      const { status } = await test.post(`/odata/v4/cardano-sign/SigningRequests(id='${fakeId}')/CardanoSignService.SubmitVerifiedTransaction`, {})
         .catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect([400, 404, 409]).toContain(status);
@@ -407,7 +407,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       const signingRequestId = 'b0000000-0000-0000-0000-000000000012';
       const now = new Date();
       await cds.run(
-        INSERT.into('CardanoTransactionService.SigningRequests').entries({
+        INSERT.into('CardanoSignService.SigningRequests').entries({
           id: signingRequestId,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
@@ -420,7 +420,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       );
 
       const { status, data } = await test.post(
-        `/odata/v4/cardano-transaction/SigningRequests(${signingRequestId})/CardanoTransactionService.SubmitVerifiedTransaction`,
+        `/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.SubmitVerifiedTransaction`,
         { signedTxCbor: TEST_FIXTURES.signedTxCbor1 }
       ).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
 
@@ -456,7 +456,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       // Create signing request with build_id
       const signingRequestId = 'c0000000-0000-0000-0000-000000000013';
       await cds.run(
-        INSERT.into('CardanoTransactionService.SigningRequests').entries({
+        INSERT.into('CardanoSignService.SigningRequests').entries({
           id: signingRequestId,
           build_id: buildId,
           txBodyHash: TEST_FIXTURES.txBodyHash,
@@ -474,7 +474,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       // Submit with full signed transaction (not witness set)
       // signedTxCbor1 starts with 84 (CBOR array = full tx), not a1 (CBOR map = witness set)
       const { status, data } = await test.post(
-        `/odata/v4/cardano-transaction/SigningRequests(${signingRequestId})/CardanoTransactionService.SubmitVerifiedTransaction`,
+        `/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.SubmitVerifiedTransaction`,
         { signedTxCbor: TEST_FIXTURES.signedTxCbor1 }
       ).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
 

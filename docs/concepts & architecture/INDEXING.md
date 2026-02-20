@@ -366,10 +366,10 @@ entity SigningRequests : temporal {
 }
 ```
 
-#### External Signing Workflow
+#### External Signing Workflow (CardanoSignService at `/odata/v4/cardano-sign/`)
 
 ```
-Client → POST /CreateSigningRequest (with buildId)
+Client → POST /odata/v4/cardano-sign/CreateSigningRequest (with buildId)
   ↓
 Service retrieves TransactionBuild by buildId
   ↓
@@ -381,7 +381,7 @@ Return signing instructions to client
   ↓
 Client signs externally (CIP-30 wallet, CLI, hardware wallet)
   ↓
-Client → POST /SubmitVerifiedTransaction (with signed CBOR)
+Client → POST /odata/v4/cardano-sign/SubmitVerifiedTransaction (with signed CBOR)
   ↓
 Service verifies signature cryptographically
   ↓

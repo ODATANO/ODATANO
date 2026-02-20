@@ -56,6 +56,14 @@ ODATANO follows a **3-step workflow** for transaction handling with complete **p
 │  │  SubmitTransaction ──> Blockchain Submit              │  │               │
 │  │  SubmitSignedTransaction ──> External TX Submit       │  │               │
 │  └───────────────────────────────────────────────────────┘  │               │
+│                                                             │               │
+│  ┌───────────────────────────────────────────────────────┐  │               │
+│  │ CardanoSignService                                    │  │               │
+│  │                                                       │  │               │
+│  │  CreateSigningRequest ──> Signing Instructions        │  │               │
+│  │  VerifySignature ──> Signature Verification           │  │               │
+│  │  SubmitVerifiedTransaction ──> Verify + Submit        │<─│───────────────│
+│  └───────────────────────────────────────────────────────┘  │               │
 │                          ↓                                  │               │
 │  ┌───────────────────────────────────────────────────────┐  │               │
 │  │ Transaction Builder Registry                          │  │               │
@@ -760,7 +768,7 @@ ODATANO M2/M3 provides a complete transaction workflow with:
 ✅ **Full Audit Trail**: TransactionBuilds & TransactionSubmissions entities
 ✅ **Production Ready**: Comprehensive transaction tests
 
-### M3 External Signing Additions:
+### M3 External Signing Additions (CardanoSignService at `/odata/v4/cardano-sign/`):
 
 ✅ **SigningRequests**: Persistent signing workflow with TTL expiration
 ✅ **SignatureVerifications**: Cryptographic verification with audit trail

@@ -440,21 +440,26 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ## External Signing (M3)
 
-ODATANO M3 adds a complete external signing workflow with private key isolation.
+ODATANO M3 adds a complete external signing workflow with private key isolation via the **CardanoSignService**.
+
+**Sign Service Base URL:**
+```
+http://localhost:4004/odata/v4/cardano-sign
+```
 
 ### External Signing Workflow
 
 ```
-1. Build Transaction    → Returns unsigned CBOR
-2. Create Signing Request → Returns signing instructions & TTL
+1. Build Transaction    → Returns unsigned CBOR (CardanoTransactionService)
+2. Create Signing Request → Returns signing instructions & TTL (CardanoSignService)
 3. Sign Externally      → Use CIP-30 wallet or Cardano CLI
-4. Verify & Submit      → Cryptographically verify and submit
+4. Verify & Submit      → Cryptographically verify and submit (CardanoSignService)
 ```
 
 ### Create Signing Request
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest \
   -H "Content-Type: application/json" \
   -d '{
     "buildId": "uuid-from-build-response",
@@ -479,7 +484,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningReq
 After signing externally:
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransaction \
   -H "Content-Type: application/json" \
   -d '{
     "signingRequestId": "signing-request-uuid",
@@ -489,7 +494,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTr
   }'
 ```
 
-### Available External Signing Actions
+### Available External Signing Actions (CardanoSignService)
 
 | Action | Description |
 |--------|-------------|

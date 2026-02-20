@@ -7,13 +7,9 @@
     word-break: break-all;
 }
 
-/* Wizard spacing */
-.signingFlowWizard {
-    padding: 0.5rem;
-}
-
-.signingFlowWizard .sapMWizardStep {
-    padding-bottom: 1rem;
+/* Tab-based layout */
+.signingFlowTabs {
+    margin: 0 0.5rem;
 }
 
 /* Wallet connect panel */
@@ -33,6 +29,13 @@
     margin-top: 1rem;
     border-left: 4px solid #0854a0;
     padding-left: 1rem;
+}
+
+/* Selected request detail area */
+.requestDetail {
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    border-top: 2px solid #0854a0;
 }
 
 /* Verification result display */
@@ -129,11 +132,6 @@
 .inspectorContent .sapMTextArea textarea {
     font-family: "Roboto Mono", "Courier New", monospace;
     font-size: 0.75rem;
-}
-
-/* Signing request history */
-.historyList .sapMLIBContent {
-    padding: 0.5rem 0;
 }
 
 /* Transaction details grid */

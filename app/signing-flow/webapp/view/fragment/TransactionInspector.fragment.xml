@@ -13,7 +13,7 @@
                         <Button icon="sap-icon://copy" text="{i18n>copy}"
                             press=".onCopyInspectorCbor" type="Transparent" />
                     </HBox>
-                    <TextArea value="{flow>/build/unsignedTxCbor}"
+                    <TextArea value="{= ${flow>/selectedRequest/cip30TxCbor} || ${flow>/selectedRequest/unsignedTxCbor} || ${flow>/build/unsignedTxCbor}}"
                         editable="false" rows="8" width="100%"
                         growing="true" class="signingFlowMono" />
                 </VBox>
@@ -32,19 +32,20 @@
 
                     <Label text="Transaction Body Hash" />
                     <HBox alignItems="Center">
-                        <Text text="{path: 'flow>/build/txBodyHash', formatter: '.formatter.truncateHash'}"
+                        <Text text="{= ${flow>/selectedRequest/txBodyHash} || ${flow>/build/txBodyHash}}"
                             class="signingFlowMono" />
                         <Button icon="sap-icon://copy" press=".onCopyBuildTxHash"
                             type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
                     </HBox>
 
-                    <Label text="Builder Engine" />
-                    <Text text="{flow>/build/builderEngine}" />
+                    <Label text="Builder Engine" visible="{= !!${flow>/build/builderEngine}}" />
+                    <Text text="{flow>/build/builderEngine}" visible="{= !!${flow>/build/builderEngine}}" />
                 </f:SimpleForm>
             </IconTabFilter>
 
             <!-- Fee Breakdown Tab -->
-            <IconTabFilter text="{i18n>inspectorFee}" icon="sap-icon://money-bills" key="fee">
+            <IconTabFilter text="{i18n>inspectorFee}" icon="sap-icon://money-bills" key="fee"
+                visible="{= !!${flow>/build/fee}}">
                 <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
                     labelSpanXL="4" labelSpanL="4" labelSpanM="4" labelSpanS="12">
 

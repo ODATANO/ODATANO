@@ -74,6 +74,9 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
 3. Update the ODATANO service URL in `ZCL_ODATANO_TEST`
 4. Run with **Right-click → Run As → ABAP Application (Console)**
 
+### Example Package Structure after creation:
+![alt text](image-1.png)
+
 ## Running the Tests
 
 The test console app (`ZCL_ODATANO_TEST`) includes four tests:

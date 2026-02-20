@@ -9,10 +9,23 @@ sap.ui.define([
     "use strict";
 
     var INITIAL_FLOW_STATE = {
-        // Wizard step flags
-        buildCompleted: false,
-        signCompleted: false,
-        verifyCompleted: false,
+        // Tab navigation
+        selectedTab: "build",
+
+        // Request lists (categorized by status)
+        requests: {
+            pending: [],
+            verified: [],
+            submitted: []
+        },
+        counts: {
+            pending: 0,
+            verified: 0,
+            submitted: 0
+        },
+
+        // Selected request (detail view in any tab)
+        selectedRequest: null,
 
         // Build form
         txType: "simple",
@@ -35,38 +48,32 @@ sap.ui.define([
         buildOutputs: [],
         lovelaceAmount: null,
 
-        // Signing
+        // Signing action state
         signingBusy: false,
-        signingRequest: null,
         signBusy: false,
         signedTxCbor: null,
-        signerType: "browser-wallet",
-        signerInfo: "",
-        expirationText: "",
-        expirationState: "Success",
         manualCborInput: "",
         manualCborError: null,
         signMessage: null,
         signMessageType: "None",
         networkMismatch: false,
 
-        // Verification
+        // Verification action state
         verifyBusy: false,
-        verification: null,
 
-        // Submission
+        // Submission action state
         submitBusy: false,
-        submission: null,
         submitError: null,
         submissionPolling: false,
+
+        // Expiration
+        expirationText: "",
+        expirationState: "Success",
 
         // Inspector
         inspectorByteCount: 0,
         inspectorInputCount: 0,
-        inspectorOutputCount: 0,
-
-        // History
-        signingRequests: []
+        inspectorOutputCount: 0
     };
 
     return Controller.extend("odatanoview.signingflow.controller.SigningFlow", {
@@ -99,7 +106,7 @@ sap.ui.define([
                 this._walletService.connect(sWalletId).then(function (bConnected) {
                     if (bConnected) {
                         that._initFlowForWallet();
-                        that._loadSigningRequestHistory();
+                        that._loadAndCategorizeRequests();
                     }
                 });
             }
@@ -113,7 +120,7 @@ sap.ui.define([
         onRefreshWallet: function () {
             var that = this;
             this._walletService.refresh().then(function () {
-                that._loadSigningRequestHistory();
+                that._loadAndCategorizeRequests();
             });
         },
 
@@ -129,6 +136,226 @@ sap.ui.define([
         _initFlowForWallet: function () {
             this._flowModel.setProperty("/senderAddress", this._walletService.getPrimaryAddress() || "");
             this._flowModel.setProperty("/changeAddress", this._walletService.getChangeAddress() || "");
+        },
+
+        // ===== Tab Navigation =====
+
+        onTabSelect: function (oEvent) {
+            var sKey = oEvent.getParameter("key");
+            this._flowModel.setProperty("/selectedTab", sKey);
+
+            // Clear selected request when switching tabs
+            this._clearSelectedRequest();
+
+            // Refresh request lists when entering a status tab
+            if (sKey !== "build") {
+                this._loadAndCategorizeRequests();
+            }
+        },
+
+        _switchToTab: function (sKey) {
+            this._flowModel.setProperty("/selectedTab", sKey);
+            var oTabBar = this.byId("mainTabBar");
+            if (oTabBar) {
+                oTabBar.setSelectedKey(sKey);
+            }
+        },
+
+        // ===== Request Loading & Categorization =====
+
+        _loadAndCategorizeRequests: function () {
+            var sPrimaryAddress = this._walletService.getPrimaryAddress();
+            if (!sPrimaryAddress) return Promise.resolve();
+
+            var oSignModel = this.getView().getModel("sign");
+            if (!oSignModel) return Promise.resolve();
+
+            var that = this;
+
+            var oAction = oSignModel.bindContext("/GetSigningRequestsByAddress(...)");
+            oAction.setParameter("address", sPrimaryAddress);
+
+            return oAction.execute().then(function () {
+                var oResult = oAction.getBoundContext().getObject();
+                var aAssociations = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
+
+                return Promise.all(aAssociations.map(function (oAsr) {
+                    return new Promise(function (resolve) {
+                        var oSrBinding = oSignModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
+                        oSrBinding.requestObject().then(function () {
+                            var oSr = oSrBinding.getBoundContext().getObject();
+                            resolve(oSr ? {
+                                id: oSr.id,
+                                status: oSr.status || "unknown",
+                                createdAt: oSr.createdAt || "",
+                                expiresAt: oSr.expiresAt || "",
+                                txBodyHash: oSr.txBodyHash || "",
+                                unsignedTxCbor: oSr.unsignedTxCbor || "",
+                                cip30TxCbor: oSr.cip30TxCbor || "",
+                                network: oSr.network || "",
+                                cardanoCliCommand: oSr.cardanoCliCommand || "",
+                                signerType: oSr.signerType || "",
+                                signerInfo: oSr.signerInfo || ""
+                            } : null);
+                        }).catch(function () { resolve(null); });
+                    });
+                }));
+            }).then(function (aAllRequests) {
+                var aValid = aAllRequests.filter(function (r) { return r !== null; });
+
+                var aPending = [], aVerified = [], aSubmitted = [];
+                aValid.forEach(function (r) {
+                    switch (r.status) {
+                        case "pending": aPending.push(r); break;
+                        case "verified": aVerified.push(r); break;
+                        case "submitted":
+                        case "confirmed":
+                        case "expired":
+                        case "failed":
+                            aSubmitted.push(r); break;
+                    }
+                });
+
+                // Sort by createdAt descending (newest first)
+                var sortDesc = function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); };
+                aPending.sort(sortDesc);
+                aVerified.sort(sortDesc);
+                aSubmitted.sort(sortDesc);
+
+                that._flowModel.setProperty("/requests/pending", aPending);
+                that._flowModel.setProperty("/requests/verified", aVerified);
+                that._flowModel.setProperty("/requests/submitted", aSubmitted);
+                that._flowModel.setProperty("/counts/pending", aPending.length);
+                that._flowModel.setProperty("/counts/verified", aVerified.length);
+                that._flowModel.setProperty("/counts/submitted", aSubmitted.length);
+            }).catch(function () {
+                that._flowModel.setProperty("/requests/pending", []);
+                that._flowModel.setProperty("/requests/verified", []);
+                that._flowModel.setProperty("/requests/submitted", []);
+                that._flowModel.setProperty("/counts/pending", 0);
+                that._flowModel.setProperty("/counts/verified", 0);
+                that._flowModel.setProperty("/counts/submitted", 0);
+            });
+        },
+
+        onRefreshRequests: function () {
+            this._loadAndCategorizeRequests();
+            MessageToast.show("Refreshing...");
+        },
+
+        // ===== Request Selection =====
+
+        onPendingRequestSelect: function (oEvent) {
+            var oItem = oEvent.getParameter("listItem");
+            var oCtx = oItem ? oItem.getBindingContext("flow") : null;
+            if (!oCtx) return;
+
+            var oRequest = JSON.parse(JSON.stringify(oCtx.getObject()));
+            this._selectRequest(oRequest);
+            this._startExpirationCountdown(oRequest.expiresAt);
+        },
+
+        onVerifiedRequestSelect: function (oEvent) {
+            var oItem = oEvent.getParameter("listItem");
+            var oCtx = oItem ? oItem.getBindingContext("flow") : null;
+            if (!oCtx) return;
+
+            var oRequest = JSON.parse(JSON.stringify(oCtx.getObject()));
+            this._selectRequest(oRequest);
+        },
+
+        onSubmittedRequestSelect: function (oEvent) {
+            var oItem = oEvent.getParameter("listItem");
+            var oCtx = oItem ? oItem.getBindingContext("flow") : null;
+            if (!oCtx) return;
+
+            var oRequest = JSON.parse(JSON.stringify(oCtx.getObject()));
+            this._selectRequest(oRequest);
+
+            // Load submission details for submitted requests
+            if (oRequest.status === "submitted" || oRequest.status === "confirmed") {
+                this._loadSubmissionDetails(oRequest.id);
+            }
+        },
+
+        _selectRequest: function (oRequest) {
+            this._clearSelectedRequest();
+
+            var sWalletNetwork = this._walletService.getNetwork();
+            oRequest.networkMismatch = sWalletNetwork !== null && sWalletNetwork !== oRequest.network;
+
+            // Initialize verification object if not present
+            if (!oRequest.verification) {
+                oRequest.verification = {
+                    isValid: false,
+                    witnessCount: 0,
+                    signerKeyHashes: [],
+                    txBodyHash: ""
+                };
+            }
+
+            // Initialize submission object if not present
+            if (!oRequest.submission) {
+                oRequest.submission = {
+                    id: "",
+                    txHash: "",
+                    status: ""
+                };
+            }
+
+            this._flowModel.setProperty("/selectedRequest", oRequest);
+            this._flowModel.setProperty("/networkMismatch", oRequest.networkMismatch);
+
+            // Update inspector from selected request
+            var sCbor = oRequest.cip30TxCbor || oRequest.unsignedTxCbor || "";
+            this._flowModel.setProperty("/inspectorByteCount", Math.floor(sCbor.length / 2));
+        },
+
+        _clearSelectedRequest: function () {
+            this._clearExpirationTimer();
+            this._clearStatusPolling();
+            this._flowModel.setProperty("/selectedRequest", null);
+            this._flowModel.setProperty("/signBusy", false);
+            this._flowModel.setProperty("/signMessage", null);
+            this._flowModel.setProperty("/signMessageType", "None");
+            this._flowModel.setProperty("/manualCborInput", "");
+            this._flowModel.setProperty("/manualCborError", null);
+            this._flowModel.setProperty("/submitError", null);
+            this._flowModel.setProperty("/signedTxCbor", null);
+            this._flowModel.setProperty("/networkMismatch", false);
+            this._flowModel.setProperty("/verifyBusy", false);
+            this._flowModel.setProperty("/expirationText", "");
+            this._flowModel.setProperty("/expirationState", "Success");
+        },
+
+        _loadSubmissionDetails: function (sSigningRequestId) {
+            var oSignModel = this.getView().getModel("sign");
+            if (!oSignModel) return;
+
+            var that = this;
+
+            // Load the signing request with expanded submission
+            var oSrBinding = oSignModel.bindContext("/SigningRequests('" + sSigningRequestId + "')", undefined, {
+                $expand: "submission"
+            });
+            oSrBinding.requestObject().then(function () {
+                var oSr = oSrBinding.getBoundContext().getObject();
+                if (oSr && oSr.submission) {
+                    that._flowModel.setProperty("/selectedRequest/submission", {
+                        id: oSr.submission.id || "",
+                        txHash: oSr.submission.txHash || "",
+                        status: oSr.submission.status || "submitted",
+                        submittedAt: oSr.submission.submittedAt || ""
+                    });
+
+                    // Start polling if still submitted (not yet confirmed)
+                    if (oSr.submission.status === "submitted") {
+                        that._startStatusPolling(oSr.submission.id);
+                    }
+                }
+            }).catch(function () {
+                // Ignore - submission may not exist yet
+            });
         },
 
         // ===== Build Step =====
@@ -261,8 +488,6 @@ sap.ui.define([
 
                 // Load inputs/outputs
                 that._loadBuildDetails(oTxModel, oBuild.id);
-
-                that._flowModel.setProperty("/buildCompleted", true);
             }).catch(function (oError) {
                 that._flowModel.setProperty("/buildError", (oError && oError.message) || "Transaction build failed");
             }).finally(function () {
@@ -324,16 +549,16 @@ sap.ui.define([
             }
         },
 
-        // ===== Continue to Signing (Build → Sign transition) =====
+        // ===== Continue to Signing (Build -> Pending transition) =====
 
         onContinueToSigning: function () {
-            var oTxModel = this.getView().getModel("tx");
+            var oSignModel = this.getView().getModel("sign");
             var sBuildId = this._flowModel.getProperty("/build/id");
-            if (!oTxModel || !sBuildId) return;
+            if (!oSignModel || !sBuildId) return;
 
             this._flowModel.setProperty("/signingBusy", true);
 
-            var oSigningAction = oTxModel.bindContext("/CreateSigningRequest(...)");
+            var oSigningAction = oSignModel.bindContext("/CreateSigningRequest(...)");
             oSigningAction.setParameter("buildId", sBuildId);
 
             var that = this;
@@ -343,30 +568,26 @@ sap.ui.define([
                     throw new Error("Failed to create signing request");
                 }
 
-                that._flowModel.setProperty("/signingRequest", {
-                    id: oSR.id,
-                    status: oSR.status || "pending",
-                    txBodyHash: oSR.txBodyHash || "",
-                    unsignedTxCbor: oSR.cip30TxCbor || oSR.unsignedTxCbor || "",
-                    cardanoCliCommand: oSR.cardanoCliCommand || "",
-                    expiresAt: oSR.expiresAt || "",
-                    network: oSR.network || ""
+                var sNewId = oSR.id;
+
+                // Refresh request lists and switch to Pending tab
+                return that._loadAndCategorizeRequests().then(function () {
+                    that._switchToTab("pending");
+
+                    // Auto-select the new request
+                    var aPending = that._flowModel.getProperty("/requests/pending") || [];
+                    var oNewRequest = null;
+                    for (var i = 0; i < aPending.length; i++) {
+                        if (aPending[i].id === sNewId) {
+                            oNewRequest = JSON.parse(JSON.stringify(aPending[i]));
+                            break;
+                        }
+                    }
+                    if (oNewRequest) {
+                        that._selectRequest(oNewRequest);
+                        that._startExpirationCountdown(oNewRequest.expiresAt);
+                    }
                 });
-
-                // Check network mismatch
-                var sWalletNetwork = that._walletService.getNetwork();
-                var sTxNetwork = oSR.network;
-                that._flowModel.setProperty("/networkMismatch",
-                    sWalletNetwork !== null && sWalletNetwork !== sTxNetwork);
-
-                // Start expiration countdown
-                that._startExpirationCountdown(oSR.expiresAt);
-
-                // Advance wizard
-                var oWizard = that.byId("signingWizard");
-                if (oWizard) {
-                    oWizard.nextStep();
-                }
             }).catch(function (oError) {
                 MessageBox.error((oError && oError.message) || "Failed to create signing request");
             }).finally(function () {
@@ -374,26 +595,19 @@ sap.ui.define([
             });
         },
 
-        // ===== Sign Step =====
+        // ===== Sign Actions (operate on selectedRequest) =====
 
-        onStepSignActivate: function () {
-            // Reset sign state if returning to this step
-            if (!this._flowModel.getProperty("/signCompleted")) {
-                this._flowModel.setProperty("/signMessage", null);
-                this._flowModel.setProperty("/signMessageType", "None");
-            }
-        },
+        onSignSelectedWithWallet: function () {
+            var oSelectedRequest = this._flowModel.getProperty("/selectedRequest");
+            if (!oSelectedRequest) return;
 
-        onSignWithWallet: function () {
             this._flowModel.setProperty("/signBusy", true);
             this._flowModel.setProperty("/signMessage", "Requesting signature from wallet...");
             this._flowModel.setProperty("/signMessageType", "Information");
-            this._flowModel.setProperty("/signerType", "browser-wallet");
-            this._flowModel.setProperty("/signerInfo", this._walletService.getModel().getProperty("/walletName") || "");
 
             var oSigningRequest = {
-                unsignedTxCbor: this._flowModel.getProperty("/signingRequest/unsignedTxCbor"),
-                txBodyHash: this._flowModel.getProperty("/signingRequest/txBodyHash")
+                unsignedTxCbor: oSelectedRequest.cip30TxCbor || oSelectedRequest.unsignedTxCbor,
+                txBodyHash: oSelectedRequest.txBodyHash
             };
 
             var that = this;
@@ -403,9 +617,15 @@ sap.ui.define([
                 }
 
                 that._flowModel.setProperty("/signedTxCbor", oResult.signedTxCbor);
-                that._flowModel.setProperty("/signCompleted", true);
-                that._flowModel.setProperty("/signMessage", "Transaction signed successfully!");
+                that._flowModel.setProperty("/signMessage", "Signed! Verifying...");
                 that._flowModel.setProperty("/signMessageType", "Success");
+
+                // Auto-verify after wallet signing
+                that._performVerificationForSelected(
+                    oResult.signedTxCbor,
+                    "browser-wallet",
+                    that._walletService.getModel().getProperty("/walletName") || ""
+                );
             }).catch(function (oError) {
                 that._flowModel.setProperty("/signMessage", (oError && oError.message) || "Signing failed");
                 that._flowModel.setProperty("/signMessageType", "Error");
@@ -414,25 +634,7 @@ sap.ui.define([
             });
         },
 
-        onCopySigningRequestId: function () {
-            var sId = this._flowModel.getProperty("/signingRequest/id");
-            if (sId) {
-                navigator.clipboard.writeText(sId).then(function () {
-                    MessageToast.show("ID copied");
-                });
-            }
-        },
-
-        onCopyCliCommand: function () {
-            var sCmd = this._flowModel.getProperty("/signingRequest/cardanoCliCommand");
-            if (sCmd) {
-                navigator.clipboard.writeText(sCmd).then(function () {
-                    MessageToast.show("CLI command copied");
-                });
-            }
-        },
-
-        onSubmitManualCbor: function () {
+        onSubmitManualCborForSelected: function () {
             var sCbor = (this._flowModel.getProperty("/manualCborInput") || "").trim();
 
             // Basic hex validation
@@ -443,36 +645,41 @@ sap.ui.define([
 
             this._flowModel.setProperty("/manualCborError", null);
             this._flowModel.setProperty("/signedTxCbor", sCbor);
-            this._flowModel.setProperty("/signerType", "cardano-cli");
-            this._flowModel.setProperty("/signerInfo", "manual-paste");
-            this._flowModel.setProperty("/signCompleted", true);
-            MessageToast.show("Signed CBOR accepted");
+            MessageToast.show("Signed CBOR accepted, verifying...");
+
+            // Auto-verify after manual CBOR input
+            this._performVerificationForSelected(sCbor, "cardano-cli", "manual-paste");
         },
 
-        // ===== Verify Step =====
-
-        onStepVerifyActivate: function () {
-            // Auto-verify when step is activated
-            if (this._flowModel.getProperty("/verification")) return; // Already verified
-            if (!this._flowModel.getProperty("/signedTxCbor")) return; // No signed data
-
-            this._performVerification();
+        onCopySelectedRequestId: function () {
+            var sId = this._flowModel.getProperty("/selectedRequest/id");
+            if (sId) {
+                navigator.clipboard.writeText(sId).then(function () {
+                    MessageToast.show("ID copied");
+                });
+            }
         },
 
-        _performVerification: function () {
-            var oTxModel = this.getView().getModel("tx");
-            var sSigningRequestId = this._flowModel.getProperty("/signingRequest/id");
-            var sSignedCbor = this._flowModel.getProperty("/signedTxCbor");
-            var sSignerType = this._flowModel.getProperty("/signerType");
-            var sSignerInfo = this._flowModel.getProperty("/signerInfo");
+        onCopyCliCommand: function () {
+            var sCmd = this._flowModel.getProperty("/selectedRequest/cardanoCliCommand");
+            if (sCmd) {
+                navigator.clipboard.writeText(sCmd).then(function () {
+                    MessageToast.show("CLI command copied");
+                });
+            }
+        },
 
-            if (!oTxModel || !sSigningRequestId || !sSignedCbor) return;
+        // ===== Verify (auto-triggered after sign) =====
+
+        _performVerificationForSelected: function (sSignedCbor, sSignerType, sSignerInfo) {
+            var oSignModel = this.getView().getModel("sign");
+            var oSelectedRequest = this._flowModel.getProperty("/selectedRequest");
+            if (!oSignModel || !oSelectedRequest) return;
 
             this._flowModel.setProperty("/verifyBusy", true);
 
-            // Bound action on SigningRequests entity
-            var sPath = "/SigningRequests('" + sSigningRequestId + "')/CardanoTransactionService.VerifySignature(...)";
-            var oVerifyAction = oTxModel.bindContext(sPath);
+            var sPath = "/SigningRequests('" + oSelectedRequest.id + "')/CardanoSignService.VerifySignature(...)";
+            var oVerifyAction = oSignModel.bindContext(sPath);
             oVerifyAction.setParameter("signedTxCbor", sSignedCbor);
             oVerifyAction.setParameter("signerType", sSignerType || "browser-wallet");
             oVerifyAction.setParameter("signerInfo", sSignerInfo || "");
@@ -486,38 +693,50 @@ sap.ui.define([
                     try { aKeyHashes = JSON.parse(oResult.signerKeyHashes); } catch { aKeyHashes = []; }
                 }
 
-                var aWarnings = [];
-                if (oResult.warnings) {
-                    try { aWarnings = JSON.parse(oResult.warnings); } catch { aWarnings = []; }
+                if (oResult && oResult.isValid) {
+                    MessageToast.show("Signature verified successfully");
+
+                    // Refresh lists -- request moves from Pending to Verified tab
+                    that._loadAndCategorizeRequests().then(function () {
+                        that._switchToTab("verified");
+
+                        // Auto-select the now-verified request
+                        var aVerified = that._flowModel.getProperty("/requests/verified") || [];
+                        var oVerifiedReq = null;
+                        for (var i = 0; i < aVerified.length; i++) {
+                            if (aVerified[i].id === oSelectedRequest.id) {
+                                oVerifiedReq = JSON.parse(JSON.stringify(aVerified[i]));
+                                break;
+                            }
+                        }
+                        if (oVerifiedReq) {
+                            oVerifiedReq.verification = {
+                                isValid: true,
+                                witnessCount: oResult.witnessCount || 0,
+                                signerKeyHashes: aKeyHashes,
+                                txBodyHash: oResult.txBodyHash || ""
+                            };
+                            that._selectRequest(oVerifiedReq);
+                            // Store signed CBOR for subsequent submit
+                            that._flowModel.setProperty("/signedTxCbor", sSignedCbor);
+                        }
+                    });
+                } else {
+                    that._flowModel.setProperty("/signMessage",
+                        "Verification failed: " + ((oResult && oResult.errorMessage) || "Unknown error"));
+                    that._flowModel.setProperty("/signMessageType", "Error");
                 }
-
-                that._flowModel.setProperty("/verification", {
-                    isValid: oResult.isValid || false,
-                    witnessCount: oResult.witnessCount || 0,
-                    signerKeyHashes: aKeyHashes,
-                    txBodyHash: oResult.txBodyHash || "",
-                    errorMessage: oResult.errorMessage || "",
-                    warnings: aWarnings
-                });
-
-                that._flowModel.setProperty("/verifyCompleted", oResult.isValid === true);
             }).catch(function (oError) {
-                that._flowModel.setProperty("/verification", {
-                    isValid: false,
-                    witnessCount: 0,
-                    signerKeyHashes: [],
-                    txBodyHash: "",
-                    errorMessage: (oError && oError.message) || "Verification failed",
-                    warnings: []
-                });
-                that._flowModel.setProperty("/verifyCompleted", false);
+                that._flowModel.setProperty("/signMessage",
+                    "Verification error: " + ((oError && oError.message) || "Unknown"));
+                that._flowModel.setProperty("/signMessageType", "Error");
             }).finally(function () {
                 that._flowModel.setProperty("/verifyBusy", false);
             });
         },
 
-        onCopyVerifyTxHash: function () {
-            var sHash = this._flowModel.getProperty("/verification/txBodyHash");
+        onCopySelectedTxHash: function () {
+            var sHash = this._flowModel.getProperty("/selectedRequest/txBodyHash");
             if (sHash) {
                 navigator.clipboard.writeText(sHash).then(function () {
                     MessageToast.show("Hash copied");
@@ -535,43 +754,61 @@ sap.ui.define([
             }
         },
 
-        // ===== Submit Step =====
+        // ===== Submit (from Verified tab) =====
 
-        onSubmitTransaction: function () {
-            var oTxModel = this.getView().getModel("tx");
-            var sSigningRequestId = this._flowModel.getProperty("/signingRequest/id");
+        onSubmitSelectedTransaction: function () {
+            var oSignModel = this.getView().getModel("sign");
+            var oSelectedRequest = this._flowModel.getProperty("/selectedRequest");
             var sSignedCbor = this._flowModel.getProperty("/signedTxCbor");
-            var sSignerType = this._flowModel.getProperty("/signerType");
-            var sSignerInfo = this._flowModel.getProperty("/signerInfo");
 
-            if (!oTxModel || !sSigningRequestId || !sSignedCbor) return;
+            if (!oSignModel || !oSelectedRequest) return;
+
+            // If no signed CBOR in session, we need it from verification
+            if (!sSignedCbor) {
+                this._flowModel.setProperty("/submitError", "No signed transaction data available. Please sign the transaction first.");
+                return;
+            }
 
             this._flowModel.setProperty("/submitBusy", true);
             this._flowModel.setProperty("/submitError", null);
-            this._flowModel.setProperty("/submission", null);
 
-            // Bound action on SigningRequests entity
-            var sPath = "/SigningRequests('" + sSigningRequestId + "')/CardanoTransactionService.SubmitVerifiedTransaction(...)";
-            var oSubmitAction = oTxModel.bindContext(sPath);
+            var sPath = "/SigningRequests('" + oSelectedRequest.id + "')/CardanoSignService.SubmitVerifiedTransaction(...)";
+            var oSubmitAction = oSignModel.bindContext(sPath);
             oSubmitAction.setParameter("signedTxCbor", sSignedCbor);
-            oSubmitAction.setParameter("signerType", sSignerType || "browser-wallet");
-            oSubmitAction.setParameter("signerInfo", sSignerInfo || "");
+            oSubmitAction.setParameter("signerType", oSelectedRequest.signerType || "browser-wallet");
+            oSubmitAction.setParameter("signerInfo", oSelectedRequest.signerInfo || "");
 
             var that = this;
             oSubmitAction.execute().then(function () {
                 var oResult = oSubmitAction.getBoundContext().getObject();
+                MessageToast.show("Transaction submitted!");
 
-                that._flowModel.setProperty("/submission", {
-                    id: oResult.id || "",
-                    txHash: oResult.txHash || "",
-                    status: oResult.status || "submitted",
-                    submittedAt: oResult.submittedAt || ""
+                // Refresh lists -- request moves from Verified to Submitted tab
+                that._loadAndCategorizeRequests().then(function () {
+                    that._switchToTab("submitted");
+
+                    // Auto-select the now-submitted request
+                    var aSubmitted = that._flowModel.getProperty("/requests/submitted") || [];
+                    var oSubReq = null;
+                    for (var i = 0; i < aSubmitted.length; i++) {
+                        if (aSubmitted[i].id === oSelectedRequest.id) {
+                            oSubReq = JSON.parse(JSON.stringify(aSubmitted[i]));
+                            break;
+                        }
+                    }
+                    if (oSubReq) {
+                        oSubReq.submission = {
+                            id: oResult.id || "",
+                            txHash: oResult.txHash || "",
+                            status: oResult.status || "submitted",
+                            submittedAt: oResult.submittedAt || ""
+                        };
+                        that._selectRequest(oSubReq);
+                        that._startStatusPolling(oResult.id);
+                    }
                 });
 
-                MessageToast.show("Transaction submitted!");
-                that._startStatusPolling();
                 that._walletService.refresh();
-                that._loadSigningRequestHistory();
             }).catch(function (oError) {
                 that._flowModel.setProperty("/submitError", (oError && oError.message) || "Submission failed");
             }).finally(function () {
@@ -579,8 +816,8 @@ sap.ui.define([
             });
         },
 
-        onCopyTxHash: function () {
-            var sHash = this._flowModel.getProperty("/submission/txHash");
+        onCopySelectedSubmissionTxHash: function () {
+            var sHash = this._flowModel.getProperty("/selectedRequest/submission/txHash");
             if (sHash) {
                 navigator.clipboard.writeText(sHash).then(function () {
                     MessageToast.show("Transaction hash copied");
@@ -588,9 +825,9 @@ sap.ui.define([
             }
         },
 
-        onViewOnCardanoscan: function () {
-            var sTxHash = this._flowModel.getProperty("/submission/txHash");
-            var sNetwork = this._flowModel.getProperty("/build/network") || "preview";
+        onViewSelectedOnCardanoscan: function () {
+            var sTxHash = this._flowModel.getProperty("/selectedRequest/submission/txHash");
+            var sNetwork = this._flowModel.getProperty("/selectedRequest/network") || "preview";
             if (!sTxHash) return;
 
             var sBase = sNetwork === "mainnet"
@@ -601,76 +838,34 @@ sap.ui.define([
         },
 
         onNewTransaction: function () {
-            this._resetFlow();
-            var oWizard = this.byId("signingWizard");
-            if (oWizard) {
-                oWizard.discardProgress(this.byId("stepBuild"));
-            }
+            this._clearSelectedRequest();
+            // Reset build form state
+            this._flowModel.setProperty("/build", null);
+            this._flowModel.setProperty("/buildError", null);
+            this._flowModel.setProperty("/buildBusy", false);
+            this._flowModel.setProperty("/buildInputs", []);
+            this._flowModel.setProperty("/buildOutputs", []);
+            this._flowModel.setProperty("/recipientAddress", "");
+            this._flowModel.setProperty("/adaAmount", "");
+            this._flowModel.setProperty("/canBuild", false);
+            this._flowModel.setProperty("/recipientAddressState", "None");
+            this._flowModel.setProperty("/recipientAddressStateText", "");
+            this._flowModel.setProperty("/amountState", "None");
+            this._flowModel.setProperty("/amountStateText", "");
+            this._flowModel.setProperty("/lovelaceAmount", null);
+            this._switchToTab("build");
             this._initFlowForWallet();
         },
 
         // ===== Inspector =====
 
         onCopyInspectorCbor: function () {
-            var sCbor = this._flowModel.getProperty("/build/unsignedTxCbor");
+            var sCbor = this._flowModel.getProperty("/selectedRequest/unsignedTxCbor") ||
+                        this._flowModel.getProperty("/selectedRequest/cip30TxCbor") ||
+                        this._flowModel.getProperty("/build/unsignedTxCbor");
             if (sCbor) {
                 navigator.clipboard.writeText(sCbor).then(function () {
                     MessageToast.show("CBOR copied");
-                });
-            }
-        },
-
-        // ===== History =====
-
-        _loadSigningRequestHistory: function () {
-            var sPrimaryAddress = this._walletService.getPrimaryAddress();
-            if (!sPrimaryAddress) return;
-
-            var oTxModel = this.getView().getModel("tx");
-            if (!oTxModel) return;
-
-            var that = this;
-
-            var oAction = oTxModel.bindContext("/GetSigningRequestsByAddress(...)");
-            oAction.setParameter("address", sPrimaryAddress);
-            oAction.execute().then(function () {
-                var oResult = oAction.getBoundContext().getObject();
-                var aAssociations = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
-
-                Promise.all(aAssociations.map(function (oAsr) {
-                    return new Promise(function (resolve) {
-                        var oSrBinding = oTxModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
-                        oSrBinding.requestObject().then(function () {
-                            var oSr = oSrBinding.getBoundContext().getObject();
-                            resolve({
-                                id: (oSr && oSr.id) || oAsr.signingRequest_id,
-                                status: (oSr && oSr.status) || "unknown",
-                                createdAt: (oSr && oSr.createdAt) || "",
-                                txBodyHash: (oSr && oSr.txBodyHash) || ""
-                            });
-                        }).catch(function () {
-                            resolve({
-                                id: oAsr.signingRequest_id,
-                                status: "unknown",
-                                createdAt: "",
-                                txBodyHash: ""
-                            });
-                        });
-                    });
-                })).then(function (aRequests) {
-                    that._flowModel.setProperty("/signingRequests", aRequests);
-                });
-            }).catch(function () {
-                that._flowModel.setProperty("/signingRequests", []);
-            });
-        },
-
-        onHistoryItemPress: function (oEvent) {
-            var oCtx = oEvent.getSource().getBindingContext("flow");
-            var sId = oCtx ? oCtx.getProperty("id") : null;
-            if (sId) {
-                navigator.clipboard.writeText(sId).then(function () {
-                    MessageToast.show("Request ID copied");
                 });
             }
         },
@@ -724,8 +919,10 @@ sap.ui.define([
             }
         },
 
-        _startStatusPolling: function () {
+        _startStatusPolling: function (sSubmissionId) {
             this._clearStatusPolling();
+
+            if (!sSubmissionId) return;
 
             var that = this;
             var iPollCount = 0;
@@ -740,12 +937,6 @@ sap.ui.define([
                     return;
                 }
 
-                var sSubmissionId = that._flowModel.getProperty("/submission/id");
-                if (!sSubmissionId) {
-                    that._clearStatusPolling();
-                    return;
-                }
-
                 var oTxModel = that.getView().getModel("tx");
                 if (!oTxModel) return;
 
@@ -755,11 +946,13 @@ sap.ui.define([
                 oCheckAction.execute().then(function () {
                     var oResult = oCheckAction.getBoundContext().getObject();
                     if (oResult && oResult.status) {
-                        that._flowModel.setProperty("/submission/status", oResult.status);
+                        that._flowModel.setProperty("/selectedRequest/submission/status", oResult.status);
+                        that._flowModel.setProperty("/selectedRequest/status", oResult.status === "confirmed" ? "confirmed" : "submitted");
 
                         if (oResult.status === "confirmed") {
                             that._clearStatusPolling();
                             MessageToast.show("Transaction confirmed on-chain!");
+                            that._loadAndCategorizeRequests();
                         }
                     }
                 }).catch(function () {
