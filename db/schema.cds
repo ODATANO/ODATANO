@@ -1270,6 +1270,10 @@ entity SigningRequests {
         @description: 'Additional information about the signer (wallet name, etc.)'
         signerInfo       : String(100);
 
+        @title      : 'HSM Key ID'
+        @description: 'PKCS#11 key identifier used for HSM signing (audit trail)'
+        hsmKeyId         : String(40);
+
         @title      : 'Signature Verifications'
         @description: 'Composition of signature verification attempts'
         verifications    : Composition of many SignatureVerifications

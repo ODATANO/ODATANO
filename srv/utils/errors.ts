@@ -414,7 +414,23 @@ export function normalizeBackendError(
   );
 }
 
-/** 
+/**
+ * HsmError - Error related to HSM operations (signing, session, key access)
+ * Indicates that the Hardware Security Module is unavailable or signing failed
+ */
+export class HsmError extends BackendError {
+  constructor(
+    message: string,
+    statusCode: number = 503,
+    code: ErrorCode = ERROR_CODES.HSM_UNAVAILABLE,
+    originalError?: any
+  ) {
+    super(message, statusCode, code, 'hsm', originalError);
+    this.name = 'HsmError';
+  }
+}
+
+/**
  * ConfigError - Error in configuration settings
  * Captures configuration-related issues
  */

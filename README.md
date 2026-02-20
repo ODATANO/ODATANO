@@ -46,6 +46,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Transaction Building**: Cardano Serialization Library (CSL) & Buildooor for minting, ADA or Token transfers, and metadata transactions
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
+- **HSM Signing**: Optional server-side transaction signing via PKCS#11 Hardware Security Modules (YubiHSM, AWS CloudHSM, Thales Luna)
 - **Comprehensive Testing**: 978 tests across 25 test suites, 96%+ statement coverage
 
 ## Architecture Overview
@@ -81,8 +82,8 @@ Configure in your `package.json`:
 
 ```bash
 cds watch
-# → CardanoODataService + CardanoTransactionService auto-registered
-# → /odata/v4/cardano-odata/ and /odata/v4/cardano-transaction/ ready
+# → CardanoODataService + CardanoTransactionService + CardanoSignService auto-registered
+# → /odata/v4/cardano-odata/, /odata/v4/cardano-transaction/, /odata/v4/cardano-sign/ ready
 ```
 
 ### Docker (Standalone)
@@ -134,15 +135,28 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransactio
 **External Signing Operations (M3):**
 
 ```bash
-# Build transaction with external signing (returns buildId and unsigned CBOR)
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/CreateSigningRequest \
+# Create signing request (returns signing instructions and CLI commands)
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest \
   -H "Content-Type: application/json" \
   -d '{"buildId":"uuid-from-build-response"}'
 
-# Submit externally signed transaction
-curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitVerifiedTransaction \
+# Verify and submit externally signed transaction (bound action on SigningRequests)
+curl -X POST "http://localhost:4004/odata/v4/cardano-sign/SigningRequests('signing-request-id')/CardanoSignService.SubmitVerifiedTransaction" \
   -H "Content-Type: application/json" \
-  -d '{"buildId":"uuid-from-build-response","signedTxCbor":"84a400..."}'  
+  -d '{"signedTxCbor":"84a400..."}'
+```
+
+**HSM Signing Operations (M3):**
+
+```bash
+# Check HSM connection status
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/GetHsmStatus \
+  -H "Content-Type: application/json" -d '{}'
+
+# Sign and submit with HSM in one step (automated, no external signer needed)
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SignAndSubmitWithHsm \
+  -H "Content-Type: application/json" \
+  -d '{"buildId":"uuid-from-build-response"}'
 ```
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
@@ -165,7 +179,8 @@ See [Test Documentation](test/README.md) for details.
 | [Quick Start](docs/QUICK_START.md) | Get running in 5 minutes |
 | [User Guide](docs/guides/USER_GUIDE.md) | API usage, entities, and examples |
 | [Developer Guide](docs/guides/DEVELOPER_GUIDE.md) | Architecture and development |
-| [Transaction Workflow](docs/guides/TRANSACTION_WORKFLOW.md) | Build → Sign → Submit flow (M2) |
+| [Transaction Workflow](docs/guides/TRANSACTION_WORKFLOW.md) | Build → Sign → Submit flow (M2/M3) |
+| [Security Guide](docs/guides/SECURITY_GUIDE.md) | Authentication, signing security, HSM |
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
@@ -183,17 +198,17 @@ See [Test Documentation](test/README.md) for details.
 
 **15 Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetPoolById, GetAccountByStakeAddress, GetDrepById, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters
 
-### Transaction Service (`/odata/v4/cardano-transaction`) - M2
+### Transaction Service (`/odata/v4/cardano-transaction`) - M2/M3
 
-**7 Entities:** TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors
+**8 Entities:** TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, AddressTransactionBuilds
 
-**8 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus
+**11 Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus, BuildPlutusSpendTransaction, SetCollateral, GetTransactionBuildsByAddress
 
-### External Signing & Plutus Smart Contracts (`/odata/v4/cardano-transaction`) - M3
+### Signing Service (`/odata/v4/cardano-sign`) - M3
 
-**4 Entities:** SigningRequests, SignatureVerifications, AddressTransactionBuilds, AddressSigningRequests
+**5 Entities:** SigningRequests, SignatureVerifications, AddressSigningRequests, TransactionBuilds, TransactionSubmissions
 
-**8 Actions:** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress, BuildPlutusSpendTransaction, SetCollateral
+**8 Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
 
 See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference with parameters.
 

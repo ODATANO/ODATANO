@@ -105,5 +105,42 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                        @description: 'The Bech32 encoded address to retrieve signing requests for'
                                        address: db.Bech32)     returns array of AddressSigningRequests;
 
+    // ---------------------------------------------------------------------------
+    // HSM (Hardware Security Module) Signing Actions
+    // ---------------------------------------------------------------------------
+
+    @title      : 'Sign with HSM'
+    @description: 'Sign a transaction using the configured Hardware Security Module. Creates a signing request, signs with the HSM, and verifies the signature. Returns the signing request with status verified.'
+    action SignWithHsm(
+                       @title: 'Build ID'
+                       @description: 'The unique identifier of the transaction build to sign'
+                       buildId: UUID)                     returns SigningRequests;
+
+    @title      : 'Sign and Submit with HSM'
+    @description: 'Sign a transaction using the HSM and submit it to the blockchain in one atomic operation. Returns the transaction submission details.'
+    action SignAndSubmitWithHsm(
+                                @title: 'Build ID'
+                                @description: 'The unique identifier of the transaction build to sign and submit'
+                                buildId: UUID)            returns TransactionSubmissions;
+
+    @title      : 'Get HSM Status'
+    @description: 'Check the current status of the HSM connection and key availability.'
+    action GetHsmStatus()                                 returns {
+        @title: 'Connected'
+        @description: 'Whether the HSM session is active'
+        connected: Boolean;
+        @title: 'Key ID'
+        @description: 'The PKCS#11 key identifier in use'
+        keyId: String;
+        @title: 'Key Label'
+        @description: 'The PKCS#11 key label in use'
+        keyLabel: String;
+        @title: 'Public Key Hash'
+        @description: 'Blake2b-224 hash of the HSM Ed25519 public key (= Cardano verification key hash)'
+        publicKeyHash: String;
+        @title: 'Cardano Address'
+        @description: 'Enterprise Cardano address derived from the HSM public key'
+        cardanoAddress: String;
+    };
 
 }

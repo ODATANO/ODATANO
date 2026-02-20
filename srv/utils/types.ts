@@ -411,6 +411,8 @@ export enum ExternalSignerType {
   HARDWARE_WALLET = 'hardware-wallet',
   /** Custom/Unknown signer */
   CUSTOM = 'custom',
+  /** Hardware Security Module (server-side PKCS#11) */
+  HSM = 'hsm',
 }
 
 /**
@@ -547,4 +549,34 @@ export interface VerificationOptions {
   requireSignature?: boolean;
   /** List of required signer key hashes (public key hashes) */
   requiredSigners?: string[];
+}
+
+/**
+ * HSM Configuration for PKCS#11 integration
+ */
+export interface HsmConfig {
+  /** Whether HSM signing is enabled */
+  enabled: boolean;
+  /** Path to the PKCS#11 shared library (.so/.dll) */
+  pkcs11Module: string;
+  /** PKCS#11 slot index */
+  slot: number;
+  /** PKCS#11 user PIN */
+  pin: string;
+  /** Key identifier (hex string, e.g., "0x0001") */
+  keyId?: string;
+  /** Key label for CKA_LABEL lookup */
+  keyLabel?: string;
+}
+
+/**
+ * HSM signing result
+ */
+export interface HsmSignResult {
+  /** Ed25519 signature (64 bytes, hex) */
+  signatureHex: string;
+  /** Ed25519 public key (32 bytes, hex) */
+  publicKeyHex: string;
+  /** Public key hash (blake2b-224, 28 bytes, hex) */
+  publicKeyHash: string;
 }

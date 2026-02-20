@@ -44,11 +44,29 @@ export const ERROR_CODES = {
    */
   PROVIDER_UNAVAILABLE: 'ODATANO_PROVIDER_UNAVAILABLE',
 
-  /** 
+  /**
    * 500 – Internal fallback
    * Indicates an unexpected internal error
    */
   INTERNAL_ERROR: 'ODATANO_INTERNAL_ERROR',
+
+  /**
+   * 503 – HSM unavailable
+   * Indicates the HSM device or session is not available
+   */
+  HSM_UNAVAILABLE: 'ODATANO_HSM_UNAVAILABLE',
+
+  /**
+   * 500 – HSM signing failed
+   * Indicates the HSM signing operation failed
+   */
+  HSM_SIGNING_FAILED: 'ODATANO_HSM_SIGNING_FAILED',
+
+  /**
+   * 400 – HSM not configured
+   * Indicates HSM signing was requested but HSM is not configured
+   */
+  HSM_NOT_CONFIGURED: 'ODATANO_HSM_NOT_CONFIGURED',
 } as const;
 
 /** 

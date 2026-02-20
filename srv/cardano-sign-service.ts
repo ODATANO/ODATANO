@@ -4,6 +4,7 @@ import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/er
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
+import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
 const { SELECT, UPDATE } = cds.ql;
 
@@ -299,5 +300,191 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       return db.run(SELECT.from(AddressSigningRequests).where({ address_address: address }));
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // HSM (Hardware Security Module) Signing Actions
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Sign a transaction using the configured HSM.
+   * Creates signing request, signs with HSM, verifies the signature.
+   * @param req - CDS request object (with buildId)
+   * @returns {SigningRequest} Signing request with status 'verified'
+   */
+  srv.on('SignWithHsm', async (req: Request) => {
+    logger.debug('SignWithHsm Action handler called');
+    const { buildId } = req.data;
+
+    // Validate input
+    const errors = validateTransactionInputs({ buildId }, ['buildId']);
+    throwIfValidationErrors(req, 'SignWithHsm', errors);
+
+    // Check HSM is available (before handleRequest — same pattern as validation)
+    const hsmSigner = getHsmSigner();
+    if (!hsmSigner || !hsmSigner.isConnected()) {
+      rejectInvalid(req, 'SignWithHsm', 'HSM is not configured or not connected', 'hsm');
+    }
+
+    return handleRequest(req, async (db) => {
+      // 1. Fetch the build
+      const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+      if (!build) rejectInvalid(req, 'SignWithHsm', 'Build not found', 'buildId');
+
+      // 2. Create signing request internally (reuse external signer module)
+      const signerModule = getExternalSignerModule();
+      const signingPayload = signerModule.createSigningRequest(
+        build.id, build.unsignedTxCbor, build.txBodyHash, build.network, 'HSM signing'
+      );
+
+      const signingRequestRecord = await getCardanoIndexer().persistSigningRequest(db, {
+        buildId,
+        signingPayload,
+      });
+
+      // 3. Sign with HSM
+      const signedTxCbor = hsmSigner!.signTransaction(build.unsignedTxCbor, build.txBodyHash);
+
+      // 4. Verify the HSM signature (same verification path as external signing)
+      const verificationResult = signerModule.verifySignedTransaction(signedTxCbor, build.txBodyHash);
+
+      const hsmStatus = hsmSigner!.getStatus();
+      const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
+
+      // 5. Persist verification
+      await getCardanoIndexer().persistSignatureVerification(db, {
+        signingRequestId: signingRequestRecord.id,
+        signedTxCbor,
+        verificationResult,
+        signerType: 'hsm',
+        signerInfo: `HSM key: ${hsmKeyIdentifier}`,
+      });
+
+      // 6. Update HSM audit field
+      await db.run(
+        UPDATE.entity(SigningRequests)
+          .set({ hsmKeyId: hsmKeyIdentifier })
+          .where({ id: signingRequestRecord.id })
+      );
+
+      logger.info({
+        buildId,
+        signingRequestId: signingRequestRecord.id,
+        isValid: verificationResult.isValid,
+        hsmKey: hsmKeyIdentifier,
+      }, 'Transaction signed with HSM');
+
+      // Return updated signing request
+      return db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestRecord.id }));
+    });
+  });
+
+  /**
+   * Sign a transaction with HSM and submit to blockchain atomically.
+   * Creates signing request, signs, verifies, and submits in one operation.
+   * @param req - CDS request object (with buildId)
+   * @returns {TransactionSubmission} Transaction submission details
+   */
+  srv.on('SignAndSubmitWithHsm', async (req: Request) => {
+    logger.debug('SignAndSubmitWithHsm Action handler called');
+    const { buildId } = req.data;
+
+    // Validate input
+    const errors = validateTransactionInputs({ buildId }, ['buildId']);
+    throwIfValidationErrors(req, 'SignAndSubmitWithHsm', errors);
+
+    // Check HSM is available
+    const hsmSigner = getHsmSigner();
+    if (!hsmSigner || !hsmSigner.isConnected()) {
+      rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM is not configured or not connected', 'hsm');
+    }
+
+    return handleRequest(req, async (db) => {
+      // 1. Fetch the build
+      const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+      if (!build) rejectInvalid(req, 'SignAndSubmitWithHsm', 'Build not found', 'buildId');
+
+      // 2. Create signing request
+      const signerModule = getExternalSignerModule();
+      const signingPayload = signerModule.createSigningRequest(
+        build.id, build.unsignedTxCbor, build.txBodyHash, build.network, 'HSM signing + submit'
+      );
+
+      const signingRequestRecord = await getCardanoIndexer().persistSigningRequest(db, {
+        buildId,
+        signingPayload,
+      });
+
+      // 3. Sign with HSM
+      const signedTxCbor = hsmSigner!.signTransaction(build.unsignedTxCbor, build.txBodyHash);
+
+      // 4. Verify HSM signature (non-throwing — HSM is server-side trusted)
+      const verificationResult = signerModule.verifySignedTransaction(signedTxCbor, build.txBodyHash);
+
+      const hsmStatus = hsmSigner!.getStatus();
+      const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
+
+      logger.info({
+        signingRequestId: signingRequestRecord.id,
+        witnessCount: verificationResult.witnessCount,
+        hsmKey: hsmKeyIdentifier,
+      }, 'HSM signature verified, proceeding with submission');
+
+      // 5. Submit to blockchain
+      const txHash = build.txBodyHash;
+      await getCardanoClient().submitTransaction(signedTxCbor);
+      logger.info({ txHash }, 'HSM-signed transaction submitted to blockchain');
+
+      // 6. Persist everything atomically via indexer
+      const submissionRecord = await getCardanoIndexer().indexVerifiedTransactionSubmission(db, {
+        signingRequestId: signingRequestRecord.id,
+        buildId,
+        fullSignedTxCbor: signedTxCbor,
+        txHash,
+        verificationResult,
+        signerType: 'hsm',
+        signerInfo: `HSM key: ${hsmKeyIdentifier}`,
+      });
+
+      // 7. HSM audit field
+      await db.run(
+        UPDATE.entity(SigningRequests)
+          .set({ hsmKeyId: hsmKeyIdentifier })
+          .where({ id: signingRequestRecord.id })
+      );
+
+      logger.info({
+        signingRequestId: signingRequestRecord.id,
+        submissionId: submissionRecord.id,
+        txHash,
+      }, 'HSM-signed transaction submitted and all records updated');
+
+      return submissionRecord;
+    });
+  });
+
+  /**
+   * Get HSM connection status and key information.
+   * Returns null fields if HSM is not configured.
+   */
+  srv.on('GetHsmStatus', async (_req: Request) => {
+    const hsmSigner = getHsmSigner();
+    if (!hsmSigner) {
+      return {
+        connected: false,
+        keyId: null,
+        keyLabel: null,
+        publicKeyHash: null,
+        cardanoAddress: null,
+      };
+    }
+    const status = hsmSigner.getStatus();
+    return {
+      connected: status.connected,
+      keyId: status.keyId || null,
+      keyLabel: status.keyLabel || null,
+      publicKeyHash: status.publicKeyHash || null,
+      cardanoAddress: status.address || null,
+    };
   });
 };

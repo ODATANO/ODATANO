@@ -12,9 +12,10 @@ This guide explains how to build, sign, and submit Cardano transactions using th
 2. [Architecture](#architecture)
 3. [Workflow Steps](#workflow-steps)
 4. [Signing Methods](#signing-methods)
-5. [API Reference](#api-reference)
-6. [Error Handling](#error-handling)
-7. [Examples](#examples)
+5. [HSM Signing Workflow](#hsm-signing-workflow)
+6. [API Reference](#api-reference)
+7. [Error Handling](#error-handling)
+8. [Examples](#examples)
 
 ---
 
@@ -31,9 +32,10 @@ ODATANO follows a **3-step workflow** for transaction handling with complete **p
 
 ### Key Principles
 
-✅ **Server NEVER sees private keys**  
-✅ **External signing only** (CLI, Browser Wallet, Hardware Wallet)  
-✅ **Full audit trail** (TransactionBuilds + TransactionSubmissions)  
+✅ **Server NEVER sees private keys**
+✅ **External signing only** (CLI, Browser Wallet, Hardware Wallet)
+✅ **Optional HSM signing** (automated server-side via PKCS#11, private key never leaves chip)
+✅ **Full audit trail** (TransactionBuilds + TransactionSubmissions)
 ✅ **Protocol compliance** (Cardano CBOR standards)  
 
 ---
@@ -287,7 +289,139 @@ const signedTx = await yoroi.signTx(unsignedTxCbor, true);
 | **Cardano CLI** | Medium (200-500ms) | High | Backend automation, scripting | File system (encrypted) |
 | **Browser Wallet** | Fast (10-50ms) | Very High | Web dApps, Fiori apps | Browser extension (encrypted) |
 | **Hardware Wallet** | Slow (5-10s) | Maximum | High-value transactions | Hardware device |
-| **Custom Signer** | Varies | Depends | Enterprise key management | HSM, Vault, etc. |
+| **HSM (PKCS#11)** | Fast (10-50ms) | Maximum | Enterprise automation | Hardware Security Module |
+
+---
+
+## HSM Signing Workflow
+
+When an HSM is configured, ODATANO supports fully automated server-side signing. The private key never leaves the HSM chip -- the server sends the transaction body hash to the HSM via PKCS#11, and the HSM returns an Ed25519 signature.
+
+### Workflow Comparison
+
+**External Signing (4 steps):**
+```
+┌─────────┐   ┌───────────────────┐   ┌──────────────┐   ┌─────────────────────────┐
+│  BUILD  │ → │ CreateSigningReq  │ → │ Sign (Client)│ → │ SubmitVerifiedTransaction│
+│ (Server)│   │     (Server)      │   │  (External)  │   │        (Server)         │
+└─────────┘   └───────────────────┘   └──────────────┘   └─────────────────────────┘
+```
+
+**HSM Signing (2 steps):**
+```
+┌─────────┐   ┌──────────────────────┐
+│  BUILD  │ → │ SignAndSubmitWithHsm  │
+│ (Server)│   │      (Server + HSM)   │
+└─────────┘   └──────────────────────┘
+```
+
+### HSM Actions
+
+| Action | Description |
+|--------|-------------|
+| `GetHsmStatus` | Check HSM connection, key info, and derived Cardano address |
+| `SignWithHsm` | Sign a build with HSM (creates signing request + verification, does NOT submit) |
+| `SignAndSubmitWithHsm` | Sign with HSM and submit to blockchain in one atomic step |
+
+### Configuration
+
+**Plugin mode** (`package.json`):
+```json
+{
+  "cds": { "requires": { "odatano-core": {
+    "network": "preview",
+    "backends": ["blockfrost"],
+    "blockfrostApiKey": "preview_KEY",
+    "hsm": {
+      "enabled": true,
+      "pkcs11Module": "/usr/lib/pkcs11/yubihsm_pkcs11.so",
+      "slot": 0,
+      "pin": "0001password",
+      "keyLabel": "cardano-signing-key"
+    }
+  }}}
+}
+```
+
+**Environment variables:**
+```bash
+HSM_ENABLED=true
+HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
+HSM_SLOT=0
+HSM_PIN=0001password
+HSM_KEY_LABEL=cardano-signing-key
+# Optional: HSM_KEY_ID=0x0001
+```
+
+### Example: Automated HSM Transaction
+
+```typescript
+// 1. Check HSM status
+const { data: status } = await POST('/odata/v4/cardano-sign/GetHsmStatus', {});
+// → { connected: true, cardanoAddress: "addr_test1...", publicKeyHash: "a1b2..." }
+
+// 2. Build transaction (use HSM address as sender)
+const { data: build } = await POST('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+  senderAddress: status.cardanoAddress,
+  recipientAddress: 'addr_test1...',
+  lovelaceAmount: '5000000',
+});
+
+// 3. Sign + submit in one call
+const { data: submission } = await POST('/odata/v4/cardano-sign/SignAndSubmitWithHsm', {
+  buildId: build.id,
+});
+// → { txHash: "abc123...", status: "submitted" }
+```
+
+### Supported Hardware
+
+| Device | PKCS#11 Module | Use Case |
+|--------|---------------|----------|
+| **YubiHSM 2** | `yubihsm_pkcs11.so` | On-premise, USB-attached |
+| **AWS CloudHSM** | `cloudhsm_pkcs11.so` | Cloud, FIPS 140-2 Level 3 |
+| **Thales Luna** | `libCryptoki2.so` | Enterprise, high-throughput |
+| **SoftHSM** | `libsofthsm2.so` | Development and testing only |
+
+### SoftHSM Quick Setup (Development)
+
+For local development and testing without physical HSM hardware, use SoftHSM (Linux/WSL):
+
+```bash
+# Install and configure
+sudo apt-get install -y softhsm2 opensc
+mkdir -p ~/.config/softhsm2/tokens
+cat > ~/.config/softhsm2/softhsm2.conf << EOF
+directories.tokendir = $HOME/.config/softhsm2/tokens
+objectstore.backend = file
+EOF
+export SOFTHSM2_CONF=$HOME/.config/softhsm2/softhsm2.conf
+
+# Initialize token and generate Ed25519 key
+softhsm2-util --init-token --slot 0 --label "odatano-dev" --pin 1234 --so-pin 5678
+pkcs11-tool --module /usr/lib/softhsm/libsofthsm2.so \
+  --login --pin 1234 \
+  --keypairgen --key-type EC:edwards25519 \
+  --label "cardano-signing-key" --id 01
+
+# Start ODATANO with SoftHSM
+HSM_ENABLED=true HSM_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so \
+HSM_SLOT=0 HSM_PIN=1234 HSM_KEY_LABEL=cardano-signing-key cds watch
+```
+
+For detailed setup instructions, see [Security Guide — SoftHSM Setup](SECURITY_GUIDE.md#softhsm-setup-development--testing).
+
+### Security Properties
+
+- **Key isolation**: Private key is generated inside the HSM and marked `CKA_EXTRACTABLE=false`
+- **Signing mechanism**: `CKM_EDDSA` (Ed25519) via PKCS#11 v3.0
+- **Address derivation**: Enterprise address from blake2b-224(publicKey) + bech32 encoding
+- **Audit trail**: Every HSM signature records `signerType='hsm'` and `hsmKeyId` in SigningRequests
+- **Non-fatal startup**: If HSM is unreachable during server boot, the app continues without HSM (other signing methods still work)
+
+For security configuration details, see [Security Guide](SECURITY_GUIDE.md#hsm-pkcs11-integration).
+
+---
 
 ## Transaction Types
 

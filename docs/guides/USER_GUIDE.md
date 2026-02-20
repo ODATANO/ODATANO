@@ -504,6 +504,9 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 | `SubmitVerifiedTransaction` | Verify and submit in one step |
 | `GetSigningRequestsByAddress` | Get signing requests for an address |
 | `GetTransactionBuildsByAddress` | Get transaction builds for an address |
+| `SignWithHsm` | Sign transaction with HSM (server-side, returns signing request) |
+| `SignAndSubmitWithHsm` | Sign with HSM and submit to blockchain in one step |
+| `GetHsmStatus` | Check HSM connection status and key information |
 
 ### Signing Methods Supported
 
@@ -512,6 +515,53 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 | **CIP-30 Browser Wallets** | Nami, Eternl, Yoroi, Flint, etc. |
 | **Cardano CLI** | Command-line signing with payment.skey |
 | **Hardware Wallets** | Ledger, Trezor via browser extensions |
+| **HSM (PKCS#11)** | YubiHSM, AWS CloudHSM, Thales Luna -- automated server-side signing |
+
+### HSM Signing (Server-Side)
+
+ODATANO supports automated server-side signing via PKCS#11-compatible Hardware Security Modules. Unlike external signing, the private key never leaves the HSM chip -- the server sends a hash, and the HSM returns a signature.
+
+**Check HSM Status:**
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/GetHsmStatus \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+**Response:**
+```json
+{
+  "connected": true,
+  "keyId": "0x0001",
+  "keyLabel": "cardano-signing-key",
+  "publicKeyHash": "a1b2c3...",
+  "cardanoAddress": "addr_test1..."
+}
+```
+
+**Sign Only (creates signing request + verification audit trail):**
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SignWithHsm \
+  -H "Content-Type: application/json" \
+  -d '{"buildId": "uuid-from-build-response"}'
+```
+
+**Sign and Submit (one-step automated flow):**
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SignAndSubmitWithHsm \
+  -H "Content-Type: application/json" \
+  -d '{"buildId": "uuid-from-build-response"}'
+```
+
+**Response:**
+```json
+{
+  "id": "submission-uuid",
+  "txHash": "71f3d8c1...",
+  "status": "submitted"
+}
+```
+
+HSM signing requires configuration. See [Security Guide](SECURITY_GUIDE.md#hsm-pkcs11-integration) for setup instructions.
 
 ### Signing Status States
 

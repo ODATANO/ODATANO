@@ -15,8 +15,13 @@ export {
   getCardanoClient,
   getCardanoTxBuilder,
   loadConfigFromEnv,
+  loadHsmConfigFromEnv,
   shutdownAppContext,
 } from '../srv/server';
+
+// Re-export HSM signer for programmatic access
+export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
+export type { HsmConfig, HsmSignResult } from '../srv/utils/types';
 
 /**
  * Initialize the ODATANO plugin.
@@ -24,9 +29,10 @@ export {
  * then initializes all blockchain components.
  */
 export async function initialize(): Promise<void> {
-  const { loadConfigFromEnv, initializeFromConfig } = await import('../srv/server');
+  const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig } = await import('../srv/server');
   const config = loadConfigFromEnv();
-  await initializeFromConfig(config);
+  const hsmConfig = loadHsmConfigFromEnv();
+  await initializeFromConfig(config, undefined, hsmConfig);
   logger.info('ODATANO core initialized');
 }
 

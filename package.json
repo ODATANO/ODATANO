@@ -19,7 +19,8 @@
     "@harmoniclabs/cardano-ledger-ts": "^0.4.6",
     "@sap/cds": ">=9",
     "axios": "^1.13.2",
-    "bech32": "^2.0.0"
+    "bech32": "^2.0.0",
+    "pkcs11js": "^2.1.6"
   },
   "devDependencies": {
     "@cap-js/cds-test": "^0.4.1",
@@ -52,8 +53,16 @@
   "cds": {
     "build": {
       "tasks": [
-        { "for": "node-cf", "src": "srv", "dest": "../gen/srv" },
-        { "for": "hana", "src": "db", "dest": "../gen/db" }
+        {
+          "for": "node-cf",
+          "src": "srv",
+          "dest": "../gen/srv"
+        },
+        {
+          "for": "hana",
+          "src": "db",
+          "dest": "../gen/db"
+        }
       ]
     },
     "requires": {

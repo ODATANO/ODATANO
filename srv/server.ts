@@ -2,7 +2,8 @@ import cds from '@sap/cds';
 import { CardanoClient, CardanoClientConfig, Network,BackendName,TransactionBuilderName } from './blockchain/cardano-client';
 import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
-import type { LedgerProtocolParameters } from './utils/types';
+import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
+import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
 
 import { env } from 'process';
 
@@ -30,7 +31,11 @@ let appContext: AppContext | null = null;
  * @param config - CardanoClientConfig
  * @param protocolParams - Optional protocol parameters (for tests to skip backend call)
  */
-async function initializeAppContext(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters): Promise<AppContext> {
+async function initializeAppContext(
+  config: CardanoClientConfig,
+  protocolParams?: LedgerProtocolParameters,
+  hsmConfig?: HsmConfig,
+): Promise<AppContext> {
   logger.info('Initializing blockchain components...');
 
   // Create CardanoClient from configuration
@@ -42,6 +47,19 @@ async function initializeAppContext(config: CardanoClientConfig, protocolParams?
 
   // Create CardanoIndexer with client and transaction builder
   const cardanoIndexer = new CardanoIndexer(cardanoClient, cardanoTxBuilder);
+
+  // Initialize HSM signer if configured (failure is non-fatal — won't crash the app)
+  if (hsmConfig?.enabled) {
+    try {
+      const hsmSigner = new HsmSigner(hsmConfig);
+      await hsmSigner.init(config.network);
+      setHsmSigner(hsmSigner);
+      logger.info('HSM signer initialized');
+    } catch (err) {
+      logger.error('Failed to initialize HSM signer:', err);
+      setHsmSigner(null);
+    }
+  }
 
   logger.info('Blockchain components initialized successfully');
 
@@ -92,8 +110,8 @@ export function getCardanoTxBuilder(): CardanoTransactionBuilder {
  * @param config - validated CardanoClientConfig
  * @param protocolParams - Optional protocol parameters (for tests)
  */
-export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters): Promise<void> {
-  appContext = await initializeAppContext(config, protocolParams);
+export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
+  appContext = await initializeAppContext(config, protocolParams, hsmConfig);
 }
 
 /**
@@ -143,6 +161,15 @@ export async function createTestContext(
 export async function shutdownAppContext(): Promise<void> {
   if (appContext) {
     logger.info('Shutting down application context...');
+
+    // Shutdown HSM signer if active
+    const hsm = getHsmSigner();
+    if (hsm) {
+      hsm.shutdown();
+      setHsmSigner(null);
+      logger.info('HSM signer shutdown');
+    }
+
     await appContext.cardanoClient.shutdown();
     appContext = null;
     logger.info('Application context shutdown complete');
@@ -221,6 +248,42 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   };
 }
 
+/**
+ * Load HSM configuration from CDS config or environment variables.
+ * Returns undefined if HSM is not enabled.
+ *
+ * Plugin mode: cds.requires.odatano-core.hsm.enabled = true
+ * Env mode:    HSM_ENABLED=true
+ *
+ * @returns HsmConfig or undefined
+ */
+export function loadHsmConfigFromEnv(): HsmConfig | undefined {
+  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
+  const hsmCds = cdsConfig.hsm ?? {};
+
+  const hsmEnabled = hsmCds.enabled === true || env.HSM_ENABLED === 'true';
+  if (!hsmEnabled) return undefined;
+
+  const pkcs11Module = hsmCds.pkcs11Module || env.HSM_PKCS11_MODULE || '';
+  if (!pkcs11Module) {
+    throw new Error('HSM_PKCS11_MODULE is required when HSM is enabled');
+  }
+
+  const pin = hsmCds.pin || env.HSM_PIN || '';
+  if (!pin) {
+    throw new Error('HSM_PIN is required when HSM is enabled');
+  }
+
+  return {
+    enabled: true,
+    pkcs11Module,
+    slot: Number(hsmCds.slot ?? env.HSM_SLOT ?? 0),
+    pin,
+    keyId: hsmCds.keyId || env.HSM_KEY_ID,
+    keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,
+  };
+}
+
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
   // Skip if already initialized by plugin (src/plugin.ts runs first)
@@ -233,9 +296,10 @@ cds.on('served', async () => {
   }
 
   const config = loadConfigFromEnv();
+  const hsmConfig = loadHsmConfigFromEnv();
 
   try {
-    appContext = await initializeAppContext(config);
+    appContext = await initializeAppContext(config, undefined, hsmConfig);
     logger.info('CAP server bootstrap complete');
   } catch (err) {
     logger.error('Failed to initialize blockchain components:', err);
