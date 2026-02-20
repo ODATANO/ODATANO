@@ -9,11 +9,11 @@
  */
 import cds from '@sap/cds';
 import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
-import { setHsmSigner, getHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
+import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
 import { TEST_FIXTURES } from './test-fixtures';
 import { setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks, resetKoiosMocks } from './mock-helpers';
 
-const { INSERT, UPDATE } = cds.ql;
+const { INSERT } = cds.ql;
 
 jest.setTimeout(30000);
 
@@ -54,7 +54,7 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
       publicKeyHash: connected ? fakeKeyHash : undefined,
       address: connected ? 'addr_test1mockaddress' : undefined,
     }),
-    sign: (txBodyHash: Buffer) => {
+    sign: (_txBodyHash: Buffer) => {
       if (signError) throw signError;
       return {
         signatureHex: fakeSignature.toString('hex'),
@@ -62,7 +62,7 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
         publicKeyHash: fakeKeyHash,
       };
     },
-    signTransaction: (unsignedTxCbor: string, txBodyHash: string) => {
+    signTransaction: (unsignedTxCbor: string, _txBodyHash: string) => {
       if (signError) throw signError;
 
       // Build real CBOR with witness — same approach as production HsmSigner

@@ -18,10 +18,6 @@ jest.mock('@sap/cds', () => ({
 // ---------------------------------------------------------------------------
 
 // Ed25519 test key pair (RFC 8032 Test Vector 1)
-const TEST_PRIVATE_KEY = Buffer.from(
-  '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
-  'hex'
-);
 const TEST_PUBLIC_KEY = Buffer.from(
   'd75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3',
   'hex'
@@ -34,8 +30,7 @@ const TEST_PUBLIC_KEY_DER = Buffer.concat([
 // Fake Ed25519 signature (64 bytes)
 const TEST_SIGNATURE = Buffer.alloc(64, 0xab);
 
-// Mock slot handle
-const MOCK_SLOT = Buffer.from([0x01]);
+// Mock session/key handles
 const MOCK_SESSION = 42;
 const MOCK_PRIVATE_KEY_HANDLE = 100;
 const MOCK_PUBLIC_KEY_HANDLE = 101;
@@ -400,7 +395,8 @@ describe('HsmSigner', () => {
 
       try {
         await signer.init('preview');
-        fail('Should have thrown');
+        expect.assertions(3);
+        throw new Error('Should have thrown');
       } catch (err: any) {
         expect(err).toBeInstanceOf(HsmError);
         expect(err.code).toBe(ERROR_CODES.HSM_UNAVAILABLE);
@@ -415,7 +411,8 @@ describe('HsmSigner', () => {
 
       try {
         signer.sign(Buffer.alloc(32));
-        fail('Should have thrown');
+        expect.assertions(3);
+        throw new Error('Should have thrown');
       } catch (err: any) {
         expect(err).toBeInstanceOf(HsmError);
         expect(err.code).toBe(ERROR_CODES.HSM_SIGNING_FAILED);
