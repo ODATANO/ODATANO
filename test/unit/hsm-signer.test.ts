@@ -119,30 +119,7 @@ jest.mock('pkcs11js', () => {
   });
 }, { virtual: true });
 
-// Mock blake2b
-jest.mock('blake2b', () => {
-  return jest.fn((outputLength: number) => {
-    return {
-      update: jest.fn().mockReturnThis(),
-      digest: jest.fn((out: Buffer) => {
-        // Deterministic hash for testing
-        const hash = Buffer.alloc(outputLength, 0x42);
-        hash.copy(out);
-        return out;
-      }),
-    };
-  });
-});
-
-// Mock bech32
-jest.mock('bech32', () => ({
-  bech32: {
-    toWords: jest.fn((data: Buffer) => Array.from(data)),
-    encode: jest.fn((hrp: string, _words: number[], _limit: number) => {
-      return hrp === 'addr' ? 'addr1mockaddress' : 'addr_test1mockaddress';
-    }),
-  },
-}));
+// blake2b and bech32 use REAL implementations (no mocking needed — they're installed packages)
 
 // ---------------------------------------------------------------------------
 // Default config
@@ -188,8 +165,8 @@ describe('HsmSigner', () => {
       await signer.init('preview');
 
       expect(signer.isConnected()).toBe(true);
-      expect(signer.getAddress()).toBe('addr_test1mockaddress');
-      expect(signer.getPublicKeyHash()).toMatch(/^[a-f0-9]+$/);
+      expect(signer.getAddress()).toMatch(/^addr_test1/);
+      expect(signer.getPublicKeyHash()).toMatch(/^[a-f0-9]{56}$/); // 28 bytes = 56 hex chars
 
       const instance = mockPkcs11._instance;
       expect(instance.load).toHaveBeenCalledWith(DEFAULT_HSM_CONFIG.pkcs11Module);
@@ -211,7 +188,7 @@ describe('HsmSigner', () => {
       await signer.init('mainnet');
 
       expect(signer.isConnected()).toBe(true);
-      expect(signer.getAddress()).toBe('addr1mockaddress');
+      expect(signer.getAddress()).toMatch(/^addr1/);
     });
 
     it('should throw HsmError when slot not found', async () => {
@@ -345,7 +322,7 @@ describe('HsmSigner', () => {
       expect(status.keyLabel).toBe('cardano-signing-key');
       expect(status.keyId).toBe('0x0001');
       expect(status.publicKeyHash).toBeDefined();
-      expect(status.address).toBe('addr_test1mockaddress');
+      expect(status.address).toMatch(/^addr_test1/);
     });
 
     it('should return disconnected status when not initialized', () => {
@@ -390,13 +367,12 @@ describe('HsmSigner', () => {
 
   describe('error codes', () => {
     it('should use HSM_UNAVAILABLE for connection errors', async () => {
+      expect.assertions(3);
       mockPkcs11 = createMockPkcs11({ slotCount: 0 });
       const signer = new HsmSigner(DEFAULT_HSM_CONFIG);
 
       try {
         await signer.init('preview');
-        expect.assertions(3);
-        throw new Error('Should have thrown');
       } catch (err: any) {
         expect(err).toBeInstanceOf(HsmError);
         expect(err.code).toBe(ERROR_CODES.HSM_UNAVAILABLE);
@@ -405,14 +381,13 @@ describe('HsmSigner', () => {
     });
 
     it('should use HSM_SIGNING_FAILED for signing errors', async () => {
+      expect.assertions(3);
       mockPkcs11 = createMockPkcs11({ signError: new Error('device error') });
       const signer = new HsmSigner(DEFAULT_HSM_CONFIG);
       await signer.init('preview');
 
       try {
         signer.sign(Buffer.alloc(32));
-        expect.assertions(3);
-        throw new Error('Should have thrown');
       } catch (err: any) {
         expect(err).toBeInstanceOf(HsmError);
         expect(err.code).toBe(ERROR_CODES.HSM_SIGNING_FAILED);
