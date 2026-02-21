@@ -64,19 +64,25 @@ export function getTxHashFromCbor(signedTxCbor: string): string {
 
 /**
  * Maps builder errors to typed BackendErrors
- * Shared between CSL and Buildooor transaction builders
+ * Shared between CSL and Buildooor transaction builders.
+ * When no assetUnit is provided, extracts it from the error message if possible
+ * (e.g. "not enough <policyId.assetName>"), falling back to 'lovelace'.
  * @param err Error from builder
- * @param assetUnit Asset unit that caused the error (default: 'lovelace')
+ * @param assetUnit Optional asset unit override (auto-extracted from error message if omitted)
  * @throws {InsufficientFundsError} if error is related to insufficient funds
  * @throws {Error} original error if not mappable
  */
-export function mapBuilderError(err: any, assetUnit: string = 'lovelace'): never {
+export function mapBuilderError(err: any, assetUnit?: string): never {
   const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
 
   if (msg.includes('not enough') ||
       msg.includes('insufficient') ||
       msg.includes('balance')) {
-    throw new InsufficientFundsError(assetUnit, 0n, 0n, err);
+    const effectiveUnit = assetUnit ?? (() => {
+      const match = msg.match(/not enough\s+([a-f0-9.]+)/i);
+      return match?.[1] || 'lovelace';
+    })();
+    throw new InsufficientFundsError(effectiveUnit, 0n, 0n, err);
   }
 
   throw err;
