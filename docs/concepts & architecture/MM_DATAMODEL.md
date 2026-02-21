@@ -1,7 +1,39 @@
+# ODATANO Blockchain Schema
+
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#0C5ECF"
+    primaryTextColor: "#001840"
+    primaryBorderColor: "#0C5ECF"
+    lineColor: "#0C5ECF"
+    secondaryColor: "#e8f0fe"
+    tertiaryColor: "#f0f5ff"
+    mainBkg: "#f0f5ff"
+    nodeBorder: "#0C5ECF"
+    clusterBkg: "#f8faff"
+    clusterBorder: "#0C5ECF"
+    titleColor: "#001840"
+    edgeLabelBackground: "#f0f5ff"
+    textColor: "#001840"
+    background: "#ffffff"
+    fontSize: "13px"
+    fontFamily: "monospace"
+    attributeBackgroundColorEven: "#f0f5ff"
+    attributeBackgroundColorOdd: "#e0ecff"
+  er:
+    layoutDirection: "TB"
+    fontSize: 12
+    useMaxWidth: false
+    fill: "#f0f5ff"
+    stroke: "#0C5ECF"
+---
+
 erDiagram
     NetworkInformation {
-        string network PK
+        string network PK "🔑"
         decimal maxSupply
         decimal totalSupply
         decimal circulatingSupply
@@ -13,7 +45,7 @@ erDiagram
     }
 
     Epochs {
-        int epoch PK
+        int epoch PK "🔑"
         int startTime
         int endTime
         int firstBlockTime
@@ -26,11 +58,11 @@ erDiagram
     }
 
     Blocks {
-        string hash PK
+        string hash PK "🔑"
         string time
         int height
         string slotLeader
-        int epochNumber FK
+        int epochNumber FK "🔗"
         int epochSlot
         int size
         int txCount
@@ -38,7 +70,7 @@ erDiagram
     }
 
     Pools {
-        string poolId PK
+        string poolId PK "🔑"
         string vrfKeyHash
         int blocksMinted
         int blocksEpoch
@@ -55,7 +87,7 @@ erDiagram
     }
 
     Dreps {
-        string drepId PK
+        string drepId PK "🔑"
         string hex
         decimal amount
         boolean hasScript
@@ -65,7 +97,7 @@ erDiagram
     }
 
     Addresses {
-        string address PK
+        string address PK "🔑"
         string stakeAddress
         string type
         boolean isScript
@@ -75,7 +107,7 @@ erDiagram
     }
 
     Accounts {
-        string stakeAddress PK
+        string stakeAddress PK "🔑"
         boolean active
         int activeEpoch
         decimal controlledAmount
@@ -84,13 +116,13 @@ erDiagram
         decimal reservesSum
         decimal treasurySum
         decimal withdrawableAmount
-        string poolId FK
-        string drepId FK
+        string poolId FK "🔗"
+        string drepId FK "🔗"
         boolean hasAddresses
     }
 
     AddressAssets {
-        string address FK
+        string address FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -100,7 +132,7 @@ erDiagram
     }
 
     AddressUTxOs {
-        string address FK
+        string address FK "🔗"
         string hash
         int index
         string blockHash
@@ -111,7 +143,7 @@ erDiagram
     }
 
     UTxOAssets {
-        string utxo FK
+        string utxo FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -121,7 +153,7 @@ erDiagram
     }
 
     Transactions {
-        string hash PK
+        string hash PK "🔑"
         string blockHash
         int blockHeight
         long blockTime
@@ -136,16 +168,16 @@ erDiagram
     }
 
     TransactionMetadata {
-        int id PK
-        string tx FK
+        int id PK "🔑"
+        string tx FK "🔗"
         string label
         string payload
     }
 
     TransactionInputs {
-        string tx FK
+        string tx FK "🔗"
         int inputIndex
-        string address FK
+        string address FK "🔗"
         string dataHash
         string inlineDatum
         string referenceScriptHash
@@ -156,9 +188,9 @@ erDiagram
     }
 
     TransactionOutputs {
-        string tx FK
+        string tx FK "🔗"
         int outputIndex
-        string address FK
+        string address FK "🔗"
         string dataHash
         string inlineDatum
         string referenceScriptHash
@@ -167,7 +199,7 @@ erDiagram
     }
 
     TransactionInputAssets {
-        string input FK
+        string input FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -177,7 +209,7 @@ erDiagram
     }
 
     TransactionOutputAssets {
-        string output FK
+        string output FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -187,7 +219,7 @@ erDiagram
     }
 
     TransactionBuilds {
-        uuid buildId PK
+        uuid buildId PK "🔑"
         string network
         string senderAddress
         string unsignedTxCbor
@@ -204,7 +236,7 @@ erDiagram
     }
 
     TransactionBuildInputs {
-        uuid build FK
+        uuid build FK "🔗"
         int inputIndex
         string address
         decimal lovelaceAmount
@@ -214,7 +246,7 @@ erDiagram
     }
 
     TransactionBuildInputAssets {
-        uuid buildInput FK
+        uuid buildInput FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -223,7 +255,7 @@ erDiagram
     }
 
     TransactionBuildOutputs {
-        uuid build FK
+        uuid build FK "🔗"
         int outputIndex
         string address
         decimal lovelaceAmount
@@ -231,7 +263,7 @@ erDiagram
     }
 
     TransactionBuildOutputAssets {
-        uuid buildOutput FK
+        uuid buildOutput FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -240,7 +272,7 @@ erDiagram
     }
 
     TransactionSubmissions {
-        uuid submissionId PK
+        uuid submissionId PK "🔑"
         string network
         string signedTxCbor
         string txHash
@@ -253,7 +285,7 @@ erDiagram
     }
 
     TransactionSubmissionErrors {
-        uuid submission FK
+        uuid submission FK "🔗"
         int errorIndex
         string errorCode
         string errorMessage
@@ -261,8 +293,8 @@ erDiagram
     }
 
     SigningRequests {
-        uuid id PK
-        uuid build FK
+        uuid id PK "🔑"
+        uuid build FK "🔗"
         string txBodyHash
         string unsignedTxCbor
         string cip30TxCbor
@@ -281,8 +313,8 @@ erDiagram
     }
 
     SignatureVerifications {
-        uuid id PK
-        uuid signingRequest FK
+        uuid id PK "🔑"
+        uuid signingRequest FK "🔗"
         string signedTxCbor
         boolean isValid
         int witnessCount
@@ -294,49 +326,49 @@ erDiagram
     }
 
     AddressSigningRequests {
-        string address FK
-        uuid signingRequest FK
+        string address FK "🔗"
+        uuid signingRequest FK "🔗"
     }
 
     AddressTransactionBuilds {
-        string address FK
-        uuid txBuild FK
+        string address FK "🔗"
+        uuid txBuild FK "🔗"
     }
 
     AddressTransactions {
-        string address FK
-        string tx FK
+        string address FK "🔗"
+        string tx FK "🔗"
         long netAmount
         long blockTime
         string netAssets
         boolean hasAssets
     }
 
-    Epochs ||--o{ Blocks : has
-    Addresses ||--o{ AddressAssets : contains
-    Addresses ||--o{ AddressUTxOs : contains
-    AddressUTxOs ||--o{ UTxOAssets : contains
-    Accounts ||--o{ Addresses : controls
-    Accounts }o--|| Pools : delegatesTo
-    Accounts }o--|| Dreps : votesWith
-    Transactions ||--o{ TransactionMetadata : has
-    Transactions ||--o{ TransactionInputs : has
-    Transactions ||--o{ TransactionOutputs : has
-    TransactionInputs ||--o{ TransactionInputAssets : contains
-    TransactionOutputs ||--o{ TransactionOutputAssets : contains
-    Addresses ||--o{ TransactionInputs : references
-    Addresses ||--o{ TransactionOutputs : references
-    TransactionBuilds ||--o{ TransactionBuildInputs : has
-    TransactionBuilds ||--o{ TransactionBuildOutputs : has
-    TransactionBuildInputs ||--o{ TransactionBuildInputAssets : contains
-    TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : contains
-    TransactionSubmissions ||--o{ TransactionSubmissionErrors : has
-    SigningRequests }o--|| TransactionBuilds : references
-    SigningRequests ||--o{ SignatureVerifications : has
-    Addresses ||--o{ AddressSigningRequests : has
-    AddressSigningRequests }o--|| SigningRequests : references
-    Addresses ||--o{ AddressTransactionBuilds : has
-    AddressTransactionBuilds }o--|| TransactionBuilds : references
-    Addresses ||--o{ AddressTransactions : has
-    AddressTransactions }o--|| Transactions : references
+    Epochs ||--o{ Blocks : "has"
+    Addresses ||--o{ AddressAssets : "contains"
+    Addresses ||--o{ AddressUTxOs : "contains"
+    AddressUTxOs ||--o{ UTxOAssets : "contains"
+    Accounts ||--o{ Addresses : "controls"
+    Accounts }o--|| Pools : "delegatesTo"
+    Accounts }o--|| Dreps : "votesWith"
+    Transactions ||--o{ TransactionMetadata : "has"
+    Transactions ||--o{ TransactionInputs : "has"
+    Transactions ||--o{ TransactionOutputs : "has"
+    TransactionInputs ||--o{ TransactionInputAssets : "contains"
+    TransactionOutputs ||--o{ TransactionOutputAssets : "contains"
+    Addresses ||--o{ TransactionInputs : "references"
+    Addresses ||--o{ TransactionOutputs : "references"
+    TransactionBuilds ||--o{ TransactionBuildInputs : "has"
+    TransactionBuilds ||--o{ TransactionBuildOutputs : "has"
+    TransactionBuildInputs ||--o{ TransactionBuildInputAssets : "contains"
+    TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : "contains"
+    TransactionSubmissions ||--o{ TransactionSubmissionErrors : "has"
+    SigningRequests }o--|| TransactionBuilds : "references"
+    SigningRequests ||--o{ SignatureVerifications : "has"
+    Addresses ||--o{ AddressSigningRequests : "has"
+    AddressSigningRequests }o--|| SigningRequests : "references"
+    Addresses ||--o{ AddressTransactionBuilds : "has"
+    AddressTransactionBuilds }o--|| TransactionBuilds : "references"
+    Addresses ||--o{ AddressTransactions : "has"
+    AddressTransactions }o--|| Transactions : "references"
 ```
