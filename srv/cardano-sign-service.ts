@@ -1,5 +1,5 @@
 import cds, { Request } from '@sap/cds';
-import { handleRequest, passthroughRead } from './utils/backend-request-handler';
+import { handleRequest} from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getCardanoIndexer, getCardanoClient } from './server';
@@ -34,7 +34,6 @@ module.exports = (srv: cds.Service) => {
 
   const {
     SigningRequests,
-      SignatureVerifications,
       AddressSigningRequests,
       TransactionBuilds,
   } = require('#cds-models/CardanoSignService');
@@ -57,9 +56,6 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  // M3 passthrough READ handlers
-  const m3ReadEntities = [SigningRequests, SignatureVerifications, AddressSigningRequests, TransactionBuilds];
-  m3ReadEntities.forEach(entity => srv.on('READ', entity, passthroughRead()));
 
   /**
    * Create a new signing request for external signing

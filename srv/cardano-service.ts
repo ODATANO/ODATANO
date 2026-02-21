@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { getCardanoIndexer } from './server';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
-import { handleRequest, passthroughRead } from './utils/backend-request-handler';
+import { handleRequest} from './utils/backend-request-handler';
 
 const { SELECT } = cds.ql;
 
@@ -80,7 +80,7 @@ function indexOnMissAction(
  * Handles various Cardano blockchain data queries with index-on-miss behavior.
  */
 module.exports = (srv: cds.Service) => {
-  logger.debug('[CardanoService] Module loaded - registering handlers');
+  logger.debug('Module loaded - registering handlers');
 
   const {
     NetworkInformation,
@@ -90,10 +90,6 @@ module.exports = (srv: cds.Service) => {
     AddressAssets,
     AddressUTxOs,
     Transactions,
-    TransactionInputs,
-    TransactionOutputs,
-    TransactionInputAssets,
-    TransactionOutputAssets,
     TransactionMetadata,
     Pools,
     Accounts,
@@ -174,10 +170,6 @@ module.exports = (srv: cds.Service) => {
 
   srv.on('READ', Addresses, indexOnMissRead(Addresses, 'address', isValidBech32Address, (db, a) => indexer().indexAddress(db, a), { errorMessage: 'Invalid bech32 address format' }));
   srv.on('GetAddressByBech32', indexOnMissAction('GetAddressByBech32', Addresses, 'address', isValidBech32Address, (db, a) => indexer().indexAddress(db, a), { errorMessage: 'Invalid bech32 address format' }));
-
-  srv.on('READ', AddressAssets, passthroughRead());
-  srv.on('READ', AddressUTxOs, passthroughRead());
-
   /**
    * Action: GetAssetsByAddress - indexes parent address if needed, then queries child assets.
    */
@@ -214,11 +206,6 @@ module.exports = (srv: cds.Service) => {
 
   srv.on('READ', Transactions, indexOnMissRead(Transactions, 'hash', isTxHash, (db, h) => indexer().indexTransaction(db, h), { errorMessage: 'Invalid transaction hash format' }));
   srv.on('GetTransactionByHash', indexOnMissAction('GetTransactionByHash', Transactions, 'hash', isTxHash, (db, h) => indexer().indexTransaction(db, h), { errorMessage: 'Invalid transaction hash format' }));
-
-  srv.on('READ', TransactionInputs, passthroughRead());
-  srv.on('READ', TransactionOutputs, passthroughRead());
-  srv.on('READ', TransactionInputAssets, passthroughRead());
-  srv.on('READ', TransactionOutputAssets, passthroughRead());
 
   // ---------------------------------------------------------------------------
   // Transaction Metadata

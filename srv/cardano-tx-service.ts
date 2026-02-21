@@ -1,5 +1,5 @@
 import cds, { Request } from '@sap/cds';
-import { handleRequest, passthroughRead } from './utils/backend-request-handler';
+import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
@@ -16,20 +16,13 @@ const logger = cds.log('CardanoTxService');
  * Handles transaction building and submission operations & some additional data queries.
  */
 module.exports = (srv: cds.Service) => {
-  logger.info('[CardanoTxService] Module loaded - registering handlers');
+  logger.info('Module loaded - registering handlers');
 
   const {
     TransactionBuilds,
-    TransactionBuildInputs,
-    TransactionBuildOutputs,
     TransactionSubmissions,
-    TransactionSubmissionErrors,
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
-
-  // Passthrough READ handlers — these entities are read directly from DB (no index-on-miss)
-  const readEntities = [TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionSubmissions, TransactionSubmissionErrors];
-  readEntities.forEach(entity => srv.on('READ', entity, passthroughRead()));
 
   /**
    * Build a simple ADA-only transaction

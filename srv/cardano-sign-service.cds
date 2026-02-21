@@ -1,23 +1,39 @@
 using {odatano.cardano as db} from '../db/schema';
+using {Bech32} from '../db/types';
 
 /**
- * Cardano Transaction Service
+ * Cardano Sign Service
  *
- * Handles transaction building and submission operations.
- * Separate from the read-only CardanoODataService to provide
- * clear separation between general query and command operations.
+ * Handles the external signing workflow for Cardano transactions, including:
+ * - Creating signing requests with transaction details and signing instructions
+ * - Verifying signatures of signed transactions and storing verification results
+ * - Submitting verified transactions to the blockchain and tracking submission status
+ * - Providing actions for signing with a Hardware Security Module (HSM) and retrieving HSM status
  */
 service CardanoSignService @(impl: './cardano-sign-service') {
+
     // ---------------------------------------------------------------------------
-    // M3 - External Signing Workflow Entities & Actions
+    // Signing Workflow Projections
     // ---------------------------------------------------------------------------
+    @title      : 'Signature Verifications'
+    @description: 'Projection for Signature Verifications - stores verification results'
+    entity SignatureVerifications as projection on db.SignatureVerifications;
+
+    @title      : 'Address Signing Requests'
+    @description: 'Projection for retrieving signing requests by address'
+    entity AddressSigningRequests as projection on db.AddressSigningRequests;
+
+    @title      : 'Transaction Builds'
+    @description: 'Projection for Transaction Builds - needed by CreateSigningRequest to look up build details'
+    entity TransactionBuilds      as projection on db.TransactionBuilds;
+
 
     @title      : 'Transaction Submissions'
     @description: 'Projection for Transaction Submissions - stores submission results'
-    entity TransactionSubmissions       as projection on db.TransactionSubmissions;
+    entity TransactionSubmissions as projection on db.TransactionSubmissions;
 
-    @title      : 'Signing Requests'
-    @description: 'Projection for Signing Requests - tracks signing workflow'
+            @title      : 'Signing Requests'
+            @description: 'Projection for Signing Requests - tracks signing workflow'
     entity SigningRequests as projection on db.SigningRequests
         actions {
 
@@ -48,21 +64,6 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                              signerInfo: String(100)) returns TransactionSubmissions;
         };
 
-    // ---------------------------------------------------------------------------
-    // Signing Workflow Status-Transition Flow Annotations
-    // ---------------------------------------------------------------------------
-    @title      : 'Signature Verifications'
-    @description: 'Projection for Signature Verifications - stores verification results'
-    entity SignatureVerifications       as projection on db.SignatureVerifications;
-
-    @title      : 'Address Signing Requests'
-    @description: 'Projection for retrieving signing requests by address'
-    entity AddressSigningRequests       as projection on db.AddressSigningRequests;
-
-    @title      : 'Transaction Builds'
-    @description: 'Projection for Transaction Builds - needed by CreateSigningRequest to look up build details'
-    entity TransactionBuilds            as projection on db.TransactionBuilds;
-
     /**
      * SigningRequests status flow:
      *   pending ──[VerifySignature]──→ verified | failed  (conditional in handler)
@@ -70,15 +71,16 @@ service CardanoSignService @(impl: './cardano-sign-service') {
      *   pending ──[checkExpire]──→ expired  (custom time-based logic in handler)
      */
     annotate CardanoSignService.SigningRequests with @flow.status: status actions {
-        VerifySignature                                     @from       : [ #pending];
-        SubmitVerifiedTransaction                           @from       : [
+        VerifySignature                              @from       : [ #pending];
+        SubmitVerifiedTransaction                    @from       : [
             #pending,
             #verified
         ]  @to: #submitted;
     };
 
+
     // ---------------------------------------------------------------------------
-    // Signing Workflow Actions
+    // General Signing Workflow Actions
     // ---------------------------------------------------------------------------
 
     @title      : 'Create Signing Request'
@@ -89,21 +91,21 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                 buildId: UUID,
                                 @title: 'Message to Signer'
                                 @description: 'A message to include for the signer'
-                                message: String)               returns SigningRequests;
+                                message: String)        returns SigningRequests;
 
     @title      : 'Get Signing Request'
     @description: 'Retrieve an existing signing request by ID'
     action GetSigningRequest(
                              @title: 'Signing Request ID'
                              @description: 'The unique identifier of the signing request'
-                             signingRequestId: UUID)           returns SigningRequests;
+                             signingRequestId: UUID)    returns SigningRequests;
 
     @title      : 'Address Signing Requests'
     @description: 'Projection for retrieving signing requests by address'
     action GetSigningRequestsByAddress(
                                        @title: 'Bech32 Address'
                                        @description: 'The Bech32 encoded address to retrieve signing requests for'
-                                       address: db.Bech32)     returns array of AddressSigningRequests;
+                                       address: Bech32) returns array of AddressSigningRequests;
 
     // ---------------------------------------------------------------------------
     // HSM (Hardware Security Module) Signing Actions
@@ -114,33 +116,23 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     action SignWithHsm(
                        @title: 'Build ID'
                        @description: 'The unique identifier of the transaction build to sign'
-                       buildId: UUID)                     returns SigningRequests;
+                       buildId: UUID)                   returns SigningRequests;
 
     @title      : 'Sign and Submit with HSM'
     @description: 'Sign a transaction using the HSM and submit it to the blockchain in one atomic operation. Returns the transaction submission details.'
     action SignAndSubmitWithHsm(
                                 @title: 'Build ID'
                                 @description: 'The unique identifier of the transaction build to sign and submit'
-                                buildId: UUID)            returns TransactionSubmissions;
+                                buildId: UUID)          returns TransactionSubmissions;
 
     @title      : 'Get HSM Status'
     @description: 'Check the current status of the HSM connection and key availability.'
-    action GetHsmStatus()                                 returns {
-        @title: 'Connected'
-        @description: 'Whether the HSM session is active'
-        connected: Boolean;
-        @title: 'Key ID'
-        @description: 'The PKCS#11 key identifier in use'
-        keyId: String;
-        @title: 'Key Label'
-        @description: 'The PKCS#11 key label in use'
-        keyLabel: String;
-        @title: 'Public Key Hash'
-        @description: 'Blake2b-224 hash of the HSM Ed25519 public key (= Cardano verification key hash)'
-        publicKeyHash: String;
-        @title: 'Cardano Address'
-        @description: 'Enterprise Cardano address derived from the HSM public key'
-        cardanoAddress: String;
+    action GetHsmStatus()                               returns {
+        @title: 'Connected'        @description: 'Whether the HSM session is active'  connected                                                    : Boolean;
+        @title: 'Key ID'           @description: 'The PKCS#11 key identifier in use'  keyId                                                        : String;
+        @title: 'Key Label'        @description: 'The PKCS#11 key label in use'  keyLabel                                                          : String;
+        @title: 'Public Key Hash'  @description: 'Blake2b-224 hash of the HSM Ed25519 public key (= Cardano verification key hash)'  publicKeyHash : String;
+        @title: 'Cardano Address'  @description: 'Enterprise Cardano address derived from the HSM public key'  cardanoAddress                      : String;
     };
 
 }

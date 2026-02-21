@@ -1,4 +1,6 @@
 using {odatano.cardano as db} from '../db/schema';
+using {Bech32, Lovelace} from '../db/types';
+
 
 /**
  * Cardano Transaction Service
@@ -40,6 +42,15 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
             @description: 'Check the status of a submitted transaction by querying the blockchain for confirmation'
             action CheckSubmissionStatus() returns TransactionSubmissions;
         };
+    /**
+     * TransactionSubmissions status flow:
+     *   pending ──[submit to chain]──→ submitted  (internal, in SubmitTransaction handler)
+     *   submitted ──[CheckSubmissionStatus]──→ confirmed | stays submitted  (conditional)
+     *   pending | submitted ──→ failed  (blockchain error)
+     */
+    annotate CardanoTransactionService.TransactionSubmissions with @flow.status: status actions {
+        CheckSubmissionStatus                                      @from       : [ #submitted];
+    };
 
     @title      : 'Transaction Submission Errors'
     @description: 'Projection for Transaction Submission Errors'
@@ -58,16 +69,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action BuildSimpleAdaTransaction(
                                      @title: 'Sender Address'
                                      @description: 'The Bech32 encoded address of the sender'
-                                     senderAddress: db.Bech32,
+                                     senderAddress: Bech32,
                                      @title: 'Recipient Address'
                                      @description: 'The Bech32 encoded address of the recipient'
-                                     recipientAddress: db.Bech32,
+                                     recipientAddress: Bech32,
                                      @title: 'Lovelace Amount'
                                      @description: 'The amount of ADA to send in lovelace'
-                                     lovelaceAmount: db.Lovelace,
+                                     lovelaceAmount: Lovelace,
                                      @title: 'Change Address'
                                      @description: 'The Bech32 encoded address for returning change - defaults to sender address if not specified'
-                                     changeAddress: db.Bech32,
+                                     changeAddress: Bech32,
                                      @title: 'Output Datum JSON'
                                      @description: 'Optional inline datum to attach to the recipient output (JSON, cardano-cli DetailedSchema format). Required when sending to a script address.'
                                      outputDatumJson: String,
@@ -80,16 +91,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action BuildTransactionWithMetadata(
                                         @title: 'Sender Address'
                                         @description: 'The Bech32 encoded address of the sender'
-                                        senderAddress: db.Bech32,
+                                        senderAddress: Bech32,
                                         @title: 'Recipient Address'
                                         @description: 'The Bech32 encoded address of the recipient'
-                                        recipientAddress: db.Bech32,
+                                        recipientAddress: Bech32,
                                         @title: 'Lovelace Amount'
                                         @description: 'The amount of ADA to send in lovelace'
-                                        lovelaceAmount: db.Lovelace,
+                                        lovelaceAmount: Lovelace,
                                         @title: 'Change Address'
                                         @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-                                        changeAddress: db.Bech32,
+                                        changeAddress: Bech32,
                                         @title: 'Metadata JSON'
                                         @description: 'The JSON representation of the transaction metadata as string'
                                         metadataJson: String)  returns TransactionBuilds;
@@ -99,19 +110,19 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action BuildMultiAssetTransaction(
                                       @title: 'Sender Address'
                                       @description: 'The Bech32 encoded address of the sender'
-                                      senderAddress: db.Bech32,
+                                      senderAddress: Bech32,
                                       @title: 'Recipient Address'
                                       @description: 'The Bech32 encoded address of the recipient'
-                                      recipientAddress: db.Bech32,
+                                      recipientAddress: Bech32,
                                       @title: 'Lovelace Amount'
                                       @description: 'The amount of ADA to send in lovelace'
-                                      lovelaceAmount: db.Lovelace,
+                                      lovelaceAmount: Lovelace,
                                       @title: 'Assets JSON'
                                       @description: 'JSON array of assets to send (format: [{"unit":"policyId+assetName","quantity":"amount"}])'
                                       assetsJson: String,
                                       @title: 'Change Address'
                                       @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-                                      changeAddress: db.Bech32,
+                                      changeAddress: Bech32,
                                       @title: 'Output Datum JSON'
                                       @description: 'Optional inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address.'
                                       outputDatumJson: String) returns TransactionBuilds;
@@ -121,13 +132,13 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action BuildMintTransaction(
                                 @title: 'Sender Address'
                                 @description: 'The Bech32 encoded address of the sender (pays fees)'
-                                senderAddress: db.Bech32,
+                                senderAddress: Bech32,
                                 @title: 'Recipient Address'
                                 @description: 'The Bech32 encoded address to receive minted assets'
-                                recipientAddress: db.Bech32,
+                                recipientAddress: Bech32,
                                 @title: 'Lovelace Amount'
                                 @description: 'The amount of ADA to send with minted assets in lovelace'
-                                lovelaceAmount: db.Lovelace,
+                                lovelaceAmount: Lovelace,
                                 @title: 'Mint Actions JSON'
                                 @description: 'JSON array of mint/burn actions (format: [{"assetUnit":"policyId+assetName","quantity":"amount"}])'
                                 mintActionsJson: String,
@@ -136,7 +147,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 mintingPolicyScript: String,
                                 @title: 'Change Address'
                                 @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
-                                changeAddress: db.Bech32,
+                                changeAddress: Bech32,
                                 @title: 'Required Signers JSON'
                                 @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction. Required for Plutus validators checking extra_signatories.'
                                 requiredSignersJson: String,
@@ -152,7 +163,6 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @title: 'Lock on Script Address'
                                 @description: 'When true and scriptParamsJson is provided, routes the output to the enterprise script address derived from the applied script hash instead of recipientAddress. Returns scriptAddress in the response.'
                                 lockOnScript: Boolean)         returns TransactionBuilds;
-
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
@@ -186,13 +196,13 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action BuildPlutusSpendTransaction(
                                        @title: 'Sender Address'
                                        @description: 'The Bech32 encoded address of the sender (pays fees)'
-                                       senderAddress: db.Bech32,
+                                       senderAddress: Bech32,
                                        @title: 'Recipient Address'
                                        @description: 'The Bech32 encoded address to receive the unlocked funds'
-                                       recipientAddress: db.Bech32,
+                                       recipientAddress: Bech32,
                                        @title: 'Lovelace Amount'
                                        @description: 'The amount of ADA to send to the recipient in lovelace'
-                                       lovelaceAmount: db.Lovelace,
+                                       lovelaceAmount: Lovelace,
                                        @title: 'Validator Script'
                                        @description: 'The Plutus validator script in CBOR hex format'
                                        validatorScript: String,
@@ -210,7 +220,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        datumJson: String,
                                        @title: 'Change Address'
                                        @description: 'The Bech32 encoded address for returning change - defaults to sender address if not specified'
-                                       changeAddress: db.Bech32,
+                                       changeAddress: Bech32,
                                        @title: 'Required Signers JSON'
                                        @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction. Required for Plutus validators checking extra_signatories.'
                                        requiredSignersJson: String,
@@ -229,23 +239,13 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action SetCollateral(
                          @title: 'Address'
                          @description: 'The Bech32 encoded address to check and set up collateral for'
-                         address: db.Bech32)                   returns TransactionBuilds;
-     @title      : 'Address Transaction Builds'
+                         address: Bech32)                   returns TransactionBuilds;
+    @title      : 'Address Transaction Builds'
     @description: 'Projection for retrieving transaction builds by address'
     action GetTransactionBuildsByAddress(
                                          @title: 'Bech32 Address'
                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
-                                         address: db.Bech32)   returns array of AddressTransactionBuilds;
-
-    /**
-     * TransactionSubmissions status flow:
-     *   pending ──[submit to chain]──→ submitted  (internal, in SubmitTransaction handler)
-     *   submitted ──[CheckSubmissionStatus]──→ confirmed | stays submitted  (conditional)
-     *   pending | submitted ──→ failed  (blockchain error)
-     */
-    annotate CardanoTransactionService.TransactionSubmissions with @flow.status: status actions {
-        CheckSubmissionStatus                                      @from       : [ #submitted];
-    };
+                                         address: Bech32)   returns array of AddressTransactionBuilds;
 }
 
 

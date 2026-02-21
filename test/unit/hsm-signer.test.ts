@@ -117,7 +117,7 @@ jest.mock('pkcs11js', () => {
       return (mockPkcs11 as any)[prop];
     },
   });
-}, { virtual: true });
+});
 
 // blake2b and bech32 use REAL implementations (no mocking needed — they're installed packages)
 

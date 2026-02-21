@@ -7,7 +7,7 @@ import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-
 
 import { env } from 'process';
 
-const logger = cds.log('server');
+const logger = cds.log('ODATANO');
 
 const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
 const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios'];

@@ -1,5 +1,13 @@
 using {odatano.cardano as db} from '../db/schema';
+using { Blake2b256, Bech32 } from '../db/types';
 
+/**
+ * Cardano OData Service
+ *
+ * Handles external read-only queries for Cardano blockchain data, including:
+ * - Retrieving network information, blocks, epochs, pools, dreps, transactions, accounts, addresses, UTxOs, assets, and metadata
+ * - Providing actions for fetching specific data by identifiers (hashes, addresses, etc.) and for retrieving the latest blockchain state (latest block, epoch, protocol parameters)
+ */
 service CardanoODataService @(impl: './cardano-service') {
 
     // ---------------------------------------------------------------------------
@@ -90,7 +98,7 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetBlockByHash(
                           @title: 'Block Hash'
                           @description: 'The unique identifier of the block'
-                          hash: db.Blake2b256)               returns Blocks;
+                          hash: Blake2b256)               returns Blocks;
 
     @title      : 'Get Epochs by Epoch Number'
     @description: 'Retrieve epoch information using the Epoch Number'
@@ -118,49 +126,49 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetAccountByStakeAddress(
                                     @title: 'Stake Address'
                                     @description: 'The Bech32 encoded stake address'
-                                    stakeAddress: db.Bech32) returns Accounts;
+                                    stakeAddress: Bech32) returns Accounts;
 
     @title      : 'Get Transactions by Tx Hash'
     @description: 'Retrieve transaction information using the Transaction Hash'
     action GetTransactionByHash(
                                 @title: 'Transaction Hash'
                                 @description: 'The unique identifier of the transaction'
-                                hash: db.Blake2b256)         returns Transactions;
+                                hash: Blake2b256)         returns Transactions;
 
     @title      : 'Get Transaction Metadata by Tx Hash'
     @description: 'Retrieve transaction metadata using the Transaction Hash'
     action GetMetadataByTxHash(
                                @title: 'Transaction Hash'
                                @description: 'The unique identifier of the transaction'
-                               tx_hash: db.Blake2b256)       returns many TransactionMetadata;
+                               tx_hash: Blake2b256)       returns many TransactionMetadata;
 
     @title      : 'Get Addresses by Bech32 Address'
     @description: 'Retrieve address information using the Bech32 Address'
     action GetAddressByBech32(
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
-                              address: db.Bech32)            returns Addresses;
+                              address: Bech32)            returns Addresses;
 
     @title      : 'Get UTxOs by Bech32 Address'
     @description: 'Retrieve UTxO information using the Bech32 Address'
     action GetUTxOsByAddress(
                              @title: 'Bech32 Address'
                              @description: 'The Bech32 encoded address'
-                             address: db.Bech32)             returns many AddressUTxOs;
+                             address: Bech32)             returns many AddressUTxOs;
 
     @title      : 'Get Assets by Bech32 Address'
     @description: 'Retrieve asset information using the Bech32 Address'
     action GetAssetsByAddress(
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
-                              address: db.Bech32)            returns many AddressAssets;
+                              address: Bech32)            returns many AddressAssets;
 
     @title : 'Get latest Transactions by Bech32 Address'
     @description: 'Retrieve the latest transactions from the Bech32 Address'
     action GetLatestTransactionsByAddress(
                                     @title: 'Bech32 Address'
                                     @description: 'The Bech32 encoded address'
-                                    address: db.Bech32,
+                                    address: Bech32,
                                     @title: 'Limit'
                                     @description: 'The maximum number of transactions to retrieve'
                                     limit: Integer)            returns many AddressTransactions;
