@@ -194,6 +194,9 @@ erDiagram
         string txHash
         decimal fee
         string builder
+        string scriptHash
+        string fingerprint
+        string scriptAddress
         boolean hasInputs
         boolean hasOutputs
         datetime validFrom
@@ -262,10 +265,14 @@ erDiagram
         uuid build FK
         string txBodyHash
         string unsignedTxCbor
+        string cip30TxCbor
         string network
         string status
         string message
         string cardanoCliCommand
+        string signerType
+        string signerInfo
+        string hsmKeyId
         datetime createdAt
         datetime expiresAt
         datetime signedAt
@@ -299,9 +306,10 @@ erDiagram
     AddressTransactions {
         string address FK
         string tx FK
-        decimal netAmount
-        boolean isInput
-        boolean isOutput
+        long netAmount
+        long blockTime
+        string netAssets
+        boolean hasAssets
     }
 
     Epochs ||--o{ Blocks : has
@@ -332,83 +340,3 @@ erDiagram
     Addresses ||--o{ AddressTransactions : has
     AddressTransactions }o--|| Transactions : references
 ```
-
----
-
-## M2 Milestone Additions
-
-### Transaction Building Entities (Temporal)
-
-**TransactionBuilds** stores unsigned transactions built via OData actions:
-- **Purpose**: Track transaction building requests and provide unsigned CBOR for external signing
-- **Temporal**: Yes - respects INDEX_TTL_MS
-- **Key**: UUID (buildId)
-- **Builder**: 'csl' (Cardano Serialization Lib) or 'buildooor'
-- **Relations**: Has inputs, outputs, and their associated assets
-
-**TransactionBuildInputs/Outputs**:
-- **Purpose**: Detail the inputs and outputs of a transaction build
-- **Temporal**: No - linked to parent TransactionBuilds
-- **Relations**: Each can have multiple assets
-
-**TransactionBuildInputAssets/OutputAssets**:
-- **Purpose**: Native assets in transaction build inputs/outputs
-- **Temporal**: No
-- **Fields**: Unit, quantity, policy ID, asset name
-
-### Transaction Submission Entities (Temporal)
-
-**TransactionSubmissions** records submission attempts:
-- **Purpose**: Track signed transaction submissions to Cardano network
-- **Temporal**: Yes - respects INDEX_TTL_MS
-- **Key**: UUID (submissionId)
-- **Status**: 'pending', 'submitted', 'failed'
-- **Backend**: Which backend processed the submission (ogmios, blockfrost, koios)
-
-**TransactionSubmissionErrors**:
-- **Purpose**: Error details from failed submissions
-- **Temporal**: No - linked to parent TransactionSubmissions
-- **Fields**: Error code, message, backend that failed
-
----
-
-## M3 Milestone Additions
-
-### External Signing Entities
-
-**SigningRequests** manages the external signing workflow:
-- **Purpose**: Export unsigned transactions for external signing (CIP-30 wallets, Cardano CLI, hardware wallets)
-- **Temporal**: Yes - TTL-based expiration (30 minutes default)
-- **Key**: UUID (id)
-- **Status**: 'pending', 'signed', 'verified', 'submitted', 'expired', 'failed'
-- **Relations**: References TransactionBuilds, has SignatureVerifications
-
-**SignatureVerifications** stores cryptographic verification results:
-- **Purpose**: Audit trail for signature verification attempts
-- **Temporal**: No - immutable verification records
-- **Key**: UUID (id)
-- **Fields**: Signed CBOR, validity, witness count, signer key hashes, signer type/info
-- **Relations**: References SigningRequests
-
-### Address Association Entities
-
-**AddressSigningRequests** links addresses to signing requests:
-- **Purpose**: Query signing requests by sender address
-- **Temporal**: No
-- **Key**: Composite (address + signingRequest)
-- **Use Case**: "Show me all pending signing requests for this address"
-
-**AddressTransactionBuilds** links addresses to transaction builds:
-- **Purpose**: Query transaction builds by sender address
-- **Temporal**: No
-- **Key**: Composite (address + txBuild)
-- **Use Case**: "Show me all transaction builds for this address"
-
-**AddressTransactions** tracks address transaction history:
-- **Purpose**: Query transactions affecting an address with net amounts
-- **Temporal**: No
-- **Key**: Composite (address + tx)
-- **Fields**: Net amount change, isInput, isOutput flags
-- **Use Case**: "Show me transaction history with amounts for this address"
-
----

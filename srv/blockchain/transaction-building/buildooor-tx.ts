@@ -197,7 +197,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         u => u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex
       );
       if (!scriptOdatanoUtxo) {
-        throw new Error(`[BuildooorTxBuilder] Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
+        throw new Error(`Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
       }
 
       const scriptLedgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(scriptOdatanoUtxo);
@@ -361,7 +361,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   } {
     const adaOnlyUtxo = utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
     if (!adaOnlyUtxo) {
-      throw new Error('[BuildooorTxBuilder] No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      throw new Error('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
     }
     const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
     const fundingUtxos = utxos.filter(
@@ -498,6 +498,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       return new TxMetadatumMap(map);
     }
 
-    throw new Error(`[BuildooorTxBuilder] Unsupported metadata value type: ${typeof value}`);
+    throw new Error(`Unsupported metadata value type: ${typeof value}`);
   }
 }

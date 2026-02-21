@@ -266,10 +266,10 @@ services:
 
 | Setup | Storage | API Costs | TX Submit | M2 Transaction Building |
 |-------|---------|-----------|-----------|------------------------|
-| Ogmios + Blockfrost | ~15GB | Blockfrost fallback only | Self-hosted | Optimal |
+| Ogmios + Blockfrost | ~10GB | Blockfrost fallback only | Self-hosted | Optimal |
 | Blockfrost Only | 0GB | All queries | External API | Good |
 | Koios Only | 0GB | None (free) | External API | Good |
-| Ogmios Only | ~15GB | None | Self-hosted | Good (no history queries) |
+| Ogmios Only | ~10GB | None | Self-hosted | Good (no history queries) |
 
 **Recommendation:** `BACKENDS=ogmios,blockfrost` offers the best balance
 

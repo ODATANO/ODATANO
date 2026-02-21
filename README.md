@@ -47,7 +47,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
 - **HSM Signing**: Optional server-side transaction signing via PKCS#11 Hardware Security Modules (YubiHSM, AWS CloudHSM, Thales Luna)
-- **Comprehensive Testing**: 978 tests across 25 test suites, 96%+ statement coverage
+- **Comprehensive Testing**: 1122 tests across 29 test suites, 99% statement coverage
 
 ## Architecture Overview
 
@@ -164,7 +164,7 @@ See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
 ## Testing
 
 ```bash
-npm test                    # Run all 978 tests
+npm test                    # Run all 1122 tests
 npm run test:coverage       # With coverage report
 npm run test:integration    # Integration tests only
 npm run test:unit           # Unit tests only
@@ -184,7 +184,7 @@ See [Test Documentation](test/README.md) for details.
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
-| [Test Documentation](test/README.md) | Test suite overview (978 tests) |
+| [Test Documentation](test/README.md) | Test suite overview (1122 tests) |
 
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)

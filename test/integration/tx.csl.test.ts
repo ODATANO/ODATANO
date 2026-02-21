@@ -16,6 +16,7 @@ createTxServiceTestSuite({
   backendName: 'koios',
   txBuilderName: 'csl'
 });
+
 // Run transaction error handling tests with CSL
 createTxErrorTestSuite({
   backendName: 'koios',

@@ -448,7 +448,7 @@ ODATANO is designed for **private key isolation**:
 
 - [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md)
 - [Wallet Viewer README](../../app/wallet-viewer/README.md)
-- [BTP Deployment Learnings](BTP-DEPLOYMENT-LEARNINGS.md)
+- [Production Deployment](PRODUCTION_DEPLOYMENT.md)
 - [Developer Guide](DEVELOPER_GUIDE.md)
 
 ---

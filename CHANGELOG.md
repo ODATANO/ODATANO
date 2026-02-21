@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `signing-services.test.ts` - External signing integration tests
   - `signing.test.ts` - SignatureVerifier and ExternalSignerModule unit tests
 
-- **SAP BTP Deployment Learnings**: `BTP-DEPLOYMENT-LEARNINGS.md` with deployment patterns
+- **Production Deployment Guide**: `PRODUCTION_DEPLOYMENT.md` with deployment patterns (incl. BTP)
 
 - **2 New Transaction Actions** (Plutus Smart Contracts & Collateral):
   - `BuildPlutusSpendTransaction` - Spend UTxO locked at a Plutus validator script address (supports PlutusV3, redeemer/datum JSON, Ogmios execution unit evaluation, optional `inlineDatumJson` for state-machine continuing outputs)

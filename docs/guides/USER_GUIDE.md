@@ -1,7 +1,7 @@
 # ODATANO User Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.3.9\
+**Version:** 0.3.17\
 **Last Updated:** February 2026
 
 ---

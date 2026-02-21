@@ -1,8 +1,8 @@
 # ODATANO Developer Guide
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** 0.3.9\
-**Status:** Production-Ready - 25 test files, 96%+ coverage\
+**Version:** v0.3.milestone3\
+**Status:** Production-Ready - 29 test files, 99% statement coverage\
 **Last Updated:** February 2026
 
 ---
@@ -25,15 +25,13 @@
 
 ### Service Surface
 
-**29 Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors (M2), SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds (M3)
+**29 Entities:** NetworkInformation, Blocks, Epochs, Pools, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds
 
 **15 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetAssetsByAddress, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters
 
-**8 Transaction Actions (M2):** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus
+**11 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, SubmitSignedTransaction, GetBuildDetails, CheckSubmissionStatus, BuildPlutusSpendTransaction, SetCollateral, GetTransactionBuildsByAddress
 
-**2 Plutus Actions (M3, CardanoTransactionService):** BuildPlutusSpendTransaction, SetCollateral
-
-**6 External Signing Actions (M3, CardanoSignService):** CreateSigningRequest, GetSigningRequest, VerifySignature, SubmitVerifiedTransaction, GetSigningRequestsByAddress, GetTransactionBuildsByAddress
+**8 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
 
 ### Layered Architecture
 
@@ -50,7 +48,7 @@ Backends: Ogmios (live) + Blockfrost → Koios Fallback
     ↓
 Transaction Builders: CSL / Buildooor
     ↓
-External Signing Module (M3): ExternalSignerModule + SignatureVerifier
+External Signing Module: ExternalSignerModule + SignatureVerifier
     ↓
 SQLite Cache (temporal entities)
 ```
@@ -80,7 +78,7 @@ npm ci
 cp .env.example .env
 # Edit .env: Set BLOCKFROST_KEY, NETWORK=preview
 
-# Development (TypeScript, live reload, no .js files)
+# Development (TypeScript, live reload)
 npm run cds:watch
 
 # Production (compiles TypeScript → JavaScript)
@@ -93,48 +91,47 @@ npm run test:coverage # Coverage report
 
 **Development vs Production:**
 
-- **`npm run cds:watch`** - Development mode using `ts-node`, runs TypeScript directly, no `.js` files generated, auto-reloads on changes
+- **`npm run cds:watch`** - Development mode using `ts-node`, runs TypeScript directly, auto-reloads on changes
 - **`npm start`** - Production mode, compiles TypeScript to JavaScript (`.js` files gitignored), optimized for deployment
 
 ### Key Files
 
 ```
 srv/
-  server.ts              # App Context initialization (M3)
-  cardano-service.cds    # Read entity/action definitions
-  cardano-service.ts     # Read handler implementations
-  cardano-tx-service.cds # Transaction service definitions (build, submit)
-  cardano-tx-service.ts  # Transaction handler implementations (build, submit)
-  cardano-sign-service.cds # Signing service definitions (signing requests, verification)
-  cardano-sign-service.ts  # Signing handler implementations
+  server.ts                     # App Context initialization (M3)
+  cardano-service.cds           # Read entity/action definitions
+  cardano-service.ts            # Read handler implementations
+  cardano-tx-service.cds        # Transaction service definitions (build, submit)
+  cardano-tx-service.ts         # Transaction handler implementations (build, submit)
+  cardano-sign-service.cds      # Signing service definitions (signing requests, verification)
+  cardano-sign-service.ts       # Signing handler implementations
   blockchain/
-    cardano-client.ts    # Multi-backend orchestrator
-    cardano-indexer.ts   # Lazy indexing & caching
-    cardano-tx-builder.ts # Transaction builder coordinator (M2)
+    cardano-client.ts           # Multi-backend orchestrator
+    cardano-indexer.ts          # Lazy indexing & caching
+    cardano-tx-builder.ts       # Transaction builder coordinator (M2)
     backends/
-      blockfrost-backend.ts  # Historical provider
-      koios-backend.ts       # Fallback provider
-      ogmios-backend.ts      # Live WebSocket provider (M2)
-    transaction-building/    # M2 Transaction Builders
-      csl-tx.ts              # Cardano Serialization Lib builder
-      buildooor-tx.ts        # Buildooor builder
-      tx-builder-registry.ts # Builder factory
-    signing/                 # M3 External Signing
-      external-signer.ts     # Signing request creation & workflow
-      signature-verifier.ts  # Cryptographic signature verification
+      blockfrost-backend.ts     # Historical provider
+      koios-backend.ts          # Fallback provider
+      ogmios-backend.ts         # Live WebSocket provider (M2)
+    transaction-building/       # M2 Transaction Builders
+      csl-tx.ts                 # Cardano Serialization Lib builder
+      buildooor-tx.ts           # Buildooor builder
+      tx-builder-registry.ts    # Builder factory
+    signing/                    # M3 External Signing
+      external-signer.ts        # Signing request creation & workflow
+      signature-verifier.ts     # Cryptographic signature verification
   utils/
-    validators.ts        # Input validation (10+ functions)
-    errors.ts            # Error hierarchy (11 classes)
-    mappers.ts           # API → OData transformations
-    tx-build-helper.ts   # Transaction utilities (M2)
-    signing-helper.ts    # CIP-30 witness combination (M3)
+    validators.ts               # Input validation (10+ functions)
+    errors.ts                   # Error hierarchy (11 classes)
+    mappers.ts                  # API → OData transformations
+    tx-build-helper.ts          # Transaction utilities (M2)
+    signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds          # 29 entities with temporal support
-config/config.ts       # Timeouts, network, TTL, builders
-test/                  # 25 test files (integration + unit)
+db/schema.cds                   # 29 entities with temporal support
+config/config.ts                # Timeouts, network, TTL, builders
+test/                           # 25 test files (integration + unit)
 ```
-
 ---
 
 ## Plugin Architecture
@@ -158,23 +155,23 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 
 ```
 @odatano/core (npm package)
-├── cds-plugin.js              # CAP entry point → require('./src/plugin')
+├── cds-plugin.js                # CAP entry point → require('./src/plugin')
 ├── src/
-│   ├── plugin.ts              # Register kind, cds.on('served'), cds.on('shutdown')
-│   └── index.ts               # Public API: initialize(), shutdown(), getStatus()
+│   ├── plugin.ts                # Register kind, cds.on('served'), cds.on('shutdown')
+│   └── index.ts                 # Public API: initialize(), shutdown(), getStatus()
 ├── srv/
-│   ├── cardano-service.cds    # CardanoODataService definition
-│   ├── cardano-service.js     # Compiled handler
-│   ├── cardano-tx-service.cds # CardanoTransactionService definition
-│   ├── cardano-tx-service.js  # Compiled handler
+│   ├── cardano-service.cds      # CardanoODataService definition
+│   ├── cardano-service.js       # Compiled handler
+│   ├── cardano-tx-service.cds   # CardanoTransactionService definition
+│   ├── cardano-tx-service.js    # Compiled handler
 │   ├── cardano-sign-service.cds # CardanoSignService definition
 │   ├── cardano-sign-service.js  # Compiled handler
-│   ├── server.js              # AppContext, loadConfigFromEnv()
-│   ├── blockchain/            # Backends, indexer, tx builder, signing
-│   └── utils/                 # Validators, errors, mappers
+│   ├── server.js                # AppContext, loadConfigFromEnv()
+│   ├── blockchain/              # Backends, indexer, tx builder, signing
+│   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds             # 29 entities (namespace: odatano.cardano)
-└── config/                    # Network genesis configurations
+│   └── schema.cds               # 29 entities (namespace: odatano.cardano)
+└── config/                      # Network genesis configurations
 ```
 
 ### Plugin Bootstrap (src/plugin.ts)
@@ -186,7 +183,7 @@ let initialized = false;
 // Register the 'odatano-core' service kind
 cds.env.requires.kinds['odatano-core'] = { impl: '@odatano/core' };
 
-// Initialize on served — NEVER throws (don't crash the host app)
+// Initialize on served
 cds.on('served', async () => {
   if (initialized) return;
   try {
@@ -358,17 +355,17 @@ export const isPolicyId = (s: string): boolean => /^[a-fA-F0-9]{56}$/.test(s);
 ### 3. Error Hierarchy (srv/utils/errors.ts)
 
 ```typescript
-BackendError              // Base class (500)
-├── NotFoundError         // Resource not found (404)
-├── ProviderUnavailableError  // Timeout/unavailable (503)
-├── RateLimitError        // Rate limit exceeded (429)
-├── ConfigError           // Configuration error (500)
-├── BackendInitError      // Init failed (500)
-├── AllBackendsFailedError    // All backends failed (503)
-├── AllBackendsInitFailedError // All init failed (500)
-├── InsufficientFundsError    // Not enough UTxOs (400) - M2
-├── TransactionValidationError // Invalid signature/CBOR (400) - M2
-└── TransactionAlreadySubmittedError // Duplicate TX (409) - M2
+BackendError                            // Base class (500)
+├── NotFoundError                       // Resource not found (404)
+├── ProviderUnavailableError            // Timeout/unavailable (503)
+├── RateLimitError                      // Rate limit exceeded (429)
+├── ConfigError                         // Configuration error (500)
+├── BackendInitError                    // Init failed (500)
+├── AllBackendsFailedError              // All backends failed (503)
+├── AllBackendsInitFailedError          // All init failed (500)
+├── InsufficientFundsError              // Not enough UTxOs (400) - M2
+├── TransactionValidationError          // Invalid signature/CBOR (400) - M2
+└── TransactionAlreadySubmittedError    // Duplicate TX (409) - M2
 
 // Helper functions
 rejectMissing(req, entity, field)       // Missing parameter (400)
@@ -612,48 +609,7 @@ return handleRequest(req, async (db) => {
 
 ## Testing
 
-### Test Structure
-
-```
-test/
-├── integration/                        # Integration tests (live backend)
-│   ├── core-test-suite.ts              # Shared read tests
-│   ├── core.blockfrost.test.ts         # Blockfrost execution
-│   ├── core.koios.test.ts              # Koios execution
-│   ├── core-ogmios.test.ts             # Ogmios execution (M2)
-│   ├── error-handling-service.test.ts  # Error validation tests
-│   ├── odata_features.test.ts          # OData V4 query tests
-│   ├── tx-test-suite.ts                # Transaction builder tests (M2)
-│   ├── tx.csl.test.ts                  # CSL builder tests (M2)
-│   ├── tx.buildooor.test.ts            # Buildooor builder tests (M2)
-│   ├── tx-submission-mock.test.ts      # Submission tests (M2)
-│   └── signing-services.test.ts        # External signing tests (M3)
-└── unit/                               # Unit tests (isolated)
-    ├── validators.test.ts              # Validator tests
-    ├── errors.test.ts                  # Error class tests
-    ├── cardano-client.test.ts          # Client tests
-    ├── cardano-tx-builder.test.ts      # TX Builder tests
-    ├── blockfrost-backend.test.ts      # Blockfrost backend tests
-    ├── koios-backend.test.ts           # Koios backend tests
-    ├── ogmios-backend.test.ts          # Ogmios backend tests (M2)
-    ├── csl-tx-builder.test.ts          # CSL builder tests (M2)
-    ├── tx-builder-registry.test.ts     # Registry tests (M2)
-    ├── tx-build-helper.test.ts         # TX Helper tests (M2)
-    └── signing.test.ts                 # Signing module tests (M3)
-```
-
-**Current Status:** 25 test files, 96%+ coverage
-
-### Running Tests
-
-```bash
-npm test                          # All tests
-npm run test:coverage             # With coverage report
-npm run test:integration          # Integration only
-npm run test:unit                 # Unit only
-npm test -- core.blockfrost.test.ts  # Specific file
-npm test -- --watch               # Watch mode
-```
+See [test/README.md](../../test/README.md) for complete test documentation.
 
 ### Test Example
 
@@ -682,14 +638,12 @@ describe('CardanoODataService', () => {
             await POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: 'invalid' });
             fail('Should have thrown error');
         } catch (error) {
-            expect(error.response.status).toBe(400);
             expect(error.response.data.error.message).toContain('Invalid');
+            expect(error.response.status).toBe(400);
         }
     });
 });
 ```
-
-See [test/README.md](../../test/README.md) for complete documentation.
 
 ---
 
@@ -794,5 +748,5 @@ npm test           # Terminal 2 (wait 3s)
 - [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) - Error architecture
 - [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) - Caching strategy
 - [Backend Configuration](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- [BTP Deployment Learnings](BTP-DEPLOYMENT-LEARNINGS.md) - SAP BTP deployment patterns
+- [Production Deployment](PRODUCTION_DEPLOYMENT.md) - Production & BTP deployment
 

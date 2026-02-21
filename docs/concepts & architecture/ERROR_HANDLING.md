@@ -150,7 +150,7 @@ The `normalizeBackendError()` function converts any error into a typed `BackendE
 
 - **Blockfrost**: Returns correct HTTP statuses; 404 maps directly to NotFoundError.
 - **Koios**: May return 5xx for "not found"; normalization converts to 404 for consistency.
-- **Ogmios** (M2): WebSocket-based live backend for protocol parameters, UTxO queries, and transaction submission. Connection errors normalized to ProviderUnavailableError.
+- **Ogmios**: WebSocket-based live backend for protocol parameters, UTxO queries, and transaction submission. Connection errors normalized to ProviderUnavailableError.
 
 ## Best Practices
 
