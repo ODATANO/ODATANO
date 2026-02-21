@@ -39,7 +39,7 @@ function createMockPkcs11(options?: {
   slotCount?: number;
   privateKeyFound?: boolean;
   publicKeyFound?: boolean;
-  publicKeyFormat?: 'der' | 'raw';
+  publicKeyFormat?: 'der' | 'raw' | 'invalid';
   signError?: Error;
   loginError?: Error;
 }) {
@@ -78,7 +78,12 @@ function createMockPkcs11(options?: {
     }),
     C_FindObjectsFinal: jest.fn(),
     C_GetAttributeValue: jest.fn(() => {
-      const ecPoint = opts.publicKeyFormat === 'der' ? TEST_PUBLIC_KEY_DER : TEST_PUBLIC_KEY;
+      let ecPoint: Buffer;
+      if (opts.publicKeyFormat === 'invalid') {
+        ecPoint = Buffer.alloc(48, 0xaa); // 48 bytes — neither 34 (DER) nor 32 (raw)
+      } else {
+        ecPoint = opts.publicKeyFormat === 'der' ? TEST_PUBLIC_KEY_DER : TEST_PUBLIC_KEY;
+      }
       return [{ value: ecPoint }];
     }),
     C_SignInit: jest.fn(),
@@ -215,6 +220,14 @@ describe('HsmSigner', () => {
       await expect(signer.init('preview')).rejects.toThrow(HsmError);
       await expect(signer.init('preview')).rejects.toThrow(/CKR_PIN_INCORRECT/);
     });
+
+    it('should throw HsmError for unexpected public key format from HSM', async () => {
+      mockPkcs11 = createMockPkcs11({ publicKeyFormat: 'invalid' });
+      const signer = new HsmSigner(DEFAULT_HSM_CONFIG);
+
+      await expect(signer.init('preview')).rejects.toThrow(HsmError);
+      await expect(signer.init('preview')).rejects.toThrow(/Unexpected Ed25519 public key format/);
+    });
   });
 
   // =========================================================================
@@ -305,6 +318,28 @@ describe('HsmSigner', () => {
       expect(() => {
         signer.signTransaction('80', TX_BODY_HASH); // empty CBOR array
       }).toThrow(HsmError);
+    });
+
+    it('should replace existing VKey witnesses (filter key 0) when witness set already has entries', () => {
+      // CBOR: [emptyMap, {0: []}, true, null] — witness set has key 0 entry that should be replaced
+      const txWithExistingWitnesses = '84a0a10080f5f6';
+      const signedCbor = signer.signTransaction(txWithExistingWitnesses, TX_BODY_HASH);
+
+      expect(signedCbor).toBeDefined();
+      expect(typeof signedCbor).toBe('string');
+      // Signed tx starts with 84 (CBOR array of 4 elements)
+      expect(signedCbor.startsWith('84')).toBe(true);
+    });
+
+    it('should throw HsmError when witness set is not a CborMap', () => {
+      // CBOR: [emptyMap, [], true, null] — witness set is an array, not a map
+      const txWithArrayWitnessSet = '84a080f5f6';
+      expect(() => {
+        signer.signTransaction(txWithArrayWitnessSet, TX_BODY_HASH);
+      }).toThrow(HsmError);
+      expect(() => {
+        signer.signTransaction(txWithArrayWitnessSet, TX_BODY_HASH);
+      }).toThrow('Witness set must be CBOR map');
     });
   });
 

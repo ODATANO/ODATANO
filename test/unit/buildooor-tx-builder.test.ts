@@ -1,6 +1,15 @@
 import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
+import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
+
+// Test addresses and script hex from integration test fixtures
+const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
+const VALID_PLUTUS_SCRIPT = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+const VALID_SPENDING_SCRIPT = '587601010029800aba2aba1aab9eaab9dab9a48888966002646465300130053754003300700398038012444b30013370e9000001c4c9289bae300a3009375400915980099b874800800e2646644944c02c004c02cc030004c024dd5002459007200e18031803800980300098019baa0068a4d13656400401';
+const POLICY_ID = 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea';
+const ASSET_NAME = '546f6b656e4d';
+const ASSET_UNIT = POLICY_ID + ASSET_NAME;
 
 describe('BuildooorTxBuilder', () => {
   let builder: BuildooorTxBuilder;
@@ -65,6 +74,126 @@ describe('BuildooorTxBuilder', () => {
 
     it('should throw on unsupported type (boolean)', () => {
       expect(() => toMetadatum(true)).toThrow('Unsupported metadata value type');
+    });
+  });
+
+  // =========================================================================
+  // buildUnsignedMintTransaction — error/branch paths
+  // =========================================================================
+
+  describe('buildUnsignedMintTransaction — branch coverage', () => {
+    it('should exercise inlineDatum path before throwing on no ADA-only collateral', async () => {
+      // UTxOs with native assets only — no ADA-only UTxO for collateral
+      const multiAssetUtxo: UTxO = {
+        txHash: 'abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd',
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [
+          { unit: 'lovelace', quantity: '10000000' },
+          { unit: ASSET_UNIT, quantity: '100' },
+        ],
+      };
+
+      const req: TxBuildMintRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+        mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+        mintingPolicyScript: VALID_PLUTUS_SCRIPT,
+        inlineDatum: { constructor: 0, fields: [] },  // exercises lines 257-259
+      };
+
+      const ctx: TxBuildContext = {
+        utxos: [multiAssetUtxo],  // no ADA-only → throws at 265-267
+        protocolParameters: {} as any,
+      };
+
+      await expect(builder.buildUnsignedMintTransaction(req, ctx))
+        .rejects.toThrow('No ADA-only UTxO available for collateral');
+    });
+  });
+
+  // =========================================================================
+  // buildUnsignedPlutusSpendTransaction — error/branch paths
+  // =========================================================================
+
+  describe('buildUnsignedPlutusSpendTransaction — branch coverage', () => {
+    it('should throw when script UTxO is not found in ctx.utxos', async () => {
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: 'aaaa'.repeat(16), outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+        },
+      };
+
+      // ctx.utxos does NOT contain the referenced script UTxO
+      const ctx: TxBuildContext = {
+        utxos: [{
+          txHash: 'bbbb'.repeat(16),
+          outputIndex: 0,
+          address: TEST_ADDRESS,
+          amount: [{ unit: 'lovelace', quantity: '10000000' }],
+        }],
+        protocolParameters: {} as any,
+      };
+
+      await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
+        .rejects.toThrow('Script UTxO');
+      await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
+        .rejects.toThrow('not found in provided UTxOs');
+    });
+
+    it('should throw when no ADA-only collateral — also exercises changeAddress fallback and multi-asset loop', async () => {
+      const scriptTxHash = '1234123412341234123412341234123412341234123412341234123412341234';
+
+      // Script UTxO has lovelace + native asset → exercises multi-asset loop (lines 427-432)
+      const scriptUtxo: UTxO = {
+        txHash: scriptTxHash,
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [
+          { unit: 'lovelace', quantity: '5000000' },
+          { unit: ASSET_UNIT, quantity: '1' },
+        ],
+      };
+
+      // Funding UTxO also has native assets → no ADA-only UTxO for collateral
+      const fundingUtxo: UTxO = {
+        txHash: 'abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd',
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [
+          { unit: 'lovelace', quantity: '10000000' },
+          { unit: ASSET_UNIT, quantity: '50' },
+        ],
+      };
+
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+        // No changeAddress → exercises fallback to senderAddress (line 422)
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+        },
+      };
+
+      const ctx: TxBuildContext = {
+        utxos: [scriptUtxo, fundingUtxo],
+        protocolParameters: {} as any,
+      };
+
+      await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
+        .rejects.toThrow('No ADA-only UTxO available for collateral');
     });
   });
 });

@@ -1,11 +1,15 @@
 import { env } from 'process';
 import {
   loadConfigFromEnv,
+  loadHsmConfigFromEnv,
   getAppContext,
   getCardanoIndexer,
   getCardanoClient,
+  getCardanoTxBuilder,
   resetAppContext,
+  shutdownAppContext,
 } from '../../srv/server';
+import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
 
 describe('server.ts', () => {
 
@@ -101,6 +105,22 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Invalid FALLBACK_TIMEOUT_MS "xyz"');
       expect(() => loadConfigFromEnv()).toThrow('Must be a number');
     });
+
+    it('should warn but succeed when blockfrost backend has no API key', () => {
+      env.BACKENDS = 'blockfrost';
+      // No BLOCKFROST_API_KEY set — should still return config (warning is logged)
+      const config = loadConfigFromEnv();
+      expect(config.backends).toEqual(['blockfrost']);
+      expect(config.blockfrostApiKey).toBe('');
+    });
+
+    it('should warn but succeed when ogmios backend has no URL', () => {
+      env.BACKENDS = 'ogmios';
+      // No OGMIOS_URL set — should still return config (warning is logged)
+      const config = loadConfigFromEnv();
+      expect(config.backends).toEqual(['ogmios']);
+      expect(config.ogmiosUrl).toBe('');
+    });
   });
 
   // ============================================================================
@@ -132,7 +152,7 @@ describe('server.ts', () => {
   // ============================================================================
   // Convenience getters
   // ============================================================================
-  describe('getCardanoIndexer / getCardanoClient', () => {
+  describe('getCardanoIndexer / getCardanoClient / getCardanoTxBuilder', () => {
     afterEach(() => {
       resetAppContext(null);
     });
@@ -141,19 +161,22 @@ describe('server.ts', () => {
       resetAppContext(null);
       expect(() => getCardanoIndexer()).toThrow('Application not initialized');
       expect(() => getCardanoClient()).toThrow('Application not initialized');
+      expect(() => getCardanoTxBuilder()).toThrow('Application not initialized');
     });
 
     it('should return correct component from context', () => {
       const mockIndexer = { name: 'indexer' };
       const mockClient = { name: 'client' };
+      const mockTxBuilder = { name: 'txBuilder' };
       resetAppContext({
         cardanoClient: mockClient as any,
         cardanoIndexer: mockIndexer as any,
-        cardanoTxBuilder: {} as any,
+        cardanoTxBuilder: mockTxBuilder as any,
       });
 
       expect(getCardanoIndexer()).toBe(mockIndexer);
       expect(getCardanoClient()).toBe(mockClient);
+      expect(getCardanoTxBuilder()).toBe(mockTxBuilder);
     });
   });
 
@@ -192,6 +215,120 @@ describe('server.ts', () => {
       resetAppContext(null);
       expect(() => getAppContext()).toThrow('Application not initialized');
       expect(() => getAppContext()).toThrow('cds.served event');
+    });
+  });
+
+  // ============================================================================
+  // loadHsmConfigFromEnv
+  // ============================================================================
+  describe('loadHsmConfigFromEnv', () => {
+    const hsmKeys = ['HSM_ENABLED', 'HSM_PKCS11_MODULE', 'HSM_PIN', 'HSM_SLOT', 'HSM_KEY_ID', 'HSM_KEY_LABEL'];
+    const originalEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const key of hsmKeys) {
+        originalEnv[key] = env[key];
+        delete env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete env[key];
+        } else {
+          env[key] = value;
+        }
+      }
+    });
+
+    it('should return undefined when HSM is not enabled', () => {
+      expect(loadHsmConfigFromEnv()).toBeUndefined();
+    });
+
+    it('should return config when HSM is enabled with all required fields', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
+      env.HSM_PIN = '1234';
+      env.HSM_SLOT = '2';
+      env.HSM_KEY_ID = '0x0001';
+      env.HSM_KEY_LABEL = 'my-key';
+
+      const config = loadHsmConfigFromEnv();
+      expect(config).toBeDefined();
+      expect(config!.enabled).toBe(true);
+      expect(config!.pkcs11Module).toBe('/usr/lib/pkcs11/yubihsm.so');
+      expect(config!.pin).toBe('1234');
+      expect(config!.slot).toBe(2);
+      expect(config!.keyId).toBe('0x0001');
+      expect(config!.keyLabel).toBe('my-key');
+    });
+
+    it('should throw when HSM_PKCS11_MODULE is missing', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PIN = '1234';
+      expect(() => loadHsmConfigFromEnv()).toThrow('HSM_PKCS11_MODULE is required');
+    });
+
+    it('should throw when HSM_PIN is missing', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
+      expect(() => loadHsmConfigFromEnv()).toThrow('HSM_PIN is required');
+    });
+
+    it('should default slot to 0 when not specified', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
+      env.HSM_PIN = '1234';
+
+      const config = loadHsmConfigFromEnv();
+      expect(config!.slot).toBe(0);
+    });
+  });
+
+  // ============================================================================
+  // shutdownAppContext
+  // ============================================================================
+  describe('shutdownAppContext', () => {
+    afterEach(() => {
+      resetAppContext(null);
+      setHsmSigner(null);
+    });
+
+    it('should shutdown client and clear context', async () => {
+      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      resetAppContext({
+        cardanoClient: { shutdown: mockShutdown } as any,
+        cardanoIndexer: {} as any,
+        cardanoTxBuilder: {} as any,
+      });
+
+      await shutdownAppContext();
+
+      expect(mockShutdown).toHaveBeenCalled();
+      expect(() => getAppContext()).toThrow('Application not initialized');
+    });
+
+    it('should shutdown HSM signer if active', async () => {
+      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      resetAppContext({
+        cardanoClient: { shutdown: mockShutdown } as any,
+        cardanoIndexer: {} as any,
+        cardanoTxBuilder: {} as any,
+      });
+
+      const mockHsmShutdown = jest.fn();
+      setHsmSigner({ shutdown: mockHsmShutdown, getStatus: jest.fn() } as any);
+
+      await shutdownAppContext();
+
+      expect(mockHsmShutdown).toHaveBeenCalled();
+      expect(mockShutdown).toHaveBeenCalled();
+    });
+
+    it('should be a no-op when context is null', async () => {
+      resetAppContext(null);
+      await expect(shutdownAppContext()).resolves.toBeUndefined();
     });
   });
 });

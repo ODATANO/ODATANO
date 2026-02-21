@@ -730,6 +730,47 @@ describe('Utility Functions', () => {
         expect(ws.has(0)).toBe(true);
       }
     });
+
+    it('should throw for valid CBOR that is not a transaction array', () => {
+      // "00" = CBOR integer 0 — valid CBOR but not a CborArray with >= 2 elements
+      expect(() => {
+        combineTransactionWithWitnesses('00', VALID_WITNESS_SET_CBOR);
+      }).toThrow(TransactionValidationError);
+      expect(() => {
+        combineTransactionWithWitnesses('00', VALID_WITNESS_SET_CBOR);
+      }).toThrow('Invalid transaction CBOR structure');
+    });
+
+    it('should count witnesses from plain CborArray (pre-Conway format)', () => {
+      // Build a witness set where key 0 maps to a plain array (no Tag 258)
+      const fakeVkey = [Buffer.alloc(32, 0xaa), Buffer.alloc(64, 0xbb)];
+      const witnessMap = new Map();
+      witnessMap.set(0, [fakeVkey]); // plain array, NOT Tag(258, array)
+      const witnessCbor = cbor.encodeOne(witnessMap).toString('hex');
+
+      const result = combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessCbor);
+
+      expect(result).toBeDefined();
+      expect(result).toMatch(/^[a-f0-9]+$/);
+      // Should parse back to a valid transaction
+      const decoded = cbor.decodeFirstSync(Buffer.from(result, 'hex'));
+      expect(decoded[1]).toBeInstanceOf(Map);
+      expect(decoded[1].has(0)).toBe(true);
+    });
+
+    it('should throw for unexpected VKey witness value format', () => {
+      // Build a witness set where key 0 maps to a Buffer (CborBytes) — neither array nor tag
+      const witnessMap = new Map();
+      witnessMap.set(0, Buffer.from('not-an-array'));
+      const witnessCbor = cbor.encodeOne(witnessMap).toString('hex');
+
+      expect(() => {
+        combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessCbor);
+      }).toThrow(TransactionValidationError);
+      expect(() => {
+        combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessCbor);
+      }).toThrow('Unexpected VKey witness format');
+    });
   });
 
   describe('isWitnessSetCbor()', () => {

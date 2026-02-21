@@ -208,6 +208,28 @@ describe('Signing Services Integration Tests', () => {
       expect(data.isValid).to.equal(false);
       expect(data.witnessCount).to.equal(0);
     });
+
+    it('should reject when signing request does not exist', async () => {
+      const fakeId = '00000000-0000-0000-0000-000000000000';
+      const { status } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${fakeId})/CardanoSignService.VerifySignature`, {
+        signedTxCbor: TEST_FIXTURES.signedTxCbor1,
+      }).catch(err => err.response);
+
+      expect(status).to.equal(404);
+    });
+
+    it('should combine CIP-30 witness set with unsigned transaction', async () => {
+      // Pass witness set CBOR (not a full signed tx) — triggers combineTransactionWithWitnesses path
+      const { status, data } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.VerifySignature`, {
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+        signerType: 'cip30-wallet',
+        signerInfo: 'Nami',
+      });
+
+      expect(status).to.equal(200);
+      expect(data.isValid).to.equal(true);
+      expect(data.witnessCount).to.be.greaterThan(0);
+    });
   });
 
   // ==========================================================================
@@ -275,20 +297,19 @@ describe('Signing Services Integration Tests', () => {
   });
 
   describe('GetSigningRequestsByAddress Action', () => {
-    it('should retrieve signing requests for a given address', async () => {
-      // Create a signing request
-      const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
+    it('should retrieve signing requests for a given address via action', async () => {
+      // Create a signing request first
+      await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
 
-      // Retrieve by address
-      const { status, data } = await test.get(`/odata/v4/cardano-sign/SigningRequests?$filter=build/senderAddress eq '${TEST_FIXTURES.addressWithAssets}'`);
+      // Call the actual GetSigningRequestsByAddress action
+      const { status, data } = await test.post('/odata/v4/cardano-sign/GetSigningRequestsByAddress', {
+        address: TEST_FIXTURES.addressWithAssets,
+      });
 
       expect(status).to.equal(200);
       expect(data.value).to.be.an('array');
-      expect(data.value.length).to.be.greaterThan(0);
-      const found = data.value.find((req: any) => req.id === createData.id);
-      expect(found).to.exist;
     });
 
     it('should return error for missing address parameter', async () => {

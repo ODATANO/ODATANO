@@ -1208,6 +1208,21 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
           expect(status).to.be.equal(200);
         });
+
+        it('POST /GetLatestTransactionsByAddress – with custom limit', async () => {
+          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds, limit: 5 });
+          expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+          expect(status).to.be.equal(200);
+        });
+
+        it('POST /GetLatestTransactionsByAddress – return existing from cache', async () => {
+          // First call indexes data from backend
+          await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+          // Second call should return existing from DB (cache hit)
+          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+          expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+          expect(status).to.be.equal(200);
+        });
       });
     });
   });

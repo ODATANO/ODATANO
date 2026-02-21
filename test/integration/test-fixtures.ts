@@ -424,6 +424,15 @@ export const mockScriptTxInfo = [{
   }]
 }];
 
+// Mock Koios tx_info response for script UTxO with native assets
+export const mockScriptTxInfoWithAssets = [{
+  ...mockScriptTxInfo[0],
+  outputs: [{
+    ...mockScriptTxInfo[0].outputs[0],
+    asset_list: [{ policy_id: TEST_FIXTURES.policyId, asset_name: TEST_FIXTURES.assetName, quantity: '1' }],
+  }]
+}];
+
 /**
  * Configure environment for a specific backend test
  * This ensures only the specified backend is used as primary

@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import { createTestContext, resetAppContext, getCardanoClient, shutdownAppContext } from '../../srv/server';
-import { TEST_FIXTURES, MOCK_EVALUATED_BUDGET, mockUtxosAdaOnly, multiAssetUtxos, utxosForBurn, mockUtxosWithAssets, simpleRequestBody, mintingRequestBody, metaDataRequestBody, burningRequestBody, multiAssetRequestBody, plutusSpendRequestBody, mockScriptTxInfo, TestConfiguration } from './test-fixtures';
+import { TEST_FIXTURES, MOCK_EVALUATED_BUDGET, mockUtxosAdaOnly, multiAssetUtxos, utxosForBurn, mockUtxosWithAssets, simpleRequestBody, mintingRequestBody, metaDataRequestBody, burningRequestBody, multiAssetRequestBody, plutusSpendRequestBody, mockScriptTxInfo, mockScriptTxInfoWithAssets, TestConfiguration } from './test-fixtures';
 import { setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupNocks, nock } from './mock-helpers';
 const { SELECT, INSERT } = cds.ql;
 jest.setTimeout(60000);
@@ -561,6 +561,19 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
         });
+
+        it('POST /BuildMintTransaction - builds with inlineDatumJson and mintRedeemerJson', async () => {
+          const requestBody = {
+            ...mintingRequestBody,
+            inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: 42 }] }),
+            mintRedeemerJson: JSON.stringify({ constructor: 0, fields: [] }),
+          };
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
       });
 
       // ============================================================================
@@ -670,6 +683,28 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           delete (requestWithoutDatum as any).datumJson;
 
           const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', requestWithoutDatum);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildPlutusSpendTransaction - builds without changeAddress (falls back to senderAddress)', async () => {
+          setupTxInfoMock(mockScriptTxInfo);
+
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { changeAddress: _omitted, ...bodyWithoutChange } = plutusSpendRequestBody;
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', bodyWithoutChange);
+
+          expect(status).to.equal(200);
+          expect(data).to.have.property('unsignedTxCbor');
+          expect(data).to.have.property('txBodyHash');
+        });
+
+        it('POST /BuildPlutusSpendTransaction - preserves native assets from script UTxO in output', async () => {
+          setupTxInfoMock(mockScriptTxInfoWithAssets);
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', plutusSpendRequestBody);
 
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
