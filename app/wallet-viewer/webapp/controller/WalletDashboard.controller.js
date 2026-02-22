@@ -54,6 +54,101 @@ sap.ui.define([
                 dialogState: "None"
             });
             this.getView().setModel(this._signingModel, "signing");
+
+            // Load HSM status after models are propagated
+            var that = this;
+            this.getOwnerComponent().getRouter().getRoute("wallet").attachPatternMatched(function () {
+                that._loadHsmStatus();
+            });
+        },
+
+        // --- HSM Status ---
+
+        _loadHsmStatus: function () {
+            var oSignModel = this.getOwnerComponent().getModel("sign");
+            var oHsmModel = this.getOwnerComponent().getModel("hsm");
+            if (!oSignModel || !oHsmModel) {
+                console.warn("[HSM] sign or hsm model not available yet");
+                return;
+            }
+
+            oHsmModel.setProperty("/loading", true);
+            var that = this;
+
+            // Wait for OData metadata before calling action
+            oSignModel.getMetaModel().requestObject("/").then(function () {
+                console.log("[HSM] Metadata loaded, calling GetHsmStatus...");
+                var oAction = oSignModel.bindContext("/GetHsmStatus(...)");
+                oAction.execute("$direct").then(function () {
+                    var oResult = oAction.getBoundContext().getObject();
+                    console.log("[HSM] GetHsmStatus result:", oResult);
+                    oHsmModel.setProperty("/connected", oResult.connected || false);
+                    oHsmModel.setProperty("/keyId", oResult.keyId || null);
+                    oHsmModel.setProperty("/keyLabel", oResult.keyLabel || null);
+                    oHsmModel.setProperty("/publicKeyHash", oResult.publicKeyHash || null);
+                    oHsmModel.setProperty("/cardanoAddress", oResult.cardanoAddress || null);
+
+                    // Auto-connect with HSM address if no wallet connected
+                    if (oResult.connected && !that._walletService.getModel().getProperty("/isConnected")) {
+                        that._connectWithHsmAddress(oResult);
+                    }
+                }).catch(function (oError) {
+                    console.error("[HSM] GetHsmStatus failed:", oError);
+                    oHsmModel.setProperty("/connected", false);
+                }).finally(function () {
+                    oHsmModel.setProperty("/loading", false);
+                });
+            });
+        },
+
+        onRefreshHsmStatus: function () {
+            this._loadHsmStatus();
+        },
+
+        _connectWithHsmAddress: function (oHsmResult) {
+            var oWalletModel = this._walletService.getModel();
+            var sAddress = oHsmResult.cardanoAddress;
+            var bIsTestnet = sAddress && sAddress.startsWith("addr_test");
+
+            console.log("[HSM] Auto-connecting with HSM address:", sAddress);
+
+            oWalletModel.setProperty("/isConnected", true);
+            oWalletModel.setProperty("/connectedVia", "hsm");
+            oWalletModel.setProperty("/walletName", "HSM (" + (oHsmResult.keyLabel || "key") + ")");
+            oWalletModel.setProperty("/walletIcon", "sap-icon://key");
+            oWalletModel.setProperty("/networkId", bIsTestnet ? 0 : 1);
+            oWalletModel.setProperty("/networkName", bIsTestnet ? "Preview" : "Mainnet");
+            oWalletModel.setProperty("/addresses", [{ bech32: sAddress, isUsed: true }]);
+            oWalletModel.setProperty("/changeAddress", sAddress);
+            oWalletModel.setProperty("/balance", { lovelace: "0", assets: [] });
+
+            // Load balance from OData UTxOs
+            this._loadHsmBalance(sAddress);
+
+            // Load dashboard data
+            this._loadTransactions();
+            this._loadSigningRequests();
+            this._loadTransactionBuilds();
+        },
+
+        _loadHsmBalance: function (sAddress) {
+            var oDataModel = this.getOwnerComponent().getModel();
+            var oWalletModel = this._walletService.getModel();
+
+            // Index address first, then read totalLovelace
+            var oAction = oDataModel.bindContext("/GetAddressByBech32(...)");
+            oAction.setParameter("address", sAddress);
+            oAction.execute().then(function () {
+                var oAddrBinding = oDataModel.bindContext("/Addresses('" + sAddress + "')");
+                oAddrBinding.requestObject().then(function () {
+                    var oAddr = oAddrBinding.getBoundContext().getObject();
+                    var sLovelace = (oAddr && oAddr.totalLovelace) || "0";
+                    oWalletModel.setProperty("/balance/lovelace", sLovelace);
+                    console.log("[HSM] Balance loaded:", sLovelace, "lovelace");
+                });
+            }).catch(function (oError) {
+                console.warn("[HSM] Balance query failed:", oError);
+            });
         },
 
         // --- Wallet Connection ---
@@ -66,6 +161,7 @@ sap.ui.define([
                 var that = this;
                 this._walletService.connect(sWalletId).then(function (bConnected) {
                     if (bConnected) {
+                        that._walletService.getModel().setProperty("/connectedVia", "wallet");
                         that._loadTransactions();
                         that._loadSigningRequests();
                         that._loadTransactionBuilds();
@@ -545,7 +641,8 @@ sap.ui.define([
                 that._signingModel.setProperty("/statusMessage", "Submitting transaction...");
 
                 var oSignModel = that.getView().getModel("sign");
-                var oSubmitAction = oSignModel.bindContext("/SigningRequests('" + oSigningRequest.signingRequestId + "')/CardanoSignService.SubmitVerifiedTransaction(...)");
+                var oSubmitAction = oSignModel.bindContext("/SubmitVerifiedTransaction(...)");
+                oSubmitAction.setParameter("signingRequestId", oSigningRequest.signingRequestId);
                 oSubmitAction.setParameter("signedTxCbor", oResult.signedTxCbor);
                 oSubmitAction.setParameter("signerType", "browser-wallet");
                 oSubmitAction.setParameter("signerInfo", that._walletService.getModel().getProperty("/walletName"));
@@ -563,6 +660,38 @@ sap.ui.define([
                 });
             }).catch(function (oError) {
                 that._signingModel.setProperty("/statusMessage", (oError && oError.message) || "Signing failed");
+                that._signingModel.setProperty("/statusType", "Error");
+                that._signingModel.setProperty("/dialogState", "Error");
+            }).finally(function () {
+                that._signingModel.setProperty("/busy", false);
+            });
+        },
+
+        onSignWithHsm: function () {
+            var sBuildId = this._signingModel.getProperty("/buildId");
+            if (!sBuildId) return;
+
+            this._signingModel.setProperty("/busy", true);
+            this._signingModel.setProperty("/statusMessage", "Signing with HSM...");
+            this._signingModel.setProperty("/statusType", "Information");
+
+            var that = this;
+            var oSignModel = this.getView().getModel("sign");
+            var oHsmAction = oSignModel.bindContext("/SignAndSubmitWithHsm(...)");
+            oHsmAction.setParameter("buildId", sBuildId);
+
+            oHsmAction.execute().then(function () {
+                var oSubmission = oHsmAction.getBoundContext().getObject();
+
+                that._signingModel.setProperty("/signed", true);
+                that._signingModel.setProperty("/statusMessage", "Transaction submitted via HSM! Hash: " + ((oSubmission && oSubmission.txHash) || ""));
+                that._signingModel.setProperty("/statusType", "Success");
+                that._signingModel.setProperty("/dialogState", "Success");
+
+                MessageToast.show("HSM transaction submitted successfully!");
+                that._walletService.refresh();
+            }).catch(function (oError) {
+                that._signingModel.setProperty("/statusMessage", (oError && oError.message) || "HSM signing failed");
                 that._signingModel.setProperty("/statusType", "Error");
                 that._signingModel.setProperty("/dialogState", "Error");
             }).finally(function () {

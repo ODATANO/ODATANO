@@ -59,6 +59,40 @@
                     </content>
                 </Panel>
 
+                <!-- HSM Signing Module -->
+                <Panel expandable="true" expanded="false"
+                       visible="{hsm>/connected}"
+                       class="sapUiTinyMarginTop">
+                    <headerToolbar>
+                        <Toolbar>
+                            <Title text="HSM Signing Module" level="H5"/>
+                            <ToolbarSpacer/>
+                            <ObjectStatus text="Connected" state="Success" icon="sap-icon://connected"/>
+                            <Button icon="sap-icon://refresh" type="Transparent" press=".onRefreshHsmStatus" tooltip="Refresh HSM Status"/>
+                        </Toolbar>
+                    </headerToolbar>
+                    <content>
+                        <VBox class="sapUiSmallMargin">
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Key Label:" class="sapUiSmallMarginEnd"/>
+                                <Text text="{hsm>/keyLabel}"/>
+                            </HBox>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Key ID:" class="sapUiSmallMarginEnd"/>
+                                <Text text="{hsm>/keyId}"/>
+                            </HBox>
+                            <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                <Label text="Public Key Hash:" class="sapUiSmallMarginEnd"/>
+                                <Text text="{parts: ['hsm>/publicKeyHash'], formatter: '.formatter.truncateHash'}"/>
+                            </HBox>
+                            <HBox alignItems="Center">
+                                <Label text="Address:" class="sapUiSmallMarginEnd"/>
+                                <Text text="{parts: ['hsm>/cardanoAddress'], formatter: '.formatter.truncateAddress'}"/>
+                            </HBox>
+                        </VBox>
+                    </content>
+                </Panel>
+
                 <!-- Native Assets -->
                 <Panel
                     headerText="{= 'Native Assets (' + (${wallet>/balance/assets}.length || 0) + ')'}"

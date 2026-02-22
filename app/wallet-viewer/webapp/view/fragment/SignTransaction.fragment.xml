@@ -75,22 +75,33 @@
                     visible="{= !!${signing>/statusMessage}}"
                     class="sapUiSmallMarginTop"/>
 
+                <!-- Action Buttons -->
+                <HBox justifyContent="Center" class="sapUiSmallMarginTop"
+                      visible="{= !${signing>/busy} &amp;&amp; !${signing>/signed}}">
+                    <Button
+                        text="Sign with Wallet"
+                        type="Emphasized"
+                        icon="sap-icon://signature"
+                        press=".onConfirmSign"
+                        enabled="{= ${wallet>/isConnected} &amp;&amp; !!${signing>/buildId}}"
+                        visible="{= ${wallet>/connectedVia} === 'wallet'}"
+                        class="sapUiSmallMarginEnd"/>
+                    <Button
+                        text="Sign with HSM"
+                        type="Accept"
+                        icon="sap-icon://key"
+                        press=".onSignWithHsm"
+                        enabled="{= ${hsm>/connected} &amp;&amp; !!${signing>/buildId}}"
+                        visible="{= ${wallet>/connectedVia} === 'hsm'}"/>
+                </HBox>
+
                 <!-- Progress indicator when signing -->
                 <BusyIndicator
-                    text="Waiting for wallet signature..."
+                    text="Waiting for signature..."
                     visible="{signing>/busy}"
                     class="sapUiMediumMarginTop"/>
             </VBox>
         </content>
-
-        <beginButton>
-            <Button
-                text="Sign and Submit"
-                type="Emphasized"
-                icon="sap-icon://signature"
-                press=".onConfirmSign"
-                enabled="{= ${wallet>/isConnected} &amp;&amp; !${signing>/busy} &amp;&amp; !${signing>/signed}}"/>
-        </beginButton>
 
         <endButton>
             <Button

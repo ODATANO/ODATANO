@@ -678,8 +678,9 @@ sap.ui.define([
 
             this._flowModel.setProperty("/verifyBusy", true);
 
-            var sPath = "/SigningRequests('" + oSelectedRequest.id + "')/CardanoSignService.VerifySignature(...)";
+            var sPath = "/VerifySignature(...)";
             var oVerifyAction = oSignModel.bindContext(sPath);
+            oVerifyAction.setParameter("signingRequestId", oSelectedRequest.id);
             oVerifyAction.setParameter("signedTxCbor", sSignedCbor);
             oVerifyAction.setParameter("signerType", sSignerType || "browser-wallet");
             oVerifyAction.setParameter("signerInfo", sSignerInfo || "");
@@ -772,8 +773,9 @@ sap.ui.define([
             this._flowModel.setProperty("/submitBusy", true);
             this._flowModel.setProperty("/submitError", null);
 
-            var sPath = "/SigningRequests('" + oSelectedRequest.id + "')/CardanoSignService.SubmitVerifiedTransaction(...)";
+            var sPath = "/SubmitVerifiedTransaction(...)";
             var oSubmitAction = oSignModel.bindContext(sPath);
+            oSubmitAction.setParameter("signingRequestId", oSelectedRequest.id);
             oSubmitAction.setParameter("signedTxCbor", sSignedCbor);
             oSubmitAction.setParameter("signerType", oSelectedRequest.signerType || "browser-wallet");
             oSubmitAction.setParameter("signerInfo", oSelectedRequest.signerInfo || "");

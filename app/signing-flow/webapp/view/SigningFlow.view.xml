@@ -37,7 +37,7 @@
                     stretchContentHeight="false">
                     <items>
                         <!-- Build Tab -->
-                        <IconTabFilter text="{i18n>tabBuild}" icon="sap-icon://build" key="build">
+                        <IconTabFilter text="{i18n>tabBuild}" icon="sap-icon://wrench" key="build">
                             <core:Fragment fragmentName="odatanoview.signingflow.view.fragment.TabBuild" type="XML" />
                         </IconTabFilter>
 
