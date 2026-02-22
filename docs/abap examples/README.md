@@ -3,7 +3,8 @@
 ABAP Cloud examples demonstrating real SAP business process integration with the Cardano blockchain through the [ODATANO](https://github.com/ODATANO/ODATANO) OData V4 API. All examples target **SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
 
 ## Architecture
-![alt text](../assets/draw_io/abapbtp-ad.png)
+
+![alt text](<../assets/architecture & flow diagramms/abapbtp-ad.png>)
 
 ## Objects Overview
 
@@ -75,7 +76,8 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
 4. Run with **Right-click → Run As → ABAP Application (Console)**
 
 ### Example Package Structure after creation:
-![alt text](image-1.png)
+
+![alt text](../assets/abap_examples/abap_packages_example.png)
 
 ## Running the Tests
 
@@ -92,4 +94,4 @@ Tests 2–4 gracefully handle connection errors when ODATANO is not reachable.
 
 ## Example Output
 
-![alt text](image.png)
+![alt text](../assets/abap_examples/abap_console_tests.png)

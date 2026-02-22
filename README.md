@@ -51,7 +51,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 
 ## Architecture Overview
 
-![alt text](docs/assets/draw_io/odatano-ad.png)
+![alt text](<docs/assets/architecture & flow diagramms/odatano-ad.png>)
 
 ## Quick Start
 

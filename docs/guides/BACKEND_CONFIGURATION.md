@@ -4,7 +4,7 @@
 
 ODATANO uses a **Multi-Backend Architecture** that intelligently routes requests between providers:
 
-![alt text](../assets/draw_io/backendconfig-ad.png)
+![alt text](<../assets/architecture & flow diagramms/backendconfig-ad.png>)
 
 ## How Backend Selection Works
 

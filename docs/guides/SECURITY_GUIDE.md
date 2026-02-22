@@ -235,7 +235,7 @@ This is the most critical security boundary. **Private keys NEVER touch the serv
 
 ### External Signing Architecture
 
-![alt text](../assets/draw_io/signflow-ad.png)
+![alt text](<../assets/architecture & flow diagramms/signflow-ad.png>)
 
 The server only sees: unsigned CBOR, signed CBOR (public witnesses, NOT keys), and transaction body hashes.
 

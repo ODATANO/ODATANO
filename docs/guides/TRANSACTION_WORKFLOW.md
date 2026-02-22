@@ -24,7 +24,7 @@ This guide covers building, signing, and submitting Cardano transactions via the
 
 ODATANO follows a **Build → Sign → Submit** workflow with complete private key isolation:
 
-![alt text](../assets/draw_io/tx-flow-ad.png)
+![alt text](<../assets/architecture & flow diagramms/tx-flow-ad.png>)
 
 - Server **never** sees private keys
 - Signing is external (CLI, browser wallet, hardware wallet) or via HSM (key never leaves chip)
