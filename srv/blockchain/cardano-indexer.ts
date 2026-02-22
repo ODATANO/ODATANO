@@ -733,11 +733,12 @@ export class CardanoIndexer {
     await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
     logger.debug({ submissionId: submissionRecord.id }, 'Persisted submission record');
 
-    // Step 3: Update signing request metadata (status is set by @flow.status @to: #submitted)
+    // Step 3: Update signing request metadata and status
     const now = new Date().toISOString();
     await tx.run(
       UPDATE.entity(SigningRequests)
         .set({
+          status: 'submitted',
           signerType: signerType || 'custom',
           signerInfo: signerInfo || null,
           signedAt: now,
@@ -746,7 +747,7 @@ export class CardanoIndexer {
         })
         .where({ id: signingRequestId })
     );
-    logger.debug({ signingRequestId }, 'Updated signing request metadata (status managed by @flow.status)');
+    logger.debug({ signingRequestId }, 'Updated signing request status to submitted');
 
     // Step 4: Update build status
     await tx.run(

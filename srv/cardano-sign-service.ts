@@ -135,20 +135,17 @@ module.exports = (srv: cds.Service) => {
   });
 
   /**
-   * Verify signature of a signed transaction (bound action on SigningRequests)
-   * @flow.status validates @from: [#pending] automatically (409 if wrong state)
-   * @param req - CDS request with entity key in params, action data in data
+   * Verify signature of a signed transaction (unbound action)
+   * @param req - CDS request with signingRequestId + signedTxCbor in data
    * @returns {SignatureVerification} Persisted signature verification entity
    */
   srv.on('VerifySignature', async (req: Request) => {
     logger.debug('VerifySignature Action handler called');
-    const { id: signingRequestId } = req.params[0] as { id: string };
-    const { signedTxCbor, signerType, signerInfo } = req.data;
+    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
 
-    // Validate inputs (signingRequestId no longer needed — comes from URL)
     const errors = validateTransactionInputs(
-      { signedTxCbor },
-      ['signedTxCbor']
+      { signingRequestId, signedTxCbor },
+      ['signingRequestId', 'signedTxCbor']
     );
     throwIfValidationErrors(req, 'VerifySignature', errors);
 
@@ -157,9 +154,14 @@ module.exports = (srv: cds.Service) => {
       const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
       if (!signingRequest) rejectInvalid(req, 'VerifySignature', 'Signing request not found', 'signingRequestId');
 
-      // Check if expired (time-based, not covered by @flow.status)
+      // Check if expired
       if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
+      }
+
+      // Status check: only pending requests can be verified
+      if (signingRequest.status !== 'pending') {
+        rejectInvalid(req, 'VerifySignature', `Signing request status is '${signingRequest.status}', expected 'pending'`, 'signingRequestId');
       }
 
       // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
@@ -198,35 +200,33 @@ module.exports = (srv: cds.Service) => {
   });
 
   /**
-   * Verify and submit a signed transaction in one step (bound action on SigningRequests)
-   * @flow.status validates @from: [#pending, #verified] and sets @to: #submitted automatically
-   * @param req - CDS request with entity key in params, action data in data
+   * Verify and submit a signed transaction in one step (unbound action)
+   * @param req - CDS request with signingRequestId + signedTxCbor in data
    * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitVerifiedTransaction', async (req: Request) => {
     logger.debug('SubmitVerifiedTransaction Action handler called');
-    const { id: signingRequestId } = req.params[0] as { id: string };
-    const { signedTxCbor, signerType, signerInfo } = req.data;
+    const { signingRequestId, signedTxCbor, signerType, signerInfo } = req.data;
 
-    // Validate inputs (signingRequestId no longer needed — comes from URL)
     const errors = validateTransactionInputs(
-      { signedTxCbor },
-      ['signedTxCbor']
+      { signingRequestId, signedTxCbor },
+      ['signingRequestId', 'signedTxCbor']
     );
     throwIfValidationErrors(req, 'SubmitVerifiedTransaction', errors);
 
     return handleRequest(req, async (db) => {
-      // Fetch the signing request (@from already validated by framework)
       const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
       if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
 
-      // Check if expired (time-based, not covered by @flow.status)
+      // Check if expired
       if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
         rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
       }
 
-      // STATUS CHECKS REMOVED — @flow.status handles @from: [#pending, #verified]
-      // Previously: manual checks for 'submitted', 'expired', 'failed' states
+      // Status check: only pending or verified requests can be submitted
+      if (signingRequest.status !== 'pending' && signingRequest.status !== 'verified') {
+        rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${signingRequest.status}', expected 'pending' or 'verified'`, 'signingRequestId');
+      }
 
       // Check if build association exists
       if (!signingRequest.build_id) {

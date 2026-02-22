@@ -1,0 +1,370 @@
+{
+  "info": {
+    "_postman_id": "f3f3a8f6-fec8-4f45-86c7-a416cd168169",
+    "name": "ODATANO M3 - Full Service Catalog",
+    "description": "This Postman collection provides a set of example requests for testing and validating the **ODATANO Cardano OData Signing Service (Milestone 2)**.\n\nThe collection is intended as a **supplementary technical tool** to:\n\n- verify correct service behavior,\n    \n- inspect raw OData responses,\n    \n- test entity sets and actions independently,\n    \n- and support development, debugging, and demonstrations",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "44579347",
+    "_collection_link": "https://go.postman.co/collection/44579347-f3f3a8f6-fec8-4f45-86c7-a416cd168169?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "SigningRequests",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/SigningRequests",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "SigningRequests"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionSubmissions",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/TransactionSubmissions",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "TransactionSubmissions"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "TransactionBuilds",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/TransactionBuilds",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "TransactionBuilds"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "SignatureVerifications",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/SignatureVerifications",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "SignatureVerifications"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "AddressSigningRequests",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/SignatureVerifications",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "SignatureVerifications"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "CreateSigningRequest",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"buildId\":\"10fd4af7-9882-4352-a937-3ccbe17f0e48\",\r\n    \"message\":\"request ready to sign\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "CreateSigningRequest"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "GetSigningRequest",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"signingRequestId\":\"51a7e117-ee7b-4c80-88b5-a0e0e8129f80\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/GetSigningRequest",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "GetSigningRequest"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "GetSigningRequestsByAddress",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"address\":\"addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-transaction/GetSigningRequestsByAddress",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-transaction",
+            "GetSigningRequestsByAddress"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "VerifySignature",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"signingRequestId\": \"91c543db-c7ff-404d-9169-0d7ba3909712\",\r\n    \"signedTxCbor\":\"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\",\r\n    \"signerType\": \"browser-wallet\",\r\n    \"signerInfo\": \"signed with browser-wallet\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/VerifySignature",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "VerifySignature"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "SubmitVerifiedTransaction",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"signingRequestId\": \"91c543db-c7ff-404d-9169-0d7ba3909712\",\r\n    \"signedTxCbor\":\"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\",\r\n    \"signerType\": \"browser-wallet\",\r\n    \"signerInfo\": \"signed with browser-wallet\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransaction",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "SubmitVerifiedTransaction"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "GetHsmStatus",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/GetHsmStatus",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "GetHsmStatus"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "SignAndSubmitWithHsm",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"buildId\":\"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/SignAndSubmitWithHsm",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "SignAndSubmitWithHsm"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "SignWithHsm",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"buildId\":\"84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/SignWithHsm",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "SignWithHsm"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

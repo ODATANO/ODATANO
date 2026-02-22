@@ -34,49 +34,39 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
             @title      : 'Signing Requests'
             @description: 'Projection for Signing Requests - tracks signing workflow'
-    entity SigningRequests as projection on db.SigningRequests
-        actions {
+    entity SigningRequests as projection on db.SigningRequests;
 
-            @title      : 'Verify Signature'
-            @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
-            action VerifySignature(
-                                   @title: 'Signed Transaction CBOR'
-                                   @description: 'The signed transaction CBOR to verify'
-                                   signedTxCbor: String,
-                                   @title: 'Signer Type'
-                                   @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
-                                   signerType: String(20),
-                                   @title: 'Signer Info'
-                                   @description: 'Additional signer information (wallet name, etc.)'
-                                   signerInfo: String(100))           returns SignatureVerifications;
+    @title      : 'Verify Signature'
+    @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
+    action VerifySignature(
+                           @title: 'Signing Request ID'
+                           @description: 'The unique identifier of the signing request'
+                           signingRequestId: UUID,
+                           @title: 'Signed Transaction CBOR'
+                           @description: 'The signed transaction CBOR to verify'
+                           signedTxCbor: String,
+                           @title: 'Signer Type'
+                           @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
+                           signerType: String(20),
+                           @title: 'Signer Info'
+                           @description: 'Additional signer information (wallet name, etc.)'
+                           signerInfo: String(100))           returns SignatureVerifications;
 
-            @title      : 'Submit Verified Transaction'
-            @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
-            action SubmitVerifiedTransaction(
-                                             @title: 'Signed Transaction CBOR'
-                                             @description: 'The signed transaction CBOR'
-                                             signedTxCbor: String,
-                                             @title: 'Signer Type'
-                                             @description: 'Type of signer used'
-                                             signerType: String(20),
-                                             @title: 'Signer Info'
-                                             @description: 'Additional signer information'
-                                             signerInfo: String(100)) returns TransactionSubmissions;
-        };
-
-    /**
-     * SigningRequests status flow:
-     *   pending ──[VerifySignature]──→ verified | failed  (conditional in handler)
-     *   pending | verified ──[SubmitVerifiedTransaction]──→ submitted
-     *   pending ──[checkExpire]──→ expired  (custom time-based logic in handler)
-     */
-    annotate CardanoSignService.SigningRequests with @flow.status: status actions {
-        VerifySignature                              @from       : [ #pending];
-        SubmitVerifiedTransaction                    @from       : [
-            #pending,
-            #verified
-        ]  @to: #submitted;
-    };
+    @title      : 'Submit Verified Transaction'
+    @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
+    action SubmitVerifiedTransaction(
+                                     @title: 'Signing Request ID'
+                                     @description: 'The unique identifier of the signing request'
+                                     signingRequestId: UUID,
+                                     @title: 'Signed Transaction CBOR'
+                                     @description: 'The signed transaction CBOR'
+                                     signedTxCbor: String,
+                                     @title: 'Signer Type'
+                                     @description: 'Type of signer used'
+                                     signerType: String(20),
+                                     @title: 'Signer Info'
+                                     @description: 'Additional signer information'
+                                     signerInfo: String(100)) returns TransactionSubmissions;
 
 
     // ---------------------------------------------------------------------------

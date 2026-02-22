@@ -165,7 +165,8 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should verify valid signature', async () => {
-      const { status, data } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.VerifySignature`, {
+      const { status, data } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
         signerType: 'cardano-cli',
         signerInfo: 'Test',
@@ -184,22 +185,25 @@ describe('Signing Services Integration Tests', () => {
           .where({ id: signingRequestId })
       );
 
-      const { status: status1, data: data1 } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.VerifySignature`, {
+      const { status: status1, data: data1 } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
       }).catch(err => err.response);
       expect(status1).to.equal(400);
       expect(data1.error.message).to.include('expired');
 
-      // Test missing signedTxCbor (signingRequestId now comes from URL)
+      // Test missing signedTxCbor
       const { data: newReq } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', { buildId: testBuildId });
-      const { status: status2 } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${newReq.id})/CardanoSignService.VerifySignature`, {
+      const { status: status2 } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId: newReq.id,
       }).catch(err => err.response);
       expect(status2).to.equal(400);
     });
 
     it('should return isValid=false for invalid/missing signature (!isValidSig)', async () => {
       // Use unsignedTxCbor which has no witnesses - verification should fail
-      const { status, data } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.VerifySignature`, {
+      const { status, data } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         signerType: 'cardano-cli',
       });
@@ -211,16 +215,18 @@ describe('Signing Services Integration Tests', () => {
 
     it('should reject when signing request does not exist', async () => {
       const fakeId = '00000000-0000-0000-0000-000000000000';
-      const { status } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${fakeId})/CardanoSignService.VerifySignature`, {
+      const { status } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId: fakeId,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
       }).catch(err => err.response);
 
-      expect(status).to.equal(404);
+      expect(status).to.equal(400);
     });
 
     it('should combine CIP-30 witness set with unsigned transaction', async () => {
       // Pass witness set CBOR (not a full signed tx) — triggers combineTransactionWithWitnesses path
-      const { status, data } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.VerifySignature`, {
+      const { status, data } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
         signerType: 'cip30-wallet',
         signerInfo: 'Nami',
@@ -249,7 +255,8 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should combine witness set and submit transaction', async () => {
-      const { status, data } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.SubmitVerifiedTransaction`, {
+      const { status, data } = await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
         signerType: 'browser-wallet',
         signerInfo: 'Nami',
@@ -260,19 +267,21 @@ describe('Signing Services Integration Tests', () => {
       expect(data).to.have.property('txHash');
     });
 
-    it('should reject already-submitted requests with 409 (@flow.status)', async () => {
+    it('should reject already-submitted requests', async () => {
       // First submit succeeds
-      await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.SubmitVerifiedTransaction`, {
+      await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
       });
 
       setupTxResponseMock();
 
-      // Second submit: @flow.status rejects — status is 'submitted', @from only allows [#pending, #verified]
-      const { status: status1 } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})/CardanoSignService.SubmitVerifiedTransaction`, {
+      // Second submit: status is 'submitted', handler rejects since only [pending, verified] allowed
+      const { status: status1 } = await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
+        signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
       }).catch(err => err.response);
-      expect(status1).to.equal(409);
+      expect(status1).to.equal(400);
     });
 
     it('should reject expired requests', async () => {
@@ -288,7 +297,8 @@ describe('Signing Services Integration Tests', () => {
           .where({ id: newData.id })
       );
 
-      const { status: status2, data: data2 } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${newData.id})/CardanoSignService.SubmitVerifiedTransaction`, {
+      const { status: status2, data: data2 } = await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
+        signingRequestId: newData.id,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
       }).catch(err => err.response);
       expect(status2).to.equal(400);
@@ -366,7 +376,8 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       });
 
-      const { data: verifyData } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${createData.id})/CardanoSignService.VerifySignature`, {
+      const { data: verifyData } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId: createData.id,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
         signerType: 'cardano-cli',
       });
@@ -431,7 +442,8 @@ describe('Signing Services Integration Tests', () => {
       expect(getData.id).to.equal(createData.id);
 
       // Step 3: Verify signature
-      const { data: verifyData } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${createData.id})/CardanoSignService.VerifySignature`, {
+      const { data: verifyData } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
+        signingRequestId: createData.id,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
         signerType: 'cardano-cli',
       });
@@ -440,7 +452,8 @@ describe('Signing Services Integration Tests', () => {
       // Step 4: Submit transaction
       setupTxResponseMock();
 
-      const { data: submitData } = await test.post(`/odata/v4/cardano-sign/SigningRequests(${createData.id})/CardanoSignService.SubmitVerifiedTransaction`, {
+      const { data: submitData } = await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
+        signingRequestId: createData.id,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
         signerType: 'browser-wallet',
       });
