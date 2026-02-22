@@ -5,7 +5,7 @@ errors are normalized and propagated to the client.
 
 ## Error Classes Overview
 
-ODATANO uses **12 specialized error classes** for comprehensive error handling:
+ODATANO uses **13 specialized error classes** for comprehensive error handling:
 
 ### Backend Communication Errors
 
@@ -94,6 +94,15 @@ UTxO contains non-ADA assets when ADA-only transaction was requested.
 - **Example**: Simple ADA transfer includes UTxO with native tokens
 - **Fix**: Use multi-asset transaction or select different UTxOs
 
+### HSM Errors (M3)
+
+#### 13. `HsmError` (503)
+
+Hardware Security Module operation failed (signing, session, key access).
+- **Error Code**: `ODATANO_HSM_UNAVAILABLE`
+- **Retry-able**: Depends on root cause (session timeout vs misconfiguration)
+- **Example**: HSM device unavailable, signing session expired, key not accessible
+
 ### External Signing Errors (M3)
 
 M3 reuses existing error classes for signing-specific scenarios:
@@ -115,36 +124,67 @@ M3 reuses existing error classes for signing-specific scenarios:
 - Uses `NotFoundError`
 - Transaction build ID doesn't exist or has expired
 
+## Error Codes
+
+All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATANO_*` prefix convention:
+
+| Code | HTTP | Description |
+|------|------|-------------|
+| `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid transaction hash, missing fields |
+| `ODATANO_NOT_FOUND` | 404 | Resource not found on blockchain |
+| `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds/assets for transaction |
+| `ODATANO_TX_VALIDATION_FAILED` | 400 | Transaction failed protocol validation |
+| `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Duplicate transaction (already in mempool/on chain) |
+| `ODATANO_PROVIDER_RATE_LIMITED` | 429 | Backend rate limit exceeded |
+| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | Backend temporarily unavailable |
+| `ODATANO_INTERNAL_ERROR` | 500 | Unexpected internal error (fallback) |
+| `ODATANO_HSM_UNAVAILABLE` | 503 | HSM device or session not available |
+| `ODATANO_HSM_SIGNING_FAILED` | 500 | HSM signing operation failed |
+| `ODATANO_HSM_NOT_CONFIGURED` | 400 | HSM signing requested but not configured |
+
 ## Normalization Rules
 
 The `normalizeBackendError()` function converts any error into a typed `BackendError` using this priority:
 
 ### Priority Order
 
-1. **Message hints → 404 (NotFoundError)**
+1. **Already a `BackendError`** → return as-is (no re-normalization)
+
+2. **TypeError (null/undefined access) → 500 (BackendInitError)**
+   - Detects uninitialized backend clients (`Cannot read properties of null`)
+   - **Why**: Catches `init()` not called before use
+
+3. **TX already submitted hints → 409 (TransactionAlreadySubmittedError)**
+   - Hints: "already exists", "already submitted", "already known", "known transaction", "duplicate", "in mempool"
+   - Extracts txHash from message if present (64 hex chars)
+
+4. **TX validation hints → 400 (TransactionValidationError)**
+   - Hints: "signature", "witness", "verification failed", "deserialize", "malformed", "invalid cbor", "invalid transaction", "script failure"
+
+5. **Not-found message hints → 404 (NotFoundError)**
    - Hints: "not found", "has not been found", "does not exist", "no data", "no records", "empty result", "not available", "no metadata", "invalid address", "malformed address"
    - **Why**: Some providers return 5xx for missing resources (Koios)
-   
-2. **Status 429 or rate-limit messages → 429 (RateLimitError)**
+
+6. **Status 429 or rate-limit messages → 429 (RateLimitError)**
    - Patterns: "rate limit", "too many requests", "quota exceeded"
-   - Extracts `retry-after` header if present
-   
-3. **Status 404 → 404 (NotFoundError)**
+   - Extracts `retry-after` / `x-ratelimit-reset` header if present
+
+7. **Status 404 → 404 (NotFoundError)**
    - Direct mapping for well-behaved providers (Blockfrost)
-   
-4. **Status 5xx → 503 (ProviderUnavailableError)**
+
+8. **Status 5xx → 503 (ProviderUnavailableError)**
    - Provider server errors are retry-able
-   
-5. **Status 4xx → Check message**
-   - If "not found" in message → 404 (NotFoundError)
-   - Otherwise → 503 (ProviderUnavailableError)
-   
-6. **Unknown/network errors → 503 (ProviderUnavailableError)**
-   - Timeouts, connection refused, etc.
+
+9. **Status 4xx → 503 (ProviderUnavailableError)**
+   - Other client errors treated as provider issue
+
+10. **Unknown/network errors → 503 (ProviderUnavailableError)**
+    - Timeouts, connection refused, etc.
 
 ### Why This Approach?
+**Transaction-specific detection first** ensures that TX submission errors are classified correctly before falling through to generic provider error handling.
 
-**Message-first detection** ensures consistent 404 responses even when providers return incorrect status codes. This is critical for Koios compatibility, which may return 5xx for missing resources.
+**Message-first detection** for not-found ensures consistent 404 responses even when providers return incorrect status codes (critical for Koios-Blockfrost compatibility).
 
 ## Backend Notes
 
@@ -152,48 +192,24 @@ The `normalizeBackendError()` function converts any error into a typed `BackendE
 - **Koios**: May return 5xx for "not found"; normalization converts to 404 for consistency.
 - **Ogmios**: WebSocket-based live backend for protocol parameters, UTxO queries, and transaction submission. Connection errors normalized to ProviderUnavailableError.
 
+## Error Handling Utilities
+
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `handleRequest(req, handler)` | `backend-request-handler.ts` | Service-level wrapper — opens `cds.tx(req)`, catches errors, calls `mapError()` |
+| `handleBackendRequest(fn, backendName)` | `backend-request-handler.ts` | Backend-level wrapper — normalizes errors via `normalizeBackendError()` |
+| `mapError(req, err, ctx)` | `mappers.ts` | Converts `BackendError` → `req.reject()`, unknown errors → 500 |
+| `rejectMissing(req, ctx, field)` | `errors.ts` | Throws 400 for missing required parameter |
+| `rejectInvalid(req, ctx, message, target)` | `errors.ts` | Throws 400 for invalid input format |
+| `throwIfValidationErrors(req, ctx, errors)` | `errors.ts` | Batch validation — throws first error from `validateTransactionInputs()` |
+
 ## Best Practices
 
-### In Backend Code
-
-- Throw `NotFoundError` for empty/missing blockchain resources
-- Throw `ProviderUnavailableError` for timeouts or network errors
-- Avoid generic errors - use typed error classes
-
-### In Service Handlers
-
-**Input Validation:**
-```typescript
-import { rejectInvalid, rejectMissing } from './utils/errors';
-
-// Missing required parameter
-if (!hash) {
-    return rejectMissing(req, 'Transactions', 'hash');
-}
-
-// Invalid format
-if (!isTxHash(hash)) {
-    return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
-}
-```
-
-**Error Handling with handleRequest:**
-```typescript
-import { handleRequest } from './utils/backend-request-handler';
-
-return handleRequest(req, async (db) => {
-    // All BackendErrors are automatically caught and normalized
-    const tx = await indexer.indexTransaction(db, hash);
-    return tx;
-});
-```
-
-**Response Mapping:**
-- **404 (NotFoundError)**: Reject without logging noise
-- **429 (RateLimitError)**: Warn; include retry guidance; reject
-- **503 (ProviderUnavailableError)**: Warn; reject; callers may retry
-- **500 (ConfigError)**: Error; fix configuration before retry
-- **Unknown**: Error; reject 500
+- Throw typed error classes (`NotFoundError`, `ProviderUnavailableError`, etc.) — avoid generic `Error`
+- Wrap backend calls with `handleBackendRequest()` for automatic normalization
+- Use `handleRequest()` in CDS service handlers (full request lifecycle)
+- Input validation MUST happen **before** `handleRequest()`, not inside it
+- Use `throwIfValidationErrors()` for multi-field validation, `rejectMissing`/`rejectInvalid` for single fields
 
 ## Testing References
 
@@ -201,46 +217,3 @@ return handleRequest(req, async (db) => {
 - Blockfrost backend constructor tests: [test/unit/blockfrost-backend.test.ts](../../test/unit/blockfrost-backend.test.ts)
 - Error handling service integration tests: [test/integration/error-handling-service.test.ts](../../test/integration/error-handling-service.test.ts) (34 tests)
 
-## Summary
-
-### Runtime Errors (Client-Facing)
-
-1. **404 = NotFoundError** – Resource doesn't exist (not retry-able)
-2. **429 = RateLimitError** – Too many requests (retry after backoff)
-3. **503 = ProviderUnavailableError** – Temporary issue (retry-able)
-4. **502/503 = AllBackendsFailedError** – All backends down (retry later)
-
-### Configuration Errors (Startup)
-
-5. **500 = ConfigError** – Invalid configuration (fix config)
-6. **500 = BackendInitError** – Single backend init failed
-7. **500 = AllBackendsInitFailedError** – All backends init failed (service won't start)
-
-### Input Validation (Service Layer)
-
-8. **400 = rejectInvalid/rejectMissing** – Invalid or missing parameters
-
-### Transaction Errors (M2)
-
-9. **400 = InsufficientFundsError** – Not enough UTxOs for amount + fees
-10. **400 = TransactionValidationError** – Invalid signature or CBOR
-11. **409 = TransactionAlreadySubmittedError** – Duplicate transaction
-12. **400 = MixedAssetsError** – UTxO contains non-ADA assets
-
-### External Signing Errors (M3)
-
-- **404 = NotFoundError** – Signing request or build not found
-- **400 = rejectInvalid** – Signing request expired (TTL exceeded)
-- **400 = TransactionValidationError** – Signature verification failed
-
-### Key Principles
-
-✅ **Normalization checks message AND status** – Koios 5xx→404 if "not found"\
-✅ **Backends throw typed errors** – `NotFoundError` for missing resources\
-✅ **Tests expect consistent 404** – Both backends normalized\
-✅ **handleRequest wrapper** – Automatically catches and normalizes errors\
-✅ **Input validation helpers** – `rejectInvalid` and `rejectMissing` for 400 errors
-
-This enables clear client semantics and consistent behavior across all backends.
-
----

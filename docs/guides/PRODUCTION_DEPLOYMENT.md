@@ -8,13 +8,12 @@
 
 1. [Pre-Deployment Checklist](#pre-deployment-checklist)
 2. [Environment Configuration](#environment-configuration)
-3. [Docker Deployment](#docker-deployment)
-4. [SAP BTP Cloud Foundry Deployment](#sap-btp-cloud-foundry-deployment)
-5. [Database Configuration](#database-configuration)
-6. [Performance Tuning](#performance-tuning)
-7. [Health Monitoring](#health-monitoring)
-8. [Mainnet Considerations](#mainnet-considerations)
-9. [Troubleshooting](#troubleshooting)
+3. [SAP BTP Cloud Foundry Deployment](#sap-btp-cloud-foundry-deployment)
+4. [Database Configuration](#database-configuration)
+5. [Performance Tuning](#performance-tuning)
+6. [Health Monitoring](#health-monitoring)
+7. [Mainnet Considerations](#mainnet-considerations)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -45,9 +44,9 @@
 | Variable | Required | Default | Production | Description |
 |----------|----------|---------|-----------|-------------|
 | `NETWORK` | Yes | `preview` | `mainnet` | Target Cardano network |
-| `BACKENDS` | Yes | `koios` | `ogmios,blockfrost,koios` | Comma-separated backend providers (order = priority) |
-| `NODE_ENV` | No | `development` | `production` | Activates HANA + XSUAA profiles |
-| `TX_BUILDERS` | No | `csl` | `csl` | Transaction builder engines |
+| `BACKENDS` | Yes | `koios` | `ogmios,koios` | Comma-separated backend providers (order = priority) |
+| `NODE_ENV` | Yes | `development` | `production` | Activates HANA + XSUAA profiles |
+| `TX_BUILDERS` | Yes | `buildooor` | `buildooor` | Transaction builder engines |
 | `PORT` | No | `4004` | `4004` | HTTP server port |
 | `LOG_LEVEL` | No | `info` | `info` | `error`, `warn`, `info`, `debug` |
 
@@ -69,102 +68,21 @@
 
 ### Production .env Template
 
-```env
+```.env
 NETWORK=mainnet
 NODE_ENV=production
 PORT=4004
 LOG_LEVEL=info
 BACKENDS=ogmios,blockfrost,koios
 BLOCKFROST_API_KEY=mainnetYourApiKeyHere
-KOIOS_API_KEY=
+KOIOS_API_KEY=yourKoiosApiKeyHere
 OGMIOS_URL=ws://ogmios:1337
-TX_BUILDERS=csl
+TX_BUILDERS=buildooor
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 INDEX_TTL_MS=600000
 ```
-
-> **Never** commit API keys to version control. Use `.env` files (gitignored), Docker secrets, or SAP BTP Credential Store.
-
 ---
-
-## Docker Deployment
-
-For basic Docker setup, see [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md). This section covers production specifics.
-
-### Build Image
-
-```bash
-docker build \
-  --build-arg VERSION=0.3.17 \
-  --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-  --build-arg VCS_REF=$(git rev-parse --short HEAD) \
-  -t ghcr.io/odatano/odatano:0.3.17 .
-```
-
-### Production docker-compose.yml
-
-```yaml
-version: '3.8'
-
-services:
-  odatano:
-    image: ghcr.io/odatano/odatano:0.3.17
-    container_name: odatano-production
-    ports:
-      - "4004:4004"
-    env_file: .env
-    environment:
-      - NODE_ENV=production
-    restart: always
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/$metadata"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '1.0'
-        reservations:
-          memory: 256M
-          cpus: '0.5'
-    networks:
-      - odatano-network
-
-  cardano-node:
-    image: ghcr.io/intersectmbo/cardano-node:10.1.3
-    volumes:
-      - cardano-db:/data
-      - cardano-ipc:/ipc
-      - ./config/mainnet/cardano-node:/config
-    command: run --config /config/config.json --topology /config/topology.json
-    restart: always
-    networks:
-      - odatano-network
-
-  ogmios:
-    image: cardanosolutions/ogmios:v6.14.0
-    ports:
-      - "1337:1337"
-    volumes:
-      - cardano-ipc:/ipc
-    depends_on:
-      - cardano-node
-    restart: always
-    networks:
-      - odatano-network
-
-volumes:
-  cardano-db:
-  cardano-ipc:
-
-networks:
-  odatano-network:
-    driver: bridge
-```
 
 ### Key Differences from Development
 
@@ -311,17 +229,10 @@ resources:
 
 ### Build & Deploy
 
-**Windows:** `mbt build` does not work on Windows/MSYS. Use WSL:
-
 ```bash
-# In WSL
-rsync -av --delete \
-  --exclude 'node_modules' --exclude '.git' --exclude 'gen' \
-  --exclude 'mta_archives' --exclude 'app/wallet-viewer/dist' \
-  /mnt/c/Users/max/ODATANO/ ~/ODATANO/
 
 cd ~/ODATANO && npm ci && mbt build
-cp -r mta_archives /mnt/c/Users/max/ODATANO/
+
 ```
 
 **Deploy:**
@@ -458,8 +369,8 @@ parameters:
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/odata/v4/cardano-odata/$metadata` | GET | Service health (200 + XML) |
-| `/odata/v4/cardano-odata/GetNetworkInformation` | POST | Backend connectivity (200 + JSON) |
 | `/odata/v4/cardano-transaction/$metadata` | GET | Transaction service health (200 + XML) |
+| `/odata/v4/cardano-signing/$metadata` | GET | Signing service health (200 + XML) |
 
 ### Backend Connectivity
 
@@ -475,34 +386,12 @@ curl -s http://localhost:1337/health | jq '.networkSynchronization'
 # Should return > 0.99
 ```
 
-### Health Check Script
-
-```bash
-#!/bin/bash
-ODATANO_URL="http://localhost:4004"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$ODATANO_URL/odata/v4/cardano-odata/\$metadata")
-if [ "$HTTP_CODE" != "200" ]; then
-  echo "ALERT: ODATANO unhealthy (HTTP $HTTP_CODE)" && exit 1
-fi
-echo "OK: ODATANO healthy"
-```
-
----
-
 ## Mainnet Considerations
 
 Setting `NETWORK=mainnet` affects:
 - Blockfrost endpoint: `cardano-mainnet.blockfrost.io`
 - Address validation: expects `addr1...` / `stake1...` prefixes
 - Ogmios must connect to a mainnet-synced node
-
-### Blockfrost Tiers
-
-| Tier | Requests/Day | Rate Limit | Use Case |
-|------|-------------|------------|----------|
-| Free | 50,000 | 10 req/sec | Development |
-| Professional | 5,000,000 | 250 req/sec | Production |
-| Enterprise | Unlimited | Custom | High-throughput |
 
 ### Security Best Practices
 

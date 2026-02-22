@@ -77,3 +77,5 @@ dist/
 
 M3_RELEASE_CHECK.md
 
+*.drawio.png
+*.drawio

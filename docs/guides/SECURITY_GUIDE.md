@@ -1,6 +1,6 @@
 # ODATANO Security & Authentication Guide
 
-**Version:** 0.3.17 | **Last Updated:** February 2026
+**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
 
 ---
 
@@ -44,7 +44,8 @@ Layer 7: Audit Trail (SigningRequests + SignatureVerifications + TransactionSubm
 | Service | Purpose | Risk Profile |
 |---------|---------|--------------|
 | `CardanoODataService` | Read-only blockchain queries | Low — no state mutation |
-| `CardanoTransactionService` | Transaction building, signing, submission | High — involves funds movement |
+| `CardanoTransactionService` | Transaction building, signing, submission | Medium — involves funds movement preparation |
+| `CardanoSigningService` | Transaction signing | High — involves private key operations |
 
 This enables independent security policies per service.
 
@@ -194,16 +195,6 @@ Restrict allowed origins in production (no wildcards):
 | `X-Frame-Options` | `SAMEORIGIN` |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 
-### Rate Limiting
-
-ODATANO handles upstream provider rate limits (`RateLimitError`, HTTP 429). For protecting ODATANO itself, deploy an API gateway with rate limiting:
-
-```
-Client --> API Gateway (rate limit) --> AppRouter (auth) --> CAP Server
-```
-
----
-
 ## Secret Management
 
 ### Sensitive Variables
@@ -211,7 +202,7 @@ Client --> API Gateway (rate limit) --> AppRouter (auth) --> CAP Server
 | Variable | Sensitivity | Notes |
 |----------|-------------|-------|
 | `BLOCKFROST_API_KEY` | High | Grants API access, counts toward quota |
-| `KOIOS_API_KEY` | Medium | Free tier available without key |
+| `KOIOS_API_KEY` | Medium | Free tier available without key too|
 | `OGMIOS_URL` | Medium | Exposes local node endpoint |
 | `HSM_PIN` | Critical | PKCS#11 authentication |
 
@@ -244,23 +235,7 @@ This is the most critical security boundary. **Private keys NEVER touch the serv
 
 ### External Signing Architecture
 
-```
-ODATANO Server                           External (Client-Side)
-+----------------------+                 +---------------------------+
-| 1. Build Transaction |  unsigned CBOR  |                           |
-|    - Fetch UTxOs     | --------------> | 2. Sign Transaction       |
-|    - Calculate fees  |                 |    - CIP-30 Wallet        |
-|    - Serialize CBOR  |  signed CBOR    |    - Cardano CLI          |
-| 3. Verify Signature  | <-------------- |    - Hardware Wallet      |
-| 4. Submit to Network |                 +---------------------------+
-+----------------------+
-         OR (HSM mode)
-+----------------------+                 +---------------------------+
-| 1. Build Transaction |  tx body hash   | HSM Hardware              |
-| 2. Sign via PKCS#11  | --------------> |   - Ed25519 signing       |
-| 3. Verify + Submit   |  signature      |   - Key never leaves chip |
-+----------------------+ <-------------- +---------------------------+
-```
+![alt text](../assets/draw_io/signflow-ad.png)
 
 The server only sees: unsigned CBOR, signed CBOR (public witnesses, NOT keys), and transaction body hashes.
 
@@ -305,15 +280,6 @@ HSM_KEY_ID=0x0001
 curl -X POST http://localhost:4004/odata/v4/cardano-sign/GetHsmStatus \
   -H "Content-Type: application/json" -d '{}'
 ```
-
-### Dual-Library Signature Verification
-
-ODATANO uses two libraries for verification (`srv/blockchain/signing/signature-verifier.ts`):
-
-- **Harmoniclabs**: Computes tx body hash from CBOR (preserves original byte encoding for correct Blake2b-256)
-- **CSL**: Extracts witness set and performs Ed25519 signature verification
-
-This approach avoids CSL's CBOR normalization issue (re-serialization changes bytes → wrong hash).
 
 ### Verification Checks
 
@@ -391,63 +357,6 @@ GET /odata/v4/cardano-transaction/SigningRequests
 GET /odata/v4/cardano-transaction/TransactionSubmissions
     ?$filter=status eq 'failed'
 ```
-
----
-
-## Production Security Checklist
-
-### Authentication & Authorization
-
-- [ ] XSUAA service instance created and bound
-- [ ] `xs-security.json` deployed with appropriate scopes
-- [ ] Role collections assigned to users in BTP Cockpit
-- [ ] CDS `@requires` annotations on services/actions
-- [ ] Unauthenticated requests return HTTP 401
-
-### Transport & Network
-
-- [ ] All traffic over HTTPS/TLS
-- [ ] CAP server only accessible via AppRouter (not internet-facing)
-- [ ] CSRF protection enabled on all routes
-- [ ] Ogmios and database on internal network
-- [ ] Security headers configured (HSTS, CSP, X-Frame-Options, nosniff)
-
-### Secrets
-
-- [ ] No secrets in version control
-- [ ] `.env` in `.gitignore`
-- [ ] Production secrets in Credential Store / User-Provided Service
-- [ ] No `*.skey`/`*.vkey` files accessible to server
-- [ ] API keys rotated since initial setup
-- [ ] HSM PIN in credential store (not source code)
-
-### Input & Transaction Security
-
-- [ ] All endpoints validate input via `validators.ts`
-- [ ] JSON size/complexity limits enforced
-- [ ] Network-aware address validation active
-- [ ] External signing only (no private keys on server)
-- [ ] Signing request TTL enabled (30 min default)
-- [ ] Dual-library signature verification active
-- [ ] `NETWORK` env var matches deployment target
-
-### HSM (if applicable)
-
-- [ ] HSM key `CKA_EXTRACTABLE=false`
-- [ ] `GetHsmStatus` returns `connected: true`
-- [ ] HSM failure doesn't crash application
-- [ ] Audit trail shows `signerType='hsm'` + `hsmKeyId`
-
-### Monitoring
-
-- [ ] Audit entities record all operations
-- [ ] Log level appropriate for production
-- [ ] Logs do NOT contain sensitive data (API keys, private keys)
-- [ ] Rate limiting at API gateway level
-- [ ] CORS restricted to known origins
-
----
-
 ## References
 
 - [SAP CAP Security Guide](https://cap.cloud.sap/docs/guides/security/)
@@ -457,5 +366,3 @@ GET /odata/v4/cardano-transaction/TransactionSubmissions
 - [CIP-30 Cardano Wallet API](https://cips.cardano.org/cip/CIP-30/)
 
 ---
-
-**Version:** 0.3.17 | **License:** Apache 2.0 | **Repository:** [github.com/ODATANO/ODATANO](https://github.com/ODATANO/ODATANO)

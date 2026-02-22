@@ -1,6 +1,6 @@
 # Transaction Workflow Guide
 
-**Version:** 0.3.17 | **Last Updated:** February 2026
+**Version:** v0.3.milstone3 | **Last Updated:** February 2026
 
 This guide covers building, signing, and submitting Cardano transactions via the ODATANO API.
 
@@ -24,12 +24,7 @@ This guide covers building, signing, and submitting Cardano transactions via the
 
 ODATANO follows a **Build → Sign → Submit** workflow with complete private key isolation:
 
-```
-┌─────────────┐      ┌──────────────┐      ┌─────────────┐
-│   BUILD     │ ───> │     SIGN     │ ───> │   SUBMIT    │
-│  (Server)   │      │  (External)  │      │  (Server)   │
-└─────────────┘      └──────────────┘      └─────────────┘
-```
+![alt text](../assets/draw_io/tx-flow-ad.png)
 
 - Server **never** sees private keys
 - Signing is external (CLI, browser wallet, hardware wallet) or via HSM (key never leaves chip)
@@ -340,5 +335,3 @@ Plutus transactions require collateral. Use `SetCollateral` to create a dedicate
 - [Security Guide](SECURITY_GUIDE.md) — Signing security, HSM details, signature verification
 
 ---
-
-**Version:** 0.3.17 | **License:** Apache 2.0 | **Repository:** [github.com/ODATANO/ODATANO](https://github.com/ODATANO/ODATANO)

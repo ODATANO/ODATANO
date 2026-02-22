@@ -18,11 +18,11 @@ config:
     titleColor: "#001840"
     edgeLabelBackground: "#f0f5ff"
     textColor: "#001840"
-    background: "#ffffff"
+    background: "#193b79"
     fontSize: "13px"
     fontFamily: "monospace"
-    attributeBackgroundColorEven: "#f0f5ff"
-    attributeBackgroundColorOdd: "#e0ecff"
+    attributeBackgroundColorEven: "#1a60eb"
+    attributeBackgroundColorOdd: "#4d7bc5"
   er:
     layoutDirection: "TB"
     fontSize: 12
