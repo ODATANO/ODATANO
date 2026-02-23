@@ -53,7 +53,7 @@ sap.ui.define([
             }).catch(function () {
                 // GetTransactionByHash may fail if already indexed, try direct read
                 return that._readTransactionEntity(sTxHash);
-            }).catch(function (oError) {
+            }).catch(function () {
                 that._oModel.setProperty("/busy", false);
                 MessageToast.show("Failed to load transaction");
             });

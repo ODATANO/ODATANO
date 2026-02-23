@@ -108,6 +108,45 @@ npm run cds:watch
 
 See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 
+### HSM Signing (Optional)
+
+ODATANO supports server-side transaction signing via PKCS#11-compatible Hardware Security Modules (YubiHSM 2, AWS CloudHSM, Thales Luna, SoftHSM). Private keys never leave the HSM — only signatures are returned.
+
+**Plugin mode** — add `hsm` to your `cds.requires.odatano-core` config:
+
+```json
+{
+  "cds": {
+    "requires": {
+      "odatano-core": {
+        "network": "preview",
+        "backends": ["blockfrost"],
+        "blockfrostApiKey": "preview_YOUR_KEY",
+        "hsm": {
+          "enabled": true,
+          "pkcs11Module": "/usr/lib/libsofthsm2.so",
+          "pin": "1234",
+          "slot": 0,
+          "keyLabel": "cardano-signing-key"
+        }
+      }
+    }
+  }
+}
+```
+
+**Standalone mode** — use environment variables:
+
+```bash
+HSM_ENABLED=true
+HSM_PKCS11_MODULE=/usr/lib/libsofthsm2.so
+HSM_PIN=1234
+HSM_SLOT=0
+HSM_KEY_LABEL=cardano-signing-key
+```
+
+HSM is opt-in — if not configured, the signing service still works with external signing (CLI, browser wallets). If HSM initialization fails, the app continues without HSM (non-fatal). See [Security Guide](docs/guides/SECURITY_GUIDE.md) for details.
+
 ## Usage Examples
 
 **Read Operations (M1):**

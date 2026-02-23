@@ -4,9 +4,10 @@ sap.ui.define([
     "sap/m/MessageBox",
     "sap/m/MessageToast",
     "sap/ui/core/Fragment",
+    "sap/base/Log",
     "odatano/common/wallet/WalletService",
     "odatano/common/model/formatter"
-], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, WalletService, formatter) {
+], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, Log, WalletService, formatter) {
     "use strict";
 
     var INITIAL_FLOW_STATE = {
@@ -112,7 +113,6 @@ sap.ui.define([
             if (!oSignModel || !oHsmModel) return;
 
             oHsmModel.setProperty("/loading", true);
-            var that = this;
 
             oSignModel.getMetaModel().requestObject("/").then(function () {
                 var oAction = oSignModel.bindContext("/GetHsmStatus(...)");
@@ -317,7 +317,7 @@ sap.ui.define([
                 });
                 that._walletService.getModel().setProperty("/utxos", aUtxos);
             }).catch(function (oError) {
-                console.warn("Failed to load UTxOs:", oError && oError.message);
+                Log.warning("Failed to load UTxOs: " + (oError && oError.message));
             });
         },
 
@@ -339,7 +339,7 @@ sap.ui.define([
                 var aTransactions = aRaw.map(function (oData) {
                     var aAssets = [];
                     if (oData.netAssets) {
-                        try { aAssets = JSON.parse(oData.netAssets); } catch (e) { aAssets = []; }
+                        try { aAssets = JSON.parse(oData.netAssets); } catch (e) { aAssets = []; } // eslint-disable-line no-unused-vars
                     }
                     return {
                         txHash: oData.tx_hash || "",
@@ -353,7 +353,7 @@ sap.ui.define([
                 that._walletService.getModel().setProperty("/transactions", aTransactions);
             }).catch(function (oError) {
                 // Log error for debugging, don't crash the app
-                console.warn("Failed to load transactions:", oError && oError.message);
+                Log.warning("Failed to load transactions: " + (oError && oError.message));
             });
         },
 
@@ -870,7 +870,7 @@ sap.ui.define([
                         }
                         var aKeyHashes = [];
                         if (oVerif.signerKeyHashes) {
-                            try { aKeyHashes = JSON.parse(oVerif.signerKeyHashes); } catch (e) { aKeyHashes = []; }
+                            try { aKeyHashes = JSON.parse(oVerif.signerKeyHashes); } catch (e) { aKeyHashes = []; } // eslint-disable-line no-unused-vars
                         }
                         that._hsmVerification = {
                             isValid: oVerif.isValid || false,
@@ -1091,7 +1091,7 @@ sap.ui.define([
                 var oResult = oVerifyAction.getBoundContext().getObject();
                 var aKeyHashes = [];
                 if (oResult.signerKeyHashes) {
-                    try { aKeyHashes = JSON.parse(oResult.signerKeyHashes); } catch (e) { aKeyHashes = []; }
+                    try { aKeyHashes = JSON.parse(oResult.signerKeyHashes); } catch (e) { aKeyHashes = []; } // eslint-disable-line no-unused-vars
                 }
 
                 if (oResult && oResult.isValid) {

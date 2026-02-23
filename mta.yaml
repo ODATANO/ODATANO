@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 0.2.0
+version: 0.3.18
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
@@ -68,30 +68,14 @@ modules:
     build-parameters:
       build-result: app/
       requires:
-        - name: odatanowalletviewer
+        - name: odatanowallet
           artifacts:
-            - odatanowalletviewer.zip
-          target-path: app/
-        - name: odatanosigningflow
-          artifacts:
-            - odatanosigningflow.zip
+            - odatanowallet.zip
           target-path: app/
 
-  - name: odatanowalletviewer
+  - name: odatanowallet
     type: html5
-    path: app/wallet-viewer
-    build-parameters:
-      build-result: dist
-      builder: custom
-      commands:
-        - npm install
-        - npm run build
-      supported-platforms:
-        []
-
-  - name: odatanosigningflow
-    type: html5
-    path: app/signing-flow
+    path: app/wallet
     build-parameters:
       build-result: dist
       builder: custom

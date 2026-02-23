@@ -77,7 +77,7 @@ export default [
 
   // Browser globals for UI5 apps (signing-flow + wallet-viewer)
   {
-    files: ['app/signing-flow/**/*.{ts,js}', 'app/wallet-viewer/**/*.{ts,js}'],
+    files: ['app/signing-flow/**/*.{ts,js}', 'app/wallet-viewer/**/*.{ts,js}', 'app/wallet/**/*.{ts,js}'],
     languageOptions: {
       globals: {
         navigator: 'readonly',
