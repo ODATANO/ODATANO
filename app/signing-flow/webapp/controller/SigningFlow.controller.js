@@ -88,11 +88,119 @@ sap.ui.define([
             this._expirationInterval = null;
             this._statusPollingInterval = null;
             this._expiresAtTimestamp = 0;
+
+            // Load HSM status
+            var that = this;
+            this.getOwnerComponent().getRouter().getRoute("flow").attachPatternMatched(function () {
+                that._loadHsmStatus();
+            });
         },
 
         onExit: function () {
             this._clearExpirationTimer();
             this._clearStatusPolling();
+        },
+
+        // ===== HSM Status =====
+
+        _loadHsmStatus: function () {
+            var oSignModel = this.getView().getModel("sign");
+            var oHsmModel = this.getOwnerComponent().getModel("hsm");
+            if (!oSignModel || !oHsmModel) return;
+
+            oHsmModel.setProperty("/loading", true);
+            var that = this;
+
+            oSignModel.getMetaModel().requestObject("/").then(function () {
+                var oAction = oSignModel.bindContext("/GetHsmStatus(...)");
+                oAction.execute("$direct").then(function () {
+                    var oResult = oAction.getBoundContext().getObject();
+                    oHsmModel.setProperty("/connected", oResult.connected || false);
+                    oHsmModel.setProperty("/keyId", oResult.keyId || null);
+                    oHsmModel.setProperty("/keyLabel", oResult.keyLabel || null);
+                    oHsmModel.setProperty("/publicKeyHash", oResult.publicKeyHash || null);
+                    oHsmModel.setProperty("/cardanoAddress", oResult.cardanoAddress || null);
+                }).catch(function () {
+                    oHsmModel.setProperty("/connected", false);
+                }).finally(function () {
+                    oHsmModel.setProperty("/loading", false);
+                });
+            });
+        },
+
+        onHsmConnect: function () {
+            var oHsmModel = this.getOwnerComponent().getModel("hsm");
+            var oHsmData = {
+                connected: oHsmModel.getProperty("/connected"),
+                keyId: oHsmModel.getProperty("/keyId"),
+                keyLabel: oHsmModel.getProperty("/keyLabel"),
+                publicKeyHash: oHsmModel.getProperty("/publicKeyHash"),
+                cardanoAddress: oHsmModel.getProperty("/cardanoAddress")
+            };
+            this._connectWithHsmAddress(oHsmData);
+        },
+
+        onManualAddressConnect: function () {
+            var oWalletModel = this._walletService.getModel();
+            var sAddress = (oWalletModel.getProperty("/manualAddress") || "").trim();
+
+            if (!sAddress || (!sAddress.startsWith("addr_test1") && !sAddress.startsWith("addr1"))) {
+                MessageBox.error("Please enter a valid Cardano address (addr_test1... or addr1...)");
+                return;
+            }
+
+            var bIsTestnet = sAddress.startsWith("addr_test");
+            oWalletModel.setProperty("/isConnected", true);
+            oWalletModel.setProperty("/connectedVia", "manual");
+            oWalletModel.setProperty("/walletName", "Manual Address");
+            oWalletModel.setProperty("/walletIcon", "sap-icon://enter-more");
+            oWalletModel.setProperty("/networkId", bIsTestnet ? 0 : 1);
+            oWalletModel.setProperty("/networkName", bIsTestnet ? "Preview" : "Mainnet");
+            oWalletModel.setProperty("/addresses", [{ bech32: sAddress, isUsed: true }]);
+            oWalletModel.setProperty("/changeAddress", sAddress);
+            oWalletModel.setProperty("/balance", { lovelace: "0", assets: [] });
+
+            this._loadHsmBalance(sAddress);
+            this._initFlowForWallet();
+            this._loadAndCategorizeRequests();
+        },
+
+        _connectWithHsmAddress: function (oHsmResult) {
+            var oWalletModel = this._walletService.getModel();
+            var sAddress = oHsmResult.cardanoAddress;
+            var bIsTestnet = sAddress && sAddress.startsWith("addr_test");
+
+            oWalletModel.setProperty("/isConnected", true);
+            oWalletModel.setProperty("/connectedVia", "hsm");
+            oWalletModel.setProperty("/walletName", "HSM (" + (oHsmResult.keyLabel || "key") + ")");
+            oWalletModel.setProperty("/walletIcon", "sap-icon://key");
+            oWalletModel.setProperty("/networkId", bIsTestnet ? 0 : 1);
+            oWalletModel.setProperty("/networkName", bIsTestnet ? "Preview" : "Mainnet");
+            oWalletModel.setProperty("/addresses", [{ bech32: sAddress, isUsed: true }]);
+            oWalletModel.setProperty("/changeAddress", sAddress);
+            oWalletModel.setProperty("/balance", { lovelace: "0", assets: [] });
+
+            this._loadHsmBalance(sAddress);
+            this._initFlowForWallet();
+            this._loadAndCategorizeRequests();
+        },
+
+        _loadHsmBalance: function (sAddress) {
+            var oDataModel = this.getOwnerComponent().getModel();
+            var oWalletModel = this._walletService.getModel();
+
+            var oAction = oDataModel.bindContext("/GetAddressByBech32(...)");
+            oAction.setParameter("address", sAddress);
+            oAction.execute().then(function () {
+                var oAddrBinding = oDataModel.bindContext("/Addresses('" + sAddress + "')");
+                oAddrBinding.requestObject().then(function () {
+                    var oAddr = oAddrBinding.getBoundContext().getObject();
+                    var sLovelace = (oAddr && oAddr.totalLovelace) || "0";
+                    oWalletModel.setProperty("/balance/lovelace", sLovelace);
+                });
+            }).catch(function () {
+                // Balance query failed silently
+            });
         },
 
         // ===== Wallet Connection =====
@@ -105,6 +213,7 @@ sap.ui.define([
                 var that = this;
                 this._walletService.connect(sWalletId).then(function (bConnected) {
                     if (bConnected) {
+                        that._walletService.getModel().setProperty("/connectedVia", "wallet");
                         that._initFlowForWallet();
                         that._loadAndCategorizeRequests();
                     }
@@ -186,6 +295,7 @@ sap.ui.define([
                             var oSr = oSrBinding.getBoundContext().getObject();
                             resolve(oSr ? {
                                 id: oSr.id,
+                                build_id: oSr.build_id || "",
                                 status: oSr.status || "unknown",
                                 createdAt: oSr.createdAt || "",
                                 expiresAt: oSr.expiresAt || "",
@@ -365,7 +475,8 @@ sap.ui.define([
         },
 
         onRecipientAddressChange: function (oEvent) {
-            var sValue = (oEvent.getParameter("newValue") || "").trim();
+            var sValue = (oEvent.getParameter("value") || oEvent.getParameter("newValue") || "").trim();
+            this._flowModel.setProperty("/recipientAddress", sValue);
             var bech32Charset = /^[a-z0-9_]+$/;
             var MIN_ADDR_LENGTH = 58;
 
@@ -390,7 +501,8 @@ sap.ui.define([
         },
 
         onAmountChange: function (oEvent) {
-            var sValue = oEvent.getParameter("newValue");
+            var sValue = oEvent.getParameter("value") || oEvent.getParameter("newValue") || "";
+            this._flowModel.setProperty("/adaAmount", sValue);
             var nNumValue = parseFloat(sValue);
             var sBalance = this._walletService.getModel().getProperty("/balance/lovelace") || "0";
             var nAvailableAda = parseInt(sBalance, 10) / 1000000;
@@ -595,6 +707,130 @@ sap.ui.define([
             });
         },
 
+        // ===== HSM Sign (Build -> Verified transition, skips Pending) =====
+
+        onSignBuildWithHsm: function () {
+            var oSignModel = this.getView().getModel("sign");
+            var sBuildId = this._flowModel.getProperty("/build/id");
+            if (!oSignModel || !sBuildId) return;
+
+            this._flowModel.setProperty("/signingBusy", true);
+            this._performHsmSign(oSignModel, sBuildId, "signingBusy");
+        },
+
+        // ===== HSM Sign from Pending tab =====
+
+        onSignPendingWithHsm: function () {
+            var oSignModel = this.getView().getModel("sign");
+            var sBuildId = this._flowModel.getProperty("/build/id")
+                || this._flowModel.getProperty("/selectedRequest/build_id");
+            if (!oSignModel || !sBuildId) {
+                MessageBox.warning("No build available. Please build a transaction first.");
+                return;
+            }
+
+            this._flowModel.setProperty("/signBusy", true);
+            this._flowModel.setProperty("/signMessage", "Signing with HSM...");
+            this._flowModel.setProperty("/signMessageType", "Information");
+            this._performHsmSign(oSignModel, sBuildId, "signBusy");
+        },
+
+        _performHsmSign: function (oSignModel, sBuildId, sBusyProp) {
+            var oHsmAction = oSignModel.bindContext("/SignWithHsm(...)");
+            oHsmAction.setParameter("buildId", sBuildId);
+
+            var that = this;
+            oHsmAction.execute().then(function () {
+                var oSR = oHsmAction.getBoundContext().getObject();
+                if (!oSR || !oSR.id) {
+                    throw new Error("HSM signing failed");
+                }
+
+                var sNewId = oSR.id;
+                var sSignedCbor = null;
+
+                // Load signedTxCbor from verification for subsequent submit step
+                return that._loadSignedCborForRequest(oSignModel, sNewId).then(function () {
+                    // Save signedTxCbor before _selectRequest clears it
+                    sSignedCbor = that._flowModel.getProperty("/signedTxCbor");
+                    MessageToast.show("Signed with HSM!");
+                    return that._loadAndCategorizeRequests();
+                }).then(function () {
+                    that._switchToTab("verified");
+
+                    var aVerified = that._flowModel.getProperty("/requests/verified") || [];
+                    var oVerifiedReq = null;
+                    for (var i = 0; i < aVerified.length; i++) {
+                        if (aVerified[i].id === sNewId) {
+                            oVerifiedReq = JSON.parse(JSON.stringify(aVerified[i]));
+                            break;
+                        }
+                    }
+                    if (oVerifiedReq) {
+                        // Apply verification data before selecting
+                        if (that._hsmVerification) {
+                            oVerifiedReq.verification = that._hsmVerification;
+                        }
+                        that._selectRequest(oVerifiedReq);
+                    }
+                    // Restore signedTxCbor after _selectRequest cleared it
+                    if (sSignedCbor) {
+                        that._flowModel.setProperty("/signedTxCbor", sSignedCbor);
+                    }
+                    // Restore verification after _selectRequest reset it
+                    if (that._hsmVerification) {
+                        that._flowModel.setProperty("/selectedRequest/verification", that._hsmVerification);
+                        that._hsmVerification = null;
+                    }
+                });
+            }).catch(function (oError) {
+                var sMsg = (oError && oError.message) || "HSM signing failed";
+                if (sBusyProp === "signBusy") {
+                    that._flowModel.setProperty("/signMessage", sMsg);
+                    that._flowModel.setProperty("/signMessageType", "Error");
+                } else {
+                    MessageBox.error(sMsg);
+                }
+            }).finally(function () {
+                that._flowModel.setProperty("/" + sBusyProp, false);
+            });
+        },
+
+        _loadSignedCborForRequest: function (oSignModel, sSigningRequestId) {
+            var that = this;
+            var sUrl = oSignModel.getServiceUrl() +
+                "SignatureVerifications?$filter=signingRequest_id eq '" + sSigningRequestId +
+                "'&$select=signedTxCbor,isValid,witnessCount,signerKeyHashes,txBodyHash&$top=1";
+            return fetch(sUrl, { headers: { "Accept": "application/json" } })
+                .then(function (response) { return response.json(); })
+                .then(function (data) {
+                    if (data.value && data.value.length > 0) {
+                        var oVerif = data.value[0];
+                        if (oVerif.signedTxCbor) {
+                            that._flowModel.setProperty("/signedTxCbor", oVerif.signedTxCbor);
+                        }
+                        // Store verification details for display after _selectRequest
+                        var aKeyHashes = [];
+                        if (oVerif.signerKeyHashes) {
+                            try { aKeyHashes = JSON.parse(oVerif.signerKeyHashes); } catch (e) { aKeyHashes = []; }
+                        }
+                        that._hsmVerification = {
+                            isValid: oVerif.isValid || false,
+                            witnessCount: oVerif.witnessCount || 0,
+                            signerKeyHashes: aKeyHashes,
+                            txBodyHash: oVerif.txBodyHash || ""
+                        };
+                        console.log("[HSM] Verification loaded:", that._hsmVerification);
+                    } else {
+                        console.warn("[HSM] No verification found");
+                        that._hsmVerification = null;
+                    }
+                }).catch(function (err) {
+                    console.error("[HSM] Failed to load verification:", err);
+                    that._hsmVerification = null;
+                });
+        },
+
         // ===== Sign Actions (operate on selectedRequest) =====
 
         onSignSelectedWithWallet: function () {
@@ -665,6 +901,15 @@ sap.ui.define([
             if (sCmd) {
                 navigator.clipboard.writeText(sCmd).then(function () {
                     MessageToast.show("CLI command copied");
+                });
+            }
+        },
+
+        onCopyUnsignedCbor: function () {
+            var sCbor = this._flowModel.getProperty("/selectedRequest/unsignedTxCbor");
+            if (sCbor) {
+                navigator.clipboard.writeText(sCbor).then(function () {
+                    MessageToast.show("Unsigned CBOR copied");
                 });
             }
         },

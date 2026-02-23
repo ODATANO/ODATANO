@@ -22,6 +22,16 @@ sap.ui.define([
             this.setModel(walletService.getModel(), "wallet");
             walletService.detectWallets();
 
+            // HSM model
+            this.setModel(new JSONModel({
+                connected: false,
+                keyId: null,
+                keyLabel: null,
+                publicKeyHash: null,
+                cardanoAddress: null,
+                loading: true
+            }), "hsm");
+
             this.getRouter().initialize();
         },
 

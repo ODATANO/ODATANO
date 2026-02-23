@@ -58,6 +58,57 @@
                 </HBox>
             </CustomListItem>
         </List>
+
+        <!-- Divider -->
+        <HBox alignItems="Center" justifyContent="Center" width="550px"
+            visible="{= !${wallet>/isConnecting}}" class="sapUiMediumMarginTop">
+            <VBox class="walletConnectDivider" />
+            <Text text="or" class="sapUiSmallMarginBeginEnd walletConnectOrText" />
+            <VBox class="walletConnectDivider" />
+        </HBox>
+
+        <!-- HSM Connection Option -->
+        <Button
+            text="HSM ({hsm>/keyLabel})"
+            icon="sap-icon://key"
+            type="Accept"
+            press=".onHsmConnect"
+            width="550px"
+            visible="{= !${wallet>/isConnecting} &amp;&amp; !${hsm>/loading} &amp;&amp; ${hsm>/connected}}"
+            class="sapUiSmallMarginTop"/>
+
+        <Text
+            text="{parts: ['hsm>/cardanoAddress'], formatter: '.formatter.truncateAddress'}"
+            textAlign="Center"
+            visible="{= !${wallet>/isConnecting} &amp;&amp; !${hsm>/loading} &amp;&amp; ${hsm>/connected}}"
+            class="sapUiTinyMarginTop walletConnectOrText"/>
+
+        <!-- HSM Loading -->
+        <BusyIndicator
+            text="Checking HSM..."
+            visible="{= ${hsm>/loading}}"
+            class="sapUiSmallMarginTop"/>
+
+        <!-- Manual Address Connection -->
+        <VBox visible="{= !${wallet>/isConnecting}}" width="550px"
+            class="walletConnectManualPanel sapUiSmallMarginTop">
+            <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                <core:Icon src="sap-icon://enter-more" size="1.25rem"
+                    class="sapUiSmallMarginEnd" color="#0854a0" />
+                <Title text="Connect with Address" level="H5" />
+            </HBox>
+            <Text text="Paste a Cardano address to build transactions for external signing (CLI, hardware wallet)."
+                class="sapUiTinyMarginBottom" />
+            <HBox alignItems="Center">
+                <Input value="{wallet>/manualAddress}"
+                    placeholder="addr_test1q... or addr1q..."
+                    width="100%"
+                    class="signingFlowMono sapUiSmallMarginEnd"
+                    submit=".onManualAddressConnect" />
+                <Button text="Connect" icon="sap-icon://arrow-right"
+                    type="Emphasized" press=".onManualAddressConnect" />
+            </HBox>
+        </VBox>
     </VBox>
 
 </core:FragmentDefinition>

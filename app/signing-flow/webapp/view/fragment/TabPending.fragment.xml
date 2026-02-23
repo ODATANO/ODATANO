@@ -77,10 +77,11 @@
                 class="sapUiSmallMarginBottom sapUiSmallMarginBeginEnd" />
 
             <!-- Signing Tabs (Wallet vs CLI) -->
-            <IconTabBar id="signMethodTabBar" selectedKey="wallet">
+            <IconTabBar id="signMethodTabBar" selectedKey="{= ${wallet>/connectedVia} === 'hsm' ? 'hsm' : ${wallet>/connectedVia} === 'manual' ? 'cli' : 'wallet'}">
                 <items>
                     <!-- Browser Wallet Tab -->
-                    <IconTabFilter text="{i18n>signWalletTab}" icon="sap-icon://iphone" key="wallet">
+                    <IconTabFilter text="{i18n>signWalletTab}" icon="sap-icon://iphone" key="wallet"
+                        visible="{= ${wallet>/connectedVia} === 'wallet'}">
                         <VBox class="signTabContent">
                             <HBox alignItems="Center" class="sapUiSmallMarginBottom">
                                 <core:Icon src="{wallet>/walletIcon}" size="2rem" class="sapUiSmallMarginEnd"
@@ -106,18 +107,47 @@
                         </VBox>
                     </IconTabFilter>
 
-                    <!-- Manual / CLI Tab -->
-                    <IconTabFilter text="{i18n>signCliTab}" icon="sap-icon://terminal" key="cli">
+                    <!-- HSM Tab -->
+                    <IconTabFilter text="HSM" icon="sap-icon://key" key="hsm"
+                        visible="{= ${hsm>/connected} &amp;&amp; ${wallet>/connectedVia} === 'hsm'}">
+                        <VBox class="signTabContent">
+                            <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                                <core:Icon src="sap-icon://key" size="2rem" class="sapUiSmallMarginEnd" />
+                                <VBox>
+                                    <Text text="HSM ({hsm>/keyLabel})" />
+                                    <ObjectStatus text="Connected" state="Success" />
+                                </VBox>
+                            </HBox>
+
+                            <Button text="Sign with HSM"
+                                icon="sap-icon://key"
+                                type="Accept"
+                                press=".onSignPendingWithHsm"
+                                enabled="{= !${flow>/signBusy} &amp;&amp; ${flow>/expirationState} !== 'Error'}"
+                                busyIndicatorDelay="0"
+                                busy="{flow>/signBusy}"
+                                class="sapUiSmallMarginBottom" />
+
+                            <MessageStrip text="{flow>/signMessage}" type="{flow>/signMessageType}"
+                                visible="{= !!${flow>/signMessage}}" showCloseButton="true" />
+                        </VBox>
+                    </IconTabFilter>
+
+                    <!-- Manual / CLI Tab (only for manual address connection) -->
+                    <IconTabFilter text="{i18n>signCliTab}" icon="sap-icon://syntax" key="cli"
+                        visible="{= ${wallet>/connectedVia} === 'manual'}">
                         <VBox class="signTabContent">
                             <Title text="{i18n>signCliTitle}" level="H5" class="sapUiSmallMarginBottom" />
-                            <Text text="{i18n>signCliDescription}" class="sapUiSmallMarginBottom" />
+                            <Text text="Copy the unsigned transaction CBOR below, sign it externally, then paste the signed CBOR hex." class="sapUiSmallMarginBottom" />
 
+                            <Label text="Unsigned Transaction CBOR" class="sapUiSmallMarginBottom" />
                             <VBox class="cliCommandBox">
-                                <TextArea value="{flow>/selectedRequest/cardanoCliCommand}"
-                                    editable="false" rows="3" width="100%" growing="true" />
+                                <TextArea value="{flow>/selectedRequest/unsignedTxCbor}"
+                                    editable="false" rows="3" width="100%" growing="true"
+                                    class="signingFlowMono" />
                             </VBox>
                             <Button text="{i18n>signCliCopy}" icon="sap-icon://copy"
-                                press=".onCopyCliCommand" type="Transparent"
+                                press=".onCopyUnsignedCbor" type="Transparent"
                                 class="sapUiSmallMarginBottom" />
 
                             <Title text="{i18n>signPasteTitle}" level="H5"

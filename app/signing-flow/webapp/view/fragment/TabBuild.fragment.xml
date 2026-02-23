@@ -129,8 +129,13 @@
                     type="Transparent" class="copyInline" tooltip="{i18n>copy}" />
             </HBox>
 
-            <!-- Continue Button -->
+            <!-- Continue Buttons -->
             <HBox justifyContent="End" class="sapUiSmallMarginTop">
+                <Button text="Sign with HSM" icon="sap-icon://key"
+                    type="Accept" press=".onSignBuildWithHsm"
+                    visible="{= ${hsm>/connected} &amp;&amp; ${wallet>/connectedVia} === 'hsm'}"
+                    busyIndicatorDelay="0" busy="{flow>/signingBusy}"
+                    class="sapUiSmallMarginEnd" />
                 <Button text="{i18n>buildContinue}" icon="sap-icon://arrow-right"
                     type="Emphasized" press=".onContinueToSigning"
                     busyIndicatorDelay="0" busy="{flow>/signingBusy}" />

@@ -88,10 +88,6 @@ sap.ui.define([
                     oHsmModel.setProperty("/publicKeyHash", oResult.publicKeyHash || null);
                     oHsmModel.setProperty("/cardanoAddress", oResult.cardanoAddress || null);
 
-                    // Auto-connect with HSM address if no wallet connected
-                    if (oResult.connected && !that._walletService.getModel().getProperty("/isConnected")) {
-                        that._connectWithHsmAddress(oResult);
-                    }
                 }).catch(function (oError) {
                     console.error("[HSM] GetHsmStatus failed:", oError);
                     oHsmModel.setProperty("/connected", false);
@@ -105,12 +101,50 @@ sap.ui.define([
             this._loadHsmStatus();
         },
 
+        onHsmConnect: function () {
+            var oHsmModel = this.getOwnerComponent().getModel("hsm");
+            var oHsmData = {
+                connected: oHsmModel.getProperty("/connected"),
+                keyId: oHsmModel.getProperty("/keyId"),
+                keyLabel: oHsmModel.getProperty("/keyLabel"),
+                publicKeyHash: oHsmModel.getProperty("/publicKeyHash"),
+                cardanoAddress: oHsmModel.getProperty("/cardanoAddress")
+            };
+            this._connectWithHsmAddress(oHsmData);
+        },
+
+        onManualAddressConnect: function () {
+            var oWalletModel = this._walletService.getModel();
+            var sAddress = (oWalletModel.getProperty("/manualAddress") || "").trim();
+
+            if (!sAddress || (!sAddress.startsWith("addr_test1") && !sAddress.startsWith("addr1"))) {
+                MessageBox.error("Please enter a valid Cardano address (addr_test1... or addr1...)");
+                return;
+            }
+
+            var bIsTestnet = sAddress.startsWith("addr_test");
+            oWalletModel.setProperty("/isConnected", true);
+            oWalletModel.setProperty("/connectedVia", "manual");
+            oWalletModel.setProperty("/walletName", "Manual Address");
+            oWalletModel.setProperty("/walletIcon", "sap-icon://enter-more");
+            oWalletModel.setProperty("/networkId", bIsTestnet ? 0 : 1);
+            oWalletModel.setProperty("/networkName", bIsTestnet ? "Preview" : "Mainnet");
+            oWalletModel.setProperty("/addresses", [{ bech32: sAddress, isUsed: true }]);
+            oWalletModel.setProperty("/changeAddress", sAddress);
+            oWalletModel.setProperty("/balance", { lovelace: "0", assets: [] });
+
+            this._loadHsmBalance(sAddress);
+            this._loadTransactions();
+            this._loadSigningRequests();
+            this._loadTransactionBuilds();
+        },
+
         _connectWithHsmAddress: function (oHsmResult) {
             var oWalletModel = this._walletService.getModel();
             var sAddress = oHsmResult.cardanoAddress;
             var bIsTestnet = sAddress && sAddress.startsWith("addr_test");
 
-            console.log("[HSM] Auto-connecting with HSM address:", sAddress);
+            console.log("[HSM] Connecting with HSM address:", sAddress);
 
             oWalletModel.setProperty("/isConnected", true);
             oWalletModel.setProperty("/connectedVia", "hsm");

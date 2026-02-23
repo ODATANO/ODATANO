@@ -162,6 +162,26 @@
     font-size: 0.85rem;
 }
 
+/* Login screen — "or" divider line */
+.walletConnectDivider {
+    flex: 1;
+    height: 1px;
+    background-color: #d9d9d9;
+}
+
+.walletConnectOrText {
+    color: #6a6d70;
+    font-size: 0.85rem;
+}
+
+/* Login screen — manual address panel */
+.walletConnectManualPanel {
+    border: 1px solid #d9d9d9;
+    border-radius: 8px;
+    padding: 1rem;
+    background-color: #f7f7f7;
+}
+
 /* Responsive adjustments */
 @media (max-width: 600px) {
     .walletConnectPanel {

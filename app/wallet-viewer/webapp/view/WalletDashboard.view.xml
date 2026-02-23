@@ -61,7 +61,7 @@
 
                 <!-- HSM Signing Module -->
                 <Panel expandable="true" expanded="false"
-                       visible="{hsm>/connected}"
+                       visible="{= ${hsm>/connected} &amp;&amp; ${wallet>/connectedVia} === 'hsm'}"
                        class="sapUiTinyMarginTop">
                     <headerToolbar>
                         <Toolbar>
@@ -214,7 +214,7 @@
         <footer>
             <Bar visible="{wallet>/isConnected}">
                 <contentMiddle>
-                    <Text text="Connected via CIP-30"/>
+                    <Text text="{= ${wallet>/connectedVia} === 'hsm' ? 'Connected via HSM' : ${wallet>/connectedVia} === 'manual' ? 'Connected via Address' : 'Connected via CIP-30'}"/>
                 </contentMiddle>
             </Bar>
         </footer>
