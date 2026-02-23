@@ -1,0 +1,150 @@
+<mvc:View
+    controllerName="odatanoview.wallet.controller.detail.BuildDetail"
+    displayBlock="true"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <Page id="buildDetailPage"
+        title="{i18n>detailBuildTitle}"
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        busy="{detail>/busy}">
+
+        <!-- Header -->
+        <Panel class="sapUiSmallMargin">
+            <VBox>
+                <HBox alignItems="Center" justifyContent="SpaceBetween" width="100%">
+                    <Title level="H3" text="{i18n>detailBuildTitle}"/>
+                    <HBox alignItems="Center">
+                        <ObjectStatus text="{detail>/network}"
+                            state="{= ${detail>/network} === 'mainnet' ? 'Success' : 'Warning'}"
+                            class="sapUiSmallMarginEnd"/>
+                        <ObjectStatus text="{detail>/builderEngine}" icon="sap-icon://wrench"/>
+                    </HBox>
+                </HBox>
+                <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                    <Text text="{parts: ['detail>/id'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyId"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+            </VBox>
+        </Panel>
+
+        <!-- General Details -->
+        <Panel headerText="{i18n>detailGeneralTitle}" class="sapUiSmallMargin">
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="3" labelSpanL="3" labelSpanM="4" labelSpanS="12">
+
+                <Label text="Sender Address"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/senderAddress'], formatter: '.formatter.truncateAddress'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopySenderAddress"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Change Address"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/changeAddress'], formatter: '.formatter.truncateAddress'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyChangeAddress"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Fee"/>
+                <Text text="{path: 'detail>/fee', formatter: '.formatter.formatLovelaceToAdaWithUnit'}"/>
+
+                <Label text="Size"/>
+                <Text text="{path: 'detail>/size', formatter: '.formatter.formatBytes'}"/>
+
+                <Label text="Created"/>
+                <Text text="{path: 'detail>/createdAt', formatter: '.formatter.formatTimestamp'}"/>
+
+                <Label text="Tx Body Hash"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/txBodyHash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyTxBodyHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Submitted"/>
+                <ObjectStatus text="{= ${detail>/wasSubmitted} ? 'Yes' : 'No'}"
+                    state="{= ${detail>/wasSubmitted} ? 'Success' : 'Information'}"/>
+
+                <Label text="Script Hash" visible="{= !!${detail>/scriptHash}}"/>
+                <HBox alignItems="Center" visible="{= !!${detail>/scriptHash}}">
+                    <Text text="{parts: ['detail>/scriptHash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyScriptHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Fingerprint" visible="{= !!${detail>/fingerprint}}"/>
+                <Text text="{detail>/fingerprint}" visible="{= !!${detail>/fingerprint}}"
+                    class="signingFlowMono"/>
+
+                <Label text="Script Address" visible="{= !!${detail>/scriptAddress}}"/>
+                <HBox alignItems="Center" visible="{= !!${detail>/scriptAddress}}">
+                    <Text text="{parts: ['detail>/scriptAddress'], formatter: '.formatter.truncateAddress'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyScriptAddress"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+            </f:SimpleForm>
+        </Panel>
+
+        <!-- CBOR -->
+        <Panel headerText="{i18n>detailCborTitle}" class="sapUiSmallMargin"
+            visible="{= !!${detail>/unsignedTxCbor}}">
+            <HBox justifyContent="End" class="sapUiTinyMarginBottom">
+                <Button icon="sap-icon://copy" text="{i18n>copy}" press=".onCopyCbor"
+                    type="Transparent"/>
+            </HBox>
+            <TextArea value="{detail>/unsignedTxCbor}" editable="false"
+                rows="6" width="100%" growing="true" class="signingFlowMono detailCborArea"/>
+        </Panel>
+
+        <!-- Inputs -->
+        <Panel headerText="Inputs ({detail>/inputCount})" class="sapUiSmallMargin"
+            visible="{= ${detail>/inputCount} > 0}">
+            <List items="{detail>/inputs}">
+                <CustomListItem>
+                    <HBox alignItems="Center" justifyContent="SpaceBetween"
+                        class="sapUiTinyMargin" width="100%">
+                        <VBox>
+                            <Text text="{parts: ['detail>address'], formatter: '.formatter.truncateAddress'}"
+                                class="signingFlowMono"/>
+                            <Text text="{parts: ['detail>txHash'], formatter: '.formatter.truncateHash'}"
+                                class="signingFlowMono walletConnectHint" visible="{= !!${detail>txHash}}"/>
+                        </VBox>
+                        <ObjectNumber
+                            number="{path: 'detail>lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                            unit="ADA"/>
+                    </HBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+
+        <!-- Outputs -->
+        <Panel headerText="Outputs ({detail>/outputCount})" class="sapUiSmallMargin"
+            visible="{= ${detail>/outputCount} > 0}">
+            <List items="{detail>/outputs}">
+                <CustomListItem>
+                    <HBox alignItems="Center" justifyContent="SpaceBetween"
+                        class="sapUiTinyMargin" width="100%">
+                        <Text text="{parts: ['detail>address'], formatter: '.formatter.truncateAddress'}"
+                            class="signingFlowMono"/>
+                        <ObjectNumber
+                            number="{path: 'detail>lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                            unit="ADA"/>
+                    </HBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+    </Page>
+
+</mvc:View>

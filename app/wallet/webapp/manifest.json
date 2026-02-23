@@ -1,0 +1,168 @@
+{
+  "_version": "1.81.0",
+  "sap.app": {
+    "id": "odatanoview.wallet",
+    "type": "application",
+    "i18n": "i18n/i18n.properties",
+    "applicationVersion": {
+      "version": "0.0.1"
+    },
+    "title": "{{appTitle}}",
+    "description": "{{appDescription}}",
+    "dataSources": {
+      "mainService": {
+        "uri": "/odata/v4/cardano-odata/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      },
+      "txService": {
+        "uri": "/odata/v4/cardano-transaction/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      },
+      "signService": {
+        "uri": "/odata/v4/cardano-sign/",
+        "type": "OData",
+        "settings": {
+          "annotations": [],
+          "odataVersion": "4.0"
+        }
+      }
+    }
+  },
+  "sap.ui": {
+    "technology": "UI5",
+    "deviceTypes": {
+      "desktop": true,
+      "tablet": true,
+      "phone": true
+    }
+  },
+  "sap.ui5": {
+    "flexEnabled": false,
+    "resourceRoots": {
+      "odatano.common": "/common"
+    },
+    "dependencies": {
+      "minUI5Version": "1.144.0",
+      "libs": {
+        "sap.m": {},
+        "sap.ui.core": {},
+        "sap.ui.layout": {}
+      }
+    },
+    "contentDensities": {
+      "compact": true,
+      "cozy": true
+    },
+    "models": {
+      "i18n": {
+        "type": "sap.ui.model.resource.ResourceModel",
+        "settings": {
+          "bundleName": "odatanoview.wallet.i18n.i18n"
+        }
+      },
+      "": {
+        "dataSource": "mainService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": true
+        }
+      },
+      "tx": {
+        "dataSource": "txService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": false
+        }
+      },
+      "sign": {
+        "dataSource": "signService",
+        "preload": true,
+        "settings": {
+          "operationMode": "Server",
+          "autoExpandSelect": true,
+          "earlyRequests": false
+        }
+      }
+    },
+    "resources": {
+      "css": [
+        {
+          "uri": "css/style.css"
+        }
+      ]
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "controlAggregation": "pages",
+        "controlId": "app",
+        "type": "View",
+        "viewType": "XML",
+        "path": "odatanoview.wallet.view",
+        "async": true
+      },
+      "routes": [
+        {
+          "name": "wallet",
+          "pattern": "",
+          "target": ["wallet"]
+        },
+        {
+          "name": "transactionDetail",
+          "pattern": "transaction/{txHash}",
+          "target": ["transactionDetail"]
+        },
+        {
+          "name": "buildDetail",
+          "pattern": "build/{buildId}",
+          "target": ["buildDetail"]
+        },
+        {
+          "name": "signingRequestDetail",
+          "pattern": "signing-request/{requestId}",
+          "target": ["signingRequestDetail"]
+        }
+      ],
+      "targets": {
+        "wallet": {
+          "id": "wallet",
+          "name": "Wallet",
+          "level": 0
+        },
+        "transactionDetail": {
+          "id": "transactionDetail",
+          "name": "detail.TransactionDetail",
+          "level": 1
+        },
+        "buildDetail": {
+          "id": "buildDetail",
+          "name": "detail.BuildDetail",
+          "level": 1
+        },
+        "signingRequestDetail": {
+          "id": "signingRequestDetail",
+          "name": "detail.SigningRequestDetail",
+          "level": 1
+        }
+      }
+    },
+    "rootView": {
+      "viewName": "odatanoview.wallet.view.App",
+      "type": "XML",
+      "id": "App",
+      "async": true
+    }
+  }
+}

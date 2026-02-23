@@ -1,5 +1,5 @@
 {
-  "welcomeFile": "/odatanoviewwalletviewer/index.html",
+  "welcomeFile": "/odatanoviewwallet/index.html",
   "authenticationMethod": "route",
   "routes": [
     {
@@ -10,14 +10,8 @@
       "csrfProtection": true
     },
     {
-      "source": "^/odatanoviewwalletviewer/(.*)$",
-      "target": "/odatanoviewwalletviewer/$1",
-      "service": "html5-apps-repo-rt",
-      "authenticationType": "xsuaa"
-    },
-    {
-      "source": "^/odatanoviewsigningflow/(.*)$",
-      "target": "/odatanoviewsigningflow/$1",
+      "source": "^/odatanoviewwallet/(.*)$",
+      "target": "/odatanoviewwallet/$1",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa"
     },

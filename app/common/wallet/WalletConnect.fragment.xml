@@ -6,28 +6,18 @@
     <VBox
         alignItems="Center"
         visible="{= !${wallet>/isConnected}}"
-        class="sapUiMediumMarginTop">
+        class="walletConnectPanel">
 
         <Image
             src="/common/img/logo.svg"
-            width="550px"
-            class="sapUiSmallMarginBottom"/>
-
-        <Title
-            text="Connect Your Wallet"
-            level="H3"
-            class="sapUiTinyMarginBottom"/>
-
-        <Text
-            text="Connect a Cardano browser wallet to get started"
-            textAlign="Center"
-            class="sapUiSmallMarginBottom"/>
+            width="400px"
+            class="sapUiMediumMarginBottom"/>
 
         <!-- Connecting indicator -->
         <BusyIndicator
             text="Connecting to wallet..."
             visible="{wallet>/isConnecting}"
-            class="sapUiSmallMarginTop"/>
+            class="sapUiMediumMarginTop"/>
 
         <!-- Error display -->
         <MessageStrip
@@ -36,77 +26,81 @@
             showIcon="true"
             showCloseButton="true"
             visible="{= !!${wallet>/error}}"
-            class="sapUiSmallMarginTop"/>
+            class="sapUiSmallMarginBottom walletConnectFullWidth"/>
 
-        <!-- Wallet List -->
-        <List
-            items="{wallet>/availableWallets}"
-            mode="SingleSelectMaster"
-            selectionChange=".onWalletSelect"
-            visible="{= !${wallet>/isConnecting}}"
-            noDataText="No Cardano wallets detected. Install Nami, Eternl or Lace."
-            width="550px">
-            <CustomListItem type="Active">
-                <HBox alignItems="Center" class="sapUiSmallMargin">
-                    <Image
-                        src="{wallet>icon}"
-                        width="32px"
-                        height="32px"
-                        class="sapUiSmallMarginEnd"
-                        visible="{= !!${wallet>icon}}"/>
-                    <Text text="{wallet>name}" class="sapMTextBold"/>
-                </HBox>
-            </CustomListItem>
-        </List>
+        <!-- Browser Wallets Section -->
+        <VBox visible="{= !${wallet>/isConnecting}}" class="walletConnectFullWidth">
 
-        <!-- Divider -->
-        <HBox alignItems="Center" justifyContent="Center" width="550px"
-            visible="{= !${wallet>/isConnecting}}" class="sapUiMediumMarginTop">
-            <VBox class="walletConnectDivider" />
-            <Text text="or" class="sapUiSmallMarginBeginEnd walletConnectOrText" />
-            <VBox class="walletConnectDivider" />
-        </HBox>
+            <Label text="Browser Wallet" design="Bold" class="sapUiTinyMarginBottom"/>
 
-        <!-- HSM Connection Option -->
-        <Button
-            text="HSM ({hsm>/keyLabel})"
-            icon="sap-icon://key"
-            type="Accept"
-            press=".onHsmConnect"
-            width="550px"
-            visible="{= !${wallet>/isConnecting} &amp;&amp; !${hsm>/loading} &amp;&amp; ${hsm>/connected}}"
-            class="sapUiSmallMarginTop"/>
+            <List
+                items="{wallet>/availableWallets}"
+                mode="SingleSelectMaster"
+                selectionChange=".onWalletSelect"
+                noDataText="No Cardano wallets detected. Install Eternl, Lace or Nami."
+                class="walletConnectList">
+                <CustomListItem type="Active" class="walletConnectItem">
+                    <HBox alignItems="Center" class="walletConnectItemContent">
+                        <Image
+                            src="{wallet>icon}"
+                            width="28px"
+                            height="28px"
+                            class="sapUiSmallMarginEnd"
+                            visible="{= !!${wallet>icon}}"/>
+                        <Text text="{wallet>name}"/>
+                    </HBox>
+                </CustomListItem>
+            </List>
 
-        <Text
-            text="{parts: ['hsm>/cardanoAddress'], formatter: '.formatter.truncateAddress'}"
-            textAlign="Center"
-            visible="{= !${wallet>/isConnecting} &amp;&amp; !${hsm>/loading} &amp;&amp; ${hsm>/connected}}"
-            class="sapUiTinyMarginTop walletConnectOrText"/>
+            <!-- HSM Option -->
+            <VBox visible="{= !${hsm>/loading} &amp;&amp; ${hsm>/connected}}"
+                class="sapUiSmallMarginTop">
+                <Label text="Hardware Security Module" design="Bold" class="sapUiTinyMarginBottom"/>
+                <List class="walletConnectList">
+                    <CustomListItem type="Active" press=".onHsmConnect" class="walletConnectItem">
+                        <HBox alignItems="Center" justifyContent="SpaceBetween"
+                            class="walletConnectItemContent" width="100%">
+                            <HBox alignItems="Center">
+                                <core:Icon src="sap-icon://key" size="1.2rem"
+                                    class="sapUiSmallMarginEnd" color="#107e3e"/>
+                                <VBox>
+                                    <Text text="HSM ({hsm>/keyLabel})"/>
+                                    <Text text="{parts: ['hsm>/cardanoAddress'], formatter: '.formatter.truncateAddress'}"
+                                        class="walletConnectHint"/>
+                                </VBox>
+                            </HBox>
+                            <core:Icon src="sap-icon://accept" color="#107e3e"/>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </VBox>
 
-        <!-- HSM Loading -->
-        <BusyIndicator
-            text="Checking HSM..."
-            visible="{= ${hsm>/loading}}"
-            class="sapUiSmallMarginTop"/>
+            <!-- HSM Loading -->
+            <BusyIndicator
+                text="Checking HSM..."
+                visible="{= ${hsm>/loading}}"
+                class="sapUiSmallMarginTop"/>
 
-        <!-- Manual Address Connection -->
-        <VBox visible="{= !${wallet>/isConnecting}}" width="550px"
-            class="walletConnectManualPanel sapUiSmallMarginTop">
-            <HBox alignItems="Center" class="sapUiSmallMarginBottom">
-                <core:Icon src="sap-icon://enter-more" size="1.25rem"
-                    class="sapUiSmallMarginEnd" color="#0854a0" />
-                <Title text="Connect with Address" level="H5" />
+            <!-- Divider -->
+            <HBox alignItems="Center" justifyContent="Center"
+                class="walletConnectDividerRow">
+                <VBox class="walletConnectDivider"/>
+                <Text text="or" class="walletConnectOrText"/>
+                <VBox class="walletConnectDivider"/>
             </HBox>
-            <Text text="Paste a Cardano address to build transactions for external signing (CLI, hardware wallet)."
-                class="sapUiTinyMarginBottom" />
+
+            <!-- Manual Address -->
+            <Label text="External Signing" design="Bold" class="sapUiTinyMarginBottom"/>
+            <Text text="Paste an address to build transactions for CLI or hardware wallet signing."
+                class="walletConnectHint sapUiTinyMarginBottom"/>
             <HBox alignItems="Center">
                 <Input value="{wallet>/manualAddress}"
                     placeholder="addr_test1q... or addr1q..."
                     width="100%"
                     class="signingFlowMono sapUiSmallMarginEnd"
-                    submit=".onManualAddressConnect" />
+                    submit=".onManualAddressConnect"/>
                 <Button text="Connect" icon="sap-icon://arrow-right"
-                    type="Emphasized" press=".onManualAddressConnect" />
+                    type="Emphasized" press=".onManualAddressConnect"/>
             </HBox>
         </VBox>
     </VBox>

@@ -1,0 +1,86 @@
+<mvc:View
+    controllerName="odatanoview.wallet.controller.Wallet"
+    displayBlock="true"
+    height="100%"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <Page id="walletPage" showHeader="true" enableScrolling="true">
+        <customHeader>
+            <Bar>
+                <contentMiddle>
+                    <Title text="{i18n>headerTitle}"/>
+                </contentMiddle>
+                <contentRight>
+                    <Button text="{i18n>headerDisconnect}" press=".onDisconnect"
+                        type="Transparent" visible="{wallet>/isConnected}"/>
+                </contentRight>
+            </Bar>
+        </customHeader>
+
+        <content>
+            <!-- Not Connected: Wallet Connect -->
+            <core:Fragment fragmentName="odatano.common.wallet.WalletConnect" type="XML"/>
+
+            <!-- Connected: Tab-based Wallet App -->
+            <VBox visible="{wallet>/isConnected}" class="sapUiSmallMarginTopBottom walletMainContent">
+
+                <!-- Wallet Info Header -->
+                <core:Fragment fragmentName="odatano.common.wallet.WalletHeader" type="XML"/>
+
+                <!-- Main Tab Bar -->
+                <IconTabBar id="mainTabBar" select=".onTabSelect"
+                    selectedKey="{flow>/selectedTab}"
+                    class="signingFlowTabs"
+                    stretchContentHeight="false">
+                    <items>
+                        <!-- Dashboard Tab -->
+                        <IconTabFilter text="{i18n>tabDashboard}" icon="sap-icon://home" key="dashboard">
+                            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TabDashboard" type="XML"/>
+                        </IconTabFilter>
+
+                        <!-- Build Tab -->
+                        <IconTabFilter text="{i18n>tabBuild}" icon="sap-icon://wrench" key="build">
+                            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TabBuild" type="XML"/>
+                        </IconTabFilter>
+
+                        <!-- Pending Tab -->
+                        <IconTabFilter text="{i18n>tabPending}" icon="sap-icon://pending" key="pending"
+                            count="{flow>/counts/pending}">
+                            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TabPending" type="XML"/>
+                        </IconTabFilter>
+
+                        <!-- Verified Tab -->
+                        <IconTabFilter text="{i18n>tabVerified}" icon="sap-icon://accept" key="verified"
+                            count="{flow>/counts/verified}">
+                            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TabVerified" type="XML"/>
+                        </IconTabFilter>
+
+                        <!-- Submitted Tab -->
+                        <IconTabFilter text="{i18n>tabSubmitted}" icon="sap-icon://upload-to-cloud" key="submitted"
+                            count="{flow>/counts/submitted}">
+                            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TabSubmitted" type="XML"/>
+                        </IconTabFilter>
+                    </items>
+                </IconTabBar>
+
+                <!-- Transaction Inspector -->
+                <Panel headerText="{i18n>inspectorTitle}" expandable="true" expanded="false"
+                    visible="{= !!${flow>/build} || !!${flow>/selectedRequest}}"
+                    class="sapUiTinyMarginTop sapUiSmallMarginBeginEnd sapUiSmallMarginBottom">
+                    <core:Fragment fragmentName="odatanoview.wallet.view.fragment.TransactionInspector" type="XML"/>
+                </Panel>
+            </VBox>
+        </content>
+
+        <footer>
+            <Bar visible="{wallet>/isConnected}">
+                <contentMiddle>
+                    <Text text="{= ${wallet>/connectedVia} === 'hsm' ? 'Connected via HSM' : ${wallet>/connectedVia} === 'manual' ? 'Connected via Address' : 'Connected via CIP-30'}"/>
+                </contentMiddle>
+            </Bar>
+        </footer>
+    </Page>
+
+</mvc:View>

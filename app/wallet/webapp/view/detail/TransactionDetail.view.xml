@@ -1,0 +1,134 @@
+<mvc:View
+    controllerName="odatanoview.wallet.controller.detail.TransactionDetail"
+    displayBlock="true"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <Page id="transactionDetailPage"
+        title="{i18n>detailTransactionTitle}"
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        busy="{detail>/busy}">
+
+        <!-- Header -->
+        <Panel class="sapUiSmallMargin">
+            <VBox>
+                <HBox alignItems="Center" justifyContent="SpaceBetween" width="100%">
+                    <Title level="H3" text="{i18n>detailTransactionTitle}"/>
+                    <ObjectStatus text="{detail>/network}"
+                        state="{= ${detail>/network} === 'Mainnet' ? 'Success' : 'Warning'}"/>
+                </HBox>
+                <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                    <Text text="{parts: ['detail>/hash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+            </VBox>
+        </Panel>
+
+        <!-- General Details -->
+        <Panel headerText="Details" class="sapUiSmallMargin">
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="3" labelSpanL="3" labelSpanM="4" labelSpanS="12">
+
+                <Label text="Block Hash"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/blockHash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyBlockHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Block Height"/>
+                <Text text="{detail>/blockHeight}"/>
+
+                <Label text="Block Time"/>
+                <Text text="{path: 'detail>/blockTime', formatter: '.formatter.formatBlockTime'}"/>
+
+                <Label text="Slot"/>
+                <Text text="{detail>/slot}"/>
+
+                <Label text="Fee"/>
+                <Text text="{path: 'detail>/fee', formatter: '.formatter.formatLovelaceToAdaWithUnit'}"/>
+
+                <Label text="Deposit" visible="{= ${detail>/deposit} !== '0' &amp;&amp; !!${detail>/deposit}}"/>
+                <Text text="{path: 'detail>/deposit', formatter: '.formatter.formatLovelaceToAdaWithUnit'}"
+                    visible="{= ${detail>/deposit} !== '0' &amp;&amp; !!${detail>/deposit}}"/>
+
+                <Label text="Size"/>
+                <Text text="{path: 'detail>/size', formatter: '.formatter.formatBytes'}"/>
+            </f:SimpleForm>
+        </Panel>
+
+        <!-- Inputs -->
+        <Panel headerText="Inputs ({detail>/inputCount})" class="sapUiSmallMargin"
+            visible="{= ${detail>/inputCount} > 0}">
+            <List items="{detail>/inputs}">
+                <CustomListItem>
+                    <HBox alignItems="Center" justifyContent="SpaceBetween"
+                        class="sapUiTinyMargin" width="100%">
+                        <HBox alignItems="Center">
+                            <Text text="{path: 'detail>address_address', formatter: '.formatter.truncateAddress'}"
+                                class="signingFlowMono"/>
+                            <ObjectStatus text="Collateral" state="Warning"
+                                visible="{detail>isCollateral}" class="sapUiSmallMarginBegin"/>
+                            <ObjectStatus text="Reference" state="Information"
+                                visible="{detail>isReference}" class="sapUiSmallMarginBegin"/>
+                        </HBox>
+                        <ObjectNumber
+                            number="{path: 'detail>lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                            unit="ADA"/>
+                    </HBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+
+        <!-- Outputs -->
+        <Panel headerText="Outputs ({detail>/outputCount})" class="sapUiSmallMargin"
+            visible="{= ${detail>/outputCount} > 0}">
+            <List items="{detail>/outputs}">
+                <CustomListItem>
+                    <VBox class="sapUiTinyMargin">
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" width="100%">
+                            <Text text="{path: 'detail>address_address', formatter: '.formatter.truncateAddress'}"
+                                class="signingFlowMono"/>
+                            <ObjectNumber
+                                number="{path: 'detail>lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                                unit="ADA"/>
+                        </HBox>
+                        <!-- Native assets on this output -->
+                        <HBox items="{detail>nativeAssets}" wrap="Wrap"
+                            visible="{detail>hasNativeAssets}" class="sapUiTinyMarginTop">
+                            <ObjectStatus
+                                text="{= ${detail>asset_assetName} || ${detail>asset_policyId}.substring(0, 8) + '...'}"
+                                state="Information" icon="sap-icon://inventory"
+                                class="sapUiSmallMarginEnd sapUiTinyMarginBottom"/>
+                        </HBox>
+                    </VBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+
+        <!-- Metadata -->
+        <Panel headerText="Metadata ({detail>/metadataCount})" class="sapUiSmallMargin"
+            visible="{= ${detail>/metadataCount} > 0}">
+            <List items="{detail>/metadata}">
+                <CustomListItem>
+                    <VBox class="sapUiTinyMargin">
+                        <Label text="Label: {detail>label}"/>
+                        <Text text="{detail>payload}" class="signingFlowMono" wrapping="true"/>
+                    </VBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+
+        <!-- Cardanoscan Link -->
+        <HBox justifyContent="Center" class="sapUiSmallMargin">
+            <Link text="{i18n>submitViewExplorer}" press=".onViewOnCardanoscan"/>
+        </HBox>
+    </Page>
+
+</mvc:View>

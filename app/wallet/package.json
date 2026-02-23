@@ -1,0 +1,12 @@
+{
+  "name": "odatano-wallet",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "ui5 build --clean-dest --dest dist"
+  },
+  "devDependencies": {
+    "@ui5/cli": "^4.0.0",
+    "ui5-task-zipper": "^3.0.0"
+  }
+}

@@ -1,0 +1,247 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core">
+
+    <VBox>
+        <!-- Balance Card -->
+        <Panel headerText="Balance" expandable="false" class="sapUiTinyMarginTop">
+            <content>
+                <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+                    <VBox>
+                        <ObjectNumber
+                            number="{= Math.floor(Number(${wallet>/balance/lovelace} || 0) / 1000000 * 100) / 100 }"
+                            unit="ADA"
+                            emphasized="true"
+                            state="Information"/>
+                        <Text text="{= (${wallet>/balance/lovelace} || '0') + ' lovelace'}"/>
+                    </VBox>
+                    <Button
+                        text="Send ADA"
+                        icon="sap-icon://initiative"
+                        type="Emphasized"
+                        press=".onSendAda"/>
+                </HBox>
+            </content>
+        </Panel>
+
+        <!-- HSM Signing Module -->
+        <Panel expandable="true" expanded="false"
+               visible="{= ${hsm>/connected} &amp;&amp; ${wallet>/connectedVia} === 'hsm'}"
+               class="sapUiTinyMarginTop">
+            <headerToolbar>
+                <Toolbar>
+                    <Title text="HSM Signing Module" level="H5"/>
+                    <ToolbarSpacer/>
+                    <ObjectStatus text="Connected" state="Success" icon="sap-icon://connected"/>
+                    <Button icon="sap-icon://refresh" type="Transparent" press=".onRefreshHsmStatus" tooltip="Refresh HSM Status"/>
+                </Toolbar>
+            </headerToolbar>
+            <content>
+                <VBox class="sapUiSmallMargin">
+                    <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                        <Label text="Key Label:" class="sapUiSmallMarginEnd"/>
+                        <Text text="{hsm>/keyLabel}"/>
+                    </HBox>
+                    <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                        <Label text="Key ID:" class="sapUiSmallMarginEnd"/>
+                        <Text text="{hsm>/keyId}"/>
+                    </HBox>
+                    <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                        <Label text="Public Key Hash:" class="sapUiSmallMarginEnd"/>
+                        <Text text="{parts: ['hsm>/publicKeyHash'], formatter: '.formatter.truncateHash'}"/>
+                    </HBox>
+                    <HBox alignItems="Center">
+                        <Label text="Address:" class="sapUiSmallMarginEnd"/>
+                        <Text text="{parts: ['hsm>/cardanoAddress'], formatter: '.formatter.truncateAddress'}"/>
+                    </HBox>
+                </VBox>
+            </content>
+        </Panel>
+
+        <!-- UTxOs -->
+        <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            headerText="{= 'UTxOs (' + (${wallet>/utxos} ? ${wallet>/utxos}.length : 0) + ')'}"
+            visible="{= ${wallet>/utxos} &amp;&amp; ${wallet>/utxos}.length > 0}">
+            <content>
+                <List items="{wallet>/utxos}" noDataText="No UTxOs">
+                    <CustomListItem type="Active" press=".onToggleUtxoDetail">
+                        <VBox class="sapUiSmallMargin">
+                            <!-- Summary row -->
+                            <HBox alignItems="Center" justifyContent="SpaceBetween">
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${wallet>expanded} ? 'sap-icon://navigation-down-arrow' : 'sap-icon://navigation-right-arrow'}"
+                                        size="0.85rem" class="sapUiSmallMarginEnd" color="#6a6d70"/>
+                                    <Text text="{parts: ['wallet>hash'], formatter: '.formatter.truncateHash'}"
+                                        class="signingFlowMono"/>
+                                    <Text text="{= '#' + ${wallet>index}}" class="sapUiTinyMarginBegin walletConnectHint"/>
+                                </HBox>
+                                <HBox alignItems="Center">
+                                    <ObjectStatus text="{= ${wallet>assets} &amp;&amp; ${wallet>assets}.length > 0 ? ${wallet>assets}.length + ' asset(s)' : ''}"
+                                        state="Information" class="sapUiSmallMarginEnd"
+                                        visible="{= ${wallet>assets} &amp;&amp; ${wallet>assets}.length > 0}"/>
+                                    <ObjectNumber
+                                        number="{path: 'wallet>lovelace', formatter: '.formatter.formatLovelaceToAda'}"
+                                        unit="ADA"/>
+                                </HBox>
+                            </HBox>
+                            <!-- Expanded detail -->
+                            <VBox visible="{wallet>expanded}" class="dashboardItemDetail">
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Tx Hash:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{wallet>hash}" class="signingFlowMono" wrapping="true"/>
+                                    <Button icon="sap-icon://copy" press=".onCopyUtxoHash"
+                                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Output Index:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{wallet>index}"/>
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Lovelace:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{wallet>lovelace}" class="signingFlowMono"/>
+                                </HBox>
+                                <!-- Assets detail -->
+                                <VBox visible="{= ${wallet>assets} &amp;&amp; ${wallet>assets}.length > 0}"
+                                    class="sapUiTinyMarginTop">
+                                    <Label text="Assets:" class="sapUiTinyMarginBottom"/>
+                                    <List items="{wallet>assets}" class="dashboardSubList">
+                                        <CustomListItem>
+                                            <HBox alignItems="Center" justifyContent="SpaceBetween"
+                                                class="sapUiTinyMargin">
+                                                <VBox>
+                                                    <Text text="{= ${wallet>asset_assetName} || '(unnamed)'}"
+                                                        class="sapUiTinyMarginBottom"/>
+                                                    <Text text="{parts: ['wallet>asset_policyId'], formatter: '.formatter.truncateHash'}"
+                                                        class="signingFlowMono walletConnectHint"/>
+                                                </VBox>
+                                                <ObjectNumber number="{wallet>asset_quantity}" unit="units"/>
+                                            </HBox>
+                                        </CustomListItem>
+                                    </List>
+                                </VBox>
+                            </VBox>
+                        </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Wallet Transactions -->
+        <Panel headerText="{= 'Wallet Transactions (' + (${wallet>/transactions} ? ${wallet>/transactions}.length : 0) + ')'}"
+            expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            visible="{= ${wallet>/transactions} &amp;&amp; ${wallet>/transactions}.length > 0}">
+            <content>
+                <List items="{wallet>/transactions}" noDataText="No transactions">
+                    <CustomListItem type="Active" press=".onToggleTxDetail">
+                        <VBox class="sapUiSmallMargin">
+                            <!-- Summary row -->
+                            <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${wallet>expanded} ? 'sap-icon://navigation-down-arrow' : 'sap-icon://navigation-right-arrow'}"
+                                        size="0.85rem" class="sapUiSmallMarginEnd" color="#6a6d70"/>
+                                    <VBox>
+                                        <Text text="{parts: ['wallet>txHash'], formatter: '.formatter.truncateHash'}"
+                                            class="signingFlowMono"/>
+                                        <Text text="{parts: ['wallet>timestamp'], formatter: '.formatter.formatBlockTime'}"
+                                            class="walletConnectHint sapUiTinyMarginTop"/>
+                                    </VBox>
+                                </HBox>
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${wallet>amount} >= 0 ? 'sap-icon://arrow-top' : 'sap-icon://arrow-bottom'}"
+                                        color="{= ${wallet>amount} >= 0 ? '#107e3e' : '#bb0000'}"
+                                        size="1rem" class="sapUiTinyMarginEnd"/>
+                                    <ObjectNumber
+                                        number="{= (${wallet>amount} >= 0 ? '+' : '') + (Math.floor(Number(${wallet>amount} || 0) / 1000000 * 100) / 100)}"
+                                        unit="ADA"
+                                        state="{= ${wallet>amount} >= 0 ? 'Success' : 'Error'}"/>
+                                </HBox>
+                            </HBox>
+                            <!-- Expanded detail -->
+                            <VBox visible="{wallet>expanded}" class="dashboardItemDetail">
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Tx Hash:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{wallet>txHash}" class="signingFlowMono" wrapping="true"/>
+                                    <Button icon="sap-icon://copy" press=".onCopyTxHash"
+                                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Amount:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{= ${wallet>amount} + ' lovelace (' + (Math.floor(Number(${wallet>amount} || 0) / 1000000 * 100) / 100) + ' ADA)'}"/>
+                                </HBox>
+                                <!-- Native Asset changes -->
+                                <VBox visible="{wallet>hasAssets}" class="sapUiTinyMarginTop">
+                                    <Label text="Asset Changes:" class="sapUiTinyMarginBottom"/>
+                                    <HBox items="{wallet>assets}" wrap="Wrap">
+                                        <ObjectStatus
+                                            text="{= (Number(${wallet>quantity}) >= 0 ? '+' : '') + ${wallet>quantity} + ' ' + (${wallet>assetName} || ${wallet>policyId}.substring(0, 8) + '...')}"
+                                            state="{= Number(${wallet>quantity}) >= 0 ? 'Success' : 'Error'}"
+                                            icon="{= Number(${wallet>quantity}) >= 0 ? 'sap-icon://arrow-top' : 'sap-icon://arrow-bottom'}"
+                                            class="sapUiSmallMarginEnd sapUiTinyMarginBottom"/>
+                                    </HBox>
+                                </VBox>
+                                <!-- Detail navigation link -->
+                                <Link text="Open Full Detail" press=".onTransactionItemPress"
+                                    class="sapUiSmallMarginTop"/>
+                            </VBox>
+                        </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Signing Requests -->
+        <Panel headerText="Signing Requests" expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            visible="{= ${wallet>/signingRequests}.length > 0 }">
+            <content>
+                <List items="{wallet>/signingRequests}" noDataText="No signing requests">
+                    <CustomListItem type="Active" press=".onSigningRequestItemPress">
+                        <VBox class="sapUiSmallMargin">
+                            <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                <VBox>
+                                    <Title level="H5" text="{= ${wallet>id} ? ${wallet>id}.substring(0, 8) + '...' + ${wallet>id}.slice(-4) : 'N/A'}"/>
+                                    <Label text="{parts: ['wallet>createdAt'], formatter: '.formatter.formatTimestamp'}" class="sapUiTinyMarginTop"/>
+                                </VBox>
+                                <ObjectStatus
+                                    text="{wallet>status}"
+                                    state="{parts: ['wallet>status'], formatter: '.formatter.getSigningRequestStatusState'}"
+                                    icon="{parts: ['wallet>status'], formatter: '.formatter.getSigningRequestStatusIcon'}"/>
+                            </HBox>
+                        </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Transaction Builds -->
+        <Panel headerText="Transaction Builds" expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            visible="{= ${wallet>/transactionBuilds}.length > 0 }">
+            <content>
+                <List items="{wallet>/transactionBuilds}" noDataText="No transaction builds">
+                    <CustomListItem type="Active" press=".onTransactionBuildItemPress">
+                        <VBox class="sapUiSmallMargin">
+                            <HBox justifyContent="SpaceBetween" alignItems="Center">
+                                <VBox>
+                                    <Title level="H5" text="{= ${wallet>id} ? ${wallet>id}.substring(0, 8) + '...' + ${wallet>id}.slice(-4) : 'N/A'}"/>
+                                    <Label text="{parts: ['wallet>createdAt'], formatter: '.formatter.formatTimestamp'}" class="sapUiTinyMarginTop"/>
+                                </VBox>
+                                <ObjectNumber
+                                    number="{= Math.floor(Number(${wallet>fee} || 0) / 1000000 * 100) / 100}"
+                                    unit="ADA fee"
+                                    state="Warning"/>
+                            </HBox>
+                            <HBox justifyContent="SpaceBetween" alignItems="Center" class="sapUiTinyMarginTop">
+                                <Label text="{= ${wallet>senderAddress} ? 'From: ' + ${wallet>senderAddress}.substring(0, 15) + '...' : ''}"/>
+                                <ObjectStatus
+                                    text="{= ${wallet>wasSubmitted} ? 'Submitted' : 'Pending'}"
+                                    state="{= ${wallet>wasSubmitted} ? 'Success' : 'None'}"/>
+                            </HBox>
+                        </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+    </VBox>
+</core:FragmentDefinition>

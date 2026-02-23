@@ -108,7 +108,7 @@
     "test:integration:both": "npm run test:integration:blockfrost && npm run test:integration:koios",
     "test:unit": "npm test -- --testPathPattern=unit",
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
-    "watch-wallet-viewer": "cds watch --open wallet-viewer/webapp/index.html"
+    "watch-wallet": "cds watch --open wallet/webapp/index.html"
   },
   "workspaces": [
     "app/router"

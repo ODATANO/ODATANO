@@ -1,0 +1,172 @@
+<mvc:View
+    controllerName="odatanoview.wallet.controller.detail.SigningRequestDetail"
+    displayBlock="true"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.ui.layout.form">
+
+    <Page id="signingRequestDetailPage"
+        title="{i18n>detailSigningRequestTitle}"
+        showNavButton="true"
+        navButtonPress=".onNavBack"
+        busy="{detail>/busy}">
+
+        <!-- Header -->
+        <Panel class="sapUiSmallMargin">
+            <VBox>
+                <HBox alignItems="Center" justifyContent="SpaceBetween" width="100%">
+                    <Title level="H3" text="{i18n>detailSigningRequestTitle}"/>
+                    <HBox alignItems="Center">
+                        <ObjectStatus
+                            text="{detail>/status}"
+                            state="{path: 'detail>/status', formatter: '.formatter.getSigningRequestStatusState'}"
+                            icon="{path: 'detail>/status', formatter: '.formatter.getSigningRequestStatusIcon'}"
+                            class="sapUiSmallMarginEnd"/>
+                        <ObjectStatus text="{detail>/network}"
+                            state="{= ${detail>/network} === 'mainnet' ? 'Success' : 'Warning'}"/>
+                    </HBox>
+                </HBox>
+                <HBox alignItems="Center" class="sapUiTinyMarginTop">
+                    <Text text="{parts: ['detail>/id'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyId"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+            </VBox>
+        </Panel>
+
+        <!-- General Details -->
+        <Panel headerText="{i18n>detailGeneralTitle}" class="sapUiSmallMargin">
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="3" labelSpanL="3" labelSpanM="4" labelSpanS="12">
+
+                <Label text="Status"/>
+                <ObjectStatus
+                    text="{detail>/status}"
+                    state="{path: 'detail>/status', formatter: '.formatter.getSigningRequestStatusState'}"
+                    icon="{path: 'detail>/status', formatter: '.formatter.getSigningRequestStatusIcon'}"/>
+
+                <Label text="Signer Type" visible="{= !!${detail>/signerType}}"/>
+                <Text text="{detail>/signerType}" visible="{= !!${detail>/signerType}}"/>
+
+                <Label text="Signer Info" visible="{= !!${detail>/signerInfo}}"/>
+                <Text text="{detail>/signerInfo}" visible="{= !!${detail>/signerInfo}}"/>
+
+                <Label text="HSM Key ID" visible="{= !!${detail>/hsmKeyId}}"/>
+                <Text text="{detail>/hsmKeyId}" visible="{= !!${detail>/hsmKeyId}}"
+                    class="signingFlowMono"/>
+
+                <Label text="Tx Body Hash"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/txBodyHash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopyTxBodyHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Created"/>
+                <Text text="{path: 'detail>/createdAt', formatter: '.formatter.formatTimestamp'}"/>
+
+                <Label text="Expires"/>
+                <Text text="{path: 'detail>/expiresAt', formatter: '.formatter.formatTimestamp'}"/>
+
+                <Label text="Signed At" visible="{= !!${detail>/signedAt}}"/>
+                <Text text="{path: 'detail>/signedAt', formatter: '.formatter.formatTimestamp'}"
+                    visible="{= !!${detail>/signedAt}}"/>
+
+                <Label text="Submitted At" visible="{= !!${detail>/submittedAt}}"/>
+                <Text text="{path: 'detail>/submittedAt', formatter: '.formatter.formatTimestamp'}"
+                    visible="{= !!${detail>/submittedAt}}"/>
+
+                <Label text="Error" visible="{= !!${detail>/errorMessage}}"/>
+                <MessageStrip text="{detail>/errorMessage}" type="Error"
+                    visible="{= !!${detail>/errorMessage}}"/>
+            </f:SimpleForm>
+        </Panel>
+
+        <!-- CBOR Section -->
+        <Panel headerText="{i18n>detailCborTitle}" class="sapUiSmallMargin"
+            visible="{= !!${detail>/unsignedTxCbor}}">
+            <VBox>
+                <Label text="Unsigned TX CBOR" class="sapUiTinyMarginBottom"/>
+                <HBox justifyContent="End" class="sapUiTinyMarginBottom">
+                    <Button icon="sap-icon://copy" text="{i18n>copy}" press=".onCopyUnsignedCbor"
+                        type="Transparent"/>
+                </HBox>
+                <TextArea value="{detail>/unsignedTxCbor}" editable="false"
+                    rows="4" width="100%" growing="true" class="signingFlowMono detailCborArea"/>
+            </VBox>
+
+            <VBox visible="{= !!${detail>/cip30TxCbor}}" class="sapUiSmallMarginTop">
+                <Label text="CIP-30 TX CBOR" class="sapUiTinyMarginBottom"/>
+                <HBox justifyContent="End" class="sapUiTinyMarginBottom">
+                    <Button icon="sap-icon://copy" text="{i18n>copy}" press=".onCopyCip30Cbor"
+                        type="Transparent"/>
+                </HBox>
+                <TextArea value="{detail>/cip30TxCbor}" editable="false"
+                    rows="4" width="100%" growing="true" class="signingFlowMono detailCborArea"/>
+            </VBox>
+
+            <VBox visible="{= !!${detail>/cardanoCliCommand}}" class="sapUiSmallMarginTop">
+                <Label text="CLI Command" class="sapUiTinyMarginBottom"/>
+                <HBox justifyContent="End" class="sapUiTinyMarginBottom">
+                    <Button icon="sap-icon://copy" text="{i18n>copy}" press=".onCopyCliCommand"
+                        type="Transparent"/>
+                </HBox>
+                <TextArea value="{detail>/cardanoCliCommand}" editable="false"
+                    rows="3" width="100%" growing="true" class="signingFlowMono cliCommandBox"/>
+            </VBox>
+        </Panel>
+
+        <!-- Verifications -->
+        <Panel headerText="{i18n>detailVerificationsTitle} ({detail>/verificationCount})"
+            class="sapUiSmallMargin"
+            visible="{= ${detail>/verificationCount} > 0}">
+            <List items="{detail>/verifications}">
+                <CustomListItem>
+                    <VBox class="sapUiSmallMargin">
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" width="100%">
+                            <ObjectStatus
+                                text="{path: 'detail>isValid', formatter: '.formatter.getVerificationText'}"
+                                state="{path: 'detail>isValid', formatter: '.formatter.getVerificationState'}"
+                                icon="{path: 'detail>isValid', formatter: '.formatter.getVerificationIcon'}"/>
+                            <ObjectNumber number="{detail>witnessCount}" unit="witness(es)"/>
+                        </HBox>
+                        <Text text="{detail>signerKeyHashes}"
+                            class="signingFlowMono sapUiTinyMarginTop"
+                            wrapping="true" visible="{= !!${detail>signerKeyHashes}}"/>
+                    </VBox>
+                </CustomListItem>
+            </List>
+        </Panel>
+
+        <!-- Submission -->
+        <Panel headerText="{i18n>detailSubmissionTitle}" class="sapUiSmallMargin"
+            visible="{= !!${detail>/submission}}">
+            <f:SimpleForm editable="false" layout="ResponsiveGridLayout"
+                labelSpanXL="3" labelSpanL="3" labelSpanM="4" labelSpanS="12">
+
+                <Label text="Transaction Hash"/>
+                <HBox alignItems="Center">
+                    <Text text="{parts: ['detail>/submission/txHash'], formatter: '.formatter.truncateHash'}"
+                        class="signingFlowMono"/>
+                    <Button icon="sap-icon://copy" press=".onCopySubmissionTxHash"
+                        type="Transparent" class="copyInline" tooltip="{i18n>copy}"/>
+                </HBox>
+
+                <Label text="Status"/>
+                <ObjectStatus text="{detail>/submission/status}"
+                    state="{path: 'detail>/submission/status', formatter: '.formatter.getSubmissionStatusState'}"/>
+
+                <Label text="Submitted At"/>
+                <Text text="{path: 'detail>/submission/submittedAt', formatter: '.formatter.formatBlockTime'}"/>
+            </f:SimpleForm>
+
+            <HBox justifyContent="Center" class="sapUiSmallMarginTop">
+                <Link text="{i18n>submitViewExplorer}" press=".onViewOnCardanoscan"/>
+            </HBox>
+        </Panel>
+    </Page>
+
+</mvc:View>

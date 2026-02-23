@@ -1,3 +1,2 @@
 
-using from './wallet-viewer/annotations';
-using from './signing-flow/annotations';
+using from './wallet/annotations';

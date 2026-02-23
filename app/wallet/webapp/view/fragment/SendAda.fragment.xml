@@ -1,0 +1,88 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:form="sap.ui.layout.form">
+
+    <Dialog
+        id="sendAdaDialog"
+        title="{i18n>sendAdaTitle}"
+        contentWidth="400px">
+
+        <content>
+            <VBox class="sapUiSmallMargin">
+                <!-- Sender info -->
+                <HBox alignItems="Center" class="sapUiSmallMarginBottom">
+                    <core:Icon src="sap-icon://wallet" class="sapUiSmallMarginEnd"/>
+                    <VBox>
+                        <Label text="From" design="Bold"/>
+                        <Text text="{parts: ['sendModel>/senderAddress'], formatter: '.formatter.truncateAddress'}"/>
+                    </VBox>
+                </HBox>
+
+                <form:SimpleForm
+                    editable="true"
+                    layout="ResponsiveGridLayout"
+                    labelSpanXL="3"
+                    labelSpanL="3"
+                    labelSpanM="3"
+                    labelSpanS="12">
+
+                    <Label text="{i18n>recipientLabel}" required="true"/>
+                    <Input
+                        id="sendRecipientInput"
+                        value="{sendModel>/recipientAddress}"
+                        placeholder="addr1... or addr_test1..."
+                        valueLiveUpdate="true"
+                        liveChange=".onSendRecipientChange"
+                        valueState="{sendModel>/recipientAddressState}"
+                        valueStateText="{sendModel>/recipientAddressStateText}"/>
+
+                    <Label text="{i18n>amountLabel}" required="true"/>
+                    <Input
+                        id="sendAmountInput"
+                        value="{sendModel>/adaAmount}"
+                        type="Number"
+                        placeholder="e.g. 10"
+                        valueLiveUpdate="true"
+                        liveChange=".onSendAmountChange"
+                        valueState="{sendModel>/amountState}"
+                        valueStateText="{sendModel>/amountStateText}"/>
+
+                </form:SimpleForm>
+
+                <!-- Available balance info -->
+                <HBox justifyContent="End" class="sapUiSmallMarginTop">
+                    <Text text="{i18n>availableBalanceLabel}: "/>
+                    <ObjectNumber
+                        number="{= Math.floor(Number(${sendModel>/availableBalance} || 0) / 1000000 * 100) / 100 }"
+                        unit="ADA"
+                        class="sapUiTinyMarginBegin"/>
+                </HBox>
+
+                <!-- Error display -->
+                <MessageStrip
+                    text="{sendModel>/error}"
+                    type="Error"
+                    showIcon="true"
+                    visible="{= !!${sendModel>/error}}"
+                    class="sapUiSmallMarginTop"/>
+            </VBox>
+        </content>
+
+        <beginButton>
+            <Button
+                text="{i18n>continueButton}"
+                type="Emphasized"
+                press=".onContinueSend"
+                enabled="{sendModel>/canContinue}"/>
+        </beginButton>
+
+        <endButton>
+            <Button
+                text="{i18n>cancelButton}"
+                press=".onCancelSend"/>
+        </endButton>
+
+    </Dialog>
+
+</core:FragmentDefinition>
