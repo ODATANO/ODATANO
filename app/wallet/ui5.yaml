@@ -1,6 +1,6 @@
 specVersion: "4.0"
 metadata:
-  name: odatanoview.wallet
+  name: odatanoviewwallet
 type: application
 framework:
   name: SAPUI5
@@ -14,6 +14,6 @@ builder:
     - name: ui5-task-zipper
       afterTask: generateVersionInfo
       configuration:
-        archiveName: odatanowallet
+        archiveName: odatanoviewwallet
         additionalFiles:
           - xs-app.json

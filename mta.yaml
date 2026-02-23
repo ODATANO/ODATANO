@@ -68,12 +68,12 @@ modules:
     build-parameters:
       build-result: app/
       requires:
-        - name: odatanowallet
+        - name: odatanoviewwallet
           artifacts:
-            - odatanowallet.zip
+            - odatanoviewwallet.zip
           target-path: app/
 
-  - name: odatanowallet
+  - name: odatanoviewwallet
     type: html5
     path: app/wallet
     build-parameters:
