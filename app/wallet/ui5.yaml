@@ -1,6 +1,6 @@
 specVersion: "4.0"
 metadata:
-  name: odatanoviewwallet
+  name: odatanoview.wallet
 type: application
 framework:
   name: SAPUI5

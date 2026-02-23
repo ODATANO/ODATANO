@@ -5,8 +5,8 @@ sap.ui.define([
     "sap/m/MessageToast",
     "sap/ui/core/Fragment",
     "sap/base/Log",
-    "odatano/common/wallet/WalletService",
-    "odatano/common/model/formatter"
+    "odatanoview/wallet/service/WalletService",
+    "odatanoview/wallet/model/formatter"
 ], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, Log, WalletService, formatter) {
     "use strict";
 
@@ -275,7 +275,14 @@ sap.ui.define([
                 oDataModel.getMetaModel().requestObject("/").then(function () {
                     that._loadUtxos();
                     that._loadTransactions();
+                }).catch(function () {
+                    // Metadata failed — try loading directly as fallback
+                    that._loadUtxos();
+                    that._loadTransactions();
                 });
+            } else {
+                this._loadUtxos();
+                this._loadTransactions();
             }
             this._loadSigningRequests();
             this._loadTransactionBuilds();
@@ -700,6 +707,7 @@ sap.ui.define([
                 var sCbor = oBuild.unsignedTxCbor || "";
                 that._flowModel.setProperty("/inspectorByteCount", Math.floor(sCbor.length / 2));
                 that._loadBuildDetails(oTxModel, oBuild.id);
+                that._loadUtxos();
             }).catch(function (oError) {
                 that._flowModel.setProperty("/buildError", (oError && oError.message) || "Transaction build failed");
             }).finally(function () {
@@ -1166,6 +1174,8 @@ sap.ui.define([
                 });
 
                 that._walletService.refresh();
+                that._loadUtxos();
+                that._loadTransactions();
             }).catch(function (oError) {
                 that._flowModel.setProperty("/submitError", (oError && oError.message) || "Submission failed");
             }).finally(function () {

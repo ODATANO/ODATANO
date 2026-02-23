@@ -1,5 +1,5 @@
 {
-  "welcomeFile": "/odatanoviewwallet/index.html",
+  "welcomeFile": "/odatanoview.wallet/index.html",
   "authenticationMethod": "route",
   "routes": [
     {
@@ -10,8 +10,8 @@
       "csrfProtection": true
     },
     {
-      "source": "^/odatanoviewwallet/(.*)$",
-      "target": "/odatanoviewwallet/$1",
+      "source": "^/odatanoview[.]wallet/(.*)$",
+      "target": "/odatanoview.wallet/$1",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa"
     },

@@ -1,4 +1,3 @@
-/* global TextDecoder */
 sap.ui.define([
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast"
@@ -290,7 +289,7 @@ sap.ui.define([
 
     /**
      * WalletService - Singleton service for CIP-30 wallet interactions
-     * @namespace odatano.common.wallet
+     * @namespace odatanoview.wallet.service
      */
     var WalletService = {
 

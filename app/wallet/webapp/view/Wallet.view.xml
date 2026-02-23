@@ -21,13 +21,13 @@
 
         <content>
             <!-- Not Connected: Wallet Connect -->
-            <core:Fragment fragmentName="odatano.common.wallet.WalletConnect" type="XML"/>
+            <core:Fragment fragmentName="odatanoview.wallet.view.fragment.WalletConnect" type="XML"/>
 
             <!-- Connected: Tab-based Wallet App -->
             <VBox visible="{wallet>/isConnected}" class="sapUiSmallMarginTopBottom walletMainContent">
 
                 <!-- Wallet Info Header -->
-                <core:Fragment fragmentName="odatano.common.wallet.WalletHeader" type="XML"/>
+                <core:Fragment fragmentName="odatanoview.wallet.view.fragment.WalletHeader" type="XML"/>
 
                 <!-- Main Tab Bar -->
                 <IconTabBar id="mainTabBar" select=".onTabSelect"

@@ -2,7 +2,7 @@ sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
     "sap/m/MessageToast",
-    "odatano/common/model/formatter"
+    "odatanoview/wallet/model/formatter"
 ], function (Controller, JSONModel, MessageToast, formatter) {
     "use strict";
 

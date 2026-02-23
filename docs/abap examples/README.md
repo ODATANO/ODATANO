@@ -63,6 +63,43 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
 
 ## Setup
 
+### 1. Get XSUAA Credentials (OAuth2 Token)
+
+The deployed ODATANO service is protected by XSUAA. To call it from ABAP, you need OAuth2 Client Credentials:
+
+```bash
+# Create a service key for the XSUAA instance (one-time)
+cf create-service-key odatano-auth odatano-sk
+
+# Read the credentials
+cf service-key odatano-auth odatano-sk
+```
+
+This returns:
+
+```json
+{
+  "clientid": "sb-odatano-...",
+  "clientsecret": "...",
+  "url": "https://<subdomain>.authentication.<region>.hana.ondemand.com"
+}
+```
+
+Use these values when instantiating `ZCL_ODATANO_CLIENT`:
+
+| ABAP Parameter | Value |
+|----------------|-------|
+| `iv_base_url` | Your `odatano-srv` URL (e.g. `https://...-odatano-srv.cfapps.us10-001.hana.ondemand.com`) |
+| `iv_token_url` | `{url}/oauth/token` from the service key |
+| `iv_client_id` | `clientid` from the service key |
+| `iv_client_secret` | `clientsecret` from the service key |
+
+The client automatically fetches and caches Bearer tokens via the OAuth2 Client Credentials flow.
+
+> **Note:** For local development (`cds watch`), authentication is disabled. You can omit the token parameters and just pass `iv_base_url`.
+
+### 2. Create ABAP Objects
+
 1. Create an ABAP package (e.g. `Z_ODATANO`)
 2. Create all objects in order:
    - `ZODATANO_BC_LOG` (Database Table)
@@ -72,7 +109,7 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
    - `ZCL_CARDANO_MONITOR` (Network Monitor)
    - `ZCL_CARDANO_ADDR_CHECK` (Address Verification)
    - `ZCL_ODATANO_TEST` (Test Console App)
-3. Update the ODATANO service URL in `ZCL_ODATANO_TEST`
+3. Update the ODATANO service URL and credentials in `ZCL_ODATANO_TEST`
 4. Run with **Right-click → Run As → ABAP Application (Console)**
 
 ### Example Package Structure after creation:

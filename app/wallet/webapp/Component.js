@@ -2,7 +2,7 @@ sap.ui.define([
     "sap/ui/core/UIComponent",
     "sap/ui/model/json/JSONModel",
     "./model/models",
-    "odatano/common/wallet/WalletService"
+    "odatanoview/wallet/service/WalletService"
 ], function (UIComponent, JSONModel, models, WalletService) {
     "use strict";
 

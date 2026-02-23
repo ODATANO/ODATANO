@@ -9,7 +9,7 @@
         class="walletConnectPanel">
 
         <Image
-            src="/common/img/logo.svg"
+            src="img/logo.svg"
             width="400px"
             class="sapUiMediumMarginBottom"/>
 

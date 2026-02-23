@@ -17,6 +17,8 @@ export default [
       '**/.cds-gen/**',
       '**/.cds-staging/**',
       '**/scripts/**',
+      'srv/**/*.js',
+      'src/**/*.js',
     ],
   },
 

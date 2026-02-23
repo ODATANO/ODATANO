@@ -21,6 +21,11 @@ modules:
     parameters:
       instances: 1
       buildpack: nodejs_buildpack
+    properties:
+      NETWORK: preview
+      BACKENDS: blockfrost
+      BLOCKFROST_API_KEY: YOUR_BLOCKFROST_API_KEY
+      TX_BUILDERS: buildooor
     build-parameters:
       builder: custom
       commands:
