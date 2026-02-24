@@ -535,7 +535,7 @@ module.exports = (srv: cds.Service) => {
 
         // Invalidate sender address cache so next read fetches fresh data
         const addrBuild = await db.run(
-          SELECT.one.from(AddressTransactionBuilds).where({ build_id: buildId })
+          SELECT.one.from(AddressTransactionBuilds).where({ txBuild_id: buildId })
         );
         if (addrBuild?.address_address) {
           await db.run(DELETE_FROM.from(Addresses).where({ address: addrBuild.address_address }));
