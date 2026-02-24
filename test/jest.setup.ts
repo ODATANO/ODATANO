@@ -15,7 +15,8 @@ const originalConsoleError = console.error;
 const originalConsoleDir = console.dir;
 
 // Check if we should suppress logs (default: yes in test environment)
-const suppressLogs = process.env.LOG_LEVEL === 'error' || process.env.NODE_ENV === 'test';
+// Set LOG_LEVEL=debug to see all console output during tests
+const suppressLogs = process.env.LOG_LEVEL !== 'debug' && (process.env.LOG_LEVEL === 'error' || process.env.NODE_ENV === 'test');
 
 if (suppressLogs) {
   // Suppress all console output in tests

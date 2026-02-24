@@ -91,7 +91,7 @@
 
             <!-- Manual Address -->
             <Label text="External Signing" design="Bold" class="sapUiTinyMarginBottom"/>
-            <Text text="Paste an address to build transactions for CLI or hardware wallet signing."
+            <Text text="Paste an address to build transactions for manual signing like CLI."
                 class="walletConnectHint sapUiTinyMarginBottom"/>
             <HBox alignItems="Center">
                 <Input value="{wallet>/manualAddress}"

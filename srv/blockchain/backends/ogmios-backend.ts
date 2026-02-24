@@ -534,36 +534,22 @@ export class OgmiosBackend implements EvaluatingBackend {
    * Closes all connections and marks as shutdown
    */
   async shutdown(): Promise<void> {
-    if (this.isShutdown) {
-      return;
-    }
-
-    try {
-      if (this.stateQueryClient) {
-        await this.stateQueryClient.shutdown();
-      }
-    } catch (error) {
-
-      logger.error(`Error shutting down state query client: ${error}`);
-    }
-
-    try {
-      if (this.txSubmissionClient) {
-        await this.txSubmissionClient.shutdown();
-      }
-    } catch (error) {
-      logger.error(`Error shutting down tx submission client: ${error}`);
-    }
-
-    try {
-      if (this.context?.socket) {
-        this.context.socket.close();
-      }
-    } catch (error) {
-      logger.error(`Error closing socket: ${error}`);
-    }
-
+    if (this.isShutdown) return;
     this.isShutdown = true;
+
+    // Terminate the WebSocket and wait for close confirmation
+    if (this.context?.socket) {
+      const socket = this.context.socket;
+      if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3000);
+          timer.unref(); // Don't keep event loop alive for this timeout
+          socket.once('close', () => { clearTimeout(timer); resolve(); });
+          socket.terminate();
+        });
+      }
+    }
+
     this.stateQueryClient = null;
     this.txSubmissionClient = null;
     this.context = null;

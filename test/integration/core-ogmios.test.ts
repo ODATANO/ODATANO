@@ -1,5 +1,4 @@
 import cds from '@sap/cds';
-import { shutdownAppContext } from '../../srv/server';
 import { TEST_FIXTURES } from './test-fixtures';
 import { simpleRequestBody } from './test-fixtures';
 
@@ -28,10 +27,6 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
   // Only reset database before each test - AppContext is already created by server bootstrap
   beforeEach(async () => {
     await test.data.reset();
-  });
-
-  afterAll(async () => {
-    await shutdownAppContext();
   });
 
   describe('Ogmios Backend Action Tests', () => {

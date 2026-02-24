@@ -7,7 +7,7 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH } from './utils/const';
-const { SELECT, UPDATE } = cds.ql;
+const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
 
@@ -23,6 +23,12 @@ module.exports = (srv: cds.Service) => {
     TransactionSubmissions,
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
+
+  const {
+    Addresses,
+    AddressUTxOs,
+    AddressAssets
+  } = require('#cds-models/CardanoODataService');
 
   /**
    * Build a simple ADA-only transaction
@@ -66,6 +72,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
+
       return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
     });
   });
@@ -93,6 +100,7 @@ module.exports = (srv: cds.Service) => {
         { senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
         'Building transaction with metadata'
       );
+
       return await getCardanoIndexer().indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
     });
   });
@@ -137,6 +145,7 @@ module.exports = (srv: cds.Service) => {
         }
         delete cleanData.outputDatumJson;
       }
+
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
       logger.info({ result }, 'Multi-asset transaction build result');
@@ -226,6 +235,7 @@ module.exports = (srv: cds.Service) => {
         { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
         'Building minting transaction'
       );
+
       // Create clean request object with parsed mintActions (remove mintActionsJson, add mintActions)
       const cleanData = { ...req.data };
       delete cleanData.mintActionsJson;
@@ -367,6 +377,7 @@ module.exports = (srv: cds.Service) => {
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
         'Building Plutus spending transaction'
       );
+
 
       // Apply script parameters if provided (for parameterized validators)
       let finalValidatorScript = validatorScript;
@@ -521,6 +532,17 @@ module.exports = (srv: cds.Service) => {
         logger.info({ txHash }, 'Transaction submitted to blockchain');
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
+
+        // Invalidate sender address cache so next read fetches fresh data
+        const addrBuild = await db.run(
+          SELECT.one.from(AddressTransactionBuilds).where({ build_id: buildId })
+        );
+        if (addrBuild?.address_address) {
+          await db.run(DELETE_FROM.from(Addresses).where({ address: addrBuild.address_address }));
+          await db.run(DELETE_FROM.from(AddressUTxOs).where({ address_address: addrBuild.address_address }));
+          await db.run(DELETE_FROM.from(AddressAssets).where({ address_address: addrBuild.address_address }));
+          logger.info(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
+        }
       } catch (err: any) {
         logger.error({ txHash, error: err.message }, 'Transaction submission failed');
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', err.message);

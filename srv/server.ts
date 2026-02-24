@@ -172,7 +172,6 @@ export async function shutdownAppContext(): Promise<void> {
 
     await appContext.cardanoClient.shutdown();
     appContext = null;
-    logger.info('Application context shutdown complete');
   }
 }
 
@@ -305,4 +304,9 @@ cds.on('served', async () => {
     logger.error('Failed to initialize blockchain components:', err);
     throw err;
   }
+});
+
+// Shutdown hook - runs when CAP server is shutting down (e.g., cds.shutdown() in tests)
+cds.on('shutdown', async () => {
+  await shutdownAppContext();
 });

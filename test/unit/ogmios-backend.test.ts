@@ -226,31 +226,27 @@ describe('OgmiosBackend', () => {
   });
 
   describe('shutdown', () => {
-    it('should shutdown all clients and set isShutdown flag', async () => {
-      const mockStateQueryClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
-      };
-      const mockTxSubmissionClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
-      };
+    it('should terminate socket and set isShutdown flag', async () => {
       const mockSocket = {
-        close: jest.fn()
+        readyState: 1, // OPEN
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: jest.fn()
       };
       const mockContext = {
         socket: mockSocket
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).stateQueryClient = { shutdown: jest.fn() };
+      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
       await backend.shutdown();
 
-      expect(mockStateQueryClient.shutdown).toHaveBeenCalled();
-      expect(mockTxSubmissionClient.shutdown).toHaveBeenCalled();
-      expect(mockSocket.close).toHaveBeenCalled();
+      expect(mockSocket.terminate).toHaveBeenCalled();
       expect((backend as any).isShutdown).toBe(true);
       expect((backend as any).stateQueryClient).toBe(null);
       expect((backend as any).txSubmissionClient).toBe(null);
@@ -268,24 +264,25 @@ describe('OgmiosBackend', () => {
     });
 
     it('should be idempotent - calling shutdown twice should not throw', async () => {
-      const mockStateQueryClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
-      };
-      const mockTxSubmissionClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
+      const mockSocket = {
+        readyState: 1,
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: jest.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).stateQueryClient = { shutdown: jest.fn() };
+      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).context = { socket: mockSocket };
       (backend as any).isShutdown = false;
 
       await backend.shutdown();
       await backend.shutdown(); // second call should early-return
 
-      // shutdown methods should only be called once
-      expect(mockStateQueryClient.shutdown).toHaveBeenCalledTimes(1);
-      expect(mockTxSubmissionClient.shutdown).toHaveBeenCalledTimes(1);
+      // terminate should only be called once
+      expect(mockSocket.terminate).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -496,17 +493,10 @@ describe('OgmiosBackend', () => {
   });
 
   describe('shutdown error handling', () => {
-    it('should handle error when stateQueryClient.shutdown fails', async () => {
-      const mockStateQueryClient = {
-        shutdown: jest.fn().mockRejectedValue(new Error('Shutdown failed'))
-      };
-      const mockTxSubmissionClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
-      };
-
+    it('should handle shutdown when no socket exists', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).txSubmissionClient = mockTxSubmissionClient;
+      (backend as any).stateQueryClient = { shutdown: jest.fn() };
+      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
       (backend as any).context = null;
       (backend as any).isShutdown = false;
 
@@ -514,64 +504,40 @@ describe('OgmiosBackend', () => {
       expect((backend as any).isShutdown).toBe(true);
     });
 
-    it('should handle error when txSubmissionClient.shutdown fails', async () => {
-      const mockStateQueryClient = {
-        shutdown: jest.fn().mockResolvedValue(undefined)
-      };
-      const mockTxSubmissionClient = {
-        shutdown: jest.fn().mockRejectedValue(new Error('TX client shutdown failed'))
-      };
-
-      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).txSubmissionClient = mockTxSubmissionClient;
-      (backend as any).context = null;
-      (backend as any).isShutdown = false;
-
-      await expect(backend.shutdown()).resolves.not.toThrow();
-      expect((backend as any).isShutdown).toBe(true);
-    });
-
-    it('should handle error when socket.close fails', async () => {
+    it('should handle shutdown when socket is already closed', async () => {
       const mockSocket = {
-        close: jest.fn().mockImplementation(() => {
-          throw new Error('Socket close failed');
-        })
-      };
-      const mockContext = {
-        socket: mockSocket
+        readyState: 3, // CLOSED
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn(),
+        terminate: jest.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = null;
       (backend as any).txSubmissionClient = null;
-      (backend as any).context = mockContext;
+      (backend as any).context = { socket: mockSocket };
       (backend as any).isShutdown = false;
 
       await expect(backend.shutdown()).resolves.not.toThrow();
       expect((backend as any).isShutdown).toBe(true);
+      // terminate should NOT be called since socket is already closed
+      expect(mockSocket.terminate).not.toHaveBeenCalled();
     });
 
-    it('should handle all shutdown errors simultaneously', async () => {
-      const mockStateQueryClient = {
-        shutdown: jest.fn().mockRejectedValue(new Error('State query shutdown failed'))
-      };
-      const mockTxSubmissionClient = {
-        shutdown: jest.fn().mockRejectedValue(new Error('TX submission shutdown failed'))
-      };
+    it('should clean up all references even with closed socket', async () => {
       const mockSocket = {
-        close: jest.fn().mockImplementation(() => {
-          throw new Error('Socket close failed');
-        })
-      };
-      const mockContext = {
-        socket: mockSocket
+        readyState: 3, // CLOSED
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn(),
+        terminate: jest.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).txSubmissionClient = mockTxSubmissionClient;
-      (backend as any).context = mockContext;
+      (backend as any).stateQueryClient = { shutdown: jest.fn() };
+      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).context = { socket: mockSocket };
       (backend as any).isShutdown = false;
 
       await expect(backend.shutdown()).resolves.not.toThrow();

@@ -5,6 +5,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
+import { InsufficientFundsError } from '../utils/errors';
 
 const logger = cds.log('CardanoTransactionBuilder');
 
@@ -83,6 +84,7 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
+        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transfer transaction
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
@@ -105,6 +107,7 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
+        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transaction with metadata
         const txBuildResult = await builder.buildUnsignedTransactionWithMetadata(req, txContext);
         logger.info(`Built transaction with metadata successfully.`);
@@ -130,6 +133,7 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
+        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transfer transaction (unified with simple ADA transfer)
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
@@ -167,6 +171,7 @@ export class CardanoTransactionBuilder {
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
+        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
 
         if (txContext.evaluateTransaction) {
             logger.info(`Ogmios available - will use dynamic script evaluation`);
@@ -237,6 +242,7 @@ export class CardanoTransactionBuilder {
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
+        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script)`);
 
         if (txContext.evaluateTransaction) {
             logger.info(`Ogmios available - will use dynamic script evaluation`);
@@ -256,9 +262,17 @@ export class CardanoTransactionBuilder {
      * @returns {Promise<UTxO[]>} list of UTxOs
      */
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
-        // fetch UTxOs directly using cardano client
         logger.debug(`Fetching UTxOs for address: ${address}`);
         const utxos = await this.client.getAddressUtxos(address);
+        logger.info(`Found ${utxos.length} UTxOs for address ${address.substring(0, 20)}...`);
+        if (utxos.length === 0) {
+            throw new InsufficientFundsError(
+                'lovelace',
+                BigInt(0),
+                BigInt(0),
+                new Error(`Address ${address} has no UTxOs. Verify this is the correct sender address and that it has been funded.`)
+            );
+        }
         return utxos;
     }
 }

@@ -48,7 +48,15 @@ export class HsmSigner {
    */
   async init(network: 'mainnet' | 'preview' | 'preprod' | string): Promise<void> {
     // Dynamic import — pkcs11js is only loaded when HSM is configured
-    const pkcs11js = require('pkcs11js');
+    let pkcs11js: any;
+    try {
+      pkcs11js = require('pkcs11js');
+    } catch {
+      throw new HsmError(
+        'pkcs11js is not installed. Install it with: npm install pkcs11js',
+        500, ERROR_CODES.HSM_UNAVAILABLE
+      );
+    }
     this.pkcs11 = new pkcs11js.PKCS11();
 
     try {

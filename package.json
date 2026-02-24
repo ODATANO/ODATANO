@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "0.3.18",
+  "version": "0.3.19",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -19,7 +19,9 @@
     "@harmoniclabs/cardano-ledger-ts": "^0.4.6",
     "@sap/cds": ">=9",
     "axios": "^1.13.2",
-    "bech32": "^2.0.0",
+    "bech32": "^2.0.0"
+  },
+  "optionalDependencies": {
     "pkcs11js": "^2.1.6"
   },
   "devDependencies": {
@@ -86,6 +88,7 @@
     }
   },
   "scripts": {
+    "clean": "node -e \"require('glob').sync('{srv,db,src}/**/*.{js,js.map,d.ts,d.ts.map}',{ignore:'**/node_modules/**'}).forEach(f=>require('fs').unlinkSync(f));console.log('Clean complete')\"",
     "build": "npm run cds:types && tsc",
     "build:plugin": "npm run cds:types && tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run build:plugin",
