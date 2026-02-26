@@ -481,16 +481,10 @@ Implementation of comprehensive error handling for transaction-related operation
 
 ## A. Output: Unsigned Transaction Export Interface
 
-Implementation of OData endpoints to export unsigned Cardano transactions for external signing. The interface provides signing instructions, Cardano CLI commands, and CIP-30 compatible CBOR for browser wallets. Signing requests include TTL-based expiration to ensure security.
+Unsigned Transaction Export Interface: Extension of the transaction module to support exporting unsigned transactions for external signing. The OData Action BuildTransaction returns a valid payload containing a deterministic reference id, hash placeholder, and timestamp. This enables third-party signers (Cardano CLI, Browser Wallets, etc.) to sign externally – no private keys handled in the CAP service.
 
 ### Acceptance criteria
-
-- Unsigned transaction export via OData action (`CreateSigningRequest`)
-- Signing request with TTL-based expiration (30 minutes default)
-- Cardano CLI signing command generation
-- CIP-30 compatible CBOR format for browser wallets
-- Signing status tracking (pending, signed, verified, submitted, expired, failed)
-- Address association for request lookup
+End-to-End External Signing Flow Validated: Unsigned TX can be exported, signed externally, verified, and successfully submitted to Cardano preview testnet.
 
 ### Evidence
 
@@ -515,17 +509,11 @@ Implementation of OData endpoints to export unsigned Cardano transactions for ex
 
 ## B. Output: External Signer Integration Module
 
-Integration module enabling external signing of transactions through CIP-30 browser wallets (Nami, Eternl, Yoroi), Cardano CLI, and hardware wallets (Ledger, Trezor). The module handles witness set combination, signature verification, and audit trail creation.
+Implementation of the external signing workflow using the Cardano CLI as reference signer. Flow: Unsigned TX → External Sign → Verify → Assemble → Submit. Demonstrates full round-trip signing with complete key separation and no private-key exposure
 
 ### Acceptance criteria
 
-- CIP-30 browser wallet integration (signTx API)
-- Cardano CLI signing support
-- Hardware wallet compatibility (via browser extensions)
-- Witness set combination for CIP-30 wallets
-- Cryptographic signature verification
-- Complete audit trail for verification attempts
-- Private key isolation (server never handles keys)
+Private-Key Isolation Confirmed: CAP service never stores or uses private key material (code review + architecture evidence).
 
 ### Evidence
 
@@ -534,11 +522,15 @@ Integration module enabling external signing of transactions through CIP-30 brow
 - Signature Verifier: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/signature-verifier.ts
 - External Signer Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/external-signer.ts
 - CIP-30 Witness Combination: https://github.com/ODATANO/ODATANO/blob/main/srv/utils/signing-helper.ts
+- HSM Signing Module: https://github.com/ODATANO/ODATANO/blob/main/srv/blockchain/signing/hsm-signer.ts
 
 **OData Actions (CardanoSignService at `/odata/v4/cardano-sign/`)**
 
 - `VerifySignature` - Cryptographically verify signed transaction
 - `SubmitVerifiedTransaction` - Verify and submit in one step (supports CIP-30 witness sets)
+- `SignWithHsm` - HSM signing action for signing with external hardware security modules
+- `SignAndSubmitWithHsm` - Dual action for signing with HSM and submitting in one step
+- `GetHsmStatus` - Check HSM availability and status
 
 **Data Model**
 
@@ -548,50 +540,59 @@ Integration module enabling external signing of transactions through CIP-30 brow
 
 - Transaction Workflow Guide (M3 Section): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/TRANSACTION_WORKFLOW.md
 - User Guide (External Signing): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/USER_GUIDE.md
+- Developer Guide (External Signing): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/DEVELOPER_GUIDE.md
 
 ---
 
-## C. Output: Centralized App Context Architecture
+## C. Output: SAP Business Process Integration Examples
 
-Refactored application initialization using centralized App Context pattern in `server.ts`. This enables proper dependency injection, testability, and graceful shutdown of blockchain connections.
+SAP Business Process Integration Examples: Examples for Integration of the Cardano OData API into an SAP S/4HANA process (for example, a Purchase Order posting triggers a Cardano transaction or retrieves on-chain data).
 
 ### Acceptance criteria
 
-- Centralized initialization of CardanoClient, CardanoIndexer, CardanoTransactionBuilder
-- Singleton access via `getAppContext()`, `getCardanoIndexer()`, `getCardanoClient()`
-- Test context creation via `createTestContext()`
-- Graceful shutdown via `shutdownAppContext()`
-- Environment-based configuration
+SAP Integration Operational: An SAP process can trigger an API call and receive data or transaction confirmation within 10 seconds.
 
 ### Evidence
 
-**Implementation**
+**SAP Integration Examples & Deployment**
 
-- Server App Context: https://github.com/ODATANO/ODATANO/blob/main/srv/server.ts
-
-**Functions Provided**
-
-- `getAppContext()` - Get singleton application context
-- `getCardanoIndexer()` - Convenience function for services
-- `getCardanoClient()` - Convenience function for services
-- `createTestContext()` - Create isolated test contexts
-- `resetAppContext()` - Reset context for testing
-- `shutdownAppContext()` - Graceful connection cleanup
-
+- BTP Integration Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/PRODUCTION_DEPLOYMENT.md
+- Security Best Practices for SAP Integration: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SECURITY_GUIDE.md
+- ABAP Examples: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/README.md
 ---
 
-## D. Output: Extended Test Suite (External Signing)
+## D. Output: Extended Enterprise Use Cases
 
-Comprehensive test coverage for external signing workflow including signing request creation, signature verification, CIP-30 witness combination, and status transitions.
+Enterprise Use Cases: Exampels of advanced real-world SAP scenarios based on the integration: (e.g., sustainability tracking of CO₂ certificates, tokenized inter-company settlements, audit-trail reporting for FI/CO documents). Each use case includes ABAP examples and SAP/Explorer screenshots.
+
+### Evidence
+- General SAP Integration Use Cases Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SAP_INTEGRATION_EXAMPLES.md
+- ABAP Examples: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/README.md
+- Reusable ABAP Class for OData Integration: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/zcl_odatano_client.clas.abap
+- ABAP Test Program for OData Client & Goods Receipt Example integration: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/zcl_odatano_test.clas.abap
+- Example Use Case Implementation with Fiori APP for supply chain tracking using ODATANO as a plugin: https://github.com/ODATANO/TRACE 
+
+
+
+## E. Output: Basic Wallet Viewer Fiori Sample App: 
+A lightweight SAPUI5/Fiori application that visualizes wallet information from the OData API which demonstrates how easy it is to build simple apps based on the Odataservices / CAP definitions and can be used as a reference in future applications.  
 
 ### Acceptance criteria
 
-- Integration tests for all external signing actions
-- Unit tests for SignatureVerifier and ExternalSignerModule
-- CIP-30 witness set combination tests
-- Signing status transition tests
-- TTL expiration handling tests
-- Tests pass in continuous integration
+Working SAP Fiori application that displays wallet information through OData services, including filtered views for balances, tokens, and transaction history.
+
+### Evidence
+
+Implementation of the Fiori Sample App: https://github.com/ODATANO/ODATANO/tree/main/app/wallet
+
+Youtube Video Demo of the Fiori Sample App: TODO
+
+
+## F. Output: Automated Integration & Security Tests:
+≥ 15 automated tests covering external signing, signature validation, SAP integration, and error conditions.
+
+### Acceptance criteria
+Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed test cases.
 
 ### Evidence
 
@@ -602,6 +603,7 @@ Comprehensive test coverage for external signing workflow including signing requ
 **Unit Tests**
 
 - Signing Module Unit Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/signing.test.ts
+- HSM Signer Unit Tests: https://github.com/ODATANO/ODATANO/blob/main/test/unit/hsm-signer.test.ts
 
 **Test Documentation**
 
@@ -614,33 +616,9 @@ Comprehensive test coverage for external signing workflow including signing requ
 
 ---
 
-## E. Output: Updated Documentation Package
-
-Comprehensive documentation updates covering external signing workflow, new entities, API actions, and architecture changes.
-
-### Acceptance criteria
-
-- External signing workflow documented
-- New entities documented (SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, AddressTransactions)
-- API reference for all M3 actions
-- Architecture documentation updated with App Context pattern
-- Data model diagrams updated
-
-### Evidence
-
-**Documentation Updates**
-
-- CHANGELOG (M3 Section): https://github.com/ODATANO/ODATANO/blob/main/CHANGELOG.md
-- User Guide (M3 External Signing): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/USER_GUIDE.md
-- Developer Guide (App Context): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/DEVELOPER_GUIDE.md
-- Transaction Workflow (M3 Flow): https://github.com/ODATANO/ODATANO/blob/main/docs/guides/TRANSACTION_WORKFLOW.md
-- Data Model (M3 Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/MM_DATAMODEL.md
-- Indexing (M3 Entities): https://github.com/ODATANO/ODATANO/blob/main/docs/concepts%20%26%20architecture/INDEXING.md
-
----
+## General Other Evidence for Milestone 3
 
 **Demo & Release**
 
 - Milestone Release v0.3-milestone3: https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3
 - Demo Video (M3 Walkthrough): TBD
-

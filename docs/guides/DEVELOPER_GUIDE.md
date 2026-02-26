@@ -2,7 +2,6 @@
 
 **Project:** ODATANO - OData V4 Service for Cardano Blockchain\
 **Version:** v0.3.milestone3\
-**Status:** Production-Ready - 29 test files, 99% statement coverage\
 **Last Updated:** February 2026
 
 ---

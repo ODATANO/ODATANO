@@ -1,7 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** 0.3.17 | **Last Updated:** February 2026
-
+**Version:** v0.3.milstone3 | **Last Updated:** February 2026
 ---
 
 ## Table of Contents
@@ -76,7 +75,6 @@ LOG_LEVEL=info
 BACKENDS=ogmios,blockfrost,koios
 BLOCKFROST_API_KEY=mainnetYourApiKeyHere
 KOIOS_API_KEY=yourKoiosApiKeyHere
-OGMIOS_URL=ws://ogmios:1337
 TX_BUILDERS=buildooor
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
@@ -248,7 +246,7 @@ cf deploy mta_archives/odatano_0.3.17.mtar
 cf set-env odatano-srv NETWORK "mainnet"
 cf set-env odatano-srv BACKENDS "blockfrost,koios"
 cf set-env odatano-srv BLOCKFROST_API_KEY "mainnetYourKeyHere"
-cf set-env odatano-srv TX_BUILDERS "csl"
+cf set-env odatano-srv TX_BUILDERS "buildooor"
 cf set-env odatano-srv PRIMARY_TIMEOUT_MS "8000"
 cf set-env odatano-srv FALLBACK_TIMEOUT_MS "10000"
 cf set-env odatano-srv INDEX_TTL_MS "600000"
@@ -289,9 +287,6 @@ cf html5-list -di odatano-destination-service -u  # List HTML5 apps
 ```json
 { "cds": { "requires": { "db": { "kind": "sqlite", "credentials": { "url": "db.sqlite" } } } } }
 ```
-
-- Single-instance only, no external DB server needed
-- Add `db.sqlite` to `.gitignore`
 
 ### SAP HANA (Production / BTP)
 
@@ -372,19 +367,6 @@ parameters:
 | `/odata/v4/cardano-transaction/$metadata` | GET | Transaction service health (200 + XML) |
 | `/odata/v4/cardano-signing/$metadata` | GET | Signing service health (200 + XML) |
 
-### Backend Connectivity
-
-```bash
-# Blockfrost
-curl -s -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/health
-
-# Koios
-curl -s https://api.koios.rest/api/v1/tip
-
-# Ogmios
-curl -s http://localhost:1337/health | jq '.networkSynchronization'
-# Should return > 0.99
-```
 
 ## Mainnet Considerations
 
@@ -400,15 +382,6 @@ Setting `NETWORK=mainnet` affects:
 3. **Rate limiting** — Use a reverse proxy in front of ODATANO.
 4. **Audit trail** — TransactionBuilds, TransactionSubmissions, SigningRequests entities log all operations.
 5. **Network isolation** — Expose only through a reverse proxy or API gateway.
-
-### Mainnet Checklist
-
-- [ ] `NETWORK=mainnet`
-- [ ] `BLOCKFROST_API_KEY` starts with `mainnet`
-- [ ] Ogmios connected to fully synced mainnet node
-- [ ] Test with small ADA amounts first
-- [ ] Verify addresses are `addr1...` (not `addr_test1...`)
-- [ ] Confirm protocol parameters via `GetProtocolParameters`
 
 ---
 
@@ -514,5 +487,3 @@ PORT=4005 npm start
 - [SAP Integration Examples](SAP_INTEGRATION_EXAMPLES.md) — Enterprise integration patterns
 
 ---
-
-**Version:** 0.3.17 | **License:** Apache 2.0 | **Repository:** [github.com/ODATANO/ODATANO](https://github.com/ODATANO/ODATANO)

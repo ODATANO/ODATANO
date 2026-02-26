@@ -1,5 +1,7 @@
 # SAP Integration Examples
 
+**Version:** v0.3.milstone3 | **Last Updated:** February 2026
+
 This guide demonstrates how to integrate ODATANO with SAP systems, including OData consumption from S/4HANA, ABAP code templates, and enterprise use cases.
 
 ## Overview
@@ -11,39 +13,13 @@ ODATANO exposes Cardano blockchain data and transaction capabilities as standard
 - **SAP Fiori / UI5** applications
 - **ABAP-based systems** (ECC, BW, etc.)
 
-## Architecture
+## General Architecture
 
-```
-┌────────────────────────────────────────────────────────┐
-│                        SAP Landscape                   │
-├────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  S/4HANA     │  │  SAP BTP     │  │  Fiori App   │  │
-│  │  ABAP Report │  │  Integration │  │  (UI5)       │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-│         │                 │                 │          │
-│         └─────────────────┴─────────────────┘          │
-│                           │                            │
-│                    OData V4 Requests                   │
-└───────────────────────────┼────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                      ODATANO Service                   │
-├────────────────────────────────────────────────────────┤
-│  /odata/v4/cardano-odata/      (Read Operations)       │
-│  /odata/v4/cardano-transaction/ (TX Build & Submit)    │
-│  /odata/v4/cardano-sign/        (External Signing)     │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                    Cardano Blockchain                  │
-│              (Preview / Preprod / Mainnet)             │
-└────────────────────────────────────────────────────────┘
-```
+![alt text](<../assets/architecture & flow diagramms/sap-integration-ad.png>)
 
 ## BTP Deployment
+
+For SAP BTP, ODATANO can be deployed as a Cloud Foundry application. For general information on how to deploy ODATANO to production, see the [Production Deployment Guide](PRODUCTION_DEPLOYMENT.md).
 
 ### Service Catalog in SAP BTP Cockpit
 
@@ -93,118 +69,62 @@ Now the workflow defined like above will fetch the transaction details from the 
 
 The sample Wallet Viewer application running on BTP
 
-![Fiori Wallet Viewer](../assets/screenshots/application_overview.png)
+![Application Overview](../assets/screenshots/app_overview_btp.png)
+
+Start by connecting the App to one of your installed CIP-30 compatible wallets (e.g. Eternl, Lace, Vespr) or by pasting a Cardano address to view the related transactions and details. The Example app also allows you to build transactions with the connected wallet and submit them to the Cardano blockchain via ODATANO.
+
+![Login with Wallet](../assets/screenshots/walletviewer_login.png)
+
+# Transaction flow with CIP-30 Wallet Signing inside the Wallet Viewer App
+
+Build Transaction: User selects a transaction template and clicks "Build Transaction". The app calls the ODATANO OData service to build the transaction based on the selected template and user input.
+
+![Build Tx](../assets/screenshots/build_tx_walletviewer.png)
+
+Review Build Result: The app displays the result of the transaction build, including the generated transaction details and any errors if the build failed.
+
+![Build Result](../assets/screenshots/review_tx_build.png)
+
+Review Transaction Details on Transaction Inspector
+
+![sign start](../assets/screenshots/inspect_transaction.png)
 
 
-Start by connecting the App to one of your installed CIP-30 compatible wallets (e.g. Eternl, Lace, Vespr)
+Signing with CIP-30 Wallet: The user approves the transaction in their wallet, which generates a signed transaction blob.
 
-![App Start](../assets/screenshots/app_start.png)
+![sign with cip30 wallet](../assets/screenshots/sign_tx.png)
 
-*Visual documentation (screenshots of wallet connection flow, address overview, transaction details, and signature verifications) will be included with the Final Milestone delivery.*
+After Signing: the app sends the signed transaction blob back to ODATANO for verification & witness combination using the `SubmitVerifiedTransaction` OData action. ODATANO verifies the signature and transaction details before allowing it to be submitted to the blockchain.
 
-## ABAP Integration Patterns
+![verification](../assets/screenshots/view_signature_check.png)
 
-See [ABAP Code Examples](../abap examples/README.md) for detailed code snippets and templates to call ODATANO OData services from ABAP programs
+Submit Transaction: If verification is successful, ODATANO submits the transaction to the Cardano blockchain and returns the transaction hash to the app, which displays it to the user.
 
-## Enterprise Use Cases
+![transaction submission](../assets/screenshots/view_tx_submission.png)
 
-### Use Case 1: Purchase Order Settlement on Cardano
+Link to Transaction on Cardano Explorer for the from SAP BTP deployed ODATANO instance:
+https://preview.cardanoscan.io/transaction/994447f60445bc7b54239e8a1c7ade180f4d0a3e8a2119871ca64eadaa38ed18
 
-Automated payment recording for cross-border purchase orders:
+## ABAP Integration Patterns & Reusable Code Templates
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  SAP S/4HANA    │     │  ODATANO        │     │  Cardano        │
-│  Purchase Order │────>│  Build TX       │ ───>│  Settlement TX  │
-│  Released       │     │  (ADA Transfer) │     │  Recorded       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-         │                                              │
-         │              ┌─────────────────┐             │
-         └─────────────▶│  FI Document    │◀───────────┘
-                        │  with TX Hash   │
-                        └─────────────────┘
-```
+See [ABAP Code Examples](../abap%20examples/README.md) for detailed code snippets and templates to call ODATANO OData services from ABAP programs
 
-**Workflow:**
-1. Purchase Order released in S/4HANA
-2. Background job calls ODATANO `BuildSimpleAdaTransaction`
-3. Treasury signs via external wallet (hardware wallet)
-4. Transaction submitted via `SubmitVerifiedTransaction` (CardanoSignService)
-5. TX hash stored in custom field on FI document
+## Enhanced Enterprise Use Cases
 
-### Use Case 2: CO₂ Certificate Tracking
+### TRACE — Pharmaceutical Supply Chain Tracking
 
-Immutable tracking of carbon credits on Cardano:
+TRACE is a full-stack SAP Fiori application that demonstrates how ODATANO enables enterprise-grade blockchain integration for pharmaceutical supply chain tracking. Built on SAP CAP and the Cardano blockchain, TRACE provides tamper-proof chain-of-custody for drug batches from manufacturer to pharmacy. Each batch is represented as a Plutus V3 NFT with on-chain datum, and every handoff (manufacturer → distributor → pharmacy) is recorded as a Plutus spend transaction — all orchestrated through ODATANO's OData V4 actions.
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  SAP EHS        │     │    ODATANO      │     │    Cardano      │
-│  CO₂ Certificate│────>│  Metadata TX    │────>│  Certificate    │
-│  Issued         │     │  (with CIP-25)  │     │  NFT Minted     │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
+Key capabilities demonstrated by TRACE:
 
-**Benefits:**
-- Tamper-proof audit trail
-- Public verifiability
-- Cross-company transparency
+- **Batch NFT Minting** with inline datum (ChainOfCustody) via `BuildMintTransaction`
+- **Plutus Spend Transactions** for custody transfers via `BuildPlutusSpendTransaction`
+- **Document Anchoring** of certificates and lab reports via CIP-20 metadata
+- **CIP-30 Browser Wallet Signing** with the `SubmitVerifiedTransaction` flow
+- **Parameterized Validators** using `scriptParamsJson` and `lockOnScript`
 
-### Use Case 3: Inter-Company Settlements
+TRACE serves as a reference implementation for any enterprise looking to integrate Cardano smart contracts into SAP landscapes.
 
-Blockchain-based reconciliation between company codes:
+GitHub: [https://github.com/ODATANO/TRACE](https://github.com/ODATANO/TRACE)
 
-```
-Company A (DE10)                     Company B (US20)
-      │                                    │
-      │    ┌───────────────────────┐       │
-      └──> │  Cardano Settlement   │ <─────┘
-           │  TX (Multi-Sig)       │
-           └───────────────────────┘
-                     │
-                     ▼
-           ┌───────────────────────┐
-           │  Both FI Ledgers      │
-           │  Reference Same TX    │
-           └───────────────────────┘
-```
-
-**Workflow:**
-1. Company A initiates inter-company invoice
-2. ODATANO builds multi-output transaction
-3. Both treasuries sign (multi-sig via external signing)
-4. Single TX settles both sides
-5. TX hash recorded in both company codes
-
-### Use Case 4: Audit Trail for FI/CO Postings
-
-Anchor critical financial postings to Cardano:
-
-```abap
-* After posting FI document, anchor to Cardano
-DATA: lv_doc_hash TYPE string,
-      lv_tx_hash  TYPE string.
-
-* Hash the FI document
-lv_doc_hash = calculate_document_hash( lv_belnr ).
-
-* Build metadata transaction with document hash
-lv_tx_hash = call_odatano_metadata_tx(
-  iv_metadata_label = '674'  " CIP-20 Message
-  iv_metadata_value = lv_doc_hash ).
-
-* Store TX hash on document
-UPDATE bkpf SET zzblockchain_tx = lv_tx_hash
-  WHERE bukrs = lv_bukrs
-    AND belnr = lv_belnr
-    AND gjahr = lv_gjahr.
-```
-
-## Related Documentation
-
-- [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md)
-- [Wallet Viewer README](../../app/wallet-viewer/README.md)
-- [Production Deployment](PRODUCTION_DEPLOYMENT.md)
-- [Developer Guide](DEVELOPER_GUIDE.md)
-
----
 
