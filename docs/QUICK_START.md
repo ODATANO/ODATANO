@@ -1,5 +1,7 @@
 # ODATANO Quick Start Guide
 
+**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+
 This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 
 ---

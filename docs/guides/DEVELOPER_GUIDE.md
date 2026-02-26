@@ -1,8 +1,6 @@
 # ODATANO Developer Guide
 
-**Project:** ODATANO - OData V4 Service for Cardano Blockchain\
-**Version:** v0.3.milestone3\
-**Last Updated:** February 2026
+**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
 
 ---
 

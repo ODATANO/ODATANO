@@ -55,7 +55,7 @@
 |----------|----------|-------------|
 | `BLOCKFROST_API_KEY` | If using Blockfrost | Project ID (must match `NETWORK`) |
 | `KOIOS_API_KEY` | No | Bearer token for higher rate limits |
-| `OGMIOS_URL` | If using Ogmios | WebSocket URL (e.g., `ws://localhost:1337`) |
+| `OGMIOS_URL` | If using Ogmios | WebSocket URL |
 
 ### Timeouts & Caching
 
@@ -72,7 +72,7 @@ NETWORK=mainnet
 NODE_ENV=production
 PORT=4004
 LOG_LEVEL=info
-BACKENDS=ogmios,blockfrost,koios
+BACKENDS=blockfrost,koios
 BLOCKFROST_API_KEY=mainnetYourApiKeyHere
 KOIOS_API_KEY=yourKoiosApiKeyHere
 TX_BUILDERS=buildooor
@@ -80,21 +80,8 @@ PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 INDEX_TTL_MS=600000
 ```
----
-
-### Key Differences from Development
-
-| Setting | Development | Production |
-|---------|------------|------------|
-| `NODE_ENV` | `development` | `production` |
-| `restart` | `unless-stopped` | `always` |
-| `LOG_LEVEL` | `debug` | `info` |
-| Resource limits | None | Memory/CPU constrained |
-| Image source | Local build | Registry (`ghcr.io`) |
-| Auth | `mocked` | XSUAA or default |
 
 ---
-
 ## SAP BTP Cloud Foundry Deployment
 
 ### Prerequisites

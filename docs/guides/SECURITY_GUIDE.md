@@ -263,16 +263,6 @@ HSM_PIN=0001password          # Use credential store in production!
 HSM_KEY_LABEL=cardano-signing-key
 HSM_KEY_ID=0x0001
 ```
-
-**Supported Hardware:**
-
-| Device | PKCS#11 Module | Certification |
-|--------|---------------|---------------|
-| YubiHSM 2 | `yubihsm_pkcs11.so` | FIPS 140-2 Level 2 |
-| AWS CloudHSM | `cloudhsm_pkcs11.so` | FIPS 140-2 Level 3 |
-| Thales Luna | `libCryptoki2.so` | FIPS 140-2 Level 3 |
-| SoftHSM | `libsofthsm2.so` | None (dev/test only) |
-
 **Security properties:** Key generated inside HSM with `CKA_EXTRACTABLE=false`, signing via `CKM_EDDSA` (Ed25519), PIN-based session auth. HSM failure is non-fatal — app starts without HSM, other signing methods still work.
 
 **Verify HSM status:**

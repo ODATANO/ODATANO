@@ -323,6 +323,8 @@ Plutus transactions require collateral. Use `SetCollateral` to create a dedicate
 - [Metadata Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-with-metadata-preview.ts)
 - [Minting Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts)
 - [Multi-Asset Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-multi-asset-preview.ts)
+- [Plutus Spend Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/plutus-spend-preview.ts)
+- [HSM Signing Example](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-hsm-preview.ts)
 
 ---
 

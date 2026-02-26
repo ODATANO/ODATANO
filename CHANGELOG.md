@@ -5,7 +5,7 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.3-milestone3] - 2026-02-05 - Milestone 3: External Signing & SAP Integration
+## [v0.3-milestone3] - 26-02-2026 - Milestone 3: External Signing & SAP Integration
 
 ### Added
 
@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CIP-30 browser wallet support (Nami, Eternl, Yoroi, etc.)
   - Cardano CLI signing support
   - Hardware wallet compatibility (Ledger, Trezor)
+
+- **CardanoSignService** (`/odata/v4/cardano-sign/`): New dedicated signing workflow service (3rd CDS service)
 
 - **5 New Entities** for signing workflow:
   - `SigningRequests` - Unsigned transaction export with TTL-based expiration
@@ -43,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `isWitnessSetCbor()` - Detect witness set vs full transaction
   - Automatic handling in SubmitVerifiedTransaction
 
+- **HSM Signing Integration** (Hardware Security Module):
+  - `SignWithHsm` - Sign transaction using configured HSM (PKCS#11)
+  - `SignAndSubmitWithHsm` - Sign and submit transaction atomically via HSM
+  - `GetHsmStatus` - Check HSM connection status, key info, and Cardano address
+
 - **Signing Workflow States**: `SigningStatus` enum
   - `pending` - Request created, awaiting signing
   - `signed` - Transaction has been signed
@@ -51,11 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `expired` - Request expired (30 minute default TTL)
   - `failed` - Signing or verification failed
 
-- **New Test Suites** (2 new test files):
+- **New Test Suites** (5 new test files):
   - `signing-services.test.ts` - External signing integration tests
   - `signing.test.ts` - SignatureVerifier and ExternalSignerModule unit tests
+  - `hsm-signer.test.ts` - HSM signer unit tests
+  - `cip14-fingerprint.test.ts` - CIP-14 asset fingerprint computation tests
+  - `tx-build-helper.test.ts` - Transaction build helper utility tests
 
 - **Production Deployment Guide**: `PRODUCTION_DEPLOYMENT.md` with deployment patterns (incl. BTP)
+
+- **SAP Integration Examples**: New guide with detailed examples of SAP workflows integrated with ODATANO, including screenshots and ABAP code snippets for real-world use cases (e.g., invoice payment verification, tokenized asset management)
+
+- **Security Guide**: `SECURITY.md` with best practices for secure deployment, key management, and external signing workflows
+
+- **Postman Collection M3**: Pre-configured requests for all M3 endpoints (signing, Plutus, HSM)
 
 - **2 New Transaction Actions** (Plutus Smart Contracts & Collateral):
   - `BuildPlutusSpendTransaction` - Spend UTxO locked at a Plutus validator script address (supports PlutusV3, redeemer/datum JSON, Ogmios execution unit evaluation, optional `inlineDatumJson` for state-machine continuing outputs)
@@ -64,6 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **End-to-End Plutus Scripts**:
   - `lock-ada-at-script-preview.ts` - Lock ADA at a PlutusV3 script address with inline datum
   - `plutus-spend-preview.ts` - Spend locked UTxO with redeemer, verified on Preview testnet
+  - `send-ada-hsm-preview.ts` - HSM signing workflow on Preview testnet
+  - `sign-cbor.ts` - Offline CBOR signing (Cardano CLI pattern)
 
 - **Plutus Parameterized Validator Support**:
   - `scriptParamsJson` on `BuildMintTransaction` and `BuildPlutusSpendTransaction` — apply UPLC parameters to unapplied validators, returns `scriptHash` (= policy ID)
@@ -86,15 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Architecture refactored to centralized App Context pattern
 - Services now use `getCardanoIndexer()` instead of direct instantiation
-- Test suite updated: 26 test files, 1001+ tests across integration and unit tests
+- Test suite updated: 29 test files (19 unit + 10 integration), 1121 tests
 - Enhanced error handling with signing-specific error cases
 
-### Security
+### Known Issues
 
-- **Private Key Isolation**: Server NEVER handles private keys
-- **Signature Verification**: Cryptographic verification before submission
-- **Audit Trail**: Complete history of signing requests and verifications
-- **TTL Expiration**: Signing requests expire after 30 minutes (configurable)
+- **Persistent SQLite**: Plugin tables not auto-deployed by `cds deploy` — use `scripts/deploy-db.js` workaround for persistent mode (`credentials.url: "db.sqlite"`)
+- **CSL PPViewHashesDontMatch (PlutusV3)**: CSL builder's `calc_script_data_hash()` may still produce incorrect hash for some Conway PlutusV3 transactions despite patching — use Buildooor (`TX_BUILDERS=buildooor`) for production Plutus V3
 
 ---
 

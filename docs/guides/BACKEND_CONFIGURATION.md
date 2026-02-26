@@ -1,5 +1,7 @@
 # Backend Configuration Guide
 
+**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+
 ## Architecture Overview
 
 ODATANO uses a **Multi-Backend Architecture** that intelligently routes requests between providers:

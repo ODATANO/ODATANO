@@ -1,5 +1,7 @@
 # Docker Deployment
 
+**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+
 ## Quick Start
 
 ### Build from Source

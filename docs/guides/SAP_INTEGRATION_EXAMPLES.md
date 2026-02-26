@@ -113,7 +113,7 @@ See [ABAP Code Examples](../abap%20examples/README.md) for detailed code snippet
 
 ### TRACE — Pharmaceutical Supply Chain Tracking
 
-TRACE is a full-stack SAP Fiori application that demonstrates how ODATANO enables enterprise-grade blockchain integration for pharmaceutical supply chain tracking. Built on SAP CAP and the Cardano blockchain, TRACE provides tamper-proof chain-of-custody for drug batches from manufacturer to pharmacy. Each batch is represented as a Plutus V3 NFT with on-chain datum, and every handoff (manufacturer → distributor → pharmacy) is recorded as a Plutus spend transaction — all orchestrated through ODATANO's OData V4 actions.
+TRACE is a full-stack SAP Fiori application that demonstrates how ODATANO enables enterprise-grade blockchain integration for pharmaceutical supply chain tracking. Built on top on ODATANO, TRACE provides tamper-proof chain-of-custody for drug batches from manufacturer to pharmacy. Each batch is represented as a Plutus V3 NFT with on-chain datum, and every handoff (manufacturer → distributor → pharmacy) is recorded as a Plutus spend transaction — all orchestrated through ODATANO's OData V4 actions.
 
 Key capabilities demonstrated by TRACE:
 

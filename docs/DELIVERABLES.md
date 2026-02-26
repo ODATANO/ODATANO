@@ -569,8 +569,8 @@ Enterprise Use Cases: Exampels of advanced real-world SAP scenarios based on the
 - General SAP Integration Use Cases Documentation: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SAP_INTEGRATION_EXAMPLES.md
 - ABAP Examples: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/README.md
 - Reusable ABAP Class for OData Integration: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/zcl_odatano_client.clas.abap
-- ABAP Test Program for OData Client & Goods Receipt Example integration: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/zcl_odatano_test.clas.abap
-- Example Use Case Implementation with Fiori APP for supply chain tracking using ODATANO as a plugin: https://github.com/ODATANO/TRACE 
+- ABAP Test Class for OData Client & Goods Receipt Example integration: https://github.com/ODATANO/ODATANO/blob/main/docs/abap%20examples/zcl_odatano_test.clas.abap
+- Advanced Example Use Case Implementation with own Fiori APP for supply chain tracking using ODATANO as a plugin: https://github.com/ODATANO/TRACE
 
 
 
@@ -583,9 +583,9 @@ Working SAP Fiori application that displays wallet information through OData ser
 
 ### Evidence
 
-Implementation of the Fiori Sample App: https://github.com/ODATANO/ODATANO/tree/main/app/wallet
+- Implementation of the Fiori Sample App: https://github.com/ODATANO/ODATANO/tree/main/app/wallet
 
-Youtube Video Demo of the Fiori Sample App: TODO
+- Youtube Video Demo of the Fiori Sample App: TODO
 
 
 ## F. Output: Automated Integration & Security Tests:
@@ -614,6 +614,8 @@ Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed te
 - Test Pipeline: https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml
 - Code Coverage: https://codecov.io/gh/ODATANO/ODATANO
 
+**Security Guidelines and Best Practices for SAP Integration**
+- Security Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SECURITY_GUIDE.md
 ---
 
 ## General Other Evidence for Milestone 3
@@ -621,4 +623,4 @@ Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed te
 **Demo & Release**
 
 - Milestone Release v0.3-milestone3: https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3
-- Demo Video (M3 Walkthrough): TBD
+- Demo Video External Signing: TBD

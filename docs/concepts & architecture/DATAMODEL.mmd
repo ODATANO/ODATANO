@@ -1,37 +1,31 @@
-# ODATANO Blockchain Schema
-
-```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    primaryColor: "#0C5ECF"
-    primaryTextColor: "#001840"
-    primaryBorderColor: "#001840"
-    lineColor: "#001840"
-    secondaryColor: "#4d7bc5"
-    tertiaryColor: "#0C5ECF"
-    mainBkg: "#0C5ECF"
-    nodeBorder: "#001840"
-    clusterBkg: "#001840"
-    clusterBorder: "#001840"
-    titleColor: "#001840"
-    edgeLabelBackground: "#0C5ECF"
-    textColor: "#001840"
-    background: "#4d7bc5"
-    fontSize: "13px"
-    fontFamily: "monospace"
-    attributeBackgroundColorEven: "#4d7bc5"
-    attributeBackgroundColorOdd: "#4d7bc5"
-  er:
-    layoutDirection: "TB"
-    fontSize: 12
-    useMaxWidth: false
-    fill: "#0C5ECF"
-    stroke: "#0C5ECF"
----
-
 erDiagram
+    Epochs ||--o{ Blocks : "has"
+    Addresses ||--o{ AddressAssets : "contains"
+    Addresses ||--o{ AddressUTxOs : "contains"
+    AddressUTxOs ||--o{ UTxOAssets : "contains"
+    Accounts ||--o{ Addresses : "controls"
+    Accounts }o--|| Pools : "delegatesTo"
+    Accounts }o--|| Dreps : "votesWith"
+    Transactions ||--o{ TransactionMetadata : "has"
+    Transactions ||--o{ TransactionInputs : "has"
+    Transactions ||--o{ TransactionOutputs : "has"
+    TransactionInputs ||--o{ TransactionInputAssets : "contains"
+    TransactionOutputs ||--o{ TransactionOutputAssets : "contains"
+    Addresses ||--o{ TransactionInputs : "references"
+    Addresses ||--o{ TransactionOutputs : "references"
+    TransactionBuilds ||--o{ TransactionBuildInputs : "has"
+    TransactionBuilds ||--o{ TransactionBuildOutputs : "has"
+    TransactionBuildInputs ||--o{ TransactionBuildInputAssets : "contains"
+    TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : "contains"
+    TransactionSubmissions ||--o{ TransactionSubmissionErrors : "has"
+    SigningRequests }o--|| TransactionBuilds : "references"
+    SigningRequests ||--o{ SignatureVerifications : "has"
+    Addresses ||--o{ AddressSigningRequests : "has"
+    AddressSigningRequests }o--|| SigningRequests : "references"
+    Addresses ||--o{ AddressTransactionBuilds : "has"
+    AddressTransactionBuilds }o--|| TransactionBuilds : "references"
+    Addresses ||--o{ AddressTransactions : "has"
+    AddressTransactions }o--|| Transactions : "references"
     NetworkInformation {
         string network PK "🔑"
         decimal maxSupply
@@ -343,32 +337,3 @@ erDiagram
         string netAssets
         boolean hasAssets
     }
-
-    Epochs ||--o{ Blocks : "has"
-    Addresses ||--o{ AddressAssets : "contains"
-    Addresses ||--o{ AddressUTxOs : "contains"
-    AddressUTxOs ||--o{ UTxOAssets : "contains"
-    Accounts ||--o{ Addresses : "controls"
-    Accounts }o--|| Pools : "delegatesTo"
-    Accounts }o--|| Dreps : "votesWith"
-    Transactions ||--o{ TransactionMetadata : "has"
-    Transactions ||--o{ TransactionInputs : "has"
-    Transactions ||--o{ TransactionOutputs : "has"
-    TransactionInputs ||--o{ TransactionInputAssets : "contains"
-    TransactionOutputs ||--o{ TransactionOutputAssets : "contains"
-    Addresses ||--o{ TransactionInputs : "references"
-    Addresses ||--o{ TransactionOutputs : "references"
-    TransactionBuilds ||--o{ TransactionBuildInputs : "has"
-    TransactionBuilds ||--o{ TransactionBuildOutputs : "has"
-    TransactionBuildInputs ||--o{ TransactionBuildInputAssets : "contains"
-    TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : "contains"
-    TransactionSubmissions ||--o{ TransactionSubmissionErrors : "has"
-    SigningRequests }o--|| TransactionBuilds : "references"
-    SigningRequests ||--o{ SignatureVerifications : "has"
-    Addresses ||--o{ AddressSigningRequests : "has"
-    AddressSigningRequests }o--|| SigningRequests : "references"
-    Addresses ||--o{ AddressTransactionBuilds : "has"
-    AddressTransactionBuilds }o--|| TransactionBuilds : "references"
-    Addresses ||--o{ AddressTransactions : "has"
-    AddressTransactions }o--|| Transactions : "references"
-```
