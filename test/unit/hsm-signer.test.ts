@@ -124,7 +124,6 @@ jest.mock('pkcs11js', () => {
   });
 });
 
-// blake2b and bech32 use REAL implementations (no mocking needed — they're installed packages)
 
 // ---------------------------------------------------------------------------
 // Default config
@@ -287,7 +286,7 @@ describe('HsmSigner', () => {
   describe('signTransaction()', () => {
     let signer: HsmSigner;
 
-    // Real unsigned tx CBOR from test fixtures
+    // fixture: unsigned transaction with empty witness set (CBOR: [emptyMap, emptyMap, true, null])
     const UNSIGNED_TX = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
     const TX_BODY_HASH = '4a066f70b5e478f7564311fb2762025fa449246e5bdb035d233a8aadb004abc7';
 

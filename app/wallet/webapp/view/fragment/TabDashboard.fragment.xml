@@ -127,5 +127,78 @@
             </content>
         </Panel>
 
+        <!-- Native Assets -->
+        <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            headerText="{= 'Native Assets (' + (${wallet>/assetsSummary} ? ${wallet>/assetsSummary}.length : 0) + ')'}"
+            visible="{= ${wallet>/assetsSummary} &amp;&amp; ${wallet>/assetsSummary}.length > 0}">
+            <content>
+                <List items="{wallet>/assetsSummary}" noDataText="No native assets">
+                    <CustomListItem>
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+                            <VBox>
+                                <Text text="{wallet>displayName}" class="sapUiTinyMarginBottom"/>
+                                <Text text="{parts: ['wallet>policyId'], formatter: '.formatter.truncateHash'}"
+                                    class="signingFlowMono walletConnectHint"/>
+                            </VBox>
+                            <ObjectNumber number="{wallet>quantity}" unit="units" emphasized="true"/>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Recent Transactions -->
+        <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            headerText="{= 'Recent Transactions (' + (${wallet>/transactions} ? ${wallet>/transactions}.length : 0) + ')'}"
+            visible="{= ${wallet>/transactions} &amp;&amp; ${wallet>/transactions}.length > 0}">
+            <content>
+                <List items="{wallet>/transactions}" noDataText="No transactions">
+                    <CustomListItem type="Active" press=".onToggleTxDetail">
+                        <VBox class="sapUiSmallMargin">
+                            <!-- Summary row -->
+                            <HBox alignItems="Center" justifyContent="SpaceBetween">
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="{= ${wallet>expanded} ? 'sap-icon://navigation-down-arrow' : 'sap-icon://navigation-right-arrow'}"
+                                        size="0.85rem" class="sapUiSmallMarginEnd" color="#6a6d70"/>
+                                    <Text text="{parts: ['wallet>txHash'], formatter: '.formatter.truncateHash'}"
+                                        class="signingFlowMono"/>
+                                </HBox>
+                                <HBox alignItems="Center">
+                                    <ObjectStatus text="{= ${wallet>hasAssets} ? 'assets' : ''}"
+                                        state="Information" class="sapUiSmallMarginEnd"
+                                        visible="{wallet>hasAssets}"/>
+                                    <ObjectNumber
+                                        number="{path: 'wallet>amount', formatter: '.formatter.formatLovelaceToAda'}"
+                                        unit="ADA"
+                                        state="{= Number(${wallet>amount} || 0) >= 0 ? 'Success' : 'Error'}"/>
+                                </HBox>
+                            </HBox>
+                            <!-- Expanded detail -->
+                            <VBox visible="{wallet>expanded}" class="dashboardItemDetail">
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Tx Hash:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{wallet>txHash}" class="signingFlowMono" wrapping="true"/>
+                                    <Button icon="sap-icon://copy" press=".onCopyTxHash"
+                                        type="Transparent" class="copyInline" tooltip="Copy"/>
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Time:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{path: 'wallet>timestamp', formatter: '.formatter.formatBlockTime'}"/>
+                                </HBox>
+                                <HBox alignItems="Center" class="sapUiTinyMarginBottom">
+                                    <Label text="Net Amount:" class="sapUiSmallMarginEnd"/>
+                                    <Text text="{= (${wallet>amount} || '0') + ' lovelace'}" class="signingFlowMono"/>
+                                </HBox>
+                                <Button text="View Details" icon="sap-icon://detail-view"
+                                    type="Transparent" press=".onTransactionItemPress"
+                                    class="sapUiTinyMarginTop"/>
+                            </VBox>
+                        </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
     </VBox>
 </core:FragmentDefinition>

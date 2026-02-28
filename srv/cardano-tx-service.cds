@@ -246,6 +246,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                          @title: 'Bech32 Address'
                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
                                          address: Bech32)   returns array of AddressTransactionBuilds;
+
 }
 
 

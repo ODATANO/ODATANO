@@ -93,6 +93,7 @@ sap.ui.define([
             this._expirationInterval = null;
             this._statusPollingInterval = null;
             this._expiresAtTimestamp = 0;
+            this._requestLoadGeneration = 0;
 
             var that = this;
             this.getOwnerComponent().getRouter().getRoute("wallet").attachPatternMatched(function () {
@@ -275,16 +276,18 @@ sap.ui.define([
                 oDataModel.getMetaModel().requestObject("/").then(function () {
                     that._loadUtxos();
                     that._loadTransactions();
+                    that._loadAssets();
                 }).catch(function () {
                     // Metadata failed — try loading directly as fallback
                     that._loadUtxos();
                     that._loadTransactions();
+                    that._loadAssets();
                 });
             } else {
                 this._loadUtxos();
                 this._loadTransactions();
+                this._loadAssets();
             }
-            this._loadSigningRequests();
             this._loadTransactionBuilds();
         },
 
@@ -325,6 +328,35 @@ sap.ui.define([
                 that._walletService.getModel().setProperty("/utxos", aUtxos);
             }).catch(function (oError) {
                 Log.warning("Failed to load UTxOs: " + (oError && oError.message));
+            });
+        },
+
+        _loadAssets: function () {
+            var sPrimaryAddress = this._walletService.getPrimaryAddress();
+            if (!sPrimaryAddress) return;
+
+            var oDataModel = this.getView().getModel();
+            if (!oDataModel) return;
+
+            var that = this;
+            var oAction = oDataModel.bindContext("/GetAssetsByAddress(...)");
+            oAction.setParameter("address", sPrimaryAddress);
+            oAction.execute().then(function () {
+                var oResult = oAction.getBoundContext().getObject();
+                var aRaw = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
+                var aAssets = aRaw.map(function (a) {
+                    return {
+                        policyId: (a.asset && a.asset.policyId) || a.asset_policyId || "",
+                        assetName: (a.asset && a.asset.assetName) || a.asset_assetName || "",
+                        displayName: (a.asset && a.asset.assetName) || a.asset_assetName || "(unnamed)",
+                        quantity: (a.asset && a.asset.quantity) || a.asset_quantity || "0",
+                        unit: a.unit || ""
+                    };
+                });
+                that._walletService.getModel().setProperty("/assetsSummary", aAssets);
+            }).catch(function (oError) {
+                Log.warning("Failed to load assets: " + (oError && oError.message));
+                that._walletService.getModel().setProperty("/assetsSummary", []);
             });
         },
 
@@ -372,37 +404,25 @@ sap.ui.define([
             if (!oSignModel) return;
 
             var that = this;
-            var oAction = oSignModel.bindContext("/GetSigningRequestsByAddress(...)");
-            oAction.setParameter("address", sPrimaryAddress);
-            oAction.execute().then(function () {
-                var oResult = oAction.getBoundContext().getObject();
-                var aAssociations = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
-
-                Promise.all(aAssociations.map(function (oAsr) {
-                    return new Promise(function (resolve) {
-                        var oSrBinding = oSignModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
-                        oSrBinding.requestObject().then(function () {
-                            var oSr = oSrBinding.getBoundContext().getObject();
-                            resolve({
-                                id: (oSr && oSr.id) || oAsr.signingRequest_id,
-                                status: (oSr && oSr.status) || "unknown",
-                                network: (oSr && oSr.network) || "",
-                                createdAt: (oSr && oSr.createdAt) || "",
-                                expiresAt: (oSr && oSr.expiresAt) || "",
-                                signerType: (oSr && oSr.signerType) || "",
-                                signerInfo: (oSr && oSr.signerInfo) || "",
-                                txBodyHash: (oSr && oSr.txBodyHash) || ""
-                            });
-                        }).catch(function () {
-                            resolve({
-                                id: oAsr.signingRequest_id, status: "unknown", network: "",
-                                createdAt: "", expiresAt: "", signerType: "", signerInfo: "", txBodyHash: ""
-                            });
-                        });
-                    });
-                })).then(function (aSigningRequests) {
-                    that._walletService.getModel().setProperty("/signingRequests", aSigningRequests);
+            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined, undefined, {
+                $filter: "address_address eq '" + sPrimaryAddress + "'",
+                $expand: "signingRequest"
+            });
+            oListBinding.requestContexts(0, 100).then(function (aContexts) {
+                var aSigningRequests = aContexts.map(function (oCtx) {
+                    var oSr = oCtx.getObject().signingRequest || {};
+                    return {
+                        id: oSr.id || "",
+                        status: oSr.status || "unknown",
+                        network: oSr.network || "",
+                        createdAt: oSr.createdAt || "",
+                        expiresAt: oSr.expiresAt || "",
+                        signerType: oSr.signerType || "",
+                        signerInfo: oSr.signerInfo || "",
+                        txBodyHash: oSr.txBodyHash || ""
+                    };
                 });
+                that._walletService.getModel().setProperty("/signingRequests", aSigningRequests);
             }).catch(function () {
                 that._walletService.getModel().setProperty("/signingRequests", []);
             });
@@ -416,38 +436,26 @@ sap.ui.define([
             if (!oTxModel) return;
 
             var that = this;
-            var oAction = oTxModel.bindContext("/GetTransactionBuildsByAddress(...)");
-            oAction.setParameter("address", sPrimaryAddress);
-            oAction.execute().then(function () {
-                var oResult = oAction.getBoundContext().getObject();
-                var aAssociations = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
-
-                Promise.all(aAssociations.map(function (oAtb) {
-                    return new Promise(function (resolve) {
-                        var oBuildBinding = oTxModel.bindContext("/TransactionBuilds('" + oAtb.txBuild_id + "')");
-                        oBuildBinding.requestObject().then(function () {
-                            var oBuild = oBuildBinding.getBoundContext().getObject();
-                            resolve({
-                                id: (oBuild && oBuild.id) || oAtb.txBuild_id,
-                                network: (oBuild && oBuild.network) || "",
-                                senderAddress: (oBuild && oBuild.senderAddress) || "",
-                                changeAddress: (oBuild && oBuild.changeAddress) || "",
-                                fee: (oBuild && oBuild.fee) || "0",
-                                size: (oBuild && oBuild.size) || 0,
-                                createdAt: (oBuild && oBuild.createdAt) || "",
-                                wasSubmitted: (oBuild && oBuild.wasSubmitted) || false,
-                                txBodyHash: (oBuild && oBuild.txBodyHash) || ""
-                            });
-                        }).catch(function () {
-                            resolve({
-                                id: oAtb.txBuild_id, network: "", senderAddress: "", changeAddress: "",
-                                fee: "0", size: 0, createdAt: "", wasSubmitted: false, txBodyHash: ""
-                            });
-                        });
-                    });
-                })).then(function (aBuilds) {
-                    that._walletService.getModel().setProperty("/transactionBuilds", aBuilds);
+            var oListBinding = oTxModel.bindList("/AddressTransactionBuilds", undefined, undefined, undefined, {
+                $filter: "address_address eq '" + sPrimaryAddress + "'",
+                $expand: "txBuild"
+            });
+            oListBinding.requestContexts(0, 100).then(function (aContexts) {
+                var aBuilds = aContexts.map(function (oCtx) {
+                    var oBuild = oCtx.getObject().txBuild || {};
+                    return {
+                        id: oBuild.id || "",
+                        network: oBuild.network || "",
+                        senderAddress: oBuild.senderAddress || "",
+                        changeAddress: oBuild.changeAddress || "",
+                        fee: oBuild.fee || "0",
+                        size: oBuild.size || 0,
+                        createdAt: oBuild.createdAt || "",
+                        wasSubmitted: oBuild.wasSubmitted || false,
+                        txBodyHash: oBuild.txBodyHash || ""
+                    };
                 });
+                that._walletService.getModel().setProperty("/transactionBuilds", aBuilds);
             }).catch(function () {
                 that._walletService.getModel().setProperty("/transactionBuilds", []);
             });
@@ -903,35 +911,32 @@ sap.ui.define([
             var oSignModel = this.getView().getModel("sign");
             if (!oSignModel) return Promise.resolve();
 
+            // Race condition guard: discard stale results
+            var iGeneration = ++this._requestLoadGeneration;
             var that = this;
-            var oAction = oSignModel.bindContext("/GetSigningRequestsByAddress(...)");
-            oAction.setParameter("address", sPrimaryAddress);
+            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined, undefined, {
+                $filter: "address_address eq '" + sPrimaryAddress + "'",
+                $expand: "signingRequest"
+            });
 
-            return oAction.execute().then(function () {
-                var oResult = oAction.getBoundContext().getObject();
-                var aAssociations = Array.isArray(oResult) ? oResult : (oResult && oResult.value ? oResult.value : []);
+            return oListBinding.requestContexts(0, 100).then(function (aContexts) {
+                if (iGeneration !== that._requestLoadGeneration) return;
 
-                return Promise.all(aAssociations.map(function (oAsr) {
-                    return new Promise(function (resolve) {
-                        var oSrBinding = oSignModel.bindContext("/SigningRequests('" + oAsr.signingRequest_id + "')");
-                        oSrBinding.requestObject().then(function () {
-                            var oSr = oSrBinding.getBoundContext().getObject();
-                            resolve(oSr ? {
-                                id: oSr.id, build_id: oSr.build_id || "", status: oSr.status || "unknown",
-                                createdAt: oSr.createdAt || "", expiresAt: oSr.expiresAt || "",
-                                txBodyHash: oSr.txBodyHash || "", unsignedTxCbor: oSr.unsignedTxCbor || "",
-                                cip30TxCbor: oSr.cip30TxCbor || "", network: oSr.network || "",
-                                cardanoCliCommand: oSr.cardanoCliCommand || "",
-                                signerType: oSr.signerType || "", signerInfo: oSr.signerInfo || ""
-                            } : null);
-                        }).catch(function () { resolve(null); });
-                    });
-                }));
-            }).then(function (aAll) {
+                var aAll = aContexts.map(function (oCtx) { return oCtx.getObject().signingRequest || {}; });
+
                 var aPending = [], aVerified = [], aSubmitted = [];
                 var sortDesc = function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); };
 
-                aAll.filter(function (r) { return r !== null; }).forEach(function (r) {
+                aAll.forEach(function (oSr) {
+                    if (!oSr || !oSr.id) return;
+                    var r = {
+                        id: oSr.id, build_id: oSr.build_id || "", status: oSr.status || "unknown",
+                        createdAt: oSr.createdAt || "", expiresAt: oSr.expiresAt || "",
+                        txBodyHash: oSr.txBodyHash || "", unsignedTxCbor: oSr.unsignedTxCbor || "",
+                        cip30TxCbor: oSr.cip30TxCbor || "", network: oSr.network || "",
+                        cardanoCliCommand: oSr.cardanoCliCommand || "",
+                        signerType: oSr.signerType || "", signerInfo: oSr.signerInfo || ""
+                    };
                     switch (r.status) {
                         case "pending": aPending.push(r); break;
                         case "verified": aVerified.push(r); break;
@@ -948,7 +953,19 @@ sap.ui.define([
                 that._flowModel.setProperty("/counts/pending", aPending.length);
                 that._flowModel.setProperty("/counts/verified", aVerified.length);
                 that._flowModel.setProperty("/counts/submitted", aSubmitted.length);
+
+                // Also populate wallet>/signingRequests (replaces separate _loadSigningRequests call)
+                var aSigningRequests = aAll.filter(function (oSr) { return oSr.id; }).map(function (oSr) {
+                    return {
+                        id: oSr.id || "", status: oSr.status || "unknown",
+                        network: oSr.network || "", createdAt: oSr.createdAt || "",
+                        expiresAt: oSr.expiresAt || "", signerType: oSr.signerType || "",
+                        signerInfo: oSr.signerInfo || "", txBodyHash: oSr.txBodyHash || ""
+                    };
+                });
+                that._walletService.getModel().setProperty("/signingRequests", aSigningRequests);
             }).catch(function () {
+                if (iGeneration !== that._requestLoadGeneration) return;
                 that._flowModel.setProperty("/requests/pending", []);
                 that._flowModel.setProperty("/requests/verified", []);
                 that._flowModel.setProperty("/requests/submitted", []);
