@@ -83,11 +83,11 @@ describe('TxBuilderRegistry', () => {
       expect(builder.name).toBe('CslTxBuilder');
     });
 
-    it('should default to csl when TX_BUILDERS is not set', () => {
+    it('should default to buildooor when TX_BUILDERS is not set', () => {
       delete process.env.TX_BUILDERS;
 
       const builder = TxBuilderRegistry.createDefault();
-      expect(builder.name).toBe('CslTxBuilder');
+      expect(builder.name).toBe('BuildooorTxBuilder');
     });
 
     it('should filter out invalid builder names and use first valid one', () => {
