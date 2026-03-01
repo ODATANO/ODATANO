@@ -129,8 +129,7 @@
 
         <!-- Native Assets -->
         <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
-            headerText="{= 'Native Assets (' + (${wallet>/assetsSummary} ? ${wallet>/assetsSummary}.length : 0) + ')'}"
-            visible="{= ${wallet>/assetsSummary} &amp;&amp; ${wallet>/assetsSummary}.length > 0}">
+            headerText="{= 'Native Assets (' + (${wallet>/assetsSummary} ? ${wallet>/assetsSummary}.length : 0) + ')'}">
             <content>
                 <List items="{wallet>/assetsSummary}" noDataText="No native assets">
                     <CustomListItem>
@@ -165,12 +164,17 @@
                                         class="signingFlowMono"/>
                                 </HBox>
                                 <HBox alignItems="Center">
+                                    <ObjectStatus text="Pending" state="Warning"
+                                        icon="sap-icon://pending"
+                                        visible="{wallet>isPending}"
+                                        class="sapUiSmallMarginEnd"/>
                                     <ObjectStatus text="{= ${wallet>hasAssets} ? 'assets' : ''}"
                                         state="Information" class="sapUiSmallMarginEnd"
-                                        visible="{wallet>hasAssets}"/>
+                                        visible="{= !${wallet>isPending} &amp;&amp; ${wallet>hasAssets}}"/>
                                     <ObjectNumber
                                         number="{path: 'wallet>amount', formatter: '.formatter.formatLovelaceToAda'}"
                                         unit="ADA"
+                                        visible="{= !${wallet>isPending}}"
                                         state="{= Number(${wallet>amount} || 0) >= 0 ? 'Success' : 'Error'}"/>
                                 </HBox>
                             </HBox>
@@ -195,6 +199,62 @@
                                     class="sapUiTinyMarginTop"/>
                             </VBox>
                         </VBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Transaction Builds -->
+        <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            headerText="{= 'Transaction Builds (' + (${wallet>/transactionBuilds} ? ${wallet>/transactionBuilds}.length : 0) + ')'}">
+            <content>
+                <List items="{wallet>/transactionBuilds}" noDataText="No transaction builds">
+                    <CustomListItem>
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+                            <VBox>
+                                <Text text="{parts: ['wallet>txBodyHash'], formatter: '.formatter.truncateHash'}"
+                                    class="signingFlowMono sapUiTinyMarginBottom"/>
+                                <Text text="{path: 'wallet>createdAt', formatter: '.formatter.formatTimestamp'}"
+                                    class="walletConnectHint"/>
+                            </VBox>
+                            <HBox alignItems="Center">
+                                <ObjectStatus
+                                    text="{= ${wallet>wasSubmitted} ? 'Submitted' : 'Not submitted'}"
+                                    state="{= ${wallet>wasSubmitted} ? 'Success' : 'None'}"
+                                    icon="{= ${wallet>wasSubmitted} ? 'sap-icon://accept' : 'sap-icon://pending'}"
+                                    class="sapUiSmallMarginEnd"/>
+                                <ObjectNumber
+                                    number="{path: 'wallet>fee', formatter: '.formatter.formatLovelaceToAda'}"
+                                    unit="ADA" state="Information"/>
+                            </HBox>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </content>
+        </Panel>
+
+        <!-- Signing Requests -->
+        <Panel expandable="true" expanded="false" class="sapUiTinyMarginTop"
+            headerText="{= 'Signing Requests (' + (${wallet>/signingRequests} ? ${wallet>/signingRequests}.length : 0) + ')'}">
+            <content>
+                <List items="{wallet>/signingRequests}" noDataText="No signing requests">
+                    <CustomListItem>
+                        <HBox alignItems="Center" justifyContent="SpaceBetween" class="sapUiSmallMargin">
+                            <VBox>
+                                <Text text="{parts: ['wallet>id'], formatter: '.formatter.truncateHash'}"
+                                    class="signingFlowMono sapUiTinyMarginBottom"/>
+                                <Text text="{path: 'wallet>createdAt', formatter: '.formatter.formatTimestamp'}"
+                                    class="walletConnectHint"/>
+                            </VBox>
+                            <HBox alignItems="Center">
+                                <ObjectStatus text="{wallet>status}"
+                                    state="{path: 'wallet>status', formatter: '.formatter.getSigningRequestStatusState'}"
+                                    icon="{path: 'wallet>status', formatter: '.formatter.getSigningRequestStatusIcon'}"
+                                    class="sapUiSmallMarginEnd"/>
+                                <ObjectStatus text="{wallet>network}"
+                                    state="{= ${wallet>network} === 'mainnet' ? 'Success' : 'Warning'}"/>
+                            </HBox>
+                        </HBox>
                     </CustomListItem>
                 </List>
             </content>

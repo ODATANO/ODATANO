@@ -107,11 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test suite updated: 29 test files (19 unit + 10 integration), 1121 tests
 - Enhanced error handling with signing-specific error cases
 
-### Known Issues
-
-- **Persistent SQLite**: Plugin tables not auto-deployed by `cds deploy` — use `scripts/deploy-db.js` workaround for persistent mode (`credentials.url: "db.sqlite"`)
-- **CSL PPViewHashesDontMatch (PlutusV3)**: CSL builder's `calc_script_data_hash()` may still produce incorrect hash for some Conway PlutusV3 transactions despite patching — use Buildooor (`TX_BUILDERS=buildooor`) for production Plutus V3
-
 ---
 
 ## [v0.2-milestone2] - 2025-01-25 - Milestone 2: Transaction Build & Submit

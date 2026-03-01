@@ -180,6 +180,16 @@ export class CardanoIndexer {
     await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
     // Also insert child entities for new address
+    // Supplement address-level amounts with assets found in UTxOs but missing from addresses endpoint
+    const addressAssetUnits = new Set(addrData.amount.filter(a => a.unit !== 'lovelace').map(a => a.unit));
+    for (const utxo of addrData.utxos) {
+      for (const amt of utxo.amount) {
+        if (amt.unit === 'lovelace' || addressAssetUnits.has(amt.unit)) continue;
+        addrData.amount.push(amt);
+        addressAssetUnits.add(amt.unit);
+      }
+    }
+
     const assetEntities = mapAddressAssets(
       addr,
       AddrEntity.validFrom ?? new Date().toISOString(),

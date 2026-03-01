@@ -6,12 +6,12 @@
 It provides unified REST/OData access to on-chain data while supporting native transaction building and submission directly from business applications.
 By abstracting blockchain complexity behind familiar SAP integration patterns, ODATANO allows enterprises to integrate Cardano into core processes securely, auditable, and at scale.
 
-[![npm version](https://img.shields.io/npm/v/@odatano/core)](https://www.npmjs.com/package/@odatano/core)
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
 [![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/@odatano/core)](https://www.npmjs.com/package/@odatano/core)
 
 ## Project Status
 

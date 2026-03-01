@@ -269,6 +269,8 @@ sap.ui.define([
         // ===== Dashboard =====
 
         _loadDashboardData: function () {
+            if (this._dashboardLoading) return;
+            this._dashboardLoading = true;
             var that = this;
             // Ensure default OData model metadata is ready before calling actions
             var oDataModel = this.getView().getModel();
@@ -282,11 +284,14 @@ sap.ui.define([
                     that._loadUtxos();
                     that._loadTransactions();
                     that._loadAssets();
+                }).finally(function () {
+                    that._dashboardLoading = false;
                 });
             } else {
                 this._loadUtxos();
                 this._loadTransactions();
                 this._loadAssets();
+                this._dashboardLoading = false;
             }
             this._loadTransactionBuilds();
         },
@@ -364,7 +369,6 @@ sap.ui.define([
                 that._walletService.getModel().setProperty("/assetsSummary", aAssets);
             }).catch(function (oError) {
                 Log.warning("Failed to load assets: " + (oError && oError.message));
-                that._walletService.getModel().setProperty("/assetsSummary", []);
             });
         },
 
@@ -394,7 +398,8 @@ sap.ui.define([
                         amount: String(oData.netAmount || 0),
                         hasAssets: oData.hasAssets || false,
                         assets: aAssets,
-                        expanded: false
+                        expanded: false,
+                        isPending: false
                     };
                 });
                 that._walletService.getModel().setProperty("/transactions", aTransactions);
@@ -1198,9 +1203,36 @@ sap.ui.define([
                     }
                 });
 
+                // Clear inspector / build state so the submitted tx doesn't linger
+                that._flowModel.setProperty("/build", null);
+                that._flowModel.setProperty("/buildInputs", []);
+                that._flowModel.setProperty("/buildOutputs", []);
+                that._flowModel.setProperty("/inspectorByteCount", 0);
+                that._flowModel.setProperty("/inspectorInputCount", 0);
+                that._flowModel.setProperty("/inspectorOutputCount", 0);
+
+                // Optimistically prepend the just-submitted tx to Recent Transactions
+                // (blockchain indexer won't have it yet — takes at least one block)
+                if (oResult.txHash) {
+                    var aExisting = that._walletService.getModel().getProperty("/transactions") || [];
+                    var bAlreadyPresent = aExisting.some(function (t) { return t.txHash === oResult.txHash; });
+                    if (!bAlreadyPresent) {
+                        aExisting.unshift({
+                            txHash: oResult.txHash,
+                            timestamp: Math.floor(Date.now() / 1000),
+                            amount: "0",
+                            hasAssets: false,
+                            assets: [],
+                            expanded: false,
+                            isPending: true
+                        });
+                        that._walletService.getModel().setProperty("/transactions", aExisting);
+                    }
+                }
+
                 that._walletService.refresh();
                 that._loadUtxos();
-                that._loadTransactions();
+                that._loadTransactionBuilds();
             }).catch(function (oError) {
                 that._flowModel.setProperty("/submitError", (oError && oError.message) || "Submission failed");
             }).finally(function () {

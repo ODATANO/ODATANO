@@ -445,22 +445,34 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     return value;
   }
 
-  /** Extract CBOR, hash, fee, and outputs from a built CSL Transaction */
+  /** Extract CBOR, hash, fee, inputs and outputs from a built CSL Transaction */
   private _extractTxDetails(unsignedTx: CSL.Transaction): {
     unsignedTxCbor: string; txBodyHash: string; feeLovelace: string;
+    inputRefs: Array<{ txHash: string; index: number }>;
     outputs: Array<{ address: string; lovelace: string }>; sizeBytes: number;
   } {
     const unsignedTxCbor = Buffer.from(unsignedTx.to_bytes()).toString("hex");
     const body = unsignedTx.body();
     const txBodyHash = blake2b(32).update(body.to_bytes()).digest('hex');
     const feeLovelace = body.fee().to_str();
+
+    const txInputs = body.inputs();
+    const inputRefs: Array<{ txHash: string; index: number }> = [];
+    for (let i = 0; i < txInputs.len(); i++) {
+      const inp = txInputs.get(i);
+      inputRefs.push({
+        txHash: Buffer.from(inp.transaction_id().to_bytes()).toString('hex'),
+        index: inp.index()
+      });
+    }
+
     const outputs: Array<{ address: string; lovelace: string }> = [];
     const txOuts = body.outputs();
     for (let i = 0; i < txOuts.len(); i++) {
       const o = txOuts.get(i);
       outputs.push({ address: o.address().to_bech32(), lovelace: o.amount().coin().to_str() });
     }
-    return { unsignedTxCbor, txBodyHash, feeLovelace, outputs, sizeBytes: unsignedTxCbor.length / 2 };
+    return { unsignedTxCbor, txBodyHash, feeLovelace, inputRefs, outputs, sizeBytes: unsignedTxCbor.length / 2 };
   }
 
   /** Build the standard TxBuildResult object */
@@ -469,6 +481,16 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     txDetails: ReturnType<CSLTxBuilder['_extractTxDetails']>,
     extra?: { scriptHash?: string }
   ): TxBuildResult {
+    // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
+    const inputs = txDetails.inputRefs.map(ref => {
+      const ctxUtxo = ctx.utxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.index);
+      return {
+        txHash: ref.txHash,
+        index: ref.index,
+        lovelace: ctxUtxo ? getLovelace(ctxUtxo).toString() : "0",
+      };
+    });
+
     return {
       unsignedTxCbor: txDetails.unsignedTxCbor,
       txBodyHash: txDetails.txBodyHash,
@@ -477,11 +499,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       sizeBytes: txDetails.sizeBytes,
       builderEngine: this.name,
       feeLovelace: txDetails.feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString(),
-      })),
+      inputs,
       outputs: txDetails.outputs,
       ...extra,
       warnings: [],

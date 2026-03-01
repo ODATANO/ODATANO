@@ -218,7 +218,9 @@ export function mapTransactionOutputAssets(
  */
 export function mapAddress(address: string, addressData: AddressProviderData, maxAge: number): AddressRow {
   const now = Date.now();
-  const nowIso = new Date(now).toISOString();
+  // Subtract 2s so validFrom is before CAP's temporal $now (set at transaction start)
+  // This ensures SELECT-after-UPSERT within the same request finds the just-written records
+  const nowIso = new Date(now - 2000).toISOString();
   const validToIso = new Date(now + maxAge).toISOString();
   const totalLovelace = Array.isArray(addressData.amount)
     ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity)

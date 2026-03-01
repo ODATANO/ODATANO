@@ -283,10 +283,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   // Shared Helper Methods
   //---------------------------------------------------------------------------
 
-  /** Extract CBOR, hash, fee, size, and outputs from a built Buildooor Tx */
+  /** Extract CBOR, hash, fee, size, inputs and outputs from a built Buildooor Tx */
   private _extractTxDetails(tx: any): {
     unsignedTxCbor: string; txBodyHash: string; sizeBytes: number;
-    feeLovelace: string; outputDetails: Array<{ address: string; lovelace: string }>;
+    feeLovelace: string;
+    inputRefs: Array<{ txHash: string; index: number }>;
+    outputDetails: Array<{ address: string; lovelace: string }>;
   } {
     const unsignedTxBytes = tx.toCbor().toBuffer();
     return {
@@ -294,6 +296,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       txBodyHash: tx.hash.toString(),
       sizeBytes: unsignedTxBytes.length,
       feeLovelace: tx.body.fee.toString(),
+      inputRefs: tx.body.inputs.map((inp: any) => ({
+        txHash: inp.utxoRef.id.toString(),
+        index: inp.utxoRef.index
+      })),
       outputDetails: tx.body.outputs.map((o: any) => ({
         address: o.address?.toString?.() ?? "",
         lovelace: o.value?.lovelaces?.toString?.() ?? "0"
@@ -307,6 +313,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     txDetails: ReturnType<BuildooorTxBuilder['_extractTxDetails']>,
     extra?: { scriptHash?: string }
   ): TxBuildResult {
+    // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
+    const inputs = txDetails.inputRefs.map(ref => {
+      const ctxUtxo = ctx.utxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.index);
+      return {
+        txHash: ref.txHash,
+        index: ref.index,
+        lovelace: ctxUtxo ? getLovelace(ctxUtxo).toString() : "0"
+      };
+    });
+
     return {
       unsignedTxCbor: txDetails.unsignedTxCbor,
       txBodyHash: txDetails.txBodyHash,
@@ -315,11 +331,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       builderEngine: this.name,
       sizeBytes: txDetails.sizeBytes,
       feeLovelace: txDetails.feeLovelace,
-      inputs: ctx.utxos.map(u => ({
-        txHash: u.txHash,
-        index: u.outputIndex,
-        lovelace: getLovelace(u).toString()
-      })),
+      inputs,
       outputs: txDetails.outputDetails,
       ...extra,
       warnings: [],

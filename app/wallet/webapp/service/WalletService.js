@@ -34,6 +34,7 @@ sap.ui.define([
         error: null,
         availableWallets: [],
         utxos: [],
+        assetsSummary: [],
         transactions: [],
         signingRequests: [],
         transactionBuilds: []

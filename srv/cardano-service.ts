@@ -4,7 +4,7 @@ import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress,
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
 
-const { SELECT } = cds.ql;
+const { SELECT, DELETE } = cds.ql;
 
 const logger = cds.log(`CardanoService`);
 
@@ -181,7 +181,17 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) await indexer().indexAddress(db, address);
-      return db.run(SELECT.from(AddressAssets).where({ address_address: address }));
+      const assets = await db.run(SELECT.from(AddressAssets).where({ address_address: address }));
+
+      // Deduplicate temporal versions — keep latest validFrom per unit
+      const seen = new Map<string, any>();
+      for (const asset of assets) {
+        if (!seen.has(asset.unit) || asset.validFrom > seen.get(asset.unit).validFrom) {
+          seen.set(asset.unit, asset);
+        }
+      }
+      const deduped = Array.from(seen.values());
+      return deduped;
     });
   });
 
@@ -197,8 +207,11 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {
+        // No valid cached data — delete any expired remnants and re-index fresh
+        await db.run(DELETE.from(AddressUTxOs).where({ address_address: address }));
         await indexer().indexAddress(db, address);
-        return db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+        const fresh = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+        return fresh;
       }
 
       // Deduplicate temporal versions — keep latest validFrom per hash+index
@@ -209,7 +222,8 @@ module.exports = (srv: cds.Service) => {
           seen.set(key, utxo);
         }
       }
-      return Array.from(seen.values());
+      const deduped = Array.from(seen.values());
+      return deduped;
     });
   });
 
