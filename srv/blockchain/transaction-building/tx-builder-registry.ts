@@ -37,7 +37,7 @@ export class TxBuilderRegistry {
    */
   static createDefault(): CardanoTxBuilder {
     // Priority: env var (allows dynamic switching in tests) > CDS config > default 'csl'
-    const cdsConfig = cds.env.requires?.['odatano-core']?.txBuilders;
+    const cdsConfig = cds.env?.requires?.['odatano-core']?.txBuilders;
     const buildersEnv: string = process.env.TX_BUILDERS
       || (Array.isArray(cdsConfig) ? cdsConfig.join(',') : cdsConfig)
       || 'buildooor';
