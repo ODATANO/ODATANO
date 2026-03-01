@@ -1,6 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 ---
 
 ## Table of Contents
@@ -97,7 +97,7 @@ BTP Cloud Foundry
 ├── odatano-srv (CAP Node.js Backend)
 │   ├── CardanoODataService
 │   ├── CardanoTransactionService
-│   └── CardanoSigningService
+│   └── CardanoSignService
 │
 ├── odatano-db-deployer (HDI Container Deployment)
 │   └── Deploys schema to HANA Cloud
@@ -108,7 +108,7 @@ BTP Cloud Foundry
 │   └── Routing to HTML5 Apps
 │
 ├── odatano-html5-repo-host
-│   └── wallet-viewer.zip
+│   └── wallet.zip
 │
 └── Services
     ├── odatano-db (HANA Cloud HDI)
@@ -122,7 +122,7 @@ BTP Cloud Foundry
 ```yaml
 _schema-version: 3.3.0
 ID: odatano
-version: 0.3.17
+version: 0.3.24
 
 build-parameters:
   before-all:
@@ -227,7 +227,7 @@ cd ~/ODATANO && npm ci && mbt build
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
 # Deploy MTA
-cf deploy mta_archives/odatano_0.3.17.mtar
+cf deploy mta_archives/odatano_0.3.24.mtar
 
 # Set blockchain env vars
 cf set-env odatano-srv NETWORK "mainnet"
@@ -249,8 +249,8 @@ cf restage odatano-srv
 | `mta.yaml` | Multi-Target Application descriptor |
 | `xs-security.json` | XSUAA security configuration |
 | `app/router/xs-app.json` | Approuter routing rules |
-| `app/wallet-viewer/xs-app.json` | HTML5 app routing (included in ZIP) |
-| `app/wallet-viewer/ui5.yaml` | UI5 build config (must include `xs-app.json` in `additionalFiles`) |
+| `app/wallet/xs-app.json` | HTML5 app routing (included in ZIP) |
+| `app/wallet/ui5.yaml` | UI5 build config (must include `xs-app.json` in `additionalFiles`) |
 
 ### Useful CF Commands
 
@@ -352,7 +352,7 @@ parameters:
 |----------|--------|---------|
 | `/odata/v4/cardano-odata/$metadata` | GET | Service health (200 + XML) |
 | `/odata/v4/cardano-transaction/$metadata` | GET | Transaction service health (200 + XML) |
-| `/odata/v4/cardano-signing/$metadata` | GET | Signing service health (200 + XML) |
+| `/odata/v4/cardano-sign/$metadata` | GET | Signing service health (200 + XML) |
 
 
 ## Mainnet Considerations
@@ -426,7 +426,7 @@ Diagnose: `cf html5-list -di odatano-destination-service -u`
 
 ### BTP: 500 "Application does not have xs-app.json"
 
-`xs-app.json` not included in the wallet-viewer ZIP. Add to `additionalFiles` in `app/wallet-viewer/ui5.yaml`:
+`xs-app.json` not included in the wallet ZIP. Add to `additionalFiles` in `app/wallet/ui5.yaml`:
 
 ```yaml
 builder:
@@ -434,7 +434,7 @@ builder:
     - name: ui5-task-zipper
       afterTask: generateVersionInfo
       configuration:
-        archiveName: wallet-viewer
+        archiveName: wallet
         additionalFiles:
           - xs-app.json
 ```

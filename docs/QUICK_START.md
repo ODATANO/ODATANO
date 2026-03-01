@@ -1,6 +1,6 @@
 # ODATANO Quick Start Guide
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 
@@ -28,7 +28,7 @@ Add the `odatano-core` section to your project's `package.json`:
       "odatano-core": {
         "network": "preview",
         "backends": ["blockfrost"],
-        "blockfrostApiKey": "preview_YOUR_BLOCKFROST_KEY"
+        "blockfrostApiKey": "preview_YOUR_BLOCKFROST_API_KEY"
       }
     }
   }
@@ -112,7 +112,7 @@ LOG_LEVEL=info
 NETWORK=preview
 
 # Blockfrost API key (https://blockfrost.io)
-BLOCKFROST_KEY=your_api_key_here
+BLOCKFROST_API_KEY=your_api_key_here
 
 # Timeouts (milliseconds)
 PRIMARY_TIMEOUT_MS=8000
@@ -248,7 +248,7 @@ For comprehensive API testing, ODATANO provides two convenient options:
 npx tsx scripts/request_examples.ts
 ```
 
-The [request_examples.ts](../scripts/request_examples.ts) script automatically tests all 21 endpoints (10 GET entity sets and 11 POST actions) with real test data from the preview network. It provides:
+The [request_examples.ts](../scripts/request_examples.ts) script automatically tests service endpoints with real test data from the preview network. It provides:
 
 - Automatic testing of all service endpoints
 - Real test data (block hashes, addresses, transaction hashes, etc.)
@@ -335,4 +335,4 @@ npm run test:integration
 npm run test:unit
 ```
 
-For tests using live providers, set `BLOCKFROST_KEY` in your environment.
+For tests using live providers, set `BLOCKFROST_API_KEY` in your environment.

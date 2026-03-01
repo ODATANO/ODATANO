@@ -1,6 +1,6 @@
 # Docker Deployment
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 ## Quick Start
 
@@ -13,7 +13,7 @@ cd ODATANO
 
 # 2. Create .env from template
 cp .env.example .env
-# Edit .env and add your BLOCKFROST_KEY
+# Edit .env and add your BLOCKFROST_API_KEY
 
 # 3. Start (builds automatically)
 docker-compose up -d
@@ -37,7 +37,7 @@ curl -O https://raw.githubusercontent.com/ODATANO/ODATANO/main/docker-compose.ym
 
 # 3. Create .env file
 cat > .env << EOF
-BLOCKFROST_KEY=your-blockfrost-api-key-here
+BLOCKFROST_API_KEY=your-blockfrost-api-key-here
 NETWORK=preview
 BACKENDS=blockfrost,koios
 EOF
@@ -54,7 +54,7 @@ The `.env` file configures the service. Copy `.env.example` as a starting point:
 
 ```env
 # Required: Blockfrost API Key (get from https://blockfrost.io)
-BLOCKFROST_KEY=your-blockfrost-api-key-here
+BLOCKFROST_API_KEY=your-blockfrost-api-key-here
 
 # Network: mainnet, preview, preprod (default: preview)
 NETWORK=preview

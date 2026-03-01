@@ -1,6 +1,6 @@
 # ODATANO Developer Guide
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 ---
 
@@ -73,7 +73,7 @@ npm ci
 
 # Configure
 cp .env.example .env
-# Edit .env: Set BLOCKFROST_KEY, NETWORK=preview
+# Edit .env: Set BLOCKFROST_API_KEY, NETWORK=preview
 
 # Development (TypeScript, live reload)
 npm run cds:watch
@@ -127,7 +127,7 @@ srv/
 
 db/schema.cds                   # 29 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
-test/                           # 25 test files (integration + unit)
+test/                           # 29 test files (19 unit + 10 integration)
 ```
 ---
 
@@ -356,13 +356,15 @@ BackendError                            // Base class (500)
 ├── NotFoundError                       // Resource not found (404)
 ├── ProviderUnavailableError            // Timeout/unavailable (503)
 ├── RateLimitError                      // Rate limit exceeded (429)
-├── ConfigError                         // Configuration error (500)
 ├── BackendInitError                    // Init failed (500)
 ├── AllBackendsFailedError              // All backends failed (503)
-├── AllBackendsInitFailedError          // All init failed (500)
 ├── InsufficientFundsError              // Not enough UTxOs (400) - M2
+├── MixedAssetsError                    // Mixed asset types (400) - M2
 ├── TransactionValidationError          // Invalid signature/CBOR (400) - M2
-└── TransactionAlreadySubmittedError    // Duplicate TX (409) - M2
+├── TransactionAlreadySubmittedError    // Duplicate TX (409) - M2
+└── HsmError                            // HSM operation failed (503) - M3
+ConfigError                             // Configuration error (standalone)
+AllBackendsInitFailedError              // All init failed (standalone)
 
 // Helper functions
 rejectMissing(req, entity, field)       // Missing parameter (400)
@@ -652,7 +654,7 @@ describe('CardanoODataService', () => {
 ```env
 LOG_LEVEL=debug
 NETWORK=preview
-BLOCKFROST_KEY=your_preview_key
+BLOCKFROST_API_KEY=your_preview_key
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 INDEX_TTL_MS=60000
@@ -662,7 +664,7 @@ INDEX_TTL_MS=60000
 ```env
 LOG_LEVEL=info
 NETWORK=mainnet
-BLOCKFROST_KEY=your_mainnet_key
+BLOCKFROST_API_KEY=your_mainnet_key
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 PORT=4004
@@ -719,7 +721,7 @@ npm test           # Terminal 2 (wait 3s)
 - Verify network connectivity
 - Check Blockfrost status: https://status.blockfrost.io
 
-**BLOCKFROST_KEY not set:**
+**BLOCKFROST_API_KEY not set:**
 - Koios tests run without key (always available)
 - Blockfrost tests require valid key
 - Get key: https://blockfrost.io

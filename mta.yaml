@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 0.3.20
+version: 0.3.24
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
@@ -23,9 +23,10 @@ modules:
       buildpack: nodejs_buildpack
     properties:
       NETWORK: preview
-      BACKENDS: blockfrost
-      BLOCKFROST_API_KEY: YOUR_BLOCKFROST_API_KEY
+      BACKENDS: blockfrost,koios
+      BLOCKFROST_API_KEY: your_blockfrost_api_key_here
       TX_BUILDERS: buildooor
+      HSM_ENABLED: false
     build-parameters:
       builder: custom
       commands:

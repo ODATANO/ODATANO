@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 ---
 
@@ -99,13 +99,11 @@ POST /GetMetadataByTxHash
 ```json
 {
   "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83",
-  "block_hash": "cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39",
+  "blockHash": "cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39",
   "slot": 12345678,
   "size": 450,
   "fee": "200000",
-  "deposit": "0",
-  "invalidBefore": null,
-  "invalidHereafter": "12345700"
+  "deposit": "0"
 }
 ```
 
@@ -130,7 +128,7 @@ POST /GetAssetsByAddress
 ```json
 {
   "address": "addr_test1qz0wmc...",
-  "balance": "5000000",
+  "totalLovelace": "5000000",
   "assets": [
     {
       "policyId": "7eae28f73815e14bf9f4d6f94c6f03cc0e3e5aa9d9e2c4b1a8f7e6d5c4b3a2",
@@ -214,7 +212,7 @@ GET /Blocks?$orderby=height desc&$top=1
 GET /Transactions?$filter=slot gt 12345678&$top=10
 
 # Select specific fields
-GET /Addresses?$select=address,balance
+GET /Addresses?$select=address,totalLovelace
 
 # Expand related entities
 GET /Transactions?$expand=inputs,outputs
@@ -304,7 +302,7 @@ Service tries Blockfrost first (8s timeout), then Koios (8s timeout)
 
 ### Q: Can I query mainnet?
 
-**A:** Yes! Set `NETWORK=mainnet` and `BLOCKFROST_KEY=your_mainnet_key` in .env file
+**A:** Yes! Set `NETWORK=mainnet` and `BLOCKFROST_API_KEY=your_mainnet_key` in .env file
 
 Supported: `mainnet`, `preview`, `preprod`
 
@@ -501,7 +499,6 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 | `VerifySignature` | Cryptographically verify signed transaction |
 | `SubmitVerifiedTransaction` | Verify and submit in one step |
 | `GetSigningRequestsByAddress` | Get signing requests for an address |
-| `GetTransactionBuildsByAddress` | Get transaction builds for an address |
 | `SignWithHsm` | Sign transaction with HSM (server-side, returns signing request) |
 | `SignAndSubmitWithHsm` | Sign with HSM and submit to blockchain in one step |
 | `GetHsmStatus` | Check HSM connection status and key information |
@@ -581,7 +578,7 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 25 test files, 96%+ coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 29 test files, 99% statement coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -590,5 +587,5 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ---
 
-**Version:** 0.3.9\
+**Version:** v0.3-milestone3\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `SignatureVerifier` - Cryptographic signature verification
   - CIP-30 browser wallet support (Nami, Eternl, Yoroi, etc.)
   - Cardano CLI signing support
-  - Hardware wallet compatibility (Ledger, Trezor)
+  - HSM signing support (PKCS#11 compatible hardware wallets)
 
 - **CardanoSignService** (`/odata/v4/cardano-sign/`): New dedicated signing workflow service (3rd CDS service)
 
@@ -25,13 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `AddressTransactionBuilds` - Address-to-build associations
   - `AddressTransactions` - Address transaction history with net amounts
 
-- **6 External Signing Actions** (OData POST endpoints):
+- **5 External Signing Actions** (OData POST endpoints on CardanoSignService):
   - `CreateSigningRequest` - Create signing request for external signing
   - `GetSigningRequest` - Retrieve signing request (auto-expires if TTL exceeded)
   - `VerifySignature` - Cryptographically verify signed transaction
   - `SubmitVerifiedTransaction` - Verify and submit in one step
   - `GetSigningRequestsByAddress` - Get signing requests for an address
-  - `GetTransactionBuildsByAddress` - Get transaction builds for an address
 
 - **Centralized App Context Architecture**: Refactored initialization in `server.ts`
   - `getAppContext()` - Get singleton application context
@@ -104,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Architecture refactored to centralized App Context pattern
 - Services now use `getCardanoIndexer()` instead of direct instantiation
-- Test suite updated: 29 test files (19 unit + 10 integration), 1121 tests
+- Test suite updated: 29 test files (19 unit + 10 integration), 1122 tests
 - Enhanced error handling with signing-specific error cases
 
 ---

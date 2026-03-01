@@ -1,6 +1,6 @@
 # ODATANO Security & Authentication Guide
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 ---
 
@@ -45,7 +45,7 @@ Layer 7: Audit Trail (SigningRequests + SignatureVerifications + TransactionSubm
 |---------|---------|--------------|
 | `CardanoODataService` | Read-only blockchain queries | Low — no state mutation |
 | `CardanoTransactionService` | Transaction building, signing, submission | Medium — involves funds movement preparation |
-| `CardanoSigningService` | Transaction signing | High — involves private key operations |
+| `CardanoSignService` | Transaction signing | High — involves private key operations |
 
 This enables independent security policies per service.
 
@@ -135,6 +135,10 @@ service CardanoODataService @(requires: 'BlockchainRead') { ... }
 service CardanoTransactionService {
     action BuildSimpleAdaTransaction(...)      @(requires: 'TransactionBuild');
     action SubmitTransaction(...)              @(requires: 'TransactionSubmit');
+}
+
+// Sign service — signing workflow actions
+service CardanoSignService {
     action CreateSigningRequest(...)           @(requires: 'SigningManage');
     action VerifySignature(...)                @(requires: 'SigningManage');
 }
@@ -336,15 +340,15 @@ ODATANO records every step of the transaction lifecycle via OData-queryable enti
 
 ```http
 # Signing requests for an address
-POST /odata/v4/cardano-transaction/GetSigningRequestsByAddress
+POST /odata/v4/cardano-sign/GetSigningRequestsByAddress
 {"address": "addr_test1qq..."}
 
 # Filtered queries with OData
-GET /odata/v4/cardano-transaction/SigningRequests
+GET /odata/v4/cardano-sign/SigningRequests
     ?$filter=status eq 'verified'&$orderby=createdAt desc&$expand=verifications,build
 
 # Failed submissions
-GET /odata/v4/cardano-transaction/TransactionSubmissions
+GET /odata/v4/cardano-sign/TransactionSubmissions
     ?$filter=status eq 'failed'
 ```
 ## References

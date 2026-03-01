@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 ## Architecture Overview
 
@@ -43,7 +43,7 @@ BACKENDS=ogmios,blockfrost
 OGMIOS_URL=ws://localhost:1337
 
 # Blockfrost Configuration (required if using Blockfrost)
-BLOCKFROST_KEY=your_blockfrost_key_here
+BLOCKFROST_API_KEY=your_blockfrost_key_here
 
 # Transaction Builders
 # Options: buildooor,csl or both (comma-separated)

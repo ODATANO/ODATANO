@@ -141,10 +141,10 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest \
   -H "Content-Type: application/json" \
   -d '{"buildId":"uuid-from-build-response"}'
 
-# Verify and submit externally signed transaction (bound action on SigningRequests)
-curl -X POST "http://localhost:4004/odata/v4/cardano-sign/SigningRequests('signing-request-id')/CardanoSignService.SubmitVerifiedTransaction" \
+# Verify and submit externally signed transaction
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransaction \
   -H "Content-Type: application/json" \
-  -d '{"signedTxCbor":"84a400..."}'
+  -d '{"signingRequestId":"signing-request-id","signedTxCbor":"84a400..."}'
 ```
 
 **HSM Signing Operations (M3):**

@@ -1,6 +1,6 @@
 # Error Handling in ODATANO
 
-**Version:** 0.3.v0.3.milstone3 | **Last Updated:** February 2026
+**Version:** v0.3-milestone3 | **Last Updated:** March 2026
 
 This documentation describes error handling in ODATANO, specifically how backend
 errors are normalized and propagated to the client.
@@ -51,7 +51,7 @@ All configured backends failed for the operation.
 #### 6. `ConfigError` (500)
 
 Configuration error (missing API keys, invalid settings).
-- **Example**: BLOCKFROST_KEY not set, invalid network
+- **Example**: BLOCKFROST_API_KEY not set, invalid network
 - **Fix**: Check environment variables and config.ts
 
 #### 7. `BackendInitError` (500)
