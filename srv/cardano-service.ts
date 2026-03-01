@@ -194,9 +194,22 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
-      if (!existing) await indexer().indexAddress(db, address);
-      return db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+      const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+
+      if (!existing || existing.length === 0) {
+        await indexer().indexAddress(db, address);
+        return db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+      }
+
+      // Deduplicate temporal versions — keep latest validFrom per hash+index
+      const seen = new Map<string, any>();
+      for (const utxo of existing) {
+        const key = `${utxo.hash}#${utxo.index}`;
+        if (!seen.has(key) || utxo.validFrom > seen.get(key).validFrom) {
+          seen.set(key, utxo);
+        }
+      }
+      return Array.from(seen.values());
     });
   });
 

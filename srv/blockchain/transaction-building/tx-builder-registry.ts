@@ -36,9 +36,11 @@ export class TxBuilderRegistry {
    * @returns {CardanoTxBuilder} default transaction builder instance
    */
   static createDefault(): CardanoTxBuilder {
-    // Read directly from environment to allow dynamic switching in tests
-    // (CONFIG.transactionBuilders is cached at module load time)
-    const buildersEnv = process.env.TX_BUILDERS || 'csl';
+    // Priority: env var (allows dynamic switching in tests) > CDS config > default 'csl'
+    const cdsConfig = cds.env.requires?.['odatano-core']?.txBuilders;
+    const buildersEnv: string = process.env.TX_BUILDERS
+      || (Array.isArray(cdsConfig) ? cdsConfig.join(',') : cdsConfig)
+      || 'buildooor';
     const configuredBuilders = buildersEnv
       .split(',')
       .map(b => b.trim().toLowerCase())

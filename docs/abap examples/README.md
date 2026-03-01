@@ -1,6 +1,6 @@
 # ODATANO Milestone 3 – ABAP Integration Examples
 
-ABAP Cloud examples demonstrating real SAP business process integration with the Cardano blockchain through the [ODATANO](https://github.com/ODATANO/ODATANO) OData V4 API. All examples target **SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
+ABAP Cloud examples demonstrating real SAP business process integration with the Cardano blockchain through the ODATANO OData V4 API. All examples target **SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
 
 ## Architecture
 
@@ -63,7 +63,25 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
 
 ## Setup
 
-### 1. Get XSUAA Credentials (OAuth2 Token)
+### 1. Create ABAP Objects
+
+1. Create an ABAP package (e.g. `Z_ODATANO`)
+2. Create all objects in order:
+   - `ZODATANO_BC_LOG` (Database Table)
+   - `ZI_ODATANO_BC_LOG` (CDS View)
+   - `ZCL_ODATANO_CLIENT` (HTTP Client)
+   - `ZCL_GR_BLOCKCHAIN` (Goods Receipt Logic)
+   - `ZCL_CARDANO_MONITOR` (Network Monitor)
+   - `ZCL_CARDANO_ADDR_CHECK` (Address Verification)
+   - `ZCL_ODATANO_TEST` (Test Console App)
+3. Update the ODATANO service URL and credentials in `ZCL_ODATANO_TEST`
+4. Run with **Right-click → Run As → ABAP Application (Console)**
+
+### Example Package Structure after creation:
+
+![alt text](../assets/abap_examples/abap_packages_example.png)
+
+### 2. Get XSUAA Credentials (OAuth2 Token)
 
 The deployed ODATANO service is protected by XSUAA. To call it from ABAP, you need OAuth2 Client Credentials:
 
@@ -95,26 +113,6 @@ Use these values when instantiating `ZCL_ODATANO_CLIENT`:
 | `iv_client_secret` | `clientsecret` from the service key |
 
 The client automatically fetches and caches Bearer tokens via the OAuth2 Client Credentials flow.
-
-> **Note:** For local development (`cds watch`), authentication is disabled. You can omit the token parameters and just pass `iv_base_url`.
-
-### 2. Create ABAP Objects
-
-1. Create an ABAP package (e.g. `Z_ODATANO`)
-2. Create all objects in order:
-   - `ZODATANO_BC_LOG` (Database Table)
-   - `ZI_ODATANO_BC_LOG` (CDS View)
-   - `ZCL_ODATANO_CLIENT` (HTTP Client)
-   - `ZCL_GR_BLOCKCHAIN` (Goods Receipt Logic)
-   - `ZCL_CARDANO_MONITOR` (Network Monitor)
-   - `ZCL_CARDANO_ADDR_CHECK` (Address Verification)
-   - `ZCL_ODATANO_TEST` (Test Console App)
-3. Update the ODATANO service URL and credentials in `ZCL_ODATANO_TEST`
-4. Run with **Right-click → Run As → ABAP Application (Console)**
-
-### Example Package Structure after creation:
-
-![alt text](../assets/abap_examples/abap_packages_example.png)
 
 ## Running the Tests
 

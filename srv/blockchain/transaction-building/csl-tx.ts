@@ -174,12 +174,16 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Collateral + funding UTxO separation
     const { fundingUtxos } = this._setupCollateral(txb, ctx.utxos);
 
-    // Add all funding UTxOs as explicit inputs instead of using coin selection.
-    // CSL's add_inputs_from does not properly forward native tokens from selected
-    // inputs to the change output during Plutus minting transactions, causing
-    // ValueNotConservedUTxO when inputs contain existing native assets.
+    // Greedy coin selection: only include funding UTxOs until we have enough ADA.
+    // We still add inputs explicitly (not via add_inputs_from) because CSL does not
+    // properly forward native tokens from selected inputs to the change output
+    // during Plutus minting transactions, causing ValueNotConservedUTxO.
+    const requiredLovelace = BigInt(req.lovelaceAmount) + 5_000_000n; // output + buffer for fee + min change
+    const selectedFundingUtxos = this._selectMinimalUtxos(fundingUtxos, requiredLovelace);
+    logger.debug(`Coin selection: ${selectedFundingUtxos.length}/${fundingUtxos.length} UTxOs selected for CSL mint`);
+
     const fundingInputsBuilder = CSL.TxInputsBuilder.new();
-    for (const u of fundingUtxos) {
+    for (const u of selectedFundingUtxos) {
       const fTxHash = CSL.TransactionHash.from_bytes(Buffer.from(u.txHash, 'hex'));
       const fInput = CSL.TransactionInput.new(fTxHash, u.outputIndex);
       const fAddress = CSL.Address.from_bech32(u.address);
@@ -188,11 +192,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
     txb.set_inputs(fundingInputsBuilder);
 
-    // Create explicit change output for native tokens from funding UTxOs.
+    // Create explicit change output for native tokens from selected funding UTxOs.
     // CSL's add_change_if_needed does not forward native tokens from inputs
     // to the change output during Plutus minting transactions.
     const fundingNativeAssets = new Map<string, Map<string, bigint>>();
-    for (const u of fundingUtxos) {
+    for (const u of selectedFundingUtxos) {
       for (const a of u.amount) {
         if (a.unit.toLowerCase() === 'lovelace') continue;
         if (BigInt(a.quantity) <= 0n) continue;
@@ -580,6 +584,27 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
 
     return { collateralUtxo, fundingUtxos };
+  }
+
+  /**
+   * Greedy coin selection: sort UTxOs by lovelace descending (largest first),
+   * collect until requiredLovelace is satisfied. Falls back to all UTxOs if
+   * the full set is needed.
+   */
+  private _selectMinimalUtxos(utxos: OdatanoUtxo[], requiredLovelace: bigint): OdatanoUtxo[] {
+    const sorted = [...utxos].sort((a, b) => {
+      const aLov = BigInt(getLovelace(a));
+      const bLov = BigInt(getLovelace(b));
+      return bLov > aLov ? 1 : bLov < aLov ? -1 : 0;
+    });
+    const selected: OdatanoUtxo[] = [];
+    let accumulated = 0n;
+    for (const u of sorted) {
+      selected.push(u);
+      accumulated += BigInt(getLovelace(u));
+      if (accumulated >= requiredLovelace) break;
+    }
+    return selected;
   }
 
   //---------------------------------------------------------------------------

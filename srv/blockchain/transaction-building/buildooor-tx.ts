@@ -57,7 +57,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   public async buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
+      const allInputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
@@ -71,6 +71,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.outputDatum)];
 
+      // Coin selection: only include UTxOs needed to cover the output value
+      const inputs = this.txBuilder.keepRelevant(outputValue, allInputs);
+      logger.debug(`Coin selection: ${inputs.length}/${allInputs.length} UTxOs selected for transfer`);
+
       const tx = await this.txBuilder.build({ inputs, outputs, changeAddress });
 
       logger.debug(`Built unsigned transaction successfully.`);
@@ -83,14 +87,19 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const inputs = ledgerUtxos.map(utxo => ({ utxo }));
+      const allInputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
       const amount = BigInt(String(req.lovelaceAmount));
       const metadata = this._mapOdatanoMetadataToLedgerMetadata(req.metadataJson);
 
-      const outputs = [new TxOut({ address: recipientAddress, value: Value.lovelaces(amount) })];
+      const outputValue = Value.lovelaces(amount);
+      const outputs = [new TxOut({ address: recipientAddress, value: outputValue })];
+
+      // Coin selection: only include UTxOs needed to cover the output value
+      const inputs = this.txBuilder.keepRelevant(outputValue, allInputs);
+      logger.debug(`Coin selection: ${inputs.length}/${allInputs.length} UTxOs selected for metadata transfer`);
 
       const tx = await this.txBuilder.build({ inputs, outputs, changeAddress, metadata });
 
@@ -147,7 +156,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Collateral + funding separation
       const { collateralUtxos, fundingUtxos } = this._setupCollateral(ctx.utxos);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const inputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
+      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
+
+      // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from thin air)
+      const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
+      const inputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+      logger.debug(`Coin selection: ${inputs.length}/${allFundingInputs.length} UTxOs selected for mint`);
 
       // Evaluate execution units
       const finalExUnits = await this._evaluateExUnits(
@@ -224,14 +238,19 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const { collateralUtxos, fundingUtxos } = this._setupCollateral(senderUtxos);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
+      // Coin selection: funding UTxOs only need to cover fee + min change (script UTxO covers the output)
+      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
+      const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+      logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected for Plutus spend`);
+
       // Helper to build inputs with specified execution units
       const buildInputs = (exUnits: { mem: number; cpu: number }) => {
         const scriptInput = {
           utxo: scriptLedgerUtxo,
           inputScript: { script, datum, redeemer: redeemerData, executionUnits: exUnits }
         };
-        const regularInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
-        return [scriptInput, ...regularInputs];
+        return [scriptInput, ...selectedFundingInputs];
       };
 
       // Evaluate execution units

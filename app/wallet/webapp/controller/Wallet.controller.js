@@ -325,6 +325,14 @@ sap.ui.define([
                         expanded: false
                     };
                 });
+                // Deduplicate by hash+index (safety net for temporal DB versions)
+                var oSeen = {};
+                aUtxos = aUtxos.filter(function (oUtxo) {
+                    var sKey = oUtxo.hash + "#" + oUtxo.index;
+                    if (oSeen[sKey]) return false;
+                    oSeen[sKey] = true;
+                    return true;
+                });
                 that._walletService.getModel().setProperty("/utxos", aUtxos);
             }).catch(function (oError) {
                 Log.warning("Failed to load UTxOs: " + (oError && oError.message));
