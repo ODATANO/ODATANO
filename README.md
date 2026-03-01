@@ -27,7 +27,7 @@ Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4
 
 [Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2)
 
-### Milestone 3 (Pending March 2026) ⏳
+### Milestone 3 (Completed March 2026) ✅ - pending approval 
 Extension of the transaction module & external workflow to export unsigned Cardano transactions via OData, enabling deterministic external signing (e.g. Cardano CLI or browser wallets) with full key separation and no private-key handling in the CAP service.
 Includes Plutus smart contract support (BuildPlutusSpendTransaction, SetCollateral), end-to-end external signer integration, SAP S/4HANA business process examples, enterprise use cases, a sample Fiori wallet viewer app, and comprehensive automated integration and security tests.
 

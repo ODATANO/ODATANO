@@ -585,8 +585,7 @@ Working SAP Fiori application that displays wallet information through OData ser
 
 - Implementation of the Fiori Sample App: https://github.com/ODATANO/ODATANO/tree/main/app/wallet
 
-- Youtube Video Demo of the Fiori Sample App: TODO
-
+- Youtube Video Demo of the Fiori Sample App: https://youtu.be/TzIXRoPZDqA
 
 ## F. Output: Automated Integration & Security Tests:
 ≥ 15 automated tests covering external signing, signature validation, SAP integration, and error conditions.
@@ -618,9 +617,12 @@ Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed te
 - Security Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SECURITY_GUIDE.md
 ---
 
-## General Other Evidence for Milestone 3
+## General and other Evidence for Milestone 3
 
 **Demo & Release**
 
 - Milestone Release v0.3-milestone3: https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3
-- Demo Video External Signing: TBD
+- Demo Video Wallet Viewer Fiori App & External Signing Workflows: https://youtu.be/TzIXRoPZDqA
+- new project Homepage: https://odatano.dev
+- published as npm package: https://www.npmjs.com/package/@odatano/core
+
