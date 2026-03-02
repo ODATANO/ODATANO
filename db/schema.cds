@@ -1063,7 +1063,7 @@ entity AddressTransactions {
 
         @title      : 'Net Amount (Lovelace)'
         @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
-        netAmount   : Int64;
+        netAmount   : Decimal(20, 0);
 
         @title      : 'Block Time'
         @description: 'Block time of the transaction (denormalized for sorting)'

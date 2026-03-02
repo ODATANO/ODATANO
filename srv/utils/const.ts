@@ -87,7 +87,7 @@ export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
 /**
  * Asset unit Regex - policy ID (56 hex chars) + asset name (0-128 hex chars)
  */
-export const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
+export const ASSET_UNIT_REGEX = /^[a-f0-9]{56}([a-f0-9]{2})*$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars, even length)
 
 /**
  *  Pool ID Regex - bech32 with HRP "pool" and 28 bytes payload

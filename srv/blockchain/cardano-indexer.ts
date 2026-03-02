@@ -72,7 +72,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction } from '../utils/types';
 
 const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
@@ -256,14 +256,28 @@ export class CardanoIndexer {
   async indexAddressTransactions(tx: CapTransaction, addr: string, limit: number): Promise<AddressTransactions[]> {
     logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
 
-    // Fetch transactions for this address
-    const transactions = await this.client.getAddressTransactions(addr, limit);
+    // Layer 4: Hash-only listing (lightweight, 1 API call)
+    const txHashes = await this.client.getAddressTransactionHashes(addr, limit);
 
-    logger.debug(`indexAddressTransactions: found ${transactions.length} transactions for ${addr}`);
+    logger.debug(`indexAddressTransactions: found ${txHashes.length} tx hashes for ${addr}`);
 
-    // Index each transaction
-    for (const txData of transactions) {
-      await this.indexTransaction(tx, txData.hash);
+    if (txHashes.length === 0) return [];
+
+    // Layer 3: DB-first dedup + batch fetch
+    const batchFetched = await this.ensureTransactionsIndexed(tx, txHashes);
+
+    // For address-transaction mapping we need full provider tx data (inputs/outputs for net amounts).
+    // Transactions already in DB were not re-fetched. For those, fetch individually (coalesced).
+    const allTxData: ProviderTransaction[] = [];
+    for (const hash of txHashes) {
+      const fromBatch = batchFetched.get(hash);
+      if (fromBatch) {
+        allTxData.push(fromBatch);
+      } else {
+        // Already in DB — fetch from backend (coalesced, likely cached by RequestCoalescer)
+        const providerTx = await this.client.getTransaction(hash);
+        allTxData.push(providerTx);
+      }
     }
 
     // Create address-transaction mapping entries
@@ -272,7 +286,7 @@ export class CardanoIndexer {
 
     const transactionsEntities = mapAddressTransactions(
       addr,
-      transactions,
+      allTxData,
       now,
       validTo
     );
@@ -801,11 +815,76 @@ export class CardanoIndexer {
   }
 
   //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /** Max addresses to index concurrently (avoid overloading backends) */
+  private static readonly ADDR_CONCURRENCY = 5;
+
+  /**
+   * Ensure a set of transactions are indexed — batch DB-check + batch fetch.
+   * 1. Deduplicate hashes
+   * 2. Check which hashes already exist in DB
+   * 3. Batch-fetch missing transactions from backend
+   * 4. UPSERT all entities (Transactions, Inputs, Outputs, Assets, Metadata)
+   *
+   * @param tx       CAP transaction (cds.tx)
+   * @param txHashes array of transaction hashes to ensure
+   * @returns Map of txHash → provider Transaction (all requested, from DB fetch or backend)
+   */
+  async ensureTransactionsIndexed(
+    tx: CapTransaction,
+    txHashes: string[]
+  ): Promise<Map<string, ProviderTransaction>> {
+    const unique = [...new Set(txHashes)];
+    if (unique.length === 0) return new Map();
+
+    // DB check — which hashes are already indexed?
+    const existingRows = await tx.run(
+      SELECT.from(Transactions).columns('hash').where({ hash: { in: unique } })
+    );
+    const existingSet = new Set((existingRows as any[]).map((r: any) => r.hash));
+    const missing = unique.filter(h => !existingSet.has(h));
+
+    logger.debug(`ensureTransactionsIndexed: ${unique.length} unique, ${existingSet.size} cached, ${missing.length} to fetch`);
+
+    // Batch-fetch missing from backend
+    let fetched = new Map<string, ProviderTransaction>();
+    if (missing.length > 0) {
+      fetched = await this.client.getTransactionsBatch(missing);
+
+      // UPSERT all fetched transactions + child entities
+      for (const [, providerTx] of fetched) {
+        const txRow = mapTransaction(providerTx);
+        await tx.run(UPSERT.into(Transactions).entries(txRow));
+
+        if (providerTx.inputs) {
+          const inputRows = mapTransactionInputs(providerTx.hash, providerTx.inputs);
+          const inputAssetRows = mapTransactionInputAssets(providerTx.hash, providerTx.inputs);
+          if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
+          if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
+
+          const outputRows = mapTransactionOutputs(providerTx.hash, providerTx.outputs);
+          const outputAssetRows = mapTransactionOutputAssets(providerTx.hash, providerTx.outputs);
+          if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
+          if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
+        }
+
+        const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
+        if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+      }
+    }
+
+    return fetched;
+  }
+
+  //-----------------------------------------------------------------------------
   // Private Helpers
   //-----------------------------------------------------------------------------
 
   /**
-   * Index multiple addresses with assets
+   * Index multiple addresses with concurrency-limited parallelism.
+   * Processes addresses in chunks to avoid overwhelming backends.
    * @param tx CAP transaction object
    * @param bech32List array of bech32 addresses
    */
@@ -813,8 +892,10 @@ export class CardanoIndexer {
     tx: CapTransaction,
     bech32List: string[]
   ): Promise<void> {
-    for (const bech32 of bech32List) {
-      await this.indexAddress(tx, bech32);
+    const concurrency = CardanoIndexer.ADDR_CONCURRENCY;
+    for (let i = 0; i < bech32List.length; i += concurrency) {
+      const chunk = bech32List.slice(i, i + concurrency);
+      await Promise.all(chunk.map(addr => this.indexAddress(tx, addr)));
     }
   }
 }

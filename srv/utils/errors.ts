@@ -363,7 +363,7 @@ export function normalizeBackendError(
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 2: Rate limiting detection (status 429 or message patterns)
+  // Priority 4: Rate limiting detection (status 429 or message patterns)
   if (status === 429 ||
     messageLower.includes('rate limit') ||
     messageLower.includes('too many requests') ||
@@ -379,12 +379,12 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 3: Explicit 404 status
+  // Priority 5: Explicit 404 status
   if (status === 404) {
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 4: 5xx errors → Provider unavailable (retry-able)
+  // Priority 6: 5xx errors → Provider unavailable (retry-able)
   if (status >= 500) {
     return new ProviderUnavailableError(
       message || 'Provider returned server error',
@@ -394,7 +394,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 5: Other 4xx → Check if it's a disguised "not found"
+  // Priority 7: Other 4xx → Check if it's a disguised "not found"
   if (status >= 400) {
     // Other 4xx like bad requests → treat as unavailable
     return new ProviderUnavailableError(
@@ -405,7 +405,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 6: Unknown/network errors → treat as unavailable (default fallback)
+  // Priority 8: Unknown/network errors → treat as unavailable (default fallback)
   return new ProviderUnavailableError(
     message || 'Unknown backend error',
     backendName,

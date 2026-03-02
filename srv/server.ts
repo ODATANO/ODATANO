@@ -137,6 +137,7 @@ export async function createTestContext(
   protocolParams?: LedgerProtocolParameters
 ): Promise<AppContext> {
   // Set TX_BUILDERS env so TxBuilderRegistry.createDefault() uses the correct builder
+  const previousTxBuilders = env.TX_BUILDERS;
   env.TX_BUILDERS = txBuilderName;
 
   const config: CardanoClientConfig = {
@@ -151,7 +152,10 @@ export async function createTestContext(
     indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
   };
 
-  return initializeAppContext(config, protocolParams);
+  const context = await initializeAppContext(config, protocolParams);
+  // Restore env to avoid polluting parallel tests
+  env.TX_BUILDERS = previousTxBuilders;
+  return context;
 }
 
 /**

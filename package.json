@@ -54,6 +54,9 @@
     "typescript": "^5.9.3"
   },
   "cds": {
+    "typer": {
+      "ieee754compatible": true
+    },
     "build": {
       "tasks": [
         {

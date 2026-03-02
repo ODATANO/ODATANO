@@ -80,8 +80,8 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     blockTime: providerTx.blockTime ?? null,
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
-    fee: providerTx.fee != null ? Number(providerTx.fee) : 0,
-    deposit: providerTx.deposit != null ? Number(providerTx.deposit) : 0,
+    fee: providerTx.fee != null ? providerTx.fee : '0',
+    deposit: providerTx.deposit != null ? providerTx.deposit : '0',
     size: providerTx.size ?? null,
     hasInputs: hasInputs,
     hasOutputs: hasOutputs,
@@ -144,7 +144,7 @@ export function mapTransactionInputAssets(
         input_tx_hash: txHash,
         input_inputIndex: inputIndex,
         unit: a.unit,
-        asset_quantity: Number(a.quantity),
+        asset_quantity: a.quantity,
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -201,7 +201,7 @@ export function mapTransactionOutputAssets(
         output_tx_hash: txHash,
         output_outputIndex: outputIndex,
         unit: a.unit,
-        asset_quantity: Number(a.quantity),
+        asset_quantity: a.quantity,
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
@@ -223,8 +223,8 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
   const nowIso = new Date(now - 2000).toISOString();
   const validToIso = new Date(now + maxAge).toISOString();
   const totalLovelace = Array.isArray(addressData.amount)
-    ? Number(addressData.amount.find((a) => a.unit === 'lovelace')?.quantity)
-    : 0;
+    ? (addressData.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0')
+    : '0';
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
@@ -289,9 +289,9 @@ export function mapAddressTransactions(addr: string, addressTxsData: Transaction
  * @param tx the transaction data
  * @returns object with netLovelace and netAssets array
  */
-function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLovelace: number; netAssets: NetAsset[] } {
-  let inputLovelace = 0;
-  let outputLovelace = 0;
+function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLovelace: string; netAssets: NetAsset[] } {
+  let inputLovelace = 0n;
+  let outputLovelace = 0n;
   const assetBalances = new Map<string, bigint>(); // unit -> net quantity
 
   // Process inputs belonging to this address (subtract)
@@ -299,10 +299,10 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
     if (input.address === addr) {
       for (const amount of input.amount) {
         if (amount.unit === 'lovelace') {
-          inputLovelace += parseInt(amount.quantity, 10) || 0;
+          inputLovelace += BigInt(amount.quantity || '0');
         } else {
           // Native asset
-          const current = assetBalances.get(amount.unit) || BigInt(0);
+          const current = assetBalances.get(amount.unit) || 0n;
           assetBalances.set(amount.unit, current - BigInt(amount.quantity));
         }
       }
@@ -314,10 +314,10 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
     if (output.address === addr) {
       for (const amount of output.amount) {
         if (amount.unit === 'lovelace') {
-          outputLovelace += parseInt(amount.quantity, 10) || 0;
+          outputLovelace += BigInt(amount.quantity || '0');
         } else {
           // Native asset
-          const current = assetBalances.get(amount.unit) || BigInt(0);
+          const current = assetBalances.get(amount.unit) || 0n;
           assetBalances.set(amount.unit, current + BigInt(amount.quantity));
         }
       }
@@ -327,7 +327,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   // Convert asset map to array, filtering out zero balances
   const netAssets: NetAsset[] = [];
   for (const [unit, quantity] of assetBalances) {
-    if (quantity !== BigInt(0)) {
+    if (quantity !== 0n) {
       // Parse unit into policyId and assetName
       // Format: policyId (56 chars) + assetNameHex
       const policyId = unit.substring(0, 56);
@@ -345,7 +345,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   }
 
   return {
-    netLovelace: outputLovelace - inputLovelace,
+    netLovelace: (outputLovelace - inputLovelace).toString(),
     netAssets
   };
 }
@@ -363,7 +363,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
   return addressUtxosData.map((utxo: UtxosProviderData) => {
-    const lovelace = Number(utxo.amount.find((a) => a.unit === 'lovelace')?.quantity ?? 0);
+    const lovelace = utxo.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0';
     const hasAssets = Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace');
 
     return {
@@ -401,14 +401,14 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
         unit: asset.unit,
         validFrom: validFrom,
         validTo: validTo,
-        asset_quantity: Number(asset.quantity),
+        asset_quantity: asset.quantity,
         asset_policyId: policyId,
         asset_assetName: assetName,
       };
     });
 }
 
-/** 
+/**
  * Map UTxO Assets
  * Converts provider address UTxO asset data into UTxOAssetRow format
  * @param addressUtxosData address UTxOs data from provider
@@ -434,7 +434,7 @@ export function mapAddressUtxoAssets(
         unit: asset.unit,
         validFrom: validFrom,
         validTo: validTo,
-        asset_quantity: Number(asset.quantity),
+        asset_quantity: asset.quantity,
         asset_policyId: policyId,
         asset_assetName: assetName,
       });
@@ -458,14 +458,14 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData, max
     network: network,
     validFrom: nowIso,
     validTo: validToIso,
-    maxSupply: Number(providerNetworkData.supply.max),
-    circulatingSupply: Number(providerNetworkData.supply.circulating),
-    totalSupply: Number(providerNetworkData.supply.total),
-    lockedSupply: Number(providerNetworkData.supply.locked),
-    treasurySupply: Number(providerNetworkData.supply.treasury),
-    reservesSupply: Number(providerNetworkData.supply.reserves),
-    liveStake: Number(providerNetworkData.stake.live),
-    activeStake: Number(providerNetworkData.stake.active),
+    maxSupply: providerNetworkData.supply.max,
+    circulatingSupply: providerNetworkData.supply.circulating,
+    totalSupply: providerNetworkData.supply.total,
+    lockedSupply: providerNetworkData.supply.locked,
+    treasurySupply: providerNetworkData.supply.treasury,
+    reservesSupply: providerNetworkData.supply.reserves,
+    liveStake: providerNetworkData.stake.live,
+    activeStake: providerNetworkData.stake.active,
   };
 }
 
@@ -487,7 +487,7 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochR
     epochSlot: providerBlockData.epochSlot,
     size: providerBlockData.size,
     txCount: providerBlockData.txCount,
-    fees: Number(providerBlockData.fees),
+    fees: providerBlockData.fees ?? '0',
   };
 }
 
@@ -507,8 +507,8 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
     blockCount: providerEpochData.block_count,
     txCount: providerEpochData.tx_count,
     output: providerEpochData.output,
-    fees: Number(providerEpochData.fees),
-    activeStake: Number(providerEpochData.active_stake),
+    fees: providerEpochData.fees,
+    activeStake: providerEpochData.active_stake,
   };
 }
 
@@ -544,15 +544,15 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
     vrfKeyHash: providerPoolData.vrfKeyHash,
     blocksMinted: providerPoolData.blocksMinted,
     blocksEpoch: providerPoolData.blocksEpoch,
-    liveStake: Number(providerPoolData.liveStake),
+    liveStake: providerPoolData.liveStake,
     liveSize: providerPoolData.liveSize,
     liveDelegators: providerPoolData.liveDelegators,
     liveSaturation: providerPoolData.liveSaturation,
-    activeStake: Number(providerPoolData.activeStake),
+    activeStake: providerPoolData.activeStake,
     activeSize: providerPoolData.activeSize,
-    pledge: Number(providerPoolData.pledge),
+    pledge: providerPoolData.pledge,
     margin: Number(providerPoolData.margin),
-    fixedCost: Number(providerPoolData.fixedCost),
+    fixedCost: providerPoolData.fixedCost,
     rewardAccount: providerPoolData.rewardAccount,
   };
 }
@@ -567,7 +567,7 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
   return {
     drepId: providerDrepData.drepId,
     hex: providerDrepData.hex,
-    amount: Number(providerDrepData.amount),
+    amount: providerDrepData.amount,
     hasScript: Boolean(providerDrepData.hasScript),
     lastActiveEpoch: providerDrepData.lastActiveEpoch,
     retired: Boolean(providerDrepData.retired),
@@ -591,12 +591,12 @@ export function mapAccount(providerAccountData: AccountProviderData, max_age: nu
     stakeAddress: providerAccountData.stakeaddress,
     active: providerAccountData.active,
     activeEpoch: providerAccountData.activeEpoch,
-    controlledAmount: Number(providerAccountData.controlledAmount),
-    rewardsSum: Number(providerAccountData.rewardsSum),
-    withdrawalsSum: Number(providerAccountData.withdrawalsSum),
-    reservesSum: Number(providerAccountData.reservesSum),
-    treasurySum: Number(providerAccountData.treasurySum),
-    withdrawableAmount: Number(providerAccountData.withdrawableAmount),
+    controlledAmount: providerAccountData.controlledAmount,
+    rewardsSum: providerAccountData.rewardsSum,
+    withdrawalsSum: providerAccountData.withdrawalsSum,
+    reservesSum: providerAccountData.reservesSum,
+    treasurySum: providerAccountData.treasurySum,
+    withdrawableAmount: providerAccountData.withdrawableAmount,
     hasAddresses: providerAccountData.addresses.length > 0,
   };
 }
@@ -645,7 +645,7 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
     changeAddress: txbuildResult.senderAddress,
     unsignedTxCbor: txbuildResult.unsignedTxCbor,
     txBodyHash: txbuildResult.txBodyHash,
-    fee: Number(txbuildResult.feeLovelace),
+    fee: txbuildResult.feeLovelace,
     size: txbuildResult.sizeBytes, // size in bytes
     createdAt: now, // epoch seconds
     submission: null,
@@ -670,7 +670,7 @@ export function mapBuildInputs(buildId: string, inputs: Array<{ txHash: string; 
     txHash: input.txHash,
     outputIndex: input.index,
     address: input.address || null,
-    lovelace: Number(input.lovelace),
+    lovelace: input.lovelace,
     hasAssets: false, // simple ADA transfers don't have assets
   }));
 }
@@ -688,7 +688,7 @@ export function mapBuildOutputs(buildId: string, outputs: Array<{ address: strin
     build_id: buildId,
     outputIndex: idx,
     address: output.address,
-    lovelace: Number(output.lovelace),
+    lovelace: output.lovelace,
     isChange: changeAddress ? output.address === changeAddress : false,
     hasAssets: false, // simple ADA transfers don't have assets
   }));

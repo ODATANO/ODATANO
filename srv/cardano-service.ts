@@ -281,7 +281,7 @@ module.exports = (srv: cds.Service) => {
     const { address, limit } = req.data as { address?: string, limit?: number };
     if (!address) rejectMissing(req, 'GetLatestTransactionsByAddress', 'address');
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetLatestTransactionsByAddress', 'Invalid bech32 address format', 'address');
-    const txLimit = limit && limit > 0 ? limit : 10;
+    const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.from(AddressTransactions).where({ address }).limit(txLimit));

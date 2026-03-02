@@ -112,7 +112,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i); // Valid hex
         });
         it('POST /BuildSimpleAdaTransaction - verify build is persisted in DB', async () => {
@@ -208,7 +208,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('id');
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
         });
       });
 
@@ -226,7 +226,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
         });
 
@@ -301,7 +301,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
           // Transaction should build successfully with change going to senderAddress
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
         });
       });
 
@@ -592,7 +592,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
         });
 

@@ -81,6 +81,8 @@ export class HsmSigner {
 
       // 3. Login with PIN
       this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER, this.config.pin);
+      // Clear PIN from memory after successful login — PIN is no longer needed
+      this.config = { ...this.config, pin: '' };
       logger.debug('PKCS#11 login successful');
 
       // 4. Find private key by label or ID

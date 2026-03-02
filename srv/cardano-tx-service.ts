@@ -173,10 +173,12 @@ module.exports = (srv: cds.Service) => {
     if (!Array.isArray(parsedMintActionsRaw)) {
       rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
     }
-    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => ({
-      ...action,
-      quantity: BigInt(action.quantity)
-    }));
+    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => {
+      if (!/^-?\d+$/.test(action.quantity)) {
+        rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+      }
+      return { ...action, quantity: BigInt(action.quantity) };
+    });
 
     // Parse and validate optional requiredSignersJson
     let requiredSigners: string[] | undefined;

@@ -129,6 +129,25 @@ export interface CardanoBackend {
    * @returns {Promise<string>} transaction hash
    */
   submitTransaction(signedTxCbor: string): Promise<string>;
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * Used by the indexer to separate hash listing from detail fetching.
+   * Optional: falls back to getAddressTransactions() + map to hashes if not implemented.
+   * @param address bech32 address
+   * @param limit maximum number of transaction hashes to return
+   * @returns {Promise<string[]>} list of transaction hashes (most recent first)
+   */
+  getAddressTransactionHashes?(address: string, limit: number): Promise<string[]>;
+
+  /**
+   * Batch fetch multiple transactions by hash.
+   * Koios implements natively via POST /tx_info; Blockfrost uses concurrency-limited parallel calls.
+   * Optional: falls back to individual getTransaction() calls if not implemented.
+   * @param txHashes array of transaction hashes (hex)
+   * @returns {Promise<Map<string, Transaction>>} map of txHash -> Transaction
+   */
+  getTransactionsBatch?(txHashes: string[]): Promise<Map<string, Transaction>>;
 }
 
 /**

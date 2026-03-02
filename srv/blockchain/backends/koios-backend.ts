@@ -95,75 +95,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const tx = data[0];
-
-        let labels: MetadataLabelTx[] = [];
-
-        if (tx.metadata) {
-          labels = Object.entries(tx.metadata).map(
-            ([label, json]) => ({
-              txHash: hash,
-              label: +label,
-              json: json as JSONValue,
-            }));
-        }
-
-        return {
-          hash: tx.tx_hash,
-          blockHash: tx.block_hash,
-          blockHeight: Number(tx.block_height),
-          blockTime: tx.tx_timestamp ?? tx.block_time,
-          slot: tx.absolute_slot ?? tx.slot_no,
-          index: tx.tx_index,
-          fee: tx.tx_fee || '0',
-          deposit: tx.deposit || '0',
-          size: tx.tx_size,
-          inputs: tx.inputs.map((input: any) => {
-            const amount: Amount[] = [
-              { unit: 'lovelace', quantity: input.value }
-            ];
-            if (input.asset_list && Array.isArray(input.asset_list)) {
-              for (const asset of input.asset_list) {
-                amount.push({
-                  unit: `${asset.policy_id}${asset.asset_name}`,
-                  quantity: asset.quantity
-                });
-              }
-            }
-            return {
-              address: input.payment_addr?.bech32 || input.address,
-              txHash: input.tx_hash,
-              outputIndex: input.tx_index,
-              amount: amount,
-              dataHash: input.datum_hash || null,
-              inlineDatum: input.inline_datum || null,
-              referenceScriptHash: input.reference_script || null,
-            };
-          }),
-          outputs: tx.outputs.map((output: any) => {
-            const amount: Amount[] = [
-              { unit: 'lovelace', quantity: output.value }
-            ];
-            if (output.asset_list && Array.isArray(output.asset_list)) {
-              for (const asset of output.asset_list) {
-                amount.push({
-                  unit: `${asset.policy_id}${asset.asset_name}`,
-                  quantity: asset.quantity
-                });
-              }
-            }
-            return {
-              address: output.payment_addr?.bech32 || output.address,
-              amount: amount,
-              txHash: tx.tx_hash,
-              outputIndex: output.tx_index,
-              dataHash: output.datum_hash || null,
-              inlineDatum: output.inline_datum || null,
-              isCollateral: false,
-              referenceScriptHash: output.reference_script || null,
-            };
-          }),
-          metadata: labels
-        };
+        return this._mapKoiosTx(tx);
       },
       this.name
     );
@@ -663,5 +595,140 @@ export class KoiosBackend implements CardanoBackend {
       },
       this.name
     );
+  }
+
+  //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * @param address bech32 address
+   * @param limit maximum number of hashes
+   * @returns {Promise<string[]>} most recent tx hashes
+   */
+  async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.post('/address_txs', { _addresses: [address] });
+        return data.slice(0, limit).map((tx: { tx_hash: string }) => tx.tx_hash);
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Batch fetch multiple transactions by hash using Koios POST /tx_info.
+   * Sends all hashes in one request (chunked at 100 per Koios limit).
+   * @param txHashes array of transaction hashes
+   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
+   */
+  async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
+    return handleBackendRequest(
+      async () => {
+        const BATCH_SIZE = 100;
+        const result = new Map<string, Transaction>();
+
+        for (let i = 0; i < txHashes.length; i += BATCH_SIZE) {
+          const chunk = txHashes.slice(i, i + BATCH_SIZE);
+          const { data } = await this.api.post('/tx_info', {
+            _tx_hashes: chunk,
+            _inputs: true,
+            _metadata: true,
+            _assets: true,
+            _withdrawals: false,
+            _certs: false,
+            _scripts: false,
+            _bytecode: false,
+          });
+
+          if (data && Array.isArray(data)) {
+            for (const tx of data) {
+              result.set(tx.tx_hash, this._mapKoiosTx(tx));
+            }
+          }
+        }
+        return result;
+      },
+      this.name
+    );
+  }
+
+  //-----------------------------------------------------------------------------
+  // Private Helpers
+  //-----------------------------------------------------------------------------
+
+  /**
+   * Map a Koios /tx_info response object to the normalized Transaction type.
+   */
+  private _mapKoiosTx(tx: any): Transaction {
+    let labels: MetadataLabelTx[] = [];
+
+    if (tx.metadata) {
+      labels = Object.entries(tx.metadata).map(
+        ([label, json]) => ({
+          txHash: tx.tx_hash,
+          label: +label,
+          json: json as JSONValue,
+        }));
+    }
+
+    return {
+      hash: tx.tx_hash,
+      blockHash: tx.block_hash,
+      blockHeight: Number(tx.block_height),
+      blockTime: tx.tx_timestamp ?? tx.block_time,
+      slot: tx.absolute_slot ?? tx.slot_no,
+      index: tx.tx_index,
+      fee: tx.tx_fee || '0',
+      deposit: tx.deposit || '0',
+      size: tx.tx_size,
+      inputs: tx.inputs.map((input: any) => {
+        const amount: Amount[] = [
+          { unit: 'lovelace', quantity: input.value }
+        ];
+        if (input.asset_list && Array.isArray(input.asset_list)) {
+          for (const asset of input.asset_list) {
+            amount.push({
+              unit: `${asset.policy_id}${asset.asset_name}`,
+              quantity: asset.quantity
+            });
+          }
+        }
+        return {
+          address: input.payment_addr?.bech32 || input.address,
+          txHash: input.tx_hash,
+          outputIndex: input.tx_index,
+          amount: amount,
+          dataHash: input.datum_hash || null,
+          inlineDatum: input.inline_datum || null,
+          referenceScriptHash: input.reference_script || null,
+        };
+      }),
+      outputs: tx.outputs.map((output: any) => {
+        const amount: Amount[] = [
+          { unit: 'lovelace', quantity: output.value }
+        ];
+        if (output.asset_list && Array.isArray(output.asset_list)) {
+          for (const asset of output.asset_list) {
+            amount.push({
+              unit: `${asset.policy_id}${asset.asset_name}`,
+              quantity: asset.quantity
+            });
+          }
+        }
+        return {
+          address: output.payment_addr?.bech32 || output.address,
+          amount: amount,
+          txHash: tx.tx_hash,
+          outputIndex: output.tx_index,
+          dataHash: output.datum_hash || null,
+          inlineDatum: output.inline_datum || null,
+          isCollateral: false,
+          referenceScriptHash: output.reference_script || null,
+        };
+      }),
+      metadata: labels
+    };
   }
 }
