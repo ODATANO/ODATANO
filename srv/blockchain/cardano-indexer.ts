@@ -267,16 +267,24 @@ export class CardanoIndexer {
     const batchFetched = await this.ensureTransactionsIndexed(tx, txHashes);
 
     // For address-transaction mapping we need full provider tx data (inputs/outputs for net amounts).
-    // Transactions already in DB were not re-fetched. For those, fetch individually (coalesced).
+    // Transactions already in DB were not re-fetched — batch-fetch those separately.
     const allTxData: ProviderTransaction[] = [];
+    const missingFromBatch: string[] = [];
+
     for (const hash of txHashes) {
       const fromBatch = batchFetched.get(hash);
       if (fromBatch) {
         allTxData.push(fromBatch);
       } else {
-        // Already in DB — fetch from backend (coalesced, likely cached by RequestCoalescer)
-        const providerTx = await this.client.getTransaction(hash);
-        allTxData.push(providerTx);
+        missingFromBatch.push(hash);
+      }
+    }
+
+    if (missingFromBatch.length > 0) {
+      const fetched = await this.client.getTransactionsBatch(missingFromBatch);
+      for (const hash of missingFromBatch) {
+        const providerTx = fetched.get(hash);
+        if (providerTx) allTxData.push(providerTx);
       }
     }
 

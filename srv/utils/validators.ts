@@ -351,6 +351,18 @@ export function validateTransactionInputs(
     });
   }
 
+  // Validate lovelaceAmount is a positive integer
+  if (inputs.lovelaceAmount !== undefined && inputs.lovelaceAmount !== null) {
+    const amount = Number(inputs.lovelaceAmount);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      errors.push({
+        type: 'invalid',
+        field: 'lovelaceAmount',
+        message: 'lovelaceAmount must be a positive integer'
+      });
+    }
+  }
+
   // Validate CBOR format and size (max 32K hex chars = 16KB binary)
   const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {

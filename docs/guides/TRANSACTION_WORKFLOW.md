@@ -130,7 +130,7 @@ When an HSM is configured, ODATANO supports automated server-side signing. The p
 HSM_ENABLED=true
 HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
 HSM_SLOT=0
-HSM_PIN=0001password
+HSM_PIN=                      # Set via credential store in production
 HSM_KEY_LABEL=cardano-signing-key
 ```
 

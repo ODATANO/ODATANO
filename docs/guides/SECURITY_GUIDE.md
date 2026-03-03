@@ -77,38 +77,24 @@ ODATANO uses SAP BTP's XSUAA for production authentication. In development, auth
 
 ```json
 {
-  "xsappname": "odatano",
-  "tenant-mode": "dedicated",
   "scopes": [
-    { "name": "$XSAPPNAME.BlockchainRead", "description": "Read blockchain data" },
-    { "name": "$XSAPPNAME.TransactionBuild", "description": "Build unsigned transactions" },
-    { "name": "$XSAPPNAME.TransactionSubmit", "description": "Submit signed transactions" },
-    { "name": "$XSAPPNAME.SigningManage", "description": "Create/manage signing requests" },
-    { "name": "$XSAPPNAME.Admin", "description": "Full administrative access" }
+    { "name": "$XSAPPNAME.Read", "description": "Read Cardano blockchain data" },
+    { "name": "$XSAPPNAME.Transact", "description": "Build and submit Cardano transactions" },
+    { "name": "$XSAPPNAME.Sign", "description": "Sign transactions and manage HSM" }
   ],
   "role-templates": [
     {
-      "name": "BlockchainViewer",
-      "description": "Read-only access",
-      "scope-references": ["$XSAPPNAME.BlockchainRead"]
+      "name": "CardanoReader",
+      "description": "Read Cardano blockchain data",
+      "scope-references": ["$XSAPPNAME.Read"]
     },
     {
-      "name": "TransactionOperator",
-      "description": "Build and submit transactions",
-      "scope-references": [
-        "$XSAPPNAME.BlockchainRead", "$XSAPPNAME.TransactionBuild",
-        "$XSAPPNAME.TransactionSubmit", "$XSAPPNAME.SigningManage"
-      ]
-    },
-    {
-      "name": "Administrator",
-      "description": "Full access",
-      "scope-references": [
-        "$XSAPPNAME.BlockchainRead", "$XSAPPNAME.TransactionBuild",
-        "$XSAPPNAME.TransactionSubmit", "$XSAPPNAME.SigningManage", "$XSAPPNAME.Admin"
-      ]
+      "name": "CardanoUser",
+      "description": "Full access to Cardano services",
+      "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
     }
-  ]
+  ],
+  "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
 ```
 
@@ -127,30 +113,27 @@ SAP CAP provides declarative authorization via `@requires` annotations in CDS.
 
 ### CDS Annotations
 
+All three services require an authenticated user at the service level:
+
 ```cds
-// Read-only service — single scope
-service CardanoODataService @(requires: 'BlockchainRead') { ... }
+@requires: 'authenticated-user'
+service CardanoODataService { ... }
 
-// Transaction service — fine-grained per action
-service CardanoTransactionService {
-    action BuildSimpleAdaTransaction(...)      @(requires: 'TransactionBuild');
-    action SubmitTransaction(...)              @(requires: 'TransactionSubmit');
-}
+@requires: 'authenticated-user'
+service CardanoTransactionService { ... }
 
-// Sign service — signing workflow actions
-service CardanoSignService {
-    action CreateSigningRequest(...)           @(requires: 'SigningManage');
-    action VerifySignature(...)                @(requires: 'SigningManage');
-}
+@requires: 'authenticated-user'
+service CardanoSignService { ... }
 ```
+
+The `@requires: 'authenticated-user'` annotation ensures that every request must carry a valid JWT. The scopes (`Read`, `Transact`, `Sign`) in `xs-security.json` can be used for AppRouter-level route protection if needed.
 
 ### BTP Role Collections
 
 | Role Collection | Role Template | Intended Users |
 |-----------------|---------------|----------------|
-| ODATANO Viewer | BlockchainViewer | Analysts, dashboards, monitoring |
-| ODATANO Operator | TransactionOperator | Application backends, dApp frontends |
-| ODATANO Admin | Administrator | Platform administrators |
+| ODATANO Reader | CardanoReader | Analysts, dashboards, monitoring |
+| ODATANO User | CardanoUser | Application backends, dApp frontends, operators |
 
 Create role collections in the SAP BTP Cockpit and assign them to users.
 
@@ -263,7 +246,7 @@ ODATANO supports server-side signing via PKCS#11-compatible HSMs.
 HSM_ENABLED=true
 HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
 HSM_SLOT=0
-HSM_PIN=0001password          # Use credential store in production!
+HSM_PIN=                      # Set via credential store in production
 HSM_KEY_LABEL=cardano-signing-key
 HSM_KEY_ID=0x0001
 ```

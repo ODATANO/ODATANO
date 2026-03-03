@@ -336,18 +336,24 @@ this.on('GetTransactionByHash', async (req: Request) => {
 ### 2. Input Validators (srv/utils/validators.ts)
 
 ```typescript
-// Transaction hash: 64 hex characters
-export const isTxHash = (s: string): boolean => /^[a-fA-F0-9]{64}$/.test(s);
+// Transaction hash: 64 lowercase hex characters
+export function isTxHash(s: unknown): s is string {
+    return typeof s === "string" && TX_HASH_REGEX.test(s);   // /^[a-f0-9]{64}$/
+}
 
-// Bech32 address validation
-export const isBech32Address = (s: string): boolean =>
-    /^(addr1|stake1|addr_test1|stake_test1)[0-9a-z]+$/.test(s);
+// Block hash: separate regex (HEX_64_REGEX) for semantic clarity
+export function isBlockHash(s: unknown): s is string {
+    return typeof s === "string" && HEX_64_REGEX.test(s);    // /^[a-f0-9]{64}$/
+}
 
-// Policy ID: 56 hex characters
-export const isPolicyId = (s: string): boolean => /^[a-fA-F0-9]{56}$/.test(s);
+// Bech32 address validation (network-aware)
+export function isValidBech32Address(s: unknown): s is string { ... }
+
+// Bech32 stake address validation
+export function isValidBech32StakeAddress(s: unknown): s is string { ... }
 ```
 
-**Usage:** Always validate input BEFORE blockchain calls to prevent unnecessary API requests.
+**Usage:** Always validate input BEFORE `handleRequest()` to prevent unnecessary API requests. Prefix reject calls with `return`.
 
 ### 3. Error Hierarchy (srv/utils/errors.ts)
 
@@ -410,7 +416,7 @@ getCardanoClient(): CardanoClient
 
 // Test utilities
 createTestContext(backends, txBuilderName?, protocolParams?): Promise<AppContext>
-resetAppContext(context: AppContext | null): void
+resetAppContext(context: AppContext | null): void  // Throws if NODE_ENV=production
 shutdownAppContext(): Promise<void>
 ```
 

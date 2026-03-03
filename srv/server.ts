@@ -226,8 +226,14 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   if (primaryTimeout && isNaN(Number(primaryTimeout))) {
     throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
   }
+  if (primaryTimeout && Number(primaryTimeout) <= 0) {
+    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
+  }
   if (fallbackTimeout && isNaN(Number(fallbackTimeout))) {
     throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
+  }
+  if (fallbackTimeout && Number(fallbackTimeout) <= 0) {
+    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
   }
 
   const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';

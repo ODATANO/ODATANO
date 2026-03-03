@@ -284,7 +284,7 @@ module.exports = (srv: cds.Service) => {
     const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressTransactions).where({ address }).limit(txLimit));
+      const existing = await db.run(SELECT.from(AddressTransactions).where({ address_address: address }).limit(txLimit));
       if (!existing || existing.length === 0) {
         return indexer().indexAddressTransactions(db, address, txLimit);
       }

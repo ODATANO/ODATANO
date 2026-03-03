@@ -44,21 +44,17 @@ module.exports = (srv: cds.Service) => {
   } = require('#cds-models/CardanoSignService');
 
   /**
-   * before-READ handler for SigningRequests: lazy expiration check
-   * Updates status to 'expired' if expiresAt has passed (for pending requests)
+   * before-READ handler for SigningRequests: bulk expiration check
+   * Atomically expires all pending requests past their TTL (handles both single and collection reads)
    */
-  srv.before('READ', SigningRequests, async (req: Request) => {
-    // Expiration check runs on single-entity reads (where ID is provided)
-    if (req.params && req.params.length > 0) {
-      const { id } = req.params[0] as { id: string };
-      if (id) {
-        const db = await cds.connect.to('db');
-        const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id }));
-        if (signingRequest && signingRequest.status === 'pending') {
-          await checkAndExpireSigningRequest(db, signingRequest, SigningRequests);
-        }
-      }
-    }
+  srv.before('READ', SigningRequests, async () => {
+    const db = await cds.connect.to('db');
+    const now = new Date().toISOString();
+    await db.run(
+      UPDATE.entity(SigningRequests)
+        .set({ status: 'expired' })
+        .where({ status: 'pending', expiresAt: { '<=': now } })
+    );
   });
 
 

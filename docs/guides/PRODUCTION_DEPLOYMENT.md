@@ -171,12 +171,15 @@ resources:
 ```json
 {
   "scopes": [
-    { "name": "$XSAPPNAME.Read", "description": "Read access to Cardano OData service" }
+    { "name": "$XSAPPNAME.Read", "description": "Read Cardano blockchain data" },
+    { "name": "$XSAPPNAME.Transact", "description": "Build and submit Cardano transactions" },
+    { "name": "$XSAPPNAME.Sign", "description": "Sign transactions and manage HSM" }
   ],
   "role-templates": [
-    { "name": "CardanoReader", "description": "Read Cardano blockchain data", "scope-references": ["$XSAPPNAME.Read"] }
+    { "name": "CardanoReader", "description": "Read Cardano blockchain data", "scope-references": ["$XSAPPNAME.Read"] },
+    { "name": "CardanoUser", "description": "Full access to Cardano services", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"] }
   ],
-  "authorities": ["$XSAPPNAME.Read"]
+  "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
 ```
 
