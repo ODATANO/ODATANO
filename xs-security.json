@@ -9,7 +9,15 @@
     },
     {
       "name": "$XSAPPNAME.Read",
-      "description": "Read access to Cardano OData service"
+      "description": "Read Cardano blockchain data"
+    },
+    {
+      "name": "$XSAPPNAME.Transact",
+      "description": "Build and submit Cardano transactions"
+    },
+    {
+      "name": "$XSAPPNAME.Sign",
+      "description": "Sign transactions and manage HSM"
     }
   ],
   "attributes": [],
@@ -18,7 +26,12 @@
       "name": "CardanoReader",
       "description": "Read Cardano blockchain data",
       "scope-references": ["$XSAPPNAME.Read"]
+    },
+    {
+      "name": "CardanoUser",
+      "description": "Full access to Cardano services",
+      "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
     }
   ],
-  "authorities": ["$XSAPPNAME.Read"]
+  "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }

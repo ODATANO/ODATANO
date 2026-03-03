@@ -190,7 +190,7 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const txMetadata = await this.api.txsMetadata(tx_hash);
 
-        if (txMetadata === null || txMetadata.length === 0) {
+        if (!txMetadata || txMetadata.length === 0) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
 

@@ -8,6 +8,7 @@ using { Blake2b256, Bech32 } from '../db/types';
  * - Retrieving network information, blocks, epochs, pools, dreps, transactions, accounts, addresses, UTxOs, assets, and metadata
  * - Providing actions for fetching specific data by identifiers (hashes, addresses, etc.) and for retrieving the latest blockchain state (latest block, epoch, protocol parameters)
  */
+@requires: 'authenticated-user'
 service CardanoODataService @(impl: './cardano-service') {
 
     // ---------------------------------------------------------------------------

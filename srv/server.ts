@@ -36,7 +36,7 @@ async function initializeAppContext(
   protocolParams?: LedgerProtocolParameters,
   hsmConfig?: HsmConfig,
 ): Promise<AppContext> {
-  logger.info('Initializing blockchain components...');
+  logger.debug('Initializing blockchain components...');
 
   // Create CardanoClient from configuration
   const cardanoClient = new CardanoClient(config);
@@ -54,7 +54,7 @@ async function initializeAppContext(
       const hsmSigner = new HsmSigner(hsmConfig);
       await hsmSigner.init(config.network);
       setHsmSigner(hsmSigner);
-      logger.info('HSM signer initialized');
+      logger.debug('HSM signer initialized');
     } catch (err) {
       logger.error('Failed to initialize HSM signer:', err);
       setHsmSigner(null);
@@ -119,6 +119,9 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
  * Allows tests to inject their own instances
  */
 export function resetAppContext(context: AppContext | null): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('resetAppContext() is not available in production');
+  }
   appContext = context;
   logger.debug('Application context reset');
 }
@@ -140,22 +143,23 @@ export async function createTestContext(
   const previousTxBuilders = env.TX_BUILDERS;
   env.TX_BUILDERS = txBuilderName;
 
-  const config: CardanoClientConfig = {
-    network: (env.NETWORK as Network) || 'preview',
-    backends,
-    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-    koiosApiKey: env.KOIOS_API_KEY || '',
-    ogmiosUrl: env.OGMIOS_URL || '',
-    transactionBuilders: [txBuilderName],
-    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
-    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
-  };
+  try {
+    const config: CardanoClientConfig = {
+      network: (env.NETWORK as Network) || 'preview',
+      backends,
+      blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+      koiosApiKey: env.KOIOS_API_KEY || '',
+      ogmiosUrl: env.OGMIOS_URL || '',
+      transactionBuilders: [txBuilderName],
+      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
+      fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+      indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+    };
 
-  const context = await initializeAppContext(config, protocolParams);
-  // Restore env to avoid polluting parallel tests
-  env.TX_BUILDERS = previousTxBuilders;
-  return context;
+    return await initializeAppContext(config, protocolParams);
+  } finally {
+    env.TX_BUILDERS = previousTxBuilders;
+  }
 }
 
 /**
@@ -171,7 +175,7 @@ export async function shutdownAppContext(): Promise<void> {
     if (hsm) {
       hsm.shutdown();
       setHsmSigner(null);
-      logger.info('HSM signer shutdown');
+      logger.debug('HSM signer shutdown');
     }
 
     await appContext.cardanoClient.shutdown();
@@ -216,8 +220,8 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   }
   const txBuilders = txBuilderStrings as TransactionBuilderName[];
 
-  const primaryTimeout = cdsConfig.primaryTimeoutMs || env.PRIMARY_TIMEOUT_MS;
-  const fallbackTimeout = cdsConfig.fallbackTimeoutMs || env.FALLBACK_TIMEOUT_MS;
+  const primaryTimeout = cdsConfig.primaryTimeoutMs ?? env.PRIMARY_TIMEOUT_MS;
+  const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;
 
   if (primaryTimeout && isNaN(Number(primaryTimeout))) {
     throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);

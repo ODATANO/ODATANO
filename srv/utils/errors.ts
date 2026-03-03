@@ -278,16 +278,18 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
   return 'Unknown error';
 }
 
-/** 
+/**
  * Normalizes any backend error into a typed BackendError
- * 
- * Priority:
- * 1. Check message for "not found" → 404 (even if provider returns 5xx)
- * 2. Check HTTP status 429 or rate limit messages → 429
- * 3. Check HTTP status 404 → 404
- * 4. Check HTTP status 5xx → 503 (retry-able)
- * 5. Check HTTP status 4xx → 404 if "not found", otherwise 503
- * 6. Unknown/network errors → 503
+ *
+ * Priority (checked in order):
+ * 1. TX Submission — Already submitted/duplicate → 409
+ * 2. TX Submission — Validation/Signature errors → 400
+ * 3. Message indicates "not found" → 404 (even if provider returns 5xx)
+ * 4. Rate limiting (status 429 or message patterns) → 429
+ * 5. Explicit 404 status → 404
+ * 6. 5xx errors → 503 (Provider unavailable, retry-able)
+ * 7. Other 4xx → 503
+ * 8. Unknown/network errors → 503 (default fallback)
  */
 export function normalizeBackendError(
   err: any,

@@ -45,6 +45,11 @@ export const EXECUTION_UNIT_BUFFER = 1.1;
 export const  WITNESS_BUFFER_BYTES =  50;
 
 
+/** Collateral amount in lovelace (5 ADA) */
+export const COLLATERAL_LOVELACE = 5_000_000n;
+/** Fee buffer in lovelace (1 ADA) */
+export const FEE_BUFFER_LOVELACE = 1_000_000n;
+
 export const HRP = {
   mainnet: { addr: /^addr1[0-9a-z]{50,100}$/, stake: /^stake1[0-9a-z]{53,}$/ },
   preview: { addr: /^addr_test1[0-9a-z]{50,100}$/, stake: /^stake_test1[0-9a-z]{53,}$/ },

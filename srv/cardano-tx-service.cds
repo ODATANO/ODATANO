@@ -9,6 +9,7 @@ using {Bech32, Lovelace} from '../db/types';
  * Separate from the read-only CardanoODataService to provide
  * clear separation between general query and command operations.
  */
+@requires: 'authenticated-user'
 service CardanoTransactionService @(impl: './cardano-tx-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections - Transaction Building & Submission

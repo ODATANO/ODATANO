@@ -4,10 +4,6 @@
  * When multiple callers request the same key simultaneously (e.g., same txHash
  * during parallel address indexing), only one backend call is made. All callers
  * receive the same Promise/result.
- *
- * Unlike Facebook's DataLoader (tick-based batching), this coalesces identical
- * in-flight requests — appropriate because our indexer already knows all keys
- * upfront and the actual batching happens at the backend layer.
  */
 export class RequestCoalescer<T> {
   private pending = new Map<string, Promise<T>>();

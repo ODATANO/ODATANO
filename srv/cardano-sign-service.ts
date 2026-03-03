@@ -17,8 +17,13 @@ const logger = cds.log('CardanoSignService');
 async function checkAndExpireSigningRequest(
   db: any, signingRequest: any, SigningRequests: any
 ): Promise<boolean> {
-  if (new Date(signingRequest.expiresAt) < new Date()) {
-    await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequest.id }));
+  const now = new Date().toISOString();
+  const result = await db.run(
+    UPDATE.entity(SigningRequests)
+      .set({ status: 'expired' })
+      .where({ id: signingRequest.id, expiresAt: { '<=': now } })
+  );
+  if (result > 0) {
     signingRequest.status = 'expired';
     return true;
   }

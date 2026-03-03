@@ -105,20 +105,18 @@ module.exports = (srv: cds.Service) => {
   // Network Information (singleton - no key field)
   // ---------------------------------------------------------------------------
 
+  async function fetchNetworkInformation(db: any) {
+    const existing = await db.run(SELECT.one.from(NetworkInformation));
+    if (!existing) return await indexer().indexNetworkInformation(db);
+    return existing;
+  }
+
   srv.on('READ', NetworkInformation, async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(NetworkInformation));
-      if (!existing) return await indexer().indexNetworkInformation(db);
-      return existing;
-    });
+    return handleRequest(req, fetchNetworkInformation);
   });
 
   srv.on('GetNetworkInformation', async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(NetworkInformation));
-      if (!existing) return await indexer().indexNetworkInformation(db);
-      return existing;
-    });
+    return handleRequest(req, fetchNetworkInformation);
   });
 
   // ---------------------------------------------------------------------------

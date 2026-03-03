@@ -351,12 +351,19 @@ export function validateTransactionInputs(
     });
   }
 
-  // Validate CBOR format
+  // Validate CBOR format and size (max 32K hex chars = 16KB binary)
+  const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
     errors.push({
       type: 'invalid',
       field: 'signedTxCbor',
       message: 'Invalid signedTxCbor format'
+    });
+  } else if (inputs.signedTxCbor && typeof inputs.signedTxCbor === 'string' && inputs.signedTxCbor.length > MAX_CBOR_HEX_LENGTH) {
+    errors.push({
+      type: 'invalid',
+      field: 'signedTxCbor',
+      message: `signedTxCbor exceeds maximum size of ${MAX_CBOR_HEX_LENGTH} hex characters`
     });
   }
 

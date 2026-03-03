@@ -24,7 +24,7 @@ export class CardanoTransactionBuilder {
      */
     constructor(client: CardanoClient) {
         this.client = client;
-        logger.info('CardanoTransactionBuilder instance created');
+        logger.debug('CardanoTransactionBuilder instance created');
     }
 
     /**
@@ -37,7 +37,7 @@ export class CardanoTransactionBuilder {
         this.txBuilder = TxBuilderRegistry.createDefault();
         await this.txBuilder.init(this.client, protocolParams);
         this.initialized = true;
-        logger.info(`Initialized with builder: ${this.txBuilder.name}`);
+        logger.debug(`Initialized with builder: ${this.txBuilder.name}`);
     }
 
     /**
@@ -84,11 +84,11 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
-        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transfer transaction
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
-        logger.info(`Built simple ADA transaction successfully.`);
+        logger.debug(`Built simple ADA transaction successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }
@@ -107,10 +107,10 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
-        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transaction with metadata
         const txBuildResult = await builder.buildUnsignedTransactionWithMetadata(req, txContext);
-        logger.info(`Built transaction with metadata successfully.`);
+        logger.debug(`Built transaction with metadata successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }
@@ -133,11 +133,11 @@ export class CardanoTransactionBuilder {
             utxos: await this._fetchUtxosForAddress(req.senderAddress),
             protocolParameters: protocolParameters
         };
-        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
         // Build the unsigned transfer transaction (unified with simple ADA transfer)
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
-        logger.info(`Built multi-asset transaction successfully.`);
+        logger.debug(`Built multi-asset transaction successfully.`);
         return txBuildResult;
     }
 
@@ -171,18 +171,18 @@ export class CardanoTransactionBuilder {
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
-        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
 
         if (txContext.evaluateTransaction) {
-            logger.info(`Ogmios available - will use dynamic script evaluation`);
+            logger.debug(`Ogmios available - will use dynamic script evaluation`);
         } else {
-            logger.info(`Ogmios not available - using default execution units`);
+            logger.debug(`Ogmios not available - using default execution units`);
         }
 
         // Build the unsigned minting transaction
         const txBuildResult = await builder.buildUnsignedMintTransaction(mintReq, txContext);
 
-        logger.info(`Built minting transaction successfully.`);
+        logger.debug(`Built minting transaction successfully.`);
         // Return the transaction build result
         return txBuildResult;
     }
@@ -220,7 +220,7 @@ export class CardanoTransactionBuilder {
             // Fetch script UTxO via transaction lookup - the backend needs to provide it
             // For now, we create a minimal UTxO entry from what we know
             // The actual UTxO data will be resolved by the backend during tx building
-            logger.info(`Script UTxO ${scriptRef.txHash}#${scriptRef.outputIndex} not in sender UTxOs - fetching from backend`);
+            logger.debug(`Script UTxO ${scriptRef.txHash}#${scriptRef.outputIndex} not in sender UTxOs - fetching from backend`);
             const tx = await cardanoClient.getTransaction(scriptRef.txHash);
             const scriptOutput = tx.outputs?.find(o => o.outputIndex === scriptRef.outputIndex);
             if (!scriptOutput) {
@@ -242,17 +242,17 @@ export class CardanoTransactionBuilder {
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
-        logger.info(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script)`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script)`);
 
         if (txContext.evaluateTransaction) {
-            logger.info(`Ogmios available - will use dynamic script evaluation`);
+            logger.debug(`Ogmios available - will use dynamic script evaluation`);
         } else {
-            logger.info(`Ogmios not available - using default execution units`);
+            logger.debug(`Ogmios not available - using default execution units`);
         }
 
         const txBuildResult = await builder.buildUnsignedPlutusSpendTransaction(spendReq, txContext);
 
-        logger.info(`Built Plutus spending transaction successfully.`);
+        logger.debug(`Built Plutus spending transaction successfully.`);
         return txBuildResult;
     }
 
@@ -264,7 +264,7 @@ export class CardanoTransactionBuilder {
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
         logger.debug(`Fetching UTxOs for address: ${address}`);
         const utxos = await this.client.getAddressUtxos(address);
-        logger.info(`Found ${utxos.length} UTxOs for address ${address.substring(0, 20)}...`);
+        logger.debug(`Found ${utxos.length} UTxOs for address ${address.substring(0, 20)}...`);
         if (utxos.length === 0) {
             throw new InsufficientFundsError(
                 'lovelace',

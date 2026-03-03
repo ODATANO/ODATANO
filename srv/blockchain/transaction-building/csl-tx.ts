@@ -6,7 +6,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
-import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER } from '../../utils/const';
+import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, COLLATERAL_LOVELACE } from '../../utils/const';
 import { toCostModelArrV3, costModelsToLanguageViewCbor } from '@harmoniclabs/cardano-costmodels-ts';
 
 const logger = cds.log('CSLTxBuilder');
@@ -178,7 +178,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // We still add inputs explicitly (not via add_inputs_from) because CSL does not
     // properly forward native tokens from selected inputs to the change output
     // during Plutus minting transactions, causing ValueNotConservedUTxO.
-    const requiredLovelace = BigInt(req.lovelaceAmount) + 5_000_000n; // output + buffer for fee + min change
+    const requiredLovelace = BigInt(req.lovelaceAmount) + COLLATERAL_LOVELACE; // output + buffer for fee + min change
     const selectedFundingUtxos = this._selectMinimalUtxos(fundingUtxos, requiredLovelace);
     logger.debug(`Coin selection: ${selectedFundingUtxos.length}/${fundingUtxos.length} UTxOs selected for CSL mint`);
 

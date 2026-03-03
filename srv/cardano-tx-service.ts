@@ -6,7 +6,7 @@ import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/t
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
-import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH } from './utils/const';
+import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE } from './utils/const';
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -16,7 +16,7 @@ const logger = cds.log('CardanoTxService');
  * Handles transaction building and submission operations & some additional data queries.
  */
 module.exports = (srv: cds.Service) => {
-  logger.info('Module loaded - registering handlers');
+  logger.debug('Module loaded - registering handlers');
 
   const {
     TransactionBuilds,
@@ -71,7 +71,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
+      logger.debug({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
 
       return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
     });
@@ -96,7 +96,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
         'Building transaction with metadata'
       );
@@ -128,7 +128,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets, hasDatum: !!outputDatumJson },
         'Building multi-asset transaction'
       );
@@ -148,7 +148,7 @@ module.exports = (srv: cds.Service) => {
 
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
-      logger.info({ result }, 'Multi-asset transaction build result');
+      logger.debug({ result }, 'Multi-asset transaction build result');
       return result;
     });
   });
@@ -177,7 +177,11 @@ module.exports = (srv: cds.Service) => {
       if (!/^-?\d+$/.test(action.quantity)) {
         rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
       }
-      return { ...action, quantity: BigInt(action.quantity) };
+      try {
+        return { ...action, quantity: BigInt(action.quantity) };
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}" — cannot parse as integer`, 'mintActionsJson');
+      }
     });
 
     // Parse and validate optional requiredSignersJson
@@ -233,7 +237,7 @@ module.exports = (srv: cds.Service) => {
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
         'Building minting transaction'
       );
@@ -265,7 +269,7 @@ module.exports = (srv: cds.Service) => {
         if (lockOnScript) {
           const scriptAddr = scriptHashToEnterpriseAddress(appliedPolicyId, getCardanoClient().network);
           cleanData.recipientAddress = scriptAddr;
-          logger.info({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
+          logger.debug({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
         }
       }
 
@@ -375,7 +379,7 @@ module.exports = (srv: cds.Service) => {
     }
 
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
         'Building Plutus spending transaction'
       );
@@ -412,7 +416,7 @@ module.exports = (srv: cds.Service) => {
         const derivedScriptHash = appliedScript.hash.toString();
         const scriptAddr = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
         cleanData.recipientAddress = scriptAddr;
-        logger.info({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
+        logger.debug({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
       }
 
       const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
@@ -463,9 +467,6 @@ module.exports = (srv: cds.Service) => {
       return req.reject(400, 'SetCollateral: Invalid or missing Bech32 address');
     }
 
-    const COLLATERAL_LOVELACE = 5_000_000n;
-    const FEE_BUFFER_LOVELACE = 1_000_000n;
-
     // Fetch UTxOs and validate before entering handleRequest (req.reject inside handleRequest gets wrapped as 500)
     const utxos = await getCardanoClient().getAddressUtxos(address);
 
@@ -486,7 +487,7 @@ module.exports = (srv: cds.Service) => {
     }
 
     // Build self-send transaction: address → address, 5 ADA
-    logger.info({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
+    logger.debug({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
     return handleRequest(req, async (db) => {
       return await getCardanoIndexer().indexSimpleBuildResult(db, {
         network: getCardanoClient().network,
@@ -543,7 +544,7 @@ module.exports = (srv: cds.Service) => {
           await db.run(DELETE_FROM.from(Addresses).where({ address: addrBuild.address_address }));
           await db.run(DELETE_FROM.from(AddressUTxOs).where({ address_address: addrBuild.address_address }));
           await db.run(DELETE_FROM.from(AddressAssets).where({ address_address: addrBuild.address_address }));
-          logger.info(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
+          logger.debug(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
         }
       } catch (err: any) {
         logger.error({ txHash, error: err.message }, 'Transaction submission failed');
@@ -563,7 +564,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
-    logger.info('SubmitSignedTransaction Action handler called');
+    logger.debug('SubmitSignedTransaction Action handler called');
     const { signedTxCbor } = req.data;
 
     // Validate inputs (includes CBOR format validation)

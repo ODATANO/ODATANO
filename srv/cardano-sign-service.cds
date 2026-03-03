@@ -10,6 +10,7 @@ using {Bech32} from '../db/types';
  * - Submitting verified transactions to the blockchain and tracking submission status
  * - Providing actions for signing with a Hardware Security Module (HSM) and retrieving HSM status
  */
+@requires: 'authenticated-user'
 service CardanoSignService @(impl: './cardano-sign-service') {
 
     // ---------------------------------------------------------------------------

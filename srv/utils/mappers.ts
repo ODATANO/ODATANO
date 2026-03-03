@@ -218,9 +218,7 @@ export function mapTransactionOutputAssets(
  */
 export function mapAddress(address: string, addressData: AddressProviderData, maxAge: number): AddressRow {
   const now = Date.now();
-  // Subtract 2s so validFrom is before CAP's temporal $now (set at transaction start)
-  // This ensures SELECT-after-UPSERT within the same request finds the just-written records
-  const nowIso = new Date(now - 2000).toISOString();
+  const nowIso = new Date(now).toISOString();
   const validToIso = new Date(now + maxAge).toISOString();
   const totalLovelace = Array.isArray(addressData.amount)
     ? (addressData.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0')
@@ -521,9 +519,9 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
 export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[]): TransactionMetadataRow[] {
   const rows: TransactionMetadataRow[] = [];
 
-  for (const [idx, lbl] of providerLabels.entries()) {
+  for (const lbl of providerLabels) {
     rows.push({
-      id: idx,
+      id: Number(lbl.label),
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
       payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
