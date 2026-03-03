@@ -343,9 +343,13 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
         const addressData = await this.api.accountsAddresses(stakeAddress);
-        const addresses = await Promise.all(
-          addressData.map(address => this.getAddress(address.address))
-        );
+        const addresses: Address[] = [];
+        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
+        for (let i = 0; i < addressData.length; i += concurrent) {
+          const chunk = addressData.slice(i, i + concurrent);
+          const chunkResults = await Promise.all(chunk.map(a => this.getAddress(a.address)));
+          addresses.push(...chunkResults);
+        }
         return {
           stakeaddress: accountData.stake_address,
           active: accountData.active,

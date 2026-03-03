@@ -151,7 +151,7 @@ export async function createTestContext(
       koiosApiKey: env.KOIOS_API_KEY || '',
       ogmiosUrl: env.OGMIOS_URL || '',
       transactionBuilders: [txBuilderName],
-      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
+      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
       fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
       indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
     };
@@ -249,9 +249,9 @@ export function loadConfigFromEnv(): CardanoClientConfig {
     koiosApiKey,
     ogmiosUrl,
     transactionBuilders: txBuilders,
-    primaryTimeoutMs: Number(primaryTimeout) || 30000,
+    primaryTimeoutMs: Number(primaryTimeout) || 30000,   // || intentional: NaN (missing config) falls back to default
     fallbackTimeoutMs: Number(fallbackTimeout) || 60000,
-    indexTtlMs: Number(cdsConfig.indexTtlMs || env.INDEX_TTL_MS) || 3600000,
+    indexTtlMs: Number(cdsConfig.indexTtlMs ?? env.INDEX_TTL_MS) || 3600000,
   };
 }
 

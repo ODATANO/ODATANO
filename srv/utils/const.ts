@@ -85,6 +85,11 @@ export const POLICY_ID_HEX_LENGTH = 56;
 export const MIN_FULL_ASSET_UNIT_LENGTH = POLICY_ID_HEX_LENGTH + 1; // 57
 
 /**
+ * Generic 64-character hex string (used for block hashes and other 32-byte hex identifiers)
+ */
+export const HEX_64_REGEX = /^[a-f0-9]{64}$/;
+
+/**
  * Transaction hash Regex - 64-character hexadecimal string
  */
 export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;

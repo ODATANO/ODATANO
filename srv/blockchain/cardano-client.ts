@@ -482,9 +482,12 @@ export class CardanoClient {
 
     // Shutdown live backend if it has a shutdown method
     if (this.liveBackend && 'shutdown' in this.liveBackend && typeof this.liveBackend.shutdown === 'function') {
-    
+      try {
         await this.liveBackend.shutdown();
         logger.debug(`Live backend ${this.liveBackend.name} shut down`);
+      } catch (err) {
+        logger.error(`Error shutting down live backend ${this.liveBackend.name}: ${err}`);
+      }
     }
 
     // Shutdown historical backends

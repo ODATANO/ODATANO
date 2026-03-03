@@ -36,6 +36,7 @@ function indexOnMissRead(
 
     return handleRequest(req, async (db) => {
       if (key) {
+        // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
         const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
         if (!existing) return await indexFn(db, key);
         return existing;
@@ -64,6 +65,7 @@ function indexOnMissAction(
     if (!validate(key)) rejectInvalid(req, actionName, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
+      // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
       const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
       if (!existing) return await indexFn(db, key);
       return existing;

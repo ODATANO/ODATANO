@@ -1,5 +1,5 @@
 import { bech32 } from "bech32";
-import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,ASSET_UNIT_REGEX,
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
   POOL_ID_REGEX, DREP_ID_REGEX, HRP
 } from "./const";
 
@@ -156,7 +156,7 @@ export function isAssetUnit(s: unknown): s is string {
  * @returns { boolean } true if s is a valid block hash false otherwise
  */
 export function isBlockHash(s: unknown): s is string {
-  return typeof s === "string" && TX_HASH_REGEX.test(s);
+  return typeof s === "string" && HEX_64_REGEX.test(s);
 }
 
 /**
