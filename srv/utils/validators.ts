@@ -1,6 +1,6 @@
 import { bech32 } from "bech32";
 import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
-  POOL_ID_REGEX, DREP_ID_REGEX, HRP
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX
 } from "./const";
 
 import { getCardanoClient } from "../server";
@@ -265,6 +265,24 @@ export function isValidCbor(cborRaw: unknown): cborRaw is string {
 }
 
 /**
+ * Validate an array of Ed25519 key hashes (hex, 28 bytes / 56 hex chars each).
+ * @param signers - The parsed JSON array to validate
+ * @returns validated string array
+ * @throws Error if any signer is invalid
+ */
+export function validateRequiredSigners(signers: any[]): string[] {
+  if (!Array.isArray(signers)) {
+    throw new Error('requiredSignersJson must be a JSON array');
+  }
+  for (const signer of signers) {
+    if (typeof signer !== 'string' || !ED25519_KEY_HASH_REGEX.test(signer)) {
+      throw new Error('Invalid Ed25519 key hash: must be 56 hex chars');
+    }
+  }
+  return signers;
+}
+
+/**
  * Validation error details for transaction input validation
  */
 export interface ValidationError {
@@ -351,10 +369,10 @@ export function validateTransactionInputs(
     });
   }
 
-  // Validate lovelaceAmount is a positive integer
+  // Validate lovelaceAmount is a positive integer (string-based to avoid precision loss for large values)
   if (inputs.lovelaceAmount !== undefined && inputs.lovelaceAmount !== null) {
-    const amount = Number(inputs.lovelaceAmount);
-    if (!Number.isInteger(amount) || amount <= 0) {
+    const s = String(inputs.lovelaceAmount);
+    if (!/^\d+$/.test(s) || s === '0') {
       errors.push({
         type: 'invalid',
         field: 'lovelaceAmount',

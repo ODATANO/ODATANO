@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
@@ -401,6 +401,61 @@ describe('tx-build-helper utilities', () => {
       const result2 = applyScriptParameters(validScript, [{ int: 2 }]);
 
       expect(result1).not.toBe(result2);
+    });
+  });
+
+  describe('mapBuilderError', () => {
+    it('should throw InsufficientFundsError for "not enough" messages', () => {
+      expect(() => mapBuilderError(new Error('not enough lovelace'))).toThrow('Insufficient');
+    });
+
+    it('should throw InsufficientFundsError for "insufficient" messages', () => {
+      expect(() => mapBuilderError(new Error('insufficient funds for transaction'))).toThrow('Insufficient');
+    });
+
+    it('should throw InsufficientFundsError for "balance" messages', () => {
+      expect(() => mapBuilderError(new Error('negative balance'))).toThrow('Insufficient');
+    });
+
+    it('should re-throw original error for non-funds errors', () => {
+      const originalError = new Error('network timeout');
+      expect(() => mapBuilderError(originalError)).toThrow(originalError);
+    });
+  });
+
+  describe('parseOptionalJson', () => {
+    it('should return undefined for undefined input', () => {
+      expect(parseOptionalJson(undefined, 'test')).toBeUndefined();
+    });
+
+    it('should parse valid JSON', () => {
+      expect(parseOptionalJson('{"key":"value"}', 'test')).toEqual({ key: 'value' });
+    });
+
+    it('should throw for invalid JSON', () => {
+      expect(() => parseOptionalJson('{bad json', 'myField')).toThrow('myField must be valid JSON');
+    });
+  });
+
+  describe('parseOptionalJsonArray', () => {
+    it('should return undefined for undefined input', () => {
+      expect(parseOptionalJsonArray(undefined, 'test')).toBeUndefined();
+    });
+
+    it('should parse valid JSON array', () => {
+      expect(parseOptionalJsonArray('[1,2,3]', 'test')).toEqual([1, 2, 3]);
+    });
+
+    it('should throw for invalid JSON', () => {
+      expect(() => parseOptionalJsonArray('{bad', 'myField')).toThrow('myField must be valid JSON');
+    });
+
+    it('should throw for non-array JSON', () => {
+      expect(() => parseOptionalJsonArray('"hello"', 'myField')).toThrow('myField must be a JSON array');
+    });
+
+    it('should throw for object JSON (not array)', () => {
+      expect(() => parseOptionalJsonArray('{"a":1}', 'myField')).toThrow('myField must be a JSON array');
     });
   });
 });

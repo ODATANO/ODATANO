@@ -975,5 +975,57 @@ describe('Validator Helper Methods and Type Guards', () => {
         expect(errors).toHaveLength(0);
       });
     });
+
+    describe('lovelaceAmount validation', () => {
+      it('should reject lovelaceAmount of zero', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 0 as any,
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'lovelaceAmount',
+          message: 'lovelaceAmount must be a positive integer',
+        });
+      });
+
+      it('should reject non-numeric lovelaceAmount string', () => {
+        const errors = validateTransactionInputs(
+          {
+            senderAddress: validSenderAddress,
+            recipientAddress: validRecipientAddress,
+            lovelaceAmount: 'abc' as any,
+          },
+          ['senderAddress', 'recipientAddress']
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('lovelaceAmount');
+      });
+    });
+
+    describe('CBOR size validation', () => {
+      it('should reject signedTxCbor exceeding maximum size', () => {
+        // MAX_CBOR_HEX_LENGTH is 65536; create valid hex that exceeds it
+        const oversizedCbor = 'ab'.repeat(33000); // 66000 hex chars > 65536
+        const errors = validateTransactionInputs(
+          { signedTxCbor: oversizedCbor },
+          []
+        );
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toEqual({
+          type: 'invalid',
+          field: 'signedTxCbor',
+          message: 'signedTxCbor exceeds maximum size of 65536 hex characters',
+        });
+      });
+    });
   });
 });

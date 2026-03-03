@@ -190,8 +190,7 @@ module.exports = (srv: cds.Service) => {
           seen.set(asset.unit, asset);
         }
       }
-      const deduped = Array.from(seen.values());
-      return deduped;
+      return Array.from(seen.values());
     });
   });
 
@@ -222,8 +221,7 @@ module.exports = (srv: cds.Service) => {
           seen.set(key, utxo);
         }
       }
-      const deduped = Array.from(seen.values());
-      return deduped;
+      return Array.from(seen.values());
     });
   });
 
@@ -284,11 +282,13 @@ module.exports = (srv: cds.Service) => {
     const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressTransactions).where({ address_address: address }).limit(txLimit));
+      const existing = await db.run(SELECT.from(AddressTransactions).where({ address_address: address }));
       if (!existing || existing.length === 0) {
         return indexer().indexAddressTransactions(db, address, txLimit);
       }
-      return existing;
+      // Sort by blockTime descending and apply limit
+      existing.sort((a: any, b: any) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+      return existing.slice(0, txLimit);
     });
   });
 

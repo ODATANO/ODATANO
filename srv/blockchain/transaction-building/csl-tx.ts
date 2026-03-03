@@ -4,9 +4,10 @@ import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
+import { InsufficientFundsError } from "../../utils/errors";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
-import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, COLLATERAL_LOVELACE } from '../../utils/const';
+import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, COLLATERAL_LOVELACE, MIN_CHANGE_LOVELACE } from '../../utils/const';
 import { toCostModelArrV3, costModelsToLanguageViewCbor } from '@harmoniclabs/cardano-costmodels-ts';
 
 const logger = cds.log('CSLTxBuilder');
@@ -37,6 +38,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    */
   public async buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
+      if (!ctx.utxos || ctx.utxos.length === 0) {
+        throw new InsufficientFundsError('lovelace', BigInt(req.lovelaceAmount || 0), 0n);
+      }
       const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
       const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
       const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
@@ -235,7 +239,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         }
         nativeChangeMA.insert(ph, cslAssets);
       }
-      const nativeChangeValue = CSL.Value.new(CSL.BigNum.from_str('2000000'));
+      const nativeChangeValue = CSL.Value.new(CSL.BigNum.from_str(String(MIN_CHANGE_LOVELACE)));
       nativeChangeValue.set_multiasset(nativeChangeMA);
       txb.add_output(CSL.TransactionOutput.new(changeAddress, nativeChangeValue));
       logger.debug(`Added explicit change output for existing native tokens from funding UTxOs`);
@@ -336,7 +340,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     const { fundingUtxos } = this._setupCollateral(txb, senderUtxos);
 
     // Create output for recipient with multi-assets from the script UTxO
-    const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || 2_000_000)));
+    const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || MIN_CHANGE_LOVELACE)));
     if (scriptNonAdaAssets.length > 0) {
       outputValue.set_multiasset(this._buildCslMultiAsset(scriptNonAdaAssets));
     }

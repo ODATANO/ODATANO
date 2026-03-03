@@ -21,9 +21,15 @@ export class RequestCoalescer<T> {
     const existing = this.pending.get(key);
     if (existing) return existing;
 
-    const promise = fetcher().finally(() => {
-      this.pending.delete(key);
-    });
+    const promise = fetcher()
+      .catch((err: unknown) => {
+        // Clear on error so subsequent callers retry instead of getting cached rejection
+        this.pending.delete(key);
+        throw err;
+      })
+      .finally(() => {
+        this.pending.delete(key);
+      });
 
     this.pending.set(key, promise);
     return promise;

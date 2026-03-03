@@ -1,9 +1,12 @@
+import cds from '@sap/cds';
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
+
+const logger = cds.log('KoiosBackend');
 
 import {
   Transaction,
@@ -648,6 +651,13 @@ export class KoiosBackend implements CardanoBackend {
             }
           }
         }
+
+        // Warn about any missing transactions (requested but not returned by Koios)
+        const missing = txHashes.filter(h => !result.has(h));
+        if (missing.length > 0) {
+          logger.warn({ missing, total: txHashes.length, returned: result.size }, 'getTransactionsBatch: some transactions not found');
+        }
+
         return result;
       },
       this.name

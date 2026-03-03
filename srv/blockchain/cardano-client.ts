@@ -276,7 +276,7 @@ export class CardanoClient {
     methodName: string,
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
-    const config = METHOD_ROUTING[methodName];
+    const config = METHOD_ROUTING[methodName] ?? { preferLive: false };
     return this.executeWithPriority(fn, config.preferLive);
   }
 

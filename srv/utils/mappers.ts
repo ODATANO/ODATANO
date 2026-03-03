@@ -1,6 +1,9 @@
+import cds from '@sap/cds';
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
 import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
+
+const logger = cds.log('mappers');
 import {
   Transaction as TransactionProviderData,
   Address as AddressProviderData,
@@ -55,7 +58,6 @@ import type {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
-import cds from '@sap/cds';
 
 /** 
  * Maximum age for cached/indexed data in milliseconds 
@@ -293,9 +295,9 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   const assetBalances = new Map<string, bigint>(); // unit -> net quantity
 
   // Process inputs belonging to this address (subtract)
-  for (const input of tx.inputs) {
+  for (const input of tx.inputs ?? []) {
     if (input.address === addr) {
-      for (const amount of input.amount) {
+      for (const amount of input.amount ?? []) {
         if (amount.unit === 'lovelace') {
           inputLovelace += BigInt(amount.quantity || '0');
         } else {
@@ -308,9 +310,9 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   }
 
   // Process outputs going to this address (add)
-  for (const output of tx.outputs) {
+  for (const output of tx.outputs ?? []) {
     if (output.address === addr) {
-      for (const amount of output.amount) {
+      for (const amount of output.amount ?? []) {
         if (amount.unit === 'lovelace') {
           outputLovelace += BigInt(amount.quantity || '0');
         } else {
@@ -361,8 +363,9 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
   return addressUtxosData.map((utxo: UtxosProviderData) => {
-    const lovelace = utxo.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0';
-    const hasAssets = Array.isArray(utxo.amount) && utxo.amount.some((a) => a.unit !== 'lovelace');
+    const amounts = Array.isArray(utxo.amount) ? utxo.amount : [];
+    const lovelace = amounts.find((a) => a.unit === 'lovelace')?.quantity ?? '0';
+    const hasAssets = amounts.some((a) => a.unit !== 'lovelace');
 
     return {
       address_address: addr,
@@ -615,8 +618,10 @@ export function mapError(req: Request, err: unknown, ctx: string) {
       );
     }
     // Handle non-BackendError (plain Error, string, etc.)
-    const message = err instanceof Error ? err.message : String(err);
-    return req.reject(500, fmt('INTERNAL_ERROR', ctx, message));
+    // Log full error server-side, but return sanitized message to client
+    const internalMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ error: internalMsg }, `Unexpected error in ${ctx}`);
+    return req.reject(500, fmt('INTERNAL_ERROR', ctx, 'An internal error occurred'));
 }
 
 /** 

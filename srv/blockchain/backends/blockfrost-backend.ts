@@ -245,11 +245,17 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+        const txHashes = address_txs.map(tx => tx.tx_hash);
 
-        const transactions = await Promise.all(address_txs.map(async (tx) => {
-          return this.getTransaction(tx.tx_hash);
-        }));
+        // Batch fetch instead of N+1 individual calls
+        const batchResult = await this.getTransactionsBatch(txHashes);
 
+        // Preserve original order from address_txs
+        const transactions: Transaction[] = [];
+        for (const hash of txHashes) {
+          const tx = batchResult.get(hash);
+          if (tx) transactions.push(tx);
+        }
         return transactions;
       },
       this.name

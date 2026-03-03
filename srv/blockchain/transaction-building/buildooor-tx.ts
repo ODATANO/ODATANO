@@ -3,6 +3,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { TxBuilder, type ITxBuildArgs } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
+import { InsufficientFundsError } from "../../utils/errors";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
 import {
@@ -26,7 +27,7 @@ import {
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 import { DataI, dataFromCbor } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
-import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, WITNESS_BUFFER_BYTES } from '../../utils/const'
+import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, WITNESS_BUFFER_BYTES, MIN_CHANGE_LOVELACE } from '../../utils/const'
 
 const logger = cds.log('BuildooorTxBuilder');
 
@@ -56,6 +57,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   public async buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
+      if (!ctx.utxos || ctx.utxos.length === 0) {
+        throw new InsufficientFundsError('lovelace', BigInt(req.lovelaceAmount || 0), 0n);
+      }
       const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allInputs = ledgerUtxos.map(utxo => ({ utxo }));
 
@@ -201,6 +205,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const redeemerData = jsonToPlutusData(plutusScriptExecution.redeemer);
 
       // Determine datum: "inline" if no datum provided (assumes inline datum on UTxO), otherwise convert
+      if (!plutusScriptExecution.datum) {
+        // When no explicit datum is provided, the UTxO must have an inline datum.
+        // If neither exists, the Plutus validator will fail with a cryptic error.
+        logger.debug('No datumJson provided — expecting inline datum on script UTxO');
+      }
       const datum = plutusScriptExecution.datum
         ? jsonToPlutusData(plutusScriptExecution.datum)
         : "inline" as const;
@@ -228,9 +237,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const scriptNonAdaAssets = scriptOdatanoUtxo.amount.filter(
         a => a.unit.toLowerCase() !== 'lovelace' && BigInt(a.quantity) > 0n
       );
-      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount || MIN_CHANGE_LOVELACE));
       if (scriptNonAdaAssets.length > 0) {
-        outputValue = this._buildLedgerValue(BigInt(req.lovelaceAmount || 2_000_000), scriptOdatanoUtxo.amount);
+        outputValue = this._buildLedgerValue(BigInt(req.lovelaceAmount || MIN_CHANGE_LOVELACE), scriptOdatanoUtxo.amount);
       }
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.inlineDatum)];
 
@@ -240,7 +249,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Coin selection: funding UTxOs only need to cover fee + min change (script UTxO covers the output)
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
-      const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount || 2_000_000));
+      const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount || MIN_CHANGE_LOVELACE));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected for Plutus spend`);
 
@@ -288,7 +297,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     unsignedTxCbor: string; txBodyHash: string; sizeBytes: number;
     feeLovelace: string;
     inputRefs: Array<{ txHash: string; index: number }>;
-    outputDetails: Array<{ address: string; lovelace: string }>;
+    outputs: Array<{ address: string; lovelace: string }>;
   } {
     const unsignedTxBytes = tx.toCbor().toBuffer();
     return {
@@ -300,7 +309,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         txHash: inp.utxoRef.id.toString(),
         index: inp.utxoRef.index
       })),
-      outputDetails: tx.body.outputs.map((o: any) => ({
+      outputs: tx.body.outputs.map((o: any) => ({
         address: o.address?.toString?.() ?? "",
         lovelace: o.value?.lovelaces?.toString?.() ?? "0"
       })),
@@ -332,7 +341,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       sizeBytes: txDetails.sizeBytes,
       feeLovelace: txDetails.feeLovelace,
       inputs,
-      outputs: txDetails.outputDetails,
+      outputs: txDetails.outputs,
       ...extra,
       warnings: [],
     };

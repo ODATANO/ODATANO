@@ -176,6 +176,9 @@ export class CardanoIndexer {
     logger.debug({ addrData }, 'indexAddress: provider response');
 
     const AddrEntity = mapAddress(addr, addrData, this.client.max_age_ms);
+    const now = new Date().toISOString();
+    const validFrom = AddrEntity.validFrom ?? now;
+    const validTo = AddrEntity.validTo ?? now;
 
     await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
@@ -190,12 +193,7 @@ export class CardanoIndexer {
       }
     }
 
-    const assetEntities = mapAddressAssets(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      addrData.amount
-    );
+    const assetEntities = mapAddressAssets(addr, validFrom, validTo, addrData.amount);
 
     logger.debug({ assetEntities }, 'indexAddress: asset entities');
 
@@ -204,12 +202,7 @@ export class CardanoIndexer {
     }
 
     // UTxOs are included in getAddress response
-    const utxoEntities = mapAddressUtxos(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      addrData.utxos
-    );
+    const utxoEntities = mapAddressUtxos(addr, validFrom, validTo, addrData.utxos);
 
     logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
 
@@ -217,11 +210,7 @@ export class CardanoIndexer {
       await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
     }
 
-    const utxoAssetEntities = mapAddressUtxoAssets(
-      addrData.utxos,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString()
-    );
+    const utxoAssetEntities = mapAddressUtxoAssets(addrData.utxos, validFrom, validTo);
     logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
 
     if (utxoAssetEntities.length) {
@@ -305,6 +294,8 @@ export class CardanoIndexer {
       await tx.run(UPSERT.into(AddressTransactions).entries(transactionsEntities));
     }
 
+    // Sort by blockTime descending for consistency with GetLatestTransactionsByAddress
+    transactionsEntities.sort((a: any, b: any) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return transactionsEntities as AddressTransactions[];
   }
 

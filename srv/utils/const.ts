@@ -83,6 +83,12 @@ export const DREP_ID_BYTES = 29;
 export const POLICY_ID_HEX_LENGTH = 56;
 /** Minimum length of a full asset unit (policyId + at least 1 char assetName) */
 export const MIN_FULL_ASSET_UNIT_LENGTH = POLICY_ID_HEX_LENGTH + 1; // 57
+/** Length of a hex-encoded Ed25519 key hash (28 bytes = 56 hex chars) */
+export const ED25519_KEY_HASH_HEX_LENGTH = 56;
+/** Regex for validating Ed25519 key hash hex strings */
+export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
+/** Minimum lovelace for a change output carrying native assets (2 ADA) */
+export const MIN_CHANGE_LOVELACE = 2_000_000;
 
 /**
  * Generic 64-character hex string (used for block hashes and other 32-byte hex identifiers)
