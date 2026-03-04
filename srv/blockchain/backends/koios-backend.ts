@@ -114,6 +114,11 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
+
+        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
+          throw new NotFoundError('Block', this.name);
+        }
+
         const data = blockData.data[0];
 
         return {
@@ -321,6 +326,11 @@ export class KoiosBackend implements CardanoBackend {
         // Fallback for preview/preprod network where /totals doesn't work
         // Use genesis endpoint to get max supply; remaining fields default to '0'
         const { data: genesisData } = await this.api.get('/genesis');
+
+        if (!genesisData || !Array.isArray(genesisData) || genesisData.length === 0) {
+          throw new NotFoundError('Genesis', this.name);
+        }
+
         const genesis = genesisData[0];
         const maxSupply = genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
 
@@ -579,6 +589,11 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
+
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('LatestBlock', this.name);
+        }
+
         return await this.getBlock(data[0].hash);
       },
       this.name
@@ -593,7 +608,11 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.get('/tip');
-        // /tip returns an array, access first element
+
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('LatestEpoch', this.name);
+        }
+
         return this.getEpoch(data[0].epoch_no);
       },
       this.name
