@@ -45,7 +45,7 @@ EXPOSE 4004
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:4004/\$metadata || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:4004/odata/v4/cardano-odata/\$metadata || exit 1
 
 # Start service - serve all CDS files explicitly
 CMD ["node", "node_modules/@sap/cds/bin/serve.js", "srv"]

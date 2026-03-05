@@ -163,6 +163,80 @@ Signing endpoints (`GetHsmStatus`, `GetSigningReqsByAddress`, `CreateSigningRequ
 
 The full signing flow (GetBuildDetails → CreateSigningRequest → GetSigningRequest) completes in ~16ms total, demonstrating efficient state machine transitions without redundant backend calls.
 
+## Backend Comparison: Koios vs Blockfrost
+
+Automated comparison using `scripts/perf-compare.ts` — each backend runs against a clean SQLite database (deleted + redeployed between runs) for fair cold-start measurement. 3 rounds per endpoint, 108 calls per backend.
+
+### Server Startup
+
+| Backend | Startup Time | CAP Version |
+|---------|-------------|-------------|
+| Koios | 6.7s | v9.6.4 |
+| Blockfrost | 6.2s | v9.6.4 |
+
+### Endpoint Comparison (avg ms)
+
+| Endpoint | Koios (ms) | Blockfrost (ms) | Diff |
+|----------|----------:|----------------:|-----:|
+| GetNetworkInformation | 18.4 | 11.5 | -38% |
+| GetLatestBlock | 435.0 | 192.8 | -56% |
+| GetLatestEpoch | 326.9 | 96.7 | -70% |
+| GetLedgerProtocolParameters | 7.9 | 3.8 | -52% |
+| GetBlockByHash | 47.0 | 50.4 | +7% |
+| GetEpochByNumber | 92.6 | 38.9 | -58% |
+| GetPoolById | 279.7 | 60.5 | -78% |
+| GetDrepById | 41.6 | 49.1 | +18% |
+| GetAccountByStakeAddress | 1009.9 | 512.5 | -49% |
+| GetTransactionByHash | 97.5 | 108.6 | +11% |
+| GetMetadataByTxHash | 51.7 | 34.9 | -33% |
+| GetAddressByBech32 | 211.8 | 250.7 | +18% |
+| GetUTxOsByAddress | 3.1 | 2.2 | -29% |
+| GetAssetsByAddress | 2.4 | 2.8 | +14% |
+| GetLatestTransactionsByAddress | 2.3 | 2.0 | -13% |
+| BuildSimpleAdaTransaction | 182.6 | 99.8 | -45% |
+| BuildTxWithMetadata | 169.5 | 93.5 | -45% |
+| BuildMultiAssetTx | 169.8 | 99.0 | -42% |
+| BuildMultiAssetTx+Datum | 157.5 | 98.7 | -37% |
+| BuildMintTransaction | 289.3 | 128.6 | -56% |
+| BuildMintTx+RequiredSigners | 162.4 | 94.0 | -42% |
+| BuildPlutusSpendTx | 343.8 | 402.8 | +17% |
+
+### Category Comparison (avg ms)
+
+| Category | Koios (ms) | Blockfrost (ms) | Diff |
+|----------|----------:|----------------:|-----:|
+| Network | 9.5 | 5.7 | -40% |
+| Block | 161.6 | 82.1 | -49% |
+| Epoch | 140.7 | 45.9 | -67% |
+| Pool | 140.9 | 31.9 | -77% |
+| DRep | 22.3 | 25.9 | +16% |
+| Account | 506.0 | 258.6 | -49% |
+| Transaction | 50.3 | 55.4 | +10% |
+| Metadata | 51.7 | 34.9 | -33% |
+| Address | 44.4 | 51.9 | +17% |
+| TX Build | 156.5 | 109.6 | -30% |
+| Signing | 3.5 | 4.1 | +19% |
+
+### Overall
+
+| Metric | Koios | Blockfrost |
+|--------|------:|-----------:|
+| Avg Response | 121.5ms | 73.6ms |
+| Success Rate | 108/108 | 108/108 |
+| Server Startup | 6.7s | 6.2s |
+| Cold Start Avg | 205.6ms | 130.0ms |
+| Warm Avg | 70.2ms | 40.1ms |
+| Cache Speedup | 66% | 69% |
+
+### Analysis
+
+1. **Blockfrost is ~39% faster overall** (73.6ms vs 121.5ms avg) — primarily due to faster pool, epoch, and block lookups
+2. **Koios wins on address/transaction queries** — GetAddressByBech32 is 18% faster on Koios, and BuildPlutusSpendTx is 17% faster (Koios tx_info endpoint returns more data per call)
+3. **Biggest gap: GetPoolById** — Koios takes 280ms vs Blockfrost's 60ms (-78%)
+4. **Both backends deliver identical cache performance** — warm reads are 2-5ms regardless of backend (SQLite-only)
+5. **Server startup is equivalent** — both ~6-7s (CAP bootstrap dominates, not backend init)
+6. **Both achieve 100% success rate** — all 108 calls succeed on both backends
+
 ## Architecture: How Caching Works
 
 ```
@@ -199,6 +273,8 @@ This confirms that **>95% of cold start time is spent on blockchain backend API 
 
 ## How to Reproduce
 
+### Single Backend Benchmark
+
 ```bash
 # 1. Start the server
 cds watch
@@ -213,5 +289,20 @@ npx tsx scripts/perf-benchmark.ts --output results.json    # Custom output file
 ```
 
 Results are saved to `scripts/perf-results.json` with full per-round data, statistics, and summary.
+
+### Backend Comparison (Automated)
+
+```bash
+# Automatically starts servers with Koios and Blockfrost, benchmarks both,
+# cleans SQLite cache between runs, and outputs a side-by-side comparison.
+# Requires BLOCKFROST_API_KEY and KOIOS_API_KEY in .env
+npx tsx scripts/perf-compare.ts
+
+# Options
+npx tsx scripts/perf-compare.ts --rounds 5         # More rounds for stable averages
+npx tsx scripts/perf-compare.ts --port 4006        # Use different port
+```
+
+Results are saved to `scripts/perf-compare-results.json` with both backend results, startup times, and comparison data.
 
 For detailed per-request tracing, the `@cap-js/telemetry` plugin outputs elapsed times to the server console automatically.

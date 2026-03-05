@@ -537,7 +537,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       const epochSlot = slot % CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
 
       return {
-        time: blockTime, // Already in milliseconds
+        time: Math.floor(blockTime / 1000), // Convert ms to seconds (mapBlock expects seconds)
         height,
         hash,
         slot,

@@ -1,3 +1,7 @@
+// Disable telemetry plugin before any CDS modules load
+// Must be set before @cap-js/telemetry/cds-plugin.js is required
+process.env.NO_TELEMETRY = 'true';
+
 /**
  * Jest Setup File
  * - Set privileged default user so tests pass @requires: 'authenticated-user' without auth headers

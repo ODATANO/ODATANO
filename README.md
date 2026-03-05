@@ -91,7 +91,7 @@ cds watch
 
 ```bash
 git clone https://github.com/ODATANO/ODATANO && cd ODATANO
-cp .env.example .env  # Add your BLOCKFROST_KEY
+cp .env.example .env  # Add your BLOCKFROST_API_KEY
 docker-compose up -d
 ```
 
@@ -102,7 +102,7 @@ Service runs at `http://localhost:4004`
 ```bash
 git clone https://github.com/ODATANO/ODATANO && cd ODATANO
 npm ci
-cp .env.example .env  # Add your BLOCKFROST_KEY
+cp .env.example .env  # Add your BLOCKFROST_API_KEY
 cds deploy --to sqlite
 npm run cds:watch
 ```
