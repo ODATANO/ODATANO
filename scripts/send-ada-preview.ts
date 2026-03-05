@@ -5,6 +5,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 const BUILD_BODY = {
   senderAddress: "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp",
@@ -23,7 +25,7 @@ async function main() {
 
     // Build Transaction
     console.log('\nBuilding Transaction...');
-    const buildResponse = await axios.post(`${ODATA_URL}/BuildSimpleAdaTransaction`, BUILD_BODY);
+    const buildResponse = await axios.post(`${ODATA_URL}/BuildSimpleAdaTransaction`, BUILD_BODY, axiosConfig);
     const buildData = buildResponse.data;
 
     const buildId = buildData.id;
@@ -75,7 +77,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

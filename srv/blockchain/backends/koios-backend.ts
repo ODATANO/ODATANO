@@ -730,7 +730,7 @@ export class KoiosBackend implements CardanoBackend {
           outputIndex: input.tx_index,
           amount: amount,
           dataHash: input.datum_hash || null,
-          inlineDatum: input.inline_datum || null,
+          inlineDatum: this._sanitizeInlineDatum(input.inline_datum),
           referenceScriptHash: input.reference_script || null,
         };
       }),
@@ -752,12 +752,20 @@ export class KoiosBackend implements CardanoBackend {
           txHash: tx.tx_hash,
           outputIndex: output.tx_index,
           dataHash: output.datum_hash || null,
-          inlineDatum: output.inline_datum || null,
+          inlineDatum: this._sanitizeInlineDatum(output.inline_datum),
           isCollateral: false,
           referenceScriptHash: output.reference_script || null,
         };
       }),
       metadata: labels
     };
+  }
+
+  /** Sanitize inline datum from Koios: filter out hollow objects like {"bytes": null, "value": null} */
+  private _sanitizeInlineDatum(datum: any): any {
+    if (!datum || typeof datum !== 'object') return datum || null;
+    const values = Object.values(datum);
+    if (values.length > 0 && values.every(v => v === null)) return null;
+    return datum;
   }
 }

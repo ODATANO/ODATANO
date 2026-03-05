@@ -7,6 +7,10 @@ import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 
+// CAP mock auth: Basic auth with any user (e.g. alice), no password required
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -68,7 +72,8 @@ async function main() {
     console.log('\n[1/3] Building transaction (send ADA to script address with datum)...');
     const buildResponse = await axios.post(
       `${ODATA_URL}/BuildSimpleAdaTransaction`,
-      BUILD_BODY
+      BUILD_BODY,
+      axiosConfig
     );
     const buildData = buildResponse.data;
 
@@ -123,7 +128,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

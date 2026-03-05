@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "^6.0.0",
+    "@cap-js/telemetry": "^1.6.0",
     "@cardano-ogmios/client": "^6.14.0",
     "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@harmoniclabs/buildooor": "^0.1.28",

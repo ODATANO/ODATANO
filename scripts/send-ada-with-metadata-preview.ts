@@ -5,6 +5,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 const METADATA = {
   "674": {
@@ -31,7 +33,7 @@ async function main() {
 
     // Build Transaction with Metadata
     console.log('\nBuilding Transaction with Metadata...');
-    const buildResponse = await axios.post(`${ODATA_URL}/BuildTransactionWithMetadata`, BUILD_BODY);
+    const buildResponse = await axios.post(`${ODATA_URL}/BuildTransactionWithMetadata`, BUILD_BODY, axiosConfig);
     const buildData = buildResponse.data;
 
     const buildId = buildData.id;
@@ -83,7 +85,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

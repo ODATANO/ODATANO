@@ -2,6 +2,8 @@ import axios from 'axios';
 
 const TX_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 const SIGN_URL = 'http://localhost:4004/odata/v4/cardano-sign';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 const HSM_ADDRESS = 'addr_test1vrhejsyaadc7vn55ghmjya38u86a5d0rslruywtwkpz0qwqfv32lc';
 
@@ -15,7 +17,7 @@ async function main() {
 
     // 1. Check HSM status
     console.log('1. Checking HSM status...');
-    const hsmStatus = await axios.post(`${SIGN_URL}/GetHsmStatus`);
+    const hsmStatus = await axios.post(`${SIGN_URL}/GetHsmStatus`, {}, axiosConfig);
     const hsm = hsmStatus.data;
 
     if (!hsm.connected) {
@@ -34,7 +36,7 @@ async function main() {
       recipientAddress: RECIPIENT,
       lovelaceAmount: LOVELACE_AMOUNT,
       changeAddress: HSM_ADDRESS
-    });
+    }, axiosConfig);
 
     const build = buildResponse.data;
     console.log(`   Build ID: ${build.id}`);
@@ -45,7 +47,7 @@ async function main() {
     console.log('3. Signing and submitting with HSM...');
     const submitResponse = await axios.post(`${SIGN_URL}/SignAndSubmitWithHsm`, {
       buildId: build.id
-    });
+    }, axiosConfig);
 
     const submission = submitResponse.data;
     console.log(`   Transaction submitted successfully!`);
