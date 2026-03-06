@@ -827,16 +827,16 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
       describe('lockOnScript', () => {
 
-        it('POST /BuildMintTransaction - lockOnScript=true without scriptParamsJson has no scriptAddress', async () => {
+        it('POST /BuildMintTransaction - lockOnScript=true without scriptParamsJson rejects with 400', async () => {
           const requestBody = {
             ...mintingRequestBody,
             lockOnScript: true
           };
 
-          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
 
-          expect(status).to.equal(200);
-          expect(data.scriptAddress).to.be.oneOf([null, undefined, '']);
+          expect(status).to.equal(400);
+          expect(data.error.message).to.include('lockOnScript requires scriptParamsJson');
         });
 
         it('POST /BuildMintTransaction - lockOnScript=false does not set scriptAddress', async () => {

@@ -4,6 +4,7 @@ import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
+import { ConfigError } from './utils/errors';
 
 import { env } from 'process';
 
@@ -287,10 +288,15 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
     throw new Error('HSM_PIN is required when HSM is enabled');
   }
 
+  const slot = Number(hsmCds.slot ?? env.HSM_SLOT ?? 0);
+  if (!Number.isInteger(slot) || slot < 0) {
+    throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}" — must be a non-negative integer`);
+  }
+
   return {
     enabled: true,
     pkcs11Module,
-    slot: Number(hsmCds.slot ?? env.HSM_SLOT ?? 0),
+    slot,
     pin,
     keyId: hsmCds.keyId || env.HSM_KEY_ID,
     keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,

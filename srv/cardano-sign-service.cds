@@ -51,7 +51,10 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                            signerType: String(20),
                            @title: 'Signer Info'
                            @description: 'Additional signer information (wallet name, etc.)'
-                           signerInfo: String(100))           returns SignatureVerifications;
+                           signerInfo: String(100),
+                           @title: 'Sender Address'
+                           @description: 'Optional sender address for ownership verification. When provided, verifies the signing request belongs to this address.'
+                           address: Bech32)                   returns SignatureVerifications;
 
     @title      : 'Submit Verified Transaction'
     @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
@@ -67,7 +70,10 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                      signerType: String(20),
                                      @title: 'Signer Info'
                                      @description: 'Additional signer information'
-                                     signerInfo: String(100)) returns TransactionSubmissions;
+                                     signerInfo: String(100),
+                                     @title: 'Sender Address'
+                                     @description: 'Optional sender address for ownership verification. When provided, verifies the signing request belongs to this address.'
+                                     address: Bech32)         returns TransactionSubmissions;
 
 
     // ---------------------------------------------------------------------------
@@ -107,14 +113,20 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     action SignWithHsm(
                        @title: 'Build ID'
                        @description: 'The unique identifier of the transaction build to sign'
-                       buildId: UUID)                   returns SigningRequests;
+                       buildId: UUID,
+                       @title: 'Sender Address'
+                       @description: 'Optional sender address for ownership verification. When provided, verifies the build belongs to this address.'
+                       address: Bech32)                 returns SigningRequests;
 
     @title      : 'Sign and Submit with HSM'
     @description: 'Sign a transaction using the HSM and submit it to the blockchain in one atomic operation. Returns the transaction submission details.'
     action SignAndSubmitWithHsm(
                                 @title: 'Build ID'
                                 @description: 'The unique identifier of the transaction build to sign and submit'
-                                buildId: UUID)          returns TransactionSubmissions;
+                                buildId: UUID,
+                                @title: 'Sender Address'
+                                @description: 'Optional sender address for ownership verification. When provided, verifies the build belongs to this address.'
+                                address: Bech32)        returns TransactionSubmissions;
 
     @title      : 'Get HSM Status'
     @description: 'Check the current status of the HSM connection and key availability.'

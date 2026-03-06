@@ -4,7 +4,7 @@ import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress,
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
 
-const { SELECT, DELETE } = cds.ql;
+const { SELECT } = cds.ql;
 
 const logger = cds.log(`CardanoService`);
 
@@ -206,8 +206,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {
-        // No valid cached data — delete any expired remnants and re-index fresh
-        await db.run(DELETE.from(AddressUTxOs).where({ address_address: address }));
+        // No valid cached data — re-index fresh (UPSERT is idempotent, no DELETE needed)
         await indexer().indexAddress(db, address);
         const fresh = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
         return fresh;
@@ -282,13 +281,16 @@ module.exports = (srv: cds.Service) => {
     const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressTransactions).where({ address_address: address }));
+      const existing = await db.run(
+        SELECT.from(AddressTransactions)
+          .where({ address_address: address })
+          .orderBy('blockTime desc')
+          .limit(txLimit)
+      );
       if (!existing || existing.length === 0) {
         return indexer().indexAddressTransactions(db, address, txLimit);
       }
-      // Sort by blockTime descending and apply limit
-      existing.sort((a: any, b: any) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-      return existing.slice(0, txLimit);
+      return existing;
     });
   });
 

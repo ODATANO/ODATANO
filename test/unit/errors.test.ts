@@ -8,6 +8,7 @@ import {
   BackendInitError,
   AllBackendsInitFailedError,
   TransactionAlreadySubmittedError,
+  TransactionValidationError,
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError
@@ -498,31 +499,31 @@ describe('Error Classes', () => {
       expect(result.originalError).toBe(originalError);
     });
 
-    it('should convert 400 error to ProviderUnavailable when not "not found"', () => {
+    it('should convert 400 error to TransactionValidationError when not "not found"', () => {
       const error = { status: 400, message: 'Invalid request format' };
       const result = normalizeBackendError(error, 'blockfrost');
 
-      expect(result.statusCode).toBe(503);
-      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.statusCode).toBe(400);
+      expect(result.code).toBe(ERROR_CODES.TX_VALIDATION_FAILED);
+      expect(result).toBeInstanceOf(TransactionValidationError);
     });
 
-    it('should convert 401 error to ProviderUnavailable', () => {
+    it('should convert 401 error to BackendError with auth failure', () => {
       const error = { status: 401, message: 'Unauthorized' };
       const result = normalizeBackendError(error, 'blockfrost');
 
-      expect(result.statusCode).toBe(503);
+      expect(result.statusCode).toBe(401);
       expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result).toBeInstanceOf(BackendError);
     });
 
-    it('should convert 403 error to ProviderUnavailable (when not rate limit)', () => {
+    it('should convert 403 error to BackendError with auth failure (when not rate limit)', () => {
       const error = { status: 403, message: 'Forbidden' };
       const result = normalizeBackendError(error, 'koios');
 
-      expect(result.statusCode).toBe(503);
+      expect(result.statusCode).toBe(403);
       expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result).toBeInstanceOf(BackendError);
     });
 
     it('should convert 405 error to ProviderUnavailable', () => {

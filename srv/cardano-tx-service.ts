@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
@@ -157,7 +157,7 @@ module.exports = (srv: cds.Service) => {
 
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
-      logger.debug({ result }, 'Multi-asset transaction build result');
+      logger.debug({ id: result.id, fee: result.fee, size: result.size }, 'Multi-asset transaction build result');
       return result;
     });
   });
@@ -186,6 +186,12 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
     }
     const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => {
+      if (!action || typeof action !== 'object') {
+        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
+      }
+      if (typeof action.quantity !== 'string') {
+        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
+      }
       if (!/^-?\d+$/.test(action.quantity)) {
         return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
       }
@@ -199,11 +205,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional requiredSignersJson
     let requiredSigners: string[] | undefined;
     if (requiredSignersJson) {
-      try {
-        requiredSigners = JSON.parse(requiredSignersJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
-      }
+      const jsonResult = validateJsonWithLimits(requiredSignersJson, 'requiredSignersJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'requiredSignersJson');
+      requiredSigners = jsonResult.parsed as string[];
       if (!Array.isArray(requiredSigners)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
       }
@@ -217,11 +221,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional scriptParamsJson
     let scriptParams: any[] | undefined;
     if (scriptParamsJson) {
-      try {
-        scriptParams = JSON.parse(scriptParamsJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
-      }
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
@@ -230,21 +232,22 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional inlineDatumJson
     let inlineDatum: any | undefined;
     if (inlineDatumJson) {
-      try {
-        inlineDatum = JSON.parse(inlineDatumJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
-      }
+      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'inlineDatumJson');
+      inlineDatum = jsonResult.parsed;
     }
 
     // Parse and validate optional mintRedeemerJson
     let mintRedeemer: any | undefined;
     if (mintRedeemerJson) {
-      try {
-        mintRedeemer = JSON.parse(mintRedeemerJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'mintRedeemerJson must be valid JSON', 'mintRedeemerJson');
-      }
+      const jsonResult = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'mintRedeemerJson');
+      mintRedeemer = jsonResult.parsed;
+    }
+
+    // Validate lockOnScript requires scriptParamsJson
+    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
+      return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
     // handle the request / building the transaction / indexing the build result / returning build details
@@ -355,11 +358,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional requiredSignersJson
     let requiredSigners: string[] | undefined;
     if (requiredSignersJson) {
-      try {
-        requiredSigners = JSON.parse(requiredSignersJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
-      }
+      const jsonResult = validateJsonWithLimits(requiredSignersJson, 'requiredSignersJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'requiredSignersJson');
+      requiredSigners = jsonResult.parsed as string[];
       if (!Array.isArray(requiredSigners)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
       }
@@ -373,11 +374,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional scriptParamsJson
     let scriptParams: any[] | undefined;
     if (scriptParamsJson) {
-      try {
-        scriptParams = JSON.parse(scriptParamsJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
-      }
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
@@ -386,11 +385,14 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional inlineDatumJson
     let inlineDatum: any | undefined;
     if (inlineDatumJson) {
-      try {
-        inlineDatum = JSON.parse(inlineDatumJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
-      }
+      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'inlineDatumJson');
+      inlineDatum = jsonResult.parsed;
+    }
+
+    // Validate lockOnScript requires scriptParamsJson
+    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
+      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
     return handleRequest(req, async (db) => {
@@ -398,7 +400,6 @@ module.exports = (srv: cds.Service) => {
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
         'Building Plutus spending transaction'
       );
-
 
       // Apply script parameters if provided (for parameterized validators)
       let finalValidatorScript = validatorScript;

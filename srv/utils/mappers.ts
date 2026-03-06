@@ -424,8 +424,8 @@ export function mapAddressUtxoAssets(
   const assets: UTxOAssetRow[] = [];
 
   addressUtxosData.forEach((utxo: UtxosProviderData) => {
-
-    for (const asset of utxo.amount) {
+    const amounts = Array.isArray(utxo.amount) ? utxo.amount : [];
+    for (const asset of amounts) {
       if (!asset || !asset.unit || asset.unit === 'lovelace') continue;
       const { policyId, assetName } = parseAssetUnit(asset.unit);
       assets.push({
@@ -856,10 +856,13 @@ function parseAssetUnit(unit: string): { policyId: string | null; assetName: str
   if (unit === 'lovelace') {
     return { policyId: null, assetName: 'lovelace' };
   }
+  if (unit.length < 56 || !/^[a-f0-9]+$/i.test(unit)) {
+    return { policyId: null, assetName: unit };
+  }
 
   const policyId = unit.slice(0, 56);
   const assetNameHex = unit.slice(56);
-  const assetName = hexToUtf8(assetNameHex);
+  const assetName = assetNameHex.length > 0 ? hexToUtf8(assetNameHex) : '';
 
   return { policyId, assetName };
 }

@@ -59,7 +59,7 @@ interface JsonValidationResult {
  * @param fieldName - Name of the field (for error messages)
  * @returns JsonValidationResult with parsed value or error message
  */
-function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
+export function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
   // Check size limit first (before parsing)
   if (jsonString.length > MAX_JSON_SIZE) {
     return { valid: false, error: `${fieldName} exceeds maximum size of ${MAX_JSON_SIZE} bytes` };
@@ -212,9 +212,9 @@ export function isValidBech32Address(addrRaw: string): addrRaw is string {
   const allowed = ["addr", "addr_test"];
   const decoded = tryDecodeBech32WithHrp(addr, allowed);
   if (decoded) {
-  // avoid absurdly short/long decoded payloads
+  // Cardano addresses: 29 bytes (enterprise/reward) to 57 bytes (base address)
   const len = wordsToBytesLen(decoded.words);
-  return len >= 1 && len <= 128;
+  return len >= 29 && len <= 57;
   }
   return false;
 }

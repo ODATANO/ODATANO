@@ -396,9 +396,17 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 7: Other 4xx → Check if it's a disguised "not found"
+  // Priority 7: Other 4xx → differentiate by status code
+  if (status === 400 || status === 422) {
+    return new TransactionValidationError(
+      message || `Provider returned ${status}: invalid request`, err);
+  }
+  if (status === 401 || status === 403) {
+    return new BackendError(
+      `Provider authentication failed (${status}): ${message}`,
+      status, ERROR_CODES.PROVIDER_UNAVAILABLE, backendName, err);
+  }
   if (status >= 400) {
-    // Other 4xx like bad requests → treat as unavailable
     return new ProviderUnavailableError(
       message || 'Provider request failed',
       backendName,
