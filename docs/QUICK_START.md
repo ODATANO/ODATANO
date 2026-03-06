@@ -245,10 +245,10 @@ For comprehensive API testing, ODATANO provides two convenient options:
 ### Automated Test Script
 
 ```bash
-npx tsx scripts/request_examples.ts
+npx tsx scripts/testing/request_examples.ts
 ```
 
-The [request_examples.ts](../scripts/request_examples.ts) script automatically tests service endpoints with real test data from the preview network. It provides:
+The [request_examples.ts](../scripts/testing/request_examples.ts) script automatically tests service endpoints with real test data from the preview network. It provides:
 
 - Automatic testing of all service endpoints
 - Real test data (block hashes, addresses, transaction hashes, etc.)

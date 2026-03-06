@@ -879,7 +879,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('fee');
         });
 
-        it('POST /SetCollateral - rejects 409 when collateral already available', async () => {
+        it('POST /SetCollateral - returns 200 with collateralAvailable=true when collateral already exists', async () => {
           setupUtxoMock([
             {
               tx_hash: 'aabb00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
@@ -899,11 +899,13 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             }
           ]);
 
-          const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
             address: TEST_FIXTURES.addressWithFunds,
-          }).catch(err => err.response);
+          });
 
-          expect(status).to.equal(409);
+          expect(status).to.equal(200);
+          expect(data).to.have.property('collateralAvailable', true);
+          expect(data).to.not.have.property('unsignedTxCbor');
         });
 
         it('POST /SetCollateral - rejects 400 when insufficient funds', async () => {

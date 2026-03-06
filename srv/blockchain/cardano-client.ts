@@ -29,7 +29,7 @@ const logger = cds.log('CardanoClient');
 const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
   getAddress: { preferLive: true },
-  getAddressUtxos: { preferLive: true },
+  getAddressUtxos: { preferLive: false },
   getAddressTransactions: { preferLive: false },
   getNetworkInformation: { preferLive: true },
   getTransactionMetadata: { preferLive: false },

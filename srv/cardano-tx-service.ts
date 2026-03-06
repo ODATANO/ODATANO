@@ -492,7 +492,12 @@ module.exports = (srv: cds.Service) => {
     const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
 
     if (qualifyingUtxos.length >= 2) {
-      return req.reject(409, `SetCollateral: Collateral already available — found ${qualifyingUtxos.length} UTxOs with >= 5 ADA`);
+      return {
+        id: cds.utils.uuid(),
+        network: getCardanoClient().network,
+        senderAddress: address,
+        collateralAvailable: true,
+      };
     }
 
     const totalLovelace = utxos.reduce((sum, u) => sum + getLovelace(u), 0n);
@@ -504,13 +509,14 @@ module.exports = (srv: cds.Service) => {
     // Build self-send transaction: address → address, 5 ADA
     logger.debug({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
     return handleRequest(req, async (db) => {
-      return await getCardanoIndexer().indexSimpleBuildResult(db, {
+      const result = await getCardanoIndexer().indexSimpleBuildResult(db, {
         network: getCardanoClient().network,
         senderAddress: address,
         recipientAddress: address,
         lovelaceAmount: Number(COLLATERAL_LOVELACE),
         changeAddress: address,
       });
+      return { ...result, collateralAvailable: false };
     });
   });
 

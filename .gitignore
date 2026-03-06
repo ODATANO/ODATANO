@@ -5,7 +5,10 @@ _out
 connection.properties
 
 # Benchmark results
-scripts/perf-results.json
+scripts/perf/perf-results.json
+scripts/perf/perf-compare-results.json
+scripts/perf/perf-ogmios-eval-results.json
+scripts/perf/perf-utxo-fetch-results.json
 default-*.json
 .cdsrc-private.json
 gen/
