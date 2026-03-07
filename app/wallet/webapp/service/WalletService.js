@@ -85,10 +85,11 @@ sap.ui.define([
             argument = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
             offset += 4;
         } else if (additionalInfo === 27) {
-            // 8-byte uint — use BigInt then convert to Number (safe for lovelace/quantities)
+            // 8-byte uint — keep as string when value exceeds Number.MAX_SAFE_INTEGER to avoid precision loss
             var hi = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
             var lo = ((bytes[offset + 4] << 24) | (bytes[offset + 5] << 16) | (bytes[offset + 6] << 8) | bytes[offset + 7]) >>> 0;
-            argument = Number(BigInt(hi) * BigInt(0x100000000) + BigInt(lo));
+            var bigVal = BigInt(hi) * BigInt(0x100000000) + BigInt(lo);
+            argument = bigVal <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(bigVal) : bigVal.toString();
             offset += 8;
         } else {
             argument = 0;
@@ -158,8 +159,8 @@ sap.ui.define([
             var result = decodeCbor(bytes, 0);
             var decoded = result.value;
 
-            // Simple lovelace value (uint)
-            if (typeof decoded === "number") {
+            // Simple lovelace value (uint or string for large values)
+            if (typeof decoded === "number" || typeof decoded === "string") {
                 return { lovelace: String(decoded), assets: [] };
             }
 

@@ -569,6 +569,8 @@ export interface HsmConfig {
   keyId?: string;
   /** Key label for CKA_LABEL lookup */
   keyLabel?: string;
+  /** Optional CDS role required for HSM actions (SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus). When set, only users with this role can invoke HSM operations. */
+  requiresRole?: string;
 }
 
 /**

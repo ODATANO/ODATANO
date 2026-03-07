@@ -14,18 +14,18 @@ import {
 
 /**
  * CardanoBackend - Interface Definition for multiple backends (Blockfrost, Koios, Ogmios, etc.)
- * 
+ *
  * Defines the standard methods that any Cardano backend must implement to be used interchangeably.
  */
 export interface CardanoBackend {
 
-  /** 
-   * Backend name 
+  /**
+   * Backend name
    */
   name: string;
 
   /**
-   * Initialize the backend 
+   * Initialize the backend
    */
   init(): Promise<boolean>;
 
@@ -36,7 +36,7 @@ export interface CardanoBackend {
    */
   getTransaction(txHash: string): Promise<Transaction>;
 
-  /** 
+  /**
    * Get Address Data
    * @param address bech32 address
    * @returns {Promise<Address>} address data
@@ -70,7 +70,7 @@ export interface CardanoBackend {
    */
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
 
-  /** 
+  /**
    * Get Block Data
    * @param blockHash block hash (hex)
    * @returns {Promise<BlockData>} block data
@@ -84,26 +84,26 @@ export interface CardanoBackend {
    */
   getEpoch(epochNumber: number): Promise<EpochData>;
 
-  /** 
+  /**
    * Get Latest Epoch Data
    * @returns {Promise<EpochData>} latest epoch data
    */
   getLatestEpoch(): Promise<EpochData>;
 
-  /** 
+  /**
    * Get Latest Block Data
    * @returns {Promise<BlockData>} latest block data
    */
   getLatestBlock(): Promise<BlockData>;
 
-  /** 
+  /**
    * Get Pool Data
    * @param poolId pool id
    * @returns {Promise<PoolData>} pool data
    */
   getPool(poolId: string): Promise<PoolData>;
 
-  /** 
+  /**
    * Get Drep Data
    * @param drepId drep id
    * @returns {Promise<DrepData>} drep data

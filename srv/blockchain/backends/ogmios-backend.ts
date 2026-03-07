@@ -322,7 +322,8 @@ export class OgmiosBackend implements EvaluatingBackend {
 
       // Extract pool from response - stakePools returns object keyed by poolId
       const pool = pools[poolId];
-      
+      if (!pool) throw new NotFoundError('Pool', this.name);
+
       return {
         poolId,
         vrfKeyHash: pool.vrf || pool.vrfKeyHash || '',

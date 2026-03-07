@@ -479,10 +479,14 @@ export class KoiosBackend implements CardanoBackend {
         const addressDataResponse = await this.api.post('/account_addresses', body);
 
         // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-        const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses);
-        const addresses = await Promise.all(
-          addressesFlat.map((addr: string) => this.getAddress(addr))
-        );
+        const addressesFlat: string[] = addressDataResponse.data.flatMap((item: any) => item.addresses);
+        const addresses: Address[] = [];
+        const concurrent = 10;
+        for (let i = 0; i < addressesFlat.length; i += concurrent) {
+          const chunk = addressesFlat.slice(i, i + concurrent);
+          const chunkResults = await Promise.all(chunk.map((addr: string) => this.getAddress(addr)));
+          addresses.push(...chunkResults);
+        }
 
         const accountData = data[0];
         return {

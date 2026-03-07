@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { handleRequest} from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
-import { getCardanoIndexer, getCardanoClient } from './server';
+import { getCardanoIndexer, getCardanoClient, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
@@ -11,8 +11,8 @@ const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoSignService');
 
 /**
- * Verify that a build's senderAddress matches the caller-provided address.
- * Defense-in-depth: when address is provided, reject if it doesn't match the build owner.
+ * Verify that a build exists and, when an address is provided, that it matches
+ * the build's senderAddress. Always fetches the build from DB.
  */
 async function verifyBuildOwnership(
   req: Request, db: any, buildId: string, address: string | undefined, TransactionBuilds: any, actionName: string
@@ -43,6 +43,17 @@ async function checkAndExpireSigningRequest(
     return true;
   }
   return false;
+}
+
+/**
+ * Enforce HSM role check if hsm.requiresRole is configured.
+ * Rejects with 403 if the user lacks the required role.
+ */
+function enforceHsmRole(req: Request, actionName: string): void {
+  const hsmConfig = getHsmConfig();
+  if (hsmConfig?.requiresRole && !req.user?.is(hsmConfig.requiresRole)) {
+    req.reject(403, `Action '${actionName}' requires role '${hsmConfig.requiresRole}'`);
+  }
 }
 
 /**
@@ -245,22 +256,36 @@ module.exports = (srv: cds.Service) => {
     if (address && !isValidBech32Address(address)) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
+      // Atomically claim the signing request by transitioning status to 'submitting'.
+      // This prevents concurrent calls from both passing the status check and double-submitting.
+      const now = new Date().toISOString();
+      const claimed = await db.run(
+        UPDATE.entity(SigningRequests)
+          .set({ status: 'submitting' })
+          .where({
+            id: signingRequestId,
+            status: { in: ['pending', 'verified'] },
+            expiresAt: { '>': now },
+          })
+      );
+
+      if (claimed === 0) {
+        // Claim failed — fetch to provide a specific error message
+        const existing = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+        if (!existing) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
+        if (existing.expiresAt <= now) {
+          await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
+          rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
+        }
+        rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${existing.status}', expected 'pending' or 'verified'`, 'signingRequestId');
+      }
+
+      // Re-fetch the full record (now with status='submitting')
       const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
-      if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
 
       // Ownership check: verify address matches build owner (defense-in-depth)
       if (address && signingRequest.build_id) {
         await verifyBuildOwnership(req, db, signingRequest.build_id, address, TransactionBuilds, 'SubmitVerifiedTransaction');
-      }
-
-      // Check if expired
-      if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
-        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
-      }
-
-      // Status check: only pending or verified requests can be submitted
-      if (signingRequest.status !== 'pending' && signingRequest.status !== 'verified') {
-        rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${signingRequest.status}', expected 'pending' or 'verified'`, 'signingRequestId');
       }
 
       // Check if build association exists
@@ -345,6 +370,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('SignWithHsm', async (req: Request) => {
     logger.debug('SignWithHsm Action handler called');
+    enforceHsmRole(req, 'SignWithHsm');
     const { buildId, address } = req.data;
 
     // Validate input
@@ -361,6 +387,12 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       // 1. Fetch the build (with ownership check)
       const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignWithHsm');
+
+      // HSM can only sign builds for its own address
+      const hsmAddress = hsmSigner!.getAddress();
+      if (build.senderAddress !== hsmAddress) {
+        rejectInvalid(req, 'SignWithHsm', `Build sender '${build.senderAddress}' does not match HSM address '${hsmAddress}'`, 'buildId');
+      }
 
       // 2. Create signing request internally (reuse external signer module)
       const signerModule = getExternalSignerModule();
@@ -418,6 +450,7 @@ module.exports = (srv: cds.Service) => {
    */
   srv.on('SignAndSubmitWithHsm', async (req: Request) => {
     logger.debug('SignAndSubmitWithHsm Action handler called');
+    enforceHsmRole(req, 'SignAndSubmitWithHsm');
     const { buildId, address } = req.data;
 
     // Validate input
@@ -435,6 +468,12 @@ module.exports = (srv: cds.Service) => {
       // 1. Fetch the build (with ownership check)
       const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignAndSubmitWithHsm');
 
+      // HSM can only sign builds for its own address
+      const hsmAddress = hsmSigner!.getAddress();
+      if (build.senderAddress !== hsmAddress) {
+        rejectInvalid(req, 'SignAndSubmitWithHsm', `Build sender '${build.senderAddress}' does not match HSM address '${hsmAddress}'`, 'buildId');
+      }
+
       // 2. Create signing request
       const signerModule = getExternalSignerModule();
       const signingPayload = signerModule.createSigningRequest(
@@ -449,11 +488,19 @@ module.exports = (srv: cds.Service) => {
       // 3. Sign with HSM
       const signedTxCbor = hsmSigner!.signTransaction(build.unsignedTxCbor, build.txBodyHash);
 
-      // 4. Verify HSM signature (non-throwing — HSM is server-side trusted)
+      // 4. Verify HSM signature — reject if invalid before submitting
       const verificationResult = signerModule.verifySignedTransaction(signedTxCbor, build.txBodyHash);
 
       const hsmStatus = hsmSigner!.getStatus();
       const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
+
+      if (!verificationResult.isValid) {
+        logger.error({
+          signingRequestId: signingRequestRecord.id,
+          hsmKey: hsmKeyIdentifier,
+        }, 'HSM signature verification failed — aborting submission');
+        rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
+      }
 
       logger.info({
         signingRequestId: signingRequestRecord.id,
@@ -499,6 +546,7 @@ module.exports = (srv: cds.Service) => {
    * Returns null fields if HSM is not configured.
    */
   srv.on('GetHsmStatus', async (_req: Request) => {
+    enforceHsmRole(_req, 'GetHsmStatus');
     const hsmSigner = getHsmSigner();
     if (!hsmSigner) {
       return {

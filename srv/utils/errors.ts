@@ -298,16 +298,21 @@ export function normalizeBackendError(
   // Already normalized
   if (err instanceof BackendError) return err;
 
-  // Check for uninitialized backend client (TypeError from accessing null/undefined)
-  if (err instanceof TypeError && 
-      (err.message.includes('Cannot read properties of null') || 
+  // Check for uninitialized backend client (TypeError from calling methods on null/undefined client).
+  // Only match when the error involves a known client method to avoid masking data-level null bugs.
+  if (err instanceof TypeError &&
+      (err.message.includes('Cannot read properties of null') ||
        err.message.includes('Cannot read properties of undefined') ||
        err.message.includes('null is not an object') ||
        err.message.includes('undefined is not an object'))) {
-    return new BackendInitError(
-      backendName || 'unknown',
-      new Error('Backend client not initialized - call init() first')
-    );
+    const stack = err.stack || '';
+    const isClientAccess = /\b(stateQueryClient|txSubmissionClient|api)\b/.test(err.message + stack);
+    if (isClientAccess) {
+      return new BackendInitError(
+        backendName || 'unknown',
+        new Error('Backend client not initialized - call init() first')
+      );
+    }
   }
 
   const message = getErrorMessage(err);

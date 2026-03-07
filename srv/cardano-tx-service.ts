@@ -51,11 +51,9 @@ module.exports = (srv: cds.Service) => {
     // parse optional output datum
     const cleanData = { ...req.data };
     if (outputDatumJson) {
-      try {
-        cleanData.outputDatum = JSON.parse(outputDatumJson);
-      } catch {
-        return req.reject(400, 'Invalid outputDatumJson: must be valid JSON');
-      }
+      const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
+      cleanData.outputDatum = jsonResult.parsed;
     }
 
     // parse optional assets JSON (for locking native assets at script addresses)
@@ -147,11 +145,9 @@ module.exports = (srv: cds.Service) => {
 
       // parse optional output datum (for locking assets at script addresses)
       if (outputDatumJson) {
-        try {
-          cleanData.outputDatum = JSON.parse(outputDatumJson);
-        } catch {
-          return rejectInvalid(req, 'BuildMultiAssetTransaction', 'outputDatumJson must be valid JSON', 'outputDatumJson');
-        }
+        const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+        if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
+        cleanData.outputDatum = jsonResult.parsed;
         delete cleanData.outputDatumJson;
       }
 

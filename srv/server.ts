@@ -106,12 +106,23 @@ export function getCardanoTxBuilder(): CardanoTransactionBuilder {
   return getAppContext().cardanoTxBuilder;
 }
 
+let hsmConfigInstance: HsmConfig | undefined;
+
+/**
+ * Get the HSM configuration (if HSM is enabled).
+ * Used by sign service to check requiresRole.
+ */
+export function getHsmConfig(): HsmConfig | undefined {
+  return hsmConfigInstance;
+}
+
 /**
  * Initialize from a pre-built config (used by plugin's src/index.ts)
  * @param config - validated CardanoClientConfig
  * @param protocolParams - Optional protocol parameters (for tests)
  */
 export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
+  hsmConfigInstance = hsmConfig;
   appContext = await initializeAppContext(config, protocolParams, hsmConfig);
 }
 
@@ -300,6 +311,7 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
     pin,
     keyId: hsmCds.keyId || env.HSM_KEY_ID,
     keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,
+    requiresRole: hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || undefined,
   };
 }
 
@@ -316,6 +328,7 @@ cds.on('served', async () => {
 
   const config = loadConfigFromEnv();
   const hsmConfig = loadHsmConfigFromEnv();
+  hsmConfigInstance = hsmConfig;
 
   try {
     appContext = await initializeAppContext(config, undefined, hsmConfig);

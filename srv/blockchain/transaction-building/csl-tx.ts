@@ -138,7 +138,10 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     for (const mintAction of req.mintActions) {
       const { assetName } = parseAssetUnit(mintAction.assetUnit);
       const cslAssetName = CSL.AssetName.new(Buffer.from(assetName, 'hex'));
-      const mintQuantity = CSL.Int.new_i32(Number(mintAction.quantity));
+      const qty = String(mintAction.quantity);
+      const mintQuantity = qty.startsWith('-')
+        ? CSL.Int.new_negative(CSL.BigNum.from_str(qty.slice(1)))
+        : CSL.Int.new(CSL.BigNum.from_str(qty));
 
       const redeemerData = req.mintRedeemer
         ? this._toPlutusData(req.mintRedeemer)
@@ -154,7 +157,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const mintWitness = CSL.MintWitness.new_plutus_script(scriptSource, redeemer);
       mintBuilder.add_asset(mintWitness, cslAssetName, mintQuantity);
 
-      if (Number(mintAction.quantity) > 0) {
+      if (!String(mintAction.quantity).startsWith('-')) {
         const assetValue = CSL.Value.new(CSL.BigNum.from_str('0'));
         const multiAsset = CSL.MultiAsset.new();
         const assets = CSL.Assets.new();
@@ -784,7 +787,10 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    */
   private _jsonToCSLMetadatum(value: JSONValue): CSL.TransactionMetadatum {
     if (typeof value === 'number' || typeof value === 'bigint') {
-      const intValue = CSL.Int.new_i32(Number(value));
+      const s = String(value);
+      const intValue = s.startsWith('-')
+        ? CSL.Int.new_negative(CSL.BigNum.from_str(s.slice(1)))
+        : CSL.Int.new(CSL.BigNum.from_str(s));
       return CSL.TransactionMetadatum.new_int(intValue);
     }
 
