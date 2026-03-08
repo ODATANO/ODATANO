@@ -617,7 +617,13 @@ export class KoiosBackend implements CardanoBackend {
           throw new NotFoundError('LatestEpoch', this.name);
         }
 
-        return this.getEpoch(data[0].epoch_no);
+        const epochNo = data[0].epoch_no;
+        try {
+          return await this.getEpoch(epochNo);
+        } catch {
+          // Current epoch may not be available yet on Koios — fall back to previous
+          return await this.getEpoch(epochNo - 1);
+        }
       },
       this.name
     );

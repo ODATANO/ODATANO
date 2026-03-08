@@ -477,13 +477,13 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData, max
  * @param epochData epoch data for the block's epoch
  * @returns {BlockRow} mapped block row
  */
-export function mapBlock(providerBlockData: BlockProviderData, epochData: EpochRow): BlockRow {
+export function mapBlock(providerBlockData: BlockProviderData, epochData?: EpochRow): BlockRow {
   return {
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
     hash: providerBlockData.hash,
     slotLeader: String(providerBlockData.slotLeader ?? null),
-    epochNumber: epochData.epoch,
+    epochNumber: epochData?.epoch ?? providerBlockData.epoch,
     epoch: epochData,
     epochSlot: providerBlockData.epochSlot,
     size: providerBlockData.size,

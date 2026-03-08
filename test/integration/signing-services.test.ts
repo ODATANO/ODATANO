@@ -483,7 +483,7 @@ describe('Signing Services Integration Tests', () => {
       expect(data.keyId).to.equal('0x0001');
       expect(data.keyLabel).to.equal('test-key');
       expect(data.publicKeyHash).to.exist;
-      expect(data.cardanoAddress).to.equal('addr_test1mockaddress');
+      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithAssets);
     });
 
     it('should return disconnected status when HSM is not configured', async () => {
@@ -687,37 +687,45 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   const { Cbor, CborArray, CborBytes, CborMap, CborUInt } = require('@harmoniclabs/cbor');
   const { fromHex, toHex } = require('@harmoniclabs/uint8array-utils');
+  const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
 
-  const fakePublicKey = Buffer.alloc(32, 0xaa);
-  const fakeSignature = Buffer.alloc(64, 0xbb);
-  const fakeKeyHash = Buffer.alloc(28, 0xcc).toString('hex');
+  // Generate a real Ed25519 keypair so signatures pass verification
+  const privateKey = CSL.PrivateKey.generate_ed25519();
+  const publicKey = privateKey.to_public();
+  const realPublicKeyBytes = publicKey.as_bytes();
+  const realKeyHash = publicKey.hash().to_hex();
 
   return {
     isConnected: () => connected,
-    getAddress: () => 'addr_test1mockaddress',
-    getPublicKeyHash: () => fakeKeyHash,
+    getAddress: () => TEST_FIXTURES.addressWithAssets,
+    getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({
       connected,
       keyId: '0x0001',
       keyLabel: 'test-key',
-      publicKeyHash: connected ? fakeKeyHash : undefined,
-      address: connected ? 'addr_test1mockaddress' : undefined,
+      publicKeyHash: connected ? realKeyHash : undefined,
+      address: connected ? TEST_FIXTURES.addressWithAssets : undefined,
     }),
-    sign: (_txBodyHash: Buffer) => {
+    sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;
+      const sig = privateKey.sign(txBodyHash);
       return {
-        signatureHex: fakeSignature.toString('hex'),
-        publicKeyHex: fakePublicKey.toString('hex'),
-        publicKeyHash: fakeKeyHash,
+        signatureHex: Buffer.from(sig.to_bytes()).toString('hex'),
+        publicKeyHex: Buffer.from(realPublicKeyBytes).toString('hex'),
+        publicKeyHash: realKeyHash,
       };
     },
-    signTransaction: (unsignedTxCbor: string, _txBodyHash: string) => {
+    signTransaction: (unsignedTxCbor: string, txBodyHash: string) => {
       if (signError) throw signError;
+
+      // Sign the tx body hash with the real private key
+      const sig = privateKey.sign(Buffer.from(txBodyHash, 'hex'));
+      const sigBytes = sig.to_bytes();
 
       const txObj = Cbor.parse(fromHex(unsignedTxCbor));
       const vkeyWitness = new CborArray([
-        new CborBytes(fakePublicKey),
-        new CborBytes(fakeSignature),
+        new CborBytes(Uint8Array.from(realPublicKeyBytes)),
+        new CborBytes(Uint8Array.from(sigBytes)),
       ]);
 
       const origWs = txObj.array[1];

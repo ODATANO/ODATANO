@@ -372,7 +372,12 @@ export class CardanoIndexer {
    */
   async indexBlock(tx: CapTransaction, blockHash: string): Promise<Block> {
     const blockInfo = await this.client.getBlock(blockHash);
-    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    let epoch: Epoch | undefined;
+    try {
+      epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    } catch {
+      // Epoch data may not be available (e.g., Koios drops old/in-progress epochs)
+    }
     const blockEntity = mapBlock(blockInfo, epoch);
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
@@ -806,7 +811,12 @@ export class CardanoIndexer {
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
 
     const blockInfo = await this.client.getLatestBlock();
-    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    let epoch: Epoch | undefined;
+    try {
+      epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    } catch {
+      // Epoch data may not be available (e.g., Koios drops old/in-progress epochs)
+    }
     const blockEntity = mapBlock(blockInfo, epoch);
 
     await tx.run(UPSERT.into(Block).entries(blockEntity));
