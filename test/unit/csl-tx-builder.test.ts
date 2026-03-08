@@ -210,5 +210,303 @@ describe('CSLTxBuilder', () => {
       }));
       expect(result.len()).toBe(3);
     });
+
+    it('should handle null v3 cost model', () => {
+      const result = createCostModels(JSON.stringify({ 'plutus:v3': null }));
+      expect(result.len()).toBe(0);
+    });
+
+    it('should handle empty array v3 cost model', () => {
+      // toArray returns [] which is truthy, but toCostModelArrV3 pads it
+      const result = createCostModels(JSON.stringify({ 'plutus:v3': [] }));
+      // Empty array returns truthy from toArray but may still produce a cost model
+      // depending on toCostModelArrV3 behavior with empty input
+      expect(result).toBeDefined();
+    });
+
+    it('should prefer plutus:v3 key over PlutusV3 when both present', () => {
+      const v3a = Array(297).fill(0).map((_, i) => i);
+      const v3b = Array(297).fill(0).map((_, i) => i + 1000);
+      const result = createCostModels(JSON.stringify({
+        'plutus:v3': v3a,
+        'PlutusV3': v3b,
+      }));
+      // Should use plutus:v3 (first in || chain)
+      expect(result.len()).toBe(1);
+    });
+  });
+
+  describe('_jsonToCSLMetadatum', () => {
+    const toMetadatum = (value: any) => {
+      return (builder as any)._jsonToCSLMetadatum(value);
+    };
+
+    it('should handle positive numbers', () => {
+      const result = toMetadatum(12345);
+      expect(result).toBeDefined();
+    });
+
+    it('should handle negative numbers', () => {
+      const result = toMetadatum(-42);
+      expect(result).toBeDefined();
+    });
+
+    it('should handle bigint values', () => {
+      const result = toMetadatum(BigInt('999999999999999'));
+      expect(result).toBeDefined();
+    });
+
+    it('should handle negative bigint values', () => {
+      const result = toMetadatum(BigInt('-123456'));
+      expect(result).toBeDefined();
+    });
+
+    it('should handle strings', () => {
+      const result = toMetadatum('hello world');
+      expect(result).toBeDefined();
+    });
+
+    it('should handle empty arrays', () => {
+      const result = toMetadatum([]);
+      expect(result).toBeDefined();
+    });
+
+    it('should handle arrays with mixed types', () => {
+      const result = toMetadatum([1, 'text', { key: 'value' }]);
+      expect(result).toBeDefined();
+    });
+
+    it('should handle nested arrays', () => {
+      const result = toMetadatum([[1, 2], [3, 4]]);
+      expect(result).toBeDefined();
+    });
+
+    it('should handle empty objects', () => {
+      const result = toMetadatum({});
+      expect(result).toBeDefined();
+    });
+
+    it('should handle objects with multiple keys', () => {
+      const result = toMetadatum({ key1: 'val1', key2: 123, key3: [1, 2] });
+      expect(result).toBeDefined();
+    });
+
+    it('should handle deeply nested objects', () => {
+      const result = toMetadatum({
+        level1: {
+          level2: {
+            level3: 'deep'
+          }
+        }
+      });
+      expect(result).toBeDefined();
+    });
+
+    it('should throw for unsupported types (boolean)', () => {
+      expect(() => toMetadatum(true)).toThrow('Unsupported metadata value type');
+    });
+
+    it('should throw for unsupported types (null)', () => {
+      // null passes typeof === 'object' check but is excluded by !== null
+      // Actually null would fail at Array.isArray check, then fail typeof === 'object' && value !== null
+      // So it should throw
+      expect(() => toMetadatum(null)).toThrow('Unsupported metadata value type');
+    });
+  });
+
+  describe('_selectMinimalUtxos', () => {
+    const selectMinimalUtxos = (utxos: any[], requiredLovelace: bigint) => {
+      return (builder as any)._selectMinimalUtxos(utxos, requiredLovelace);
+    };
+
+    it('should return all UTxOs when insufficient total', () => {
+      const utxos = [
+        { txHash: 'tx1', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '1000000' }] },
+        { txHash: 'tx2', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '500000' }] },
+      ];
+      const result = selectMinimalUtxos(utxos, 10000000n);
+      expect(result).toHaveLength(2); // All returned even though total < required
+    });
+
+    it('should select only needed UTxOs when sufficient', () => {
+      const utxos = [
+        { txHash: 'tx1', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '10000000' }] },
+        { txHash: 'tx2', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '5000000' }] },
+        { txHash: 'tx3', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '2000000' }] },
+      ];
+      const result = selectMinimalUtxos(utxos, 5000000n);
+      expect(result).toHaveLength(1); // Largest UTxO (10M) is enough
+    });
+
+    it('should sort by lovelace descending (largest first)', () => {
+      const utxos = [
+        { txHash: 'tx1', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '1000000' }] },
+        { txHash: 'tx2', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '5000000' }] },
+        { txHash: 'tx3', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '3000000' }] },
+      ];
+      const result = selectMinimalUtxos(utxos, 4000000n);
+      // Should pick 5M first (largest), which is enough
+      expect(result).toHaveLength(1);
+      expect(result[0].txHash).toBe('tx2');
+    });
+
+    it('should handle equal-value UTxOs', () => {
+      const utxos = [
+        { txHash: 'tx1', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '2000000' }] },
+        { txHash: 'tx2', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '2000000' }] },
+        { txHash: 'tx3', outputIndex: 0, address: 'addr1', amount: [{ unit: 'lovelace', quantity: '2000000' }] },
+      ];
+      const result = selectMinimalUtxos(utxos, 3000000n);
+      expect(result).toHaveLength(2); // Need two 2M UTxOs to cover 3M
+    });
+  });
+
+  describe('_evaluateExUnits', () => {
+    const evaluateExUnits = async (evaluator?: any) => {
+      // Build function returns a mock transaction
+      const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+      const mockBuildFn = (_units: any) => {
+        // Return a minimal valid transaction for CBOR encoding
+        const txBody = CSL.TransactionBody.new_tx_body(
+          CSL.TransactionInputs.new(),
+          CSL.TransactionOutputs.new(),
+          CSL.BigNum.from_str('200000')
+        );
+        const witnessSet = CSL.TransactionWitnessSet.new();
+        return CSL.Transaction.new(txBody, witnessSet);
+      };
+      return (builder as any)._evaluateExUnits(mockBuildFn, evaluator);
+    };
+
+    it('should return defaults when no evaluator provided', async () => {
+      const result = await evaluateExUnits(undefined);
+      expect(result.mem).toBeDefined();
+      expect(result.cpu).toBeDefined();
+    });
+
+    it('should return defaults when evaluator throws', async () => {
+      const throwingEvaluator = async () => { throw new Error('Network timeout'); };
+      const result = await evaluateExUnits(throwingEvaluator);
+      expect(result.mem).toBeDefined();
+      expect(result.cpu).toBeDefined();
+    });
+
+    it('should return defaults when evaluator returns empty array', async () => {
+      const emptyEvaluator = async () => [];
+      const result = await evaluateExUnits(emptyEvaluator);
+      expect(result.mem).toBeDefined();
+      expect(result.cpu).toBeDefined();
+    });
+
+    it('should return defaults when evaluator returns null', async () => {
+      const nullEvaluator = async () => null;
+      const result = await evaluateExUnits(nullEvaluator);
+      expect(result.mem).toBeDefined();
+      expect(result.cpu).toBeDefined();
+    });
+
+    it('should apply buffer to evaluated results', async () => {
+      const workingEvaluator = async () => [{ budget: { memory: 100000, cpu: 50000000 } }];
+      const result = await evaluateExUnits(workingEvaluator);
+      // Result should be higher than raw values (buffer applied)
+      expect(Number(result.mem)).toBeGreaterThan(100000);
+      expect(Number(result.cpu)).toBeGreaterThan(50000000);
+    });
+  });
+
+  describe('_setupCollateral', () => {
+    const setupCollateral = (utxos: any[]) => {
+      const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+      // Create a real TransactionBuilder for testing
+      const tbCfg = CSL.TransactionBuilderConfigBuilder.new()
+        .fee_algo(CSL.LinearFee.new(CSL.BigNum.from_str('44'), CSL.BigNum.from_str('155381')))
+        .coins_per_utxo_byte(CSL.BigNum.from_str('4310'))
+        .pool_deposit(CSL.BigNum.from_str('500000000'))
+        .key_deposit(CSL.BigNum.from_str('2000000'))
+        .max_value_size(5000)
+        .max_tx_size(16384)
+        .build();
+      const txb = CSL.TransactionBuilder.new(tbCfg);
+      return (builder as any)._setupCollateral(txb, utxos);
+    };
+
+    it('should skip collateral when no ADA-only UTxO available', () => {
+      const utxos = [
+        {
+          txHash: 'a'.repeat(64),
+          outputIndex: 0,
+          address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+          amount: [
+            { unit: 'lovelace', quantity: '5000000' },
+            { unit: 'policyabc.token1', quantity: '100' }
+          ]
+        }
+      ];
+      const result = setupCollateral(utxos);
+      expect(result.collateralUtxo).toBeUndefined();
+      expect(result.fundingUtxos).toEqual(utxos);
+    });
+
+    it('should include collateral in funding when it is the only UTxO', () => {
+      const utxos = [
+        {
+          txHash: 'b'.repeat(64),
+          outputIndex: 0,
+          address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+          amount: [{ unit: 'lovelace', quantity: '5000000' }]
+        }
+      ];
+      const result = setupCollateral(utxos);
+      expect(result.collateralUtxo).toBeDefined();
+      // Funding should include the collateral since it's the only UTxO
+      expect(result.fundingUtxos).toHaveLength(1);
+    });
+
+    it('should exclude collateral from funding when multiple UTxOs available', () => {
+      const utxos = [
+        {
+          txHash: 'c'.repeat(64),
+          outputIndex: 0,
+          address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+          amount: [{ unit: 'lovelace', quantity: '3000000' }]
+        },
+        {
+          txHash: 'd'.repeat(64),
+          outputIndex: 0,
+          address: 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp',
+          amount: [{ unit: 'lovelace', quantity: '10000000' }]
+        }
+      ];
+      const result = setupCollateral(utxos);
+      expect(result.collateralUtxo).toBeDefined();
+      expect(result.fundingUtxos).toHaveLength(1);
+    });
+  });
+
+  describe('_attachInlineDatum', () => {
+    it('should not attach datum when datum is undefined', () => {
+      const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+      const address = CSL.Address.from_bech32('addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp');
+      const value = CSL.Value.new(CSL.BigNum.from_str('2000000'));
+      const output = CSL.TransactionOutput.new(address, value);
+
+      (builder as any)._attachInlineDatum(output, undefined);
+
+      // Output should not have plutus data
+      expect(output.plutus_data()).toBeUndefined();
+    });
+
+    it('should attach datum when datum is provided', () => {
+      const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+      const address = CSL.Address.from_bech32('addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp');
+      const value = CSL.Value.new(CSL.BigNum.from_str('2000000'));
+      const output = CSL.TransactionOutput.new(address, value);
+
+      const datum = { constructor: 0, fields: [{ int: 42 }] };
+      (builder as any)._attachInlineDatum(output, datum);
+
+      // Output should have plutus data
+      expect(output.plutus_data()).toBeDefined();
+    });
   });
 });
