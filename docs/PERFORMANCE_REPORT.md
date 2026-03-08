@@ -2,13 +2,11 @@
 
 ## Overview
 
-This report documents the response time and throughput characteristics of the ODATANO OData V4 service across all 38 endpoints (35 parallel + 3 chained). Tests were conducted using the automated benchmark scripts (`scripts/perf/perf-benchmark.ts` and `scripts/perf/perf-compare.ts`) with 4 backend×builder combinations tested for a comprehensive comparison.
-
-**Test Date:** 2026-03-06
-**Runs:** 3 independent runs (Run 1: 06:42 UTC, Run 2: 07:44 UTC, Run 3: 07:52 UTC)
-**Configurations:** 4 (Koios×Buildooor, Koios×CSL, Blockfrost×Buildooor, Blockfrost×CSL)
-**Benchmark:** 3 rounds per endpoint, 38 endpoints, 108 calls per configuration, 432 total calls per run
-**Success Rate:** 100% (1296/1296 across all 3 runs)
+**Test Date:** 2026-03-08
+**Runs:** 3 independent runs (20:17, 20:30, 20:37 UTC)
+**Configurations:** 8 (Koios, Blockfrost, Ogmios+Koios, Ogmios+Blockfrost — each × Buildooor and CSL)
+**Benchmark:** 3 rounds × 38 endpoints × 8 configs = 864 calls per run
+**Success Rate:** 100% (2592/2592 across all 3 runs)
 
 ## Test Environment
 
@@ -18,472 +16,266 @@ This report documents the response time and throughput characteristics of the OD
 | Platform | Windows (MSYS_NT-10.0) |
 | Database | SQLite in-memory (`@cap-js/sqlite`) |
 | Network | Cardano Preview Testnet |
-| Backends | Koios & Blockfrost (compared independently) |
-| TX Builders | CSL & Buildooor (compared independently) |
 | Server | SAP CAP `cds watch` (localhost:4005) |
-| Telemetry | `@cap-js/telemetry` (OpenTelemetry) |
-| Cache | SQLite wiped + redeployed between each configuration for fair cold-start measurement |
+| Cache | SQLite wiped + redeployed between each configuration |
 
 ---
 
-## 4-Way Comparison: Overall Summary
+## 8-Way Comparison: Overall Summary
 
-### Run 1 (06:42 UTC)
+### Run 1 (20:17 UTC)
 
-| Metric | Koios+Buildooor | Koios+CSL | Blockfrost+Buildooor | Blockfrost+CSL |
-|--------|----------------:|----------:|---------------------:|---------------:|
-| **Avg Response** | 116.2 ms | 103.4 ms | 67.4 ms | **63.3 ms** |
-| **Startup Time** | 9.5s | 9.3s | 9.2s | 9.3s |
-| **Success Rate** | 108/108 | 108/108 | 108/108 | 108/108 |
-| **Slowest Endpoint** | GetAccountByStakeAddress (1134 ms) | GetAccountByStakeAddress (1108 ms) | BuildPlutusSpendTx (378 ms) | BuildPlutusSpendTx (361 ms) |
-| **Fastest Endpoint** | GetHsmStatus (1.6 ms) | GetHsmStatus (1.7 ms) | GetHsmStatus (1.4 ms) | GetHsmStatus (1.9 ms) |
+| Rank | Configuration | Avg Response (ms) | Startup (s) |
+|------|---------------|------------------:|------------:|
+| 1 | **Ogmios+BF CSL** | **63.6** | 7.2 |
+| 2 | Ogmios+BF Buildooor | 68.0 | 7.2 |
+| 3 | Blockfrost CSL | 69.7 | 7.2 |
+| 4 | Blockfrost Buildooor | 73.0 | 7.3 |
+| 5 | Ogmios+Koios CSL | 83.1 | 7.2 |
+| 6 | Ogmios+Koios Buildooor | 97.8 | 7.2 |
+| 7 | Koios Buildooor | 159.6 | 9.4 |
+| 8 | Koios CSL | 160.8 | 7.5 |
 
-### Run 2 (07:44 UTC)
+### Run 2 (20:30 UTC)
 
-| Metric | Koios+Buildooor | Koios+CSL | Blockfrost+Buildooor | Blockfrost+CSL |
-|--------|----------------:|----------:|---------------------:|---------------:|
-| **Avg Response** | 114.9 ms | 109.0 ms | 68.8 ms | **62.5 ms** |
-| **Startup Time** | 9.5s | 10.5s | 9.3s | 9.3s |
-| **Success Rate** | 108/108 | 108/108 | 108/108 | 108/108 |
-| **Slowest Endpoint** | GetAccountByStakeAddress (808 ms) | GetAccountByStakeAddress (833 ms) | BuildPlutusSpendTx (367 ms) | GetAccountByStakeAddress (349 ms) |
-| **Fastest Endpoint** | GetHsmStatus (1.6 ms) | GetHsmStatus (1.7 ms) | GetHsmStatus (1.4 ms) | GetHsmStatus (1.9 ms) |
+| Rank | Configuration | Avg Response (ms) | Startup (s) |
+|------|---------------|------------------:|------------:|
+| 1 | **Ogmios+BF CSL** | **60.8** | 7.2 |
+| 2 | Ogmios+BF Buildooor | 65.6 | 7.2 |
+| 3 | Blockfrost CSL | 65.8 | 7.3 |
+| 4 | Blockfrost Buildooor | 71.2 | 7.3 |
+| 5 | Ogmios+Koios Buildooor | 85.9 | 8.2 |
+| 6 | Ogmios+Koios CSL | 96.8 | 7.1 |
+| 7 | Koios Buildooor | 122.7 | 7.3 |
+| 8 | Koios CSL | 137.8 | 7.5 |
 
-### Run 3 (07:52 UTC)
+### Run 3 (20:37 UTC)
 
-| Metric | Koios+Buildooor | Koios+CSL | Blockfrost+Buildooor | Blockfrost+CSL |
-|--------|----------------:|----------:|---------------------:|---------------:|
-| **Avg Response** | 118.7 ms | 125.3 ms | 72.4 ms | **67.4 ms** |
-| **Startup Time** | 10.5s | 9.5s | 9.3s | 9.3s |
-| **Success Rate** | 108/108 | 108/108 | 108/108 | 108/108 |
-| **Slowest Endpoint** | GetAccountByStakeAddress (791 ms) | GetAccountByStakeAddress (1188 ms) | BuildPlutusSpendTx (456 ms) | BuildPlutusSpendTx (355 ms) |
-| **Fastest Endpoint** | GetHsmStatus (1.6 ms) | GetHsmStatus (1.7 ms) | GetHsmStatus (1.4 ms) | GetHsmStatus (1.9 ms) |
+| Rank | Configuration | Avg Response (ms) | Startup (s) |
+|------|---------------|------------------:|------------:|
+| 1 | **Ogmios+BF CSL** | **63.9** | 7.2 |
+| 2 | Ogmios+BF Buildooor | 64.3 | 7.1 |
+| 3 | Blockfrost CSL | 64.4 | 7.2 |
+| 4 | Blockfrost Buildooor | 71.7 | 7.2 |
+| 5 | Ogmios+Koios CSL | 80.3 | 7.1 |
+| 6 | Ogmios+Koios Buildooor | 87.8 | 7.2 |
+| 7 | Koios CSL | 126.5 | 7.5 |
+| 8 | Koios Buildooor | 129.6 | 8.3 |
 
 ### Reproducibility (3 Runs)
 
 | Configuration | Run 1 | Run 2 | Run 3 | Avg | Max Variance |
-|---------------|------:|------:|------:|----:|-------------:|
-| Koios+Buildooor | 116.2 ms | 114.9 ms | 118.7 ms | 116.6 ms | ±2.1% |
-| Koios+CSL | 103.4 ms | 109.0 ms | 125.3 ms | 112.6 ms | ±11.3% |
-| Blockfrost+Buildooor | 67.4 ms | 68.8 ms | 72.4 ms | 69.5 ms | ±4.2% |
-| Blockfrost+CSL | 63.3 ms | 62.5 ms | 67.4 ms | 64.4 ms | ±4.7% |
+|---------------|------:|------:|------:|----:|---------:|
+| Ogmios+BF CSL | 63.6 ms | 60.8 ms | 63.9 ms | **62.8 ms** | ±3.2% |
+| Ogmios+BF Buildooor | 68.0 ms | 65.6 ms | 64.3 ms | **65.9 ms** | ±3.2% |
+| Blockfrost CSL | 69.7 ms | 65.8 ms | 64.4 ms | **66.6 ms** | ±4.7% |
+| Blockfrost Buildooor | 73.0 ms | 71.2 ms | 71.7 ms | **71.9 ms** | ±1.5% |
+| Ogmios+Koios CSL | 83.1 ms | 96.8 ms | 80.3 ms | **86.7 ms** | ±11.6% |
+| Ogmios+Koios Buildooor | 97.8 ms | 85.9 ms | 87.8 ms | **90.5 ms** | ±8.1% |
+| Koios CSL | 160.8 ms | 137.8 ms | 126.5 ms | **141.7 ms** | ±13.5% |
+| Koios Buildooor | 159.6 ms | 122.7 ms | 129.6 ms | **137.3 ms** | ±16.2% |
 
-Results are reproducible across 3 runs. Blockfrost configurations show **< 5% variance**, Koios configurations show higher variance (up to 11%) due to external API latency fluctuations. The ranking is stable: Blockfrost+CSL consistently fastest, Koios consistently slowest.
+Blockfrost and Ogmios+Blockfrost show < 5% variance. Koios shows up to 16% variance due to external API latency. Ranking is stable across all 3 runs.
 
-**Winner: Blockfrost + CSL** with 62.5-67.4 ms average (64.4 ms across 3 runs) — ~45% faster than Koios+Buildooor (116.6 ms avg).
-
----
-
-## Response Time Summary (Reference: Blockfrost + CSL)
-
-The tables below show the fastest configuration (Blockfrost + CSL) as primary reference. The full 4-way comparison follows in later sections.
-
-### Read Action Endpoints (POST) — CardanoODataService
-
-| Endpoint | Category | Cold Start (ms) | Warm Avg (ms) | Overall Avg (ms) |
-|----------|----------|----------------:|---------------:|------------------:|
-| GetNetworkInformation | Network | 44.2 | 2.8 | 16.6 |
-| GetLedgerProtocolParameters | Network | 5.6 | 2.8 | 3.8 |
-| GetLatestBlock | Block | 197.7 | 184.4 | 188.8 |
-| GetBlockByHash | Block | 177.6 | 3.0 | 61.2 |
-| GetLatestEpoch | Epoch | 99.1 | 91.0 | 93.7 |
-| GetEpochByNumber | Epoch | 83.9 | 2.3 | 29.5 |
-| GetPoolById | Pool | 109.2 | 2.7 | 38.2 |
-| GetDrepById | DRep | 109.9 | 2.2 | 38.1 |
-| GetAccountByStakeAddress | Account | 974.7 | 2.8 | 326.7 |
-| GetTransactionByHash | Transaction | 237.5 | 2.6 | 80.9 |
-| GetMetadataByTxHash | Metadata | 83.9 | 3.1 | 30.0 |
-| GetAddressByBech32 | Address | 734.9 | 5.1 | 248.4 |
-| GetUTxOsByAddress | Address | 2.9 | 2.0 | 2.3 |
-| GetAssetsByAddress | Address | 2.9 | 2.5 | 2.6 |
-| GetLatestTransactionsByAddress | Address | 2.7 | 1.7 | 2.0 |
-
-### Entity GET Reads (Cached) — CardanoODataService
-
-| Endpoint | Category | Cold Start (ms) | Warm Avg (ms) | Overall Avg (ms) |
-|----------|----------|----------------:|---------------:|------------------:|
-| GET Blocks(hash) | Block | 4.6 | 2.1 | 2.9 |
-| GET Epochs(number) | Epoch | 3.1 | 2.1 | 2.4 |
-| GET Pools(id) | Pool | 2.5 | 2.3 | 2.3 |
-| GET Dreps(id) | DRep | 4.7 | 2.1 | 3.0 |
-| GET Accounts(stake) | Account | 2.4 | 2.1 | 2.2 |
-| GET Transactions(hash) | Transaction | 3.8 | 2.5 | 2.9 |
-| GET Addresses(bech32) | Address | 2.3 | 3.7 | 3.2 |
-| GET NetworkInformation | Network | 2.4 | 1.9 | 2.1 |
-
-### Transaction Build Endpoints (POST) — CardanoTransactionService
-
-| Endpoint | Category | Cold Start (ms) | Warm Avg (ms) | Overall Avg (ms) |
-|----------|----------|----------------:|---------------:|------------------:|
-| BuildSimpleAdaTransaction | TX Build | 100.3 | 88.5 | 92.4 |
-| BuildTxWithMetadata | TX Build | 95.9 | 92.0 | 93.3 |
-| BuildMultiAssetTx | TX Build | 43.9 | 92.3 | 76.2 |
-| BuildMultiAssetTx+Datum | TX Build | 95.8 | 95.0 | 95.3 |
-| SetCollateral (PLUTUS addr) | TX Build | 91.1 | 88.3 | 89.3 |
-| SetCollateral (FUNDS addr) | TX Build | 101.2 | 90.7 | 94.2 |
-| BuildMintTransaction | TX Build | 90.3 | 91.1 | 90.8 |
-| BuildMintTx+RequiredSigners | TX Build | 93.4 | 89.6 | 90.9 |
-| BuildPlutusSpendTx | TX Build | 356.3 | 363.7 | 361.2 |
-| GetTxBuildsByAddress | TX Build | 2.8 | 1.6 | 2.0 |
-
-### Signing Endpoints (POST) — CardanoSignService
-
-| Endpoint | Category | Cold Start (ms) | Warm Avg (ms) | Overall Avg (ms) |
-|----------|----------|----------------:|---------------:|------------------:|
-| GetHsmStatus | Signing | 1.9 | 1.8 | 1.9 |
-| GetSigningReqsByAddress | Signing | 3.3 | 4.5 | 4.1 |
-
-### Chained Signing Flow (Sequential)
-
-| Step | Avg (ms) | Description |
-|------|----------|-------------|
-| GetBuildDetails | 3.3 | Retrieve build by ID |
-| CreateSigningRequest | 6.5 | Create signing request from build |
-| GetSigningRequest | 4.0 | Retrieve signing request by ID |
-| **Total Flow** | **13.8** | Build → SigningRequest → Verify |
+**Winner: Ogmios+Blockfrost CSL** at **62.8 ms** — 6% faster than standalone Blockfrost CSL (66.6 ms), 56% faster than pure Koios (137-142 ms).
 
 ---
 
-## Category Averages (All 4 Configurations)
+## Response Time Summary (Ogmios+Blockfrost CSL, 3-run avg)
 
-| Category | Koios+Buildooor | Koios+CSL | BF+Buildooor | BF+CSL | Best |
-|----------|----------------:|----------:|-------------:|-------:|------|
-| Network | 7.4 | 7.1 | 6.6 | **5.6** | BF+CSL |
-| Block | 178.0 | 161.1 | 86.1 | **84.3** | BF+CSL |
-| Epoch | 79.1 | 92.9 | 44.9 | **41.9** | BF+CSL |
-| Pool | 94.2 | 96.4 | 24.7 | **20.3** | BF+CSL |
-| DRep | 13.9 | 11.3 | 14.5 | **20.5** | Koios+CSL |
-| Account | 568.0 | 555.0 | 169.3 | **164.5** | BF+CSL |
-| Transaction | 46.1 | 16.4 | 48.5 | **41.9** | Koios+CSL |
-| Metadata | 28.1 | 18.8 | 31.2 | **30.0** | Koios+CSL |
-| Address | 107.7 | 37.1 | 52.9 | **51.7** | Koios+CSL |
-| TX Build | 121.7 | 126.9 | 109.0 | **98.9** | BF+CSL |
-| Signing | 4.1 | 4.1 | 3.7 | **4.1** | BF+Buildooor |
+### Read Actions (POST) — CardanoODataService
 
----
+| Endpoint | Category | Avg (ms) | Min (ms) | Max (ms) |
+|----------|----------|----------|----------|----------|
+| GetNetworkInformation | Network | 12.9 | 2.5 | 35.1 |
+| GetLedgerProtocolParameters | Network | 4.4 | 2.5 | 8.8 |
+| GetLatestBlock | Block | 103.9 | 85.9 | 125.9 |
+| GetBlockByHash | Block | 70.9 | 2.2 | 235.4 |
+| GetLatestEpoch | Epoch | 11.8 | 7.9 | 17.9 |
+| GetEpochByNumber | Epoch | 35.3 | 2.7 | 117.7 |
+| GetPoolById | Pool | 4.7 | 2.0 | 9.8 |
+| GetDrepById | DRep | 37.6 | 1.8 | 135.7 |
+| GetAccountByStakeAddress | Account | 5.4 | 2.0 | 13.6 |
+| GetTransactionByHash | Transaction | 116.3 | 1.7 | 364.8 |
+| GetMetadataByTxHash | Metadata | 42.0 | 2.2 | 143.5 |
+| GetAddressByBech32 | Address | 409.0 | 2.5 | 1290.7 |
+| GetUTxOsByAddress | Address | 2.4 | 1.5 | 3.7 |
+| GetAssetsByAddress | Address | 2.6 | 2.2 | 3.5 |
+| GetLatestTransactionsByAddress | Address | 2.6 | 1.7 | 5.8 |
 
-## Full Endpoint Comparison (avg ms)
+### Transaction Builds (POST) — CardanoTransactionService
 
-### Read Actions (POST)
+| Endpoint | Category | Avg (ms) | Min (ms) | Max (ms) |
+|----------|----------|----------|----------|----------|
+| BuildSimpleAdaTransaction | TX Build | 112.6 | 95.8 | 133.2 |
+| BuildTxWithMetadata | TX Build | 109.7 | 96.7 | 122.6 |
+| BuildMultiAssetTx | TX Build | 111.1 | 99.7 | 125.3 |
+| BuildMultiAssetTx+Datum | TX Build | 104.5 | 89.4 | 124.3 |
+| SetCollateral(PLUTUS) | TX Build | 96.0 | 87.0 | 109.2 |
+| SetCollateral(FUNDS) | TX Build | 92.2 | 78.9 | 100.2 |
+| BuildMintTransaction | TX Build | 167.5 | 134.2 | 220.8 |
+| BuildMintTx+RequiredSigners | TX Build | 159.5 | 139.2 | 177.3 |
+| BuildPlutusSpendTx | TX Build | 432.6 | 408.9 | 478.9 |
 
-| Endpoint | Koios+Buildooor | Koios+CSL | BF+Buildooor | BF+CSL |
-|----------|----------------:|----------:|-------------:|-------:|
-| GetNetworkInformation | 16.2 | 14.3 | 13.1 | 16.6 |
-| GetLedgerProtocolParameters | 3.7 | 4.7 | 4.8 | 3.8 |
-| GetLatestBlock | 426.8 | 367.6 | 189.3 | 188.8 |
-| GetBlockByHash | 104.0 | 112.1 | 66.2 | 61.2 |
-| GetLatestEpoch | 194.5 | 244.1 | 96.9 | 93.7 |
-| GetEpochByNumber | 39.7 | 30.9 | 35.9 | 29.5 |
-| GetPoolById | 185.6 | 189.8 | 46.5 | 38.2 |
-| GetDrepById | 25.0 | 20.2 | 26.9 | 38.1 |
-| GetAccountByStakeAddress | 1133.9 | 1107.6 | 336.3 | 326.7 |
-| GetTransactionByHash | 89.6 | 30.7 | 95.1 | 80.9 |
-| GetMetadataByTxHash | 28.1 | 18.8 | 31.2 | 30.0 |
-| GetAddressByBech32 | 526.7 | 176.1 | 255.2 | 248.4 |
-| GetUTxOsByAddress | 2.5 | 2.2 | 1.9 | 2.3 |
-| GetAssetsByAddress | 4.3 | 3.0 | 3.2 | 2.6 |
-| GetLatestTransactionsByAddress | 2.9 | 1.9 | 1.8 | 2.0 |
+### Signing (POST) — CardanoSignService
 
-### Entity GETs (Cached)
-
-| Endpoint | Koios+Buildooor | Koios+CSL | BF+Buildooor | BF+CSL |
-|----------|----------------:|----------:|-------------:|-------:|
-| GET Blocks(hash) | 3.3 | 3.7 | 2.7 | 2.9 |
-| GET Epochs(number) | 3.1 | 3.9 | 2.0 | 2.4 |
-| GET Pools(id) | 2.8 | 2.9 | 3.0 | 2.3 |
-| GET Dreps(id) | 2.7 | 2.3 | 2.0 | 3.0 |
-| GET Accounts(stake) | 2.2 | 2.4 | 2.3 | 2.2 |
-| GET Transactions(hash) | 2.6 | 2.1 | 1.9 | 2.9 |
-| GET Addresses(bech32) | 2.3 | 2.3 | 2.7 | 3.2 |
-| GET NetworkInformation | 2.3 | 2.2 | 2.0 | 2.1 |
-
-### Transaction Builds (POST)
-
-| Endpoint | Koios+Buildooor | Koios+CSL | BF+Buildooor | BF+CSL |
-|----------|----------------:|----------:|-------------:|-------:|
-| BuildSimpleAdaTransaction | 135.1 | 141.3 | 121.4 | 92.4 |
-| BuildTxWithMetadata | 211.3 | 135.8 | 108.6 | 93.3 |
-| BuildMultiAssetTx | 135.2 | 198.5 | 86.8 | 76.2 |
-| BuildMultiAssetTx+Datum | 130.2 | 139.3 | 96.6 | 95.3 |
-| SetCollateral(PLUTUS) | 129.2 | 126.2 | 87.2 | 89.3 |
-| SetCollateral(FUNDS) | 121.6 | 126.4 | 86.4 | 94.2 |
-| BuildMintTransaction | 153.8 | 169.4 | 116.0 | 90.8 |
-| BuildMintTx+RequiredSigners | 74.8 | 133.1 | 110.2 | 90.9 |
-| BuildPlutusSpendTx | 273.2 | 193.1 | 378.4 | 361.2 |
-| GetTxBuildsByAddress | 4.0 | 2.7 | 2.8 | 2.0 |
-
-### Signing & Chained Flow (POST)
-
-| Endpoint | Koios+Buildooor | Koios+CSL | BF+Buildooor | BF+CSL |
-|----------|----------------:|----------:|-------------:|-------:|
-| GetHsmStatus | 1.6 | 1.7 | 1.4 | 1.9 |
-| GetSigningReqsByAddress | 2.0 | 2.5 | 2.3 | 4.1 |
-| GetBuildDetails | 2.3 | 2.9 | 2.9 | 3.3 |
-| CreateSigningRequest | 8.5 | 7.0 | 6.8 | 6.5 |
-| GetSigningRequest | 4.2 | 5.3 | 4.3 | 4.0 |
+| Endpoint | Avg (ms) |
+|----------|----------|
+| GetHsmStatus | 1.6 |
+| GetSigningReqsByAddress | 2.8 |
+| GetBuildDetails → CreateSigningRequest → GetSigningRequest | **~17.7 total** |
 
 ---
 
-## Backend Comparison: Koios vs Blockfrost
+## Full 8-Way Endpoint Comparison (3-run avg, ms)
 
-Isolating the backend impact by averaging across both TX builders for each backend:
+### Read Actions
 
-| Metric | Koios (avg) | Blockfrost (avg) | Diff |
-|--------|------------:|-----------------:|-----:|
-| **Avg Response** | 109.8 ms | 65.4 ms | **-40%** |
-| **Startup Time** | 9.4s | 9.3s | -1% |
+| Endpoint | Koios BDR | Koios CSL | BF BDR | BF CSL | O+K BDR | O+K CSL | O+BF BDR | O+BF CSL |
+|----------|----------:|----------:|-------:|-------:|--------:|--------:|---------:|---------:|
+| GetNetworkInfo | 19.5 | 14.2 | 14.3 | 10.9 | 12.9 | 12.0 | 21.4 | **12.9** |
+| GetProtocolParams | 4.7 | 6.4 | 6.4 | 4.8 | 3.8 | 4.5 | 5.0 | **4.4** |
+| GetLatestBlock | 689.7 | 513.3 | 193.2 | 191.0 | 381.8 | 363.6 | 104.0 | **103.9** |
+| GetBlockByHash | 223.0 | 222.5 | 67.1 | 64.2 | 253.5 | 173.5 | 73.1 | **70.9** |
+| GetLatestEpoch | 364.6 | 572.6 | 99.1 | 98.2 | 12.6 | 10.4 | 10.7 | **11.8** |
+| GetEpochByNumber | 122.5 | 126.4 | 38.1 | 37.2 | 33.1 | 29.8 | 34.4 | **35.3** |
+| GetPoolById | 277.7 | 124.1 | 61.1 | 36.9 | 6.1 | 4.7 | 4.8 | **4.7** |
+| GetDrepById | 54.6 | 81.6 | 48.9 | 31.9 | 26.3 | 31.0 | 39.3 | **37.6** |
+| GetAccountByStakeAddr | 1045.2 | 1217.3 | 387.2 | 345.2 | 5.7 | 5.3 | 5.0 | **5.4** |
+| GetTransactionByHash | 43.7 | 82.9 | 111.4 | 95.8 | 110.2 | 107.3 | 106.8 | **116.3** |
+| GetMetadataByTxHash | 30.2 | 52.9 | 35.6 | 33.6 | 34.9 | 35.1 | 34.1 | **42.0** |
+| GetAddressByBech32 | 510.4 | 493.3 | 249.7 | 265.2 | 404.1 | 385.3 | 425.0 | **409.0** |
+| GetUTxOsByAddress | 2.4 | 2.2 | 1.9 | 2.1 | 3.2 | 2.5 | 3.2 | **2.4** |
+| GetAssetsByAddress | 3.1 | 2.6 | 2.6 | 2.5 | 3.7 | 2.6 | 2.5 | **2.6** |
+| GetLatestTxsByAddr | 2.5 | 3.0 | 2.4 | 2.4 | 3.8 | 2.3 | 2.9 | **2.6** |
 
-### Where Each Backend Wins
+### Transaction Builds
 
-**Blockfrost is faster on most endpoints**, particularly:
-
-| Endpoint | Koios (ms) | Blockfrost (ms) | Diff |
-|----------|----------:|-----------------:|-----:|
-| GetAccountByStakeAddress | 1120.7 | 331.5 | **-70%** |
-| GetPoolById | 187.7 | 42.3 | **-77%** |
-| GetLatestBlock | 397.2 | 189.1 | **-52%** |
-| GetLatestEpoch | 219.3 | 95.3 | **-57%** |
-| GetBlockByHash | 108.0 | 63.7 | **-41%** |
-| BuildSimpleAdaTransaction | 138.2 | 106.9 | **-23%** |
-| BuildMintTransaction | 161.6 | 103.4 | **-36%** |
-
-**Koios is faster on a few endpoints:**
-
-| Endpoint | Koios (ms) | Blockfrost (ms) | Diff |
-|----------|----------:|-----------------:|-----:|
-| GetDrepById | 22.6 | 32.5 | -31% |
-| GetTransactionByHash | 60.2 | 87.5 | -31% |
-| GetAddressByBech32 | 351.4 | 251.8 | Koios 39% slower here |
-
-### Analysis
-
-1. **Blockfrost is ~40% faster overall** — primarily due to faster pool, epoch, block, and account lookups
-2. **Koios wins on DRep and Transaction queries** — its `/tx_info` endpoint returns richer data per call
-3. **Biggest gap: GetAccountByStakeAddress** — Koios takes 1121ms vs Blockfrost's 332ms (3.4x slower)
-4. **Both backends deliver identical cache performance** — warm reads are 2-5ms regardless of backend (SQLite-only)
-5. **Server startup is equivalent** — both ~9.3s (CAP bootstrap dominates)
-6. **Both achieve 100% success rate** — all 108 calls succeed on both backends
+| Endpoint | Koios BDR | Koios CSL | BF BDR | BF CSL | O+K BDR | O+K CSL | O+BF BDR | O+BF CSL |
+|----------|----------:|----------:|-------:|-------:|--------:|--------:|---------:|---------:|
+| BuildSimpleAdaTx | 154.5 | 189.4 | 108.4 | 96.5 | 183.0 | 135.4 | 111.5 | **112.6** |
+| BuildTxWithMetadata | 150.4 | 158.1 | 102.6 | 102.0 | 159.0 | 132.7 | 113.1 | **109.7** |
+| BuildMultiAssetTx | 155.9 | 155.0 | 98.4 | 94.3 | 163.1 | 148.8 | 98.8 | **111.1** |
+| BuildMultiAssetTx+Datum | 147.5 | 147.4 | 101.0 | 98.9 | 151.4 | 139.3 | 103.7 | **104.5** |
+| SetCollateral(PLUTUS) | 134.3 | 135.8 | 94.4 | 89.0 | 134.7 | 152.9 | 96.5 | **96.0** |
+| SetCollateral(FUNDS) | 126.6 | 126.6 | 99.6 | 82.6 | 125.6 | 185.3 | 95.6 | **92.2** |
+| BuildMintTx | 147.8 | 190.8 | 129.5 | 104.5 | 226.1 | 254.5 | 175.6 | **167.5** |
+| BuildMintTx+ReqSigners | 163.5 | 139.7 | 107.9 | 94.8 | 250.6 | 189.6 | 165.1 | **159.5** |
+| BuildPlutusSpendTx | 351.6 | 301.2 | 400.8 | 381.0 | 344.2 | 439.8 | 455.8 | **432.6** |
 
 ---
 
-## TX Builder Comparison: Buildooor vs CSL
+## Backend Comparison
 
-Isolating the TX builder impact by comparing same-backend pairs on tx-build endpoints only:
+### Ogmios Eliminates Slow Queries
 
-### Koios Backend
+| Endpoint | Pure Koios | Ogmios+Koios | Improvement | Pure BF | Ogmios+BF | Improvement |
+|----------|----------:|-----------:|:-----------:|-------:|----------:|:-----------:|
+| GetAccountByStakeAddr | 1131 ms | **5.5 ms** | **99.5%** | 366 ms | **5.2 ms** | **98.6%** |
+| GetPoolById | 201 ms | **5.4 ms** | **97.3%** | 49 ms | **4.8 ms** | **90.2%** |
+| GetLatestEpoch | 469 ms | **11.5 ms** | **97.5%** | 99 ms | **11.3 ms** | **88.6%** |
+| GetLatestBlock | 602 ms | 373 ms | 38.0% | 192 ms | **104 ms** | 45.8% |
 
-| Endpoint | Buildooor (ms) | CSL (ms) | Diff |
-|----------|---------------:|---------:|-----:|
-| BuildSimpleAdaTransaction | 135.1 | 141.3 | +5% |
-| BuildTxWithMetadata | 211.3 | 135.8 | -36% |
-| BuildMultiAssetTx | 135.2 | 198.5 | +47% |
-| BuildMultiAssetTx+Datum | 130.2 | 139.3 | +7% |
-| BuildMintTransaction | 153.8 | 169.4 | +10% |
-| BuildMintTx+RequiredSigners | 74.8 | 133.1 | +78% |
-| BuildPlutusSpendTx | 273.2 | 193.1 | -29% |
-| **Avg (build endpoints)** | **159.1** | **158.8** | **~0%** |
+### Standalone: Koios vs Blockfrost
+
+| Metric | Koios | Blockfrost | Diff |
+|--------|------:|-----------:|-----:|
+| Avg Response | 139.5 ms | 69.3 ms | **-50%** |
+| Startup | 7.9s | 7.2s | -9% |
+
+### Hybrid: Ogmios+Koios vs Ogmios+Blockfrost
+
+| Metric | Ogmios+Koios | Ogmios+BF | Diff |
+|--------|-------------:|----------:|-----:|
+| Avg Response | 88.6 ms | 64.4 ms | **-27%** |
+| Startup | 7.3s | 7.2s | ~same |
+
+---
+
+## TX Builder Comparison: Buildooor vs CSL (3-run avg)
 
 ### Blockfrost Backend
 
 | Endpoint | Buildooor (ms) | CSL (ms) | Diff |
 |----------|---------------:|---------:|-----:|
-| BuildSimpleAdaTransaction | 121.4 | 92.4 | -24% |
-| BuildTxWithMetadata | 108.6 | 93.3 | -14% |
-| BuildMultiAssetTx | 86.8 | 76.2 | -12% |
-| BuildMultiAssetTx+Datum | 96.6 | 95.3 | -1% |
-| BuildMintTransaction | 116.0 | 90.8 | -22% |
-| BuildMintTx+RequiredSigners | 110.2 | 90.9 | -18% |
-| BuildPlutusSpendTx | 378.4 | 361.2 | -5% |
-| **Avg (build endpoints)** | **145.4** | **128.6** | **-12%** |
+| BuildSimpleAdaTx | 108.4 | 96.5 | -11% |
+| BuildMultiAssetTx | 98.4 | 94.3 | -4% |
+| BuildMintTx | 129.5 | 104.5 | -19% |
+| BuildPlutusSpendTx | 400.8 | 381.0 | -5% |
+| **Avg (build endpoints)** | **149.8** | **138.9** | **-7%** |
 
-### Analysis
+### Ogmios+Blockfrost Backend
 
-1. **Performance difference is minimal** — CSL is slightly faster on Blockfrost (~12%), tied on Koios
-2. **Individual endpoints vary significantly** — no consistent winner per transaction type
-3. **BuildPlutusSpendTx is the slowest for both builders** — script evaluation dominates regardless of builder
-4. **Builder choice should be driven by compatibility, not performance:**
-   - **Buildooor**: Correct PlutusV3 `scriptDataHash` computation, no `PPViewHashesDontMatch` errors
-   - **CSL**: Known issue with Conway PlutusV3 cost models — use Buildooor for Plutus V3 transactions
+| Endpoint | Buildooor (ms) | CSL (ms) | Diff |
+|----------|---------------:|---------:|-----:|
+| BuildSimpleAdaTx | 111.5 | 112.6 | +1% |
+| BuildMultiAssetTx | 98.8 | 111.1 | +12% |
+| BuildMintTx | 175.6 | 167.5 | -5% |
+| BuildPlutusSpendTx | 455.8 | 432.6 | -5% |
+| **Avg (build endpoints)** | **174.8** | **171.1** | **-2%** |
+
+**Conclusion:** Performance difference is minimal (~2-7%). Builder choice should be driven by **compatibility**: Buildooor handles PlutusV3 correctly, CSL has a known `PPViewHashesDontMatch` issue with Conway PlutusV3.
 
 ---
 
-## Cache Effectiveness (Read Endpoints)
-
-Averaged across all 4 configurations:
+## Cache Effectiveness
 
 | Metric | Value |
 |--------|------:|
-| Avg Cold Start (read endpoints) | 267.4 ms |
-| Avg Warm Response (read endpoints) | 3.1 ms |
-| **Cold → Warm Improvement** | **98.8%** |
-| Fastest Endpoint | GetHsmStatus (1.6 ms avg) |
-| Slowest Endpoint | GetAccountByStakeAddress (1134 ms on Koios) |
+| Avg Cold Start (read endpoints) | 245 ms |
+| Avg Warm Response (cached) | 2.7 ms |
+| **Cold → Warm Improvement** | **98.9%** |
 
-Once data is indexed in SQLite, all subsequent reads are served in **2-5ms** regardless of backend or builder — the cache layer eliminates backend latency entirely for repeat queries.
-
-## Transaction Build Performance
-
-Transaction build endpoints are consistently in the 76-378ms range (Blockfrost) or 75-273ms range (Koios) because each build requires:
-
-1. **UTxO Fetching** (~50-200ms) — Fetch sender UTxOs from backend for coin selection
-2. **Protocol Parameters** (~2-5ms) — Read from cache (already indexed)
-3. **Transaction Construction** (~30-100ms) — Builder assembles inputs, outputs, witnesses
-4. **Plutus Evaluation** (~150-300ms additional) — For Plutus transactions, execution unit estimation
-
-| Transaction Type | BF+CSL (ms) | BF+Buildooor (ms) | Koios+CSL (ms) | Koios+Buildooor (ms) |
-|-----------------|------------:|-------------------:|---------------:|---------------------:|
-| Simple ADA Transfer | 92 | 121 | 141 | 135 |
-| With Metadata | 93 | 109 | 136 | 211 |
-| Multi-Asset | 76 | 87 | 199 | 135 |
-| Multi-Asset + Datum | 95 | 97 | 139 | 130 |
-| Minting | 91 | 116 | 169 | 154 |
-| Minting + RequiredSigners | 91 | 110 | 133 | 75 |
-| Plutus Spend | 361 | 378 | 193 | 273 |
+Once indexed in SQLite, all reads serve in **2-5ms** regardless of backend or builder.
 
 ---
 
 ## Key Findings
 
-### 1. Blockfrost is ~40% Faster Than Koios Overall
-
-Blockfrost delivers 65ms average response time vs Koios's 110ms. The gap is largest on account and pool queries where Koios requires multiple API round-trips. Blockfrost's REST endpoints return complete data in a single call.
-
-### 2. TX Builder Choice Has Minimal Performance Impact
-
-CSL and Buildooor perform within ~12% of each other. The choice should be driven by **compatibility**: Buildooor correctly handles PlutusV3 `scriptDataHash` computation, while CSL has a known `PPViewHashesDontMatch` issue with Conway PlutusV3 transactions.
-
-### 3. SQLite Cache Eliminates Backend Latency
-
-Warm cache reads complete in 2-5ms regardless of backend or builder — a **98.8% reduction** from cold start times. The database layer adds less than 1ms per operation.
-
-### 4. Backend Calls Dominate Cold Start Latency
-
-Cold start times directly correlate with the number and type of blockchain API calls:
-- **GetAccountByStakeAddress** (975-3394ms cold): Requires multiple API calls for stake account data
-- **GetAddressByBech32** (521-1574ms cold): Fetches UTxOs + transaction history + assets
-- **GetLatestBlock** (198-555ms cold): Always queries chain tip (not cacheable)
-
-### 5. Signing Service is Pure Local
-
-All signing endpoints operate entirely on local SQLite data with no backend calls, resulting in sub-10ms responses. The full signing flow (GetBuildDetails → CreateSigningRequest → GetSigningRequest) completes in ~14ms.
-
-### 6. Server Startup is Backend-Independent
-
-All 4 configurations start in ~9.2-9.5s. CAP framework bootstrap dominates startup time, not backend initialization.
-
-### 7. Ogmios UTxO Routing Optimization
-
-**Problem discovered:** When Ogmios is configured as an additional backend (`BACKENDS=ogmios,blockfrost`), the `METHOD_ROUTING` config originally routed `getAddressUtxos` with `preferLive: true` — meaning all UTxO queries went to Ogmios first. This caused **+615ms overhead per TX build** (734ms vs 119ms), making Ogmios+Blockfrost **6x slower** than Blockfrost alone for transaction building.
-
-**Root cause:** Ogmios UTxO queries (`stateQueryClient.utxo()`) scan the Cardano node's in-memory ledger state. On typical setups (Docker, WSL, or non-dedicated hardware), this takes **600-1200ms per query** — significantly slower than Blockfrost's indexed REST API (~80ms cold, ~3ms cached).
-
-| Setup | Raw Ogmios UTxO Latency | Expected |
-|-------|------------------------|----------|
-| Docker on WSL (Windows) | ~640ms | - |
-| Native WSL (Linux on Windows) | ~1050ms | - |
-| Dedicated Linux server + SSD | 5-50ms | Optimal |
-
-**Fix applied (v0.3.25):** Changed `getAddressUtxos` routing to `preferLive: false` in `srv/blockchain/cardano-client.ts`. UTxO queries now go to Blockfrost/Koios (indexed, ~3ms cached) with Ogmios as fallback.
-
-**Result after fix — Blockfrost vs Ogmios+Blockfrost (TX-build endpoints, 5 rounds):**
-
-| Endpoint | BF only | Ogmios+BF | Diff |
-|----------|--------:|----------:|-----:|
-| BuildSimpleAdaTransaction | 131ms | 104ms | -27ms |
-| BuildTxWithMetadata | 107ms | 93ms | -14ms |
-| BuildMultiAssetTx | 109ms | 104ms | ~same |
-| BuildMultiAssetTx+Datum | 112ms | 93ms | -19ms |
-| SetCollateral | 91ms | 92ms | ~same |
-| BuildMintTransaction | 121ms | 168ms | +47ms |
-| BuildMintTx+RequiredSigners | 109ms | 156ms | +47ms |
-| BuildPlutusSpendTx | 409ms | 401ms | ~same |
-| **OVERALL AVG** | **128ms** | **130ms** | **~same** |
-
-Ogmios now only adds ~47ms for Plutus mint transactions (dynamic ExUnit evaluation via `evaluateTransaction`). Simple/Metadata/MultiAsset builds are unaffected. Ogmios remains the preferred backend for:
-- **Transaction evaluation** (`evaluateTransaction`) — accurate ExUnits for Plutus scripts
-- **Transaction submission** (`submitTransaction`) — direct to local node mempool
-
-**Benchmark scripts used:**
-- `scripts/perf/perf-ogmios-eval.ts` — Blockfrost vs Ogmios+Blockfrost TX-build comparison
-- `scripts/perf/perf-utxo-fetch.ts` — Isolated UTxO fetch comparison (OData read layer)
-- `scripts/perf/perf-ogmios-raw.ts` — Raw Ogmios WebSocket latency (no ODATANO server)
-
+1. **Ogmios+Blockfrost CSL is fastest** — 62.8ms avg, 6% faster than standalone Blockfrost (66.6ms)
+2. **Ogmios eliminates Koios's weakness** — GetAccountByStakeAddress drops from 1131ms to 5.5ms (99.5%)
+3. **Blockfrost is 50% faster than Koios** standalone (69ms vs 140ms)
+4. **TX builder choice is about compatibility, not speed** — CSL vs Buildooor differ by <7%
+5. **SQLite cache equalizes all backends** — warm reads 2-5ms regardless of config (98.9% reduction)
+6. **BuildPlutusSpendTx is the universal bottleneck** — 301-456ms (script evaluation dominates)
+7. **Signing is pure local** — sub-4ms, full flow ~18ms
+8. **Blockfrost configs show < 5% variance**, Koios up to 16% due to external API latency
+9. **100% reliability** — 2592/2592 calls succeeded
 ---
 
-## Architecture: How Caching Works
+## Caching Architecture
 
 ```
 Request → OData Handler → Check SQLite Cache (TTL)
                             ├── HIT  → Return cached data (2-5ms)
-                            └── MISS → Fetch from Backend → UPSERT into SQLite → Return
-                                        ├── Blockfrost (primary, 30-330ms)
-                                        ├── Koios     (alternative, 40-1100ms)
-                                        └── Ogmios    (fallback for UTxOs, evaluation + submission)
+                            └── MISS → Fetch from Backend → UPSERT → Return
+                                        ├── Ogmios    (live: pools, accounts, epochs)
+                                        ├── Blockfrost (historical: blocks, txs, addresses)
+                                        └── Koios     (alternative to Blockfrost)
 ```
 
-- **Cache TTL:** Configurable per entity (default: 1 hour via `indexTtlMs`)
-- **Eviction:** Temporal `validFrom`/`validTo` fields checked on read
-- **Concurrency:** Request coalescing prevents cache stampede for identical concurrent requests
+Cache TTL: 1 hour default (`indexTtlMs`). Request coalescing prevents cache stampede.
 
-## OpenTelemetry Tracing
+## Recommended Configuration
 
-With `@cap-js/telemetry` installed, every request produces a hierarchical trace showing exact timing for each sub-operation:
-
-```
-POST /$batch                                    1250.37 ms
-  CardanoODataService - handle GetUTxOsByAddress  1242.90 ms
-    db - READ AddressUTxOs (cache check)             1.79 ms
-    db - DELETE AddressUTxOs (evict stale)          10.42 ms
-    POST /api/v1/address_txs (Koios)               332.42 ms  ← backend call
-    POST /api/v1/tx_info (Koios)                   134.52 ms  ← backend call
-    db - UPSERT Addresses                             2.03 ms
-    db - UPSERT AddressAssets                         1.71 ms
-    db - UPSERT AddressUTxOs                          0.54 ms
-    db - READ AddressUTxOs (return cached)            1.08 ms
-```
-
-This confirms that **>95% of cold start time is spent on blockchain backend API calls**, while database operations account for less than 2% of total request time.
+| Use Case | Configuration | Avg Response |
+|----------|--------------|-------------:|
+| **Production (Ogmios available)** | Ogmios+Blockfrost CSL | **62.8 ms** |
+| **Production (no Ogmios)** | Blockfrost CSL | **66.6 ms** |
+| **Plutus V3 transactions** | Ogmios+Blockfrost Buildooor | **65.9 ms** |
+| **Free tier / no API keys** | Ogmios+Koios CSL | **86.7 ms** |
 
 ## How to Reproduce
 
-### Single Backend Benchmark
-
 ```bash
-# 1. Start the server
-cds watch
-
-# 2. Run the benchmark (in a second terminal)
-npx tsx scripts/perf/perf-benchmark.ts
-
-# Options
-npx tsx scripts/perf/perf-benchmark.ts --rounds 10      # More rounds for stable averages
-npx tsx scripts/perf/perf-benchmark.ts --base http://host:port  # Different server
-npx tsx scripts/perf/perf-benchmark.ts --output results.json    # Custom output file
-```
-
-Results are saved to `scripts/perf/perf-results.json` with full per-round data, statistics, and summary.
-
-### Full 4-Way Comparison (Automated)
-
-```bash
-# Automatically starts servers with all 4 backend×builder combinations,
-# benchmarks each, cleans SQLite cache between runs, and outputs comparison.
-# Requires BLOCKFROST_API_KEY and KOIOS_API_KEY in .env
+# Full 8-way comparison (automated server start/stop, cache wipe between configs)
+# Requires BLOCKFROST_API_KEY, KOIOS_API_KEY, and OGMIOS_URL in .env
 npx tsx scripts/perf/perf-compare.ts
-
-# Options
-npx tsx scripts/perf/perf-compare.ts --rounds 5         # More rounds for stable averages
-npx tsx scripts/perf/perf-compare.ts --port 4006        # Use different port
+npx tsx scripts/perf/perf-compare.ts --rounds 5 --port 4006
 ```
 
-The comparison script tests these 4 configurations sequentially:
+### Raw Result Files
 
-| Config | Backend | TX Builder |
-|--------|---------|-----------|
-| `koios_buildooor` | Koios | Buildooor |
-| `koios_csl` | Koios | CSL |
-| `blockfrost_buildooor` | Blockfrost | Buildooor |
-| `blockfrost_csl` | Blockfrost | CSL |
-
-Between each configuration, the SQLite database is deleted and redeployed to ensure fair cold-start measurements. Results are saved to `scripts/perf/perf-compare-results.json`.
-
-For detailed per-request tracing, the `@cap-js/telemetry` plugin outputs elapsed times to the server console automatically.
+- [`perf-compare-results_run1.json`](../scripts/perf/perf-compare-results_run1.json) — Run 1 (20:17 UTC)
+- [`perf-compare-results_run2.json`](../scripts/perf/perf-compare-results_run2.json) — Run 2 (20:30 UTC)
+- [`perf-compare-results_run3.json`](../scripts/perf/perf-compare-results_run3.json) — Run 3 (20:37 UTC)

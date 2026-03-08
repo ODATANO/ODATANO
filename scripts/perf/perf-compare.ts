@@ -23,7 +23,7 @@ import * as dotenv from "dotenv";
 import { runBenchmark, BenchmarkReport } from "./perf-benchmark";
 
 // Load .env
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+dotenv.config({ path: path.join(__dirname, "..", "..", ".env") });
 
 // --- Config ---
 
@@ -169,7 +169,7 @@ function startServer(config: BackendConfig): ChildProcess {
     env,
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,
-    cwd: path.join(__dirname, ".."),
+    cwd: path.join(__dirname, "..", ".."),
   });
 
   // Pipe server output for debugging (prefixed)
@@ -212,7 +212,7 @@ function startServer(config: BackendConfig): ChildProcess {
 
 /** Delete SQLite database files and redeploy schema for a clean cache */
 function cleanDatabase() {
-  const projectDir = path.join(__dirname, "..");
+  const projectDir = path.join(__dirname, "..", "..");
   const dbFiles = ["db.sqlite", "db.sqlite-shm", "db.sqlite-wal"];
   for (const file of dbFiles) {
     const filePath = path.join(projectDir, file);
