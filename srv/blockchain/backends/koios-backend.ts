@@ -72,7 +72,26 @@ export class KoiosBackend implements CardanoBackend {
     return true;
   }
 
-  /** 
+  /**
+   * Retry a Koios API call once if the result is an empty array.
+   * Koios sometimes returns [] transiently for valid queries.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async fetchWithRetryOnEmpty(
+    fn: () => Promise<{ data: any[] }>,
+    label: string
+  ): Promise<any[]> {
+    const first = await fn();
+    if (Array.isArray(first.data) && first.data.length === 0) {
+      logger.warn(`${label}: Koios returned empty array, retrying once...`);
+      await new Promise(r => setTimeout(r, 500));
+      const second = await fn();
+      return second.data;
+    }
+    return first.data;
+  }
+
+  /**
    * Get Transaction Data for specified transaction hash
    * @param hash transaction hash (hex)
    * @returns {Promise<Transaction>} transaction data
@@ -113,13 +132,16 @@ export class KoiosBackend implements CardanoBackend {
 
     return handleBackendRequest(
       async () => {
-        const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
+        const results = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_info', { _block_hashes: [blockHash] }),
+          `getBlock(${blockHash})`
+        );
 
-        if (!blockData.data || !Array.isArray(blockData.data) || blockData.data.length === 0) {
+        if (!results || results.length === 0) {
           throw new NotFoundError('Block', this.name);
         }
 
-        const data = blockData.data[0];
+        const data = results[0];
 
         return {
           time: data.block_time,
@@ -147,16 +169,16 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
 
-        // get data of the given epoch
-        let epochData;
+        const results = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } }),
+          `getEpoch(${epochNumber})`
+        );
 
-        epochData = await this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } });
-
-        if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
+        if (!results || results.length === 0) {
           throw new NotFoundError('Epoch', this.name);
         }
 
-        const data = epochData.data[0];
+        const data = results[0];
 
         return {
           epoch: data.epoch_no,
@@ -592,13 +614,16 @@ export class KoiosBackend implements CardanoBackend {
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/tip');
+        const tipData = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/tip'),
+          'getLatestBlock'
+        );
 
-        if (!data || !Array.isArray(data) || data.length === 0) {
+        if (!tipData || tipData.length === 0) {
           throw new NotFoundError('LatestBlock', this.name);
         }
 
-        return await this.getBlock(data[0].hash);
+        return await this.getBlock(tipData[0].hash);
       },
       this.name
     );
@@ -611,13 +636,16 @@ export class KoiosBackend implements CardanoBackend {
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/tip');
+        const tipData = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/tip'),
+          'getLatestEpoch'
+        );
 
-        if (!data || !Array.isArray(data) || data.length === 0) {
+        if (!tipData || tipData.length === 0) {
           throw new NotFoundError('LatestEpoch', this.name);
         }
 
-        const epochNo = data[0].epoch_no;
+        const epochNo = tipData[0].epoch_no;
         try {
           return await this.getEpoch(epochNo);
         } catch {
