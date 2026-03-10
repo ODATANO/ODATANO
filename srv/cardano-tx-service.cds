@@ -8,6 +8,9 @@ using {Bech32, Lovelace} from '../db/types';
  * Handles transaction building and submission operations.
  * Separate from the read-only CardanoODataService to provide
  * clear separation between general query and command operations.
+ *
+ * Security note: see CardanoODataService (cardano-service.cds) for the rationale
+ * on service-level auth without per-resource ownership enforcement.
  */
 @requires: 'authenticated-user'
 service CardanoTransactionService @(impl: './cardano-tx-service') {

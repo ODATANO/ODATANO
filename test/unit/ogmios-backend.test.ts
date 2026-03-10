@@ -70,7 +70,7 @@ describe('OgmiosBackend', () => {
 
     it('should accept wss:// scheme', () => {
       // Will fail on connection, but URL validation should pass
-      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'wss://ogmios.example.com:1337');
+      const _backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'wss://ogmios.example.com:1337');
       // validateOgmiosUrl is called in init(), which will fail on createInteractionContext, not URL validation
       expect(() => (OgmiosBackend as any).validateOgmiosUrl('wss://ogmios.example.com:1337')).not.toThrow();
     });

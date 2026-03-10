@@ -8,7 +8,7 @@ const mockRun = jest.fn().mockResolvedValue(undefined);
 const mockTx = { run: mockRun };
 
 jest.mock('@sap/cds', () => {
-  const mockInto = (entries: any) => entries;
+  const _mockInto = (entries: any) => entries;
   const mockEntries = jest.fn().mockReturnValue({});
   const mockFrom = jest.fn().mockReturnValue({
     columns: jest.fn().mockReturnValue({
@@ -486,7 +486,7 @@ describe('CardanoIndexer', () => {
       mockRun.mockResolvedValueOnce(null); // SELECT returns null
       mockClient.getProtocolParameters.mockResolvedValue({ epoch: 200 });
 
-      const result = await indexer.indexProtocolParameters(mockTx as any);
+      await indexer.indexProtocolParameters(mockTx as any);
 
       expect(mockClient.getProtocolParameters).toHaveBeenCalled();
     });

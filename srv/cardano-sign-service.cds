@@ -9,6 +9,9 @@ using {Bech32} from '../db/types';
  * - Verifying signatures of signed transactions and storing verification results
  * - Submitting verified transactions to the blockchain and tracking submission status
  * - Providing actions for signing with a Hardware Security Module (HSM) and retrieving HSM status
+ *
+ * Security note: see CardanoODataService (cardano-service.cds) for the rationale
+ * on service-level auth without per-resource ownership enforcement.
  */
 @requires: 'authenticated-user'
 service CardanoSignService @(impl: './cardano-sign-service') {
