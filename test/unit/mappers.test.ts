@@ -259,7 +259,7 @@ describe('mappers', () => {
       expect(result.type).toBe('shelley');
       expect(result.isScript).toBe(true);
       expect(result.totalLovelace).toBe('10000000');
-      expect(result.hasAssets).toBe(true);
+      expect(result.hasAssets).toBe(false); // lovelace-only — no native assets
       expect(result.hasUTxOs).toBe(true);
     });
 

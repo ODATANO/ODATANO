@@ -173,8 +173,7 @@ export class CardanoIndexer {
   async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
     const addrData = await this.client.getAddress(addr);
 
-    logger.debug(`indexAddress: provider response for address ${addr}`);
-    logger.debug({ addrData }, 'indexAddress: provider response');
+    logger.debug(`indexAddress: provider response for ${addr}: ${addrData.amount?.length ?? 0} amounts, ${addrData.utxos?.length ?? 0} utxos`);
 
     const AddrEntity = mapAddress(addr, addrData, this.client.max_age_ms);
     const now = new Date().toISOString();
@@ -196,7 +195,7 @@ export class CardanoIndexer {
 
     const assetEntities = mapAddressAssets(addr, validFrom, validTo, addrData.amount);
 
-    logger.debug({ assetEntities }, 'indexAddress: asset entities');
+    logger.debug(`indexAddress: ${assetEntities.length} asset entities`);
 
     if (assetEntities.length > 0) {
       await tx.run(UPSERT.into(AddressAssets).entries(assetEntities));
@@ -205,14 +204,14 @@ export class CardanoIndexer {
     // UTxOs are included in getAddress response
     const utxoEntities = mapAddressUtxos(addr, validFrom, validTo, addrData.utxos);
 
-    logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
+    logger.debug(`indexAddress: ${utxoEntities.length} utxo entities`);
 
     if (utxoEntities.length) {
       await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
     }
 
     const utxoAssetEntities = mapAddressUtxoAssets(addrData.utxos, validFrom, validTo);
-    logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
+    logger.debug(`indexAddress: ${utxoAssetEntities.length} utxo asset entities`);
 
     if (utxoAssetEntities.length) {
       // Remove possible duplicates before upsert
@@ -226,13 +225,21 @@ export class CardanoIndexer {
 
       logger.debug(`indexAddress: ${utxoAssetEntities.length} assets, ${uniqueAssets.length} unique (removed ${utxoAssetEntities.length - uniqueAssets.length} duplicates)`);
       await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
-
-      try {
-        await this.indexAddressTransactions(tx, addr, 10);
-      } catch (err) {
-        logger.error(`indexAddressTransactions failed for address ${addr}: ${(err as Error).message}`);
-      }
     }
+
+    // Always pre-index recent transactions (regardless of asset presence)
+    try {
+      const txEntities = await this.indexAddressTransactions(tx, addr, 10);
+      if (txEntities.length > 0) {
+        await tx.run(
+          UPDATE.entity(Addresses).set({ hasTransactions: true }).where({ address: addr })
+        );
+        AddrEntity.hasTransactions = true;
+      }
+    } catch (err) {
+      logger.error(`indexAddressTransactions failed for address ${addr}: ${(err as Error).message}`);
+    }
+
     return AddrEntity;
   }
 

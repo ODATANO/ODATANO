@@ -963,6 +963,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           const TxService = await cds.connect.to('CardanoTransactionService');
           const { TransactionSubmissions } = TxService.entities;
 
+          // Mock tx_info returning empty array (tx not yet confirmed on-chain)
+          nock('https://preview.koios.rest')
+            .post('/api/v1/tx_info', (body: any) => body._tx_hashes?.includes('dummyhash'))
+            .reply(200, []);
+
           await cds.run(INSERT.into(TransactionSubmissions).entries({
             id: '12345678-1234-1234-1234-1234567890ab',
             signedTxCbor: 'dummycbor',

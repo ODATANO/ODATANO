@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
+import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
@@ -641,9 +641,15 @@ module.exports = (srv: cds.Service) => {
           submission.status = 'confirmed';
           logger.info({ submissionId, txHash: submission.txHash }, 'Transaction confirmed on chain');
         }
-      } catch {
-        // Transaction not yet confirmed on chain — status stays 'submitted'
-        logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
+      } catch (err: any) {
+        if (err instanceof NotFoundError || err?.statusCode === 404) {
+          // Transaction genuinely not yet confirmed on chain
+          logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
+        } else {
+          // Provider error — don't mask as "pending", let caller know
+          logger.warn({ submissionId, txHash: submission.txHash, error: err.message }, 'Failed to check transaction confirmation status');
+          throw err;
+        }
       }
 
       return submission;

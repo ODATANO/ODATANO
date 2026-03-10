@@ -227,9 +227,8 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
     : '0';
 
   const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
-  const hasAssets = Array.isArray(addressData.amount) && addressData.amount.length > 0;
-  // Transactions are loaded separately via getAddressTransactions() - set to false initially
-  // Will be updated when transactions are indexed
+  const hasAssets = Array.isArray(addressData.amount) && addressData.amount.some((a) => a.unit !== 'lovelace');
+  // Transactions are indexed separately in indexAddress() — updated to true after indexing
   const hasTransactions = false;
 
   return {
