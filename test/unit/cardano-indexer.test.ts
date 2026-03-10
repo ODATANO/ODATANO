@@ -8,7 +8,6 @@ const mockRun = jest.fn().mockResolvedValue(undefined);
 const mockTx = { run: mockRun };
 
 jest.mock('@sap/cds', () => {
-  const _mockInto = (entries: any) => entries;
   const mockEntries = jest.fn().mockReturnValue({});
   const mockFrom = jest.fn().mockReturnValue({
     columns: jest.fn().mockReturnValue({
