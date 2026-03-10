@@ -469,8 +469,10 @@ describe('CardanoIndexer', () => {
   });
 
   describe('indexProtocolParameters', () => {
-    it('should return existing parameters if found in DB', async () => {
+    it('should return existing parameters if found in DB within TTL', async () => {
       const existingParams = { epoch: 100, minFeeA: 44 };
+      // Simulate a recent fetch so the TTL check passes
+      (indexer as any).lastParamsFetchTime = Date.now();
       mockRun.mockResolvedValueOnce(existingParams);
 
       const result = await indexer.indexProtocolParameters(mockTx as any);

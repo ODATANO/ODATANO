@@ -94,6 +94,7 @@ const logger = cds.log('CardanoIndexer');
 export class CardanoIndexer {
   private client: CardanoClient;
   private txBuilder: CardanoTransactionBuilder;
+  private lastParamsFetchTime = 0;
 
   /**
    * Create a new CardanoIndexer instance
@@ -508,16 +509,23 @@ export class CardanoIndexer {
    * @returns {Promise<LedgerProtocolParameter>} protocol parameters entity data
    */
   async indexProtocolParameters(tx: CapTransaction): Promise<LedgerProtocolParameter> {
-    // first, check if we have recent protocol parameters
-    const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter));
+    const network = this.client.network;
+    const now = Date.now();
 
-    if (existing) return existing;
-    // otherwise, fetch new protocol parameters from provider
+    // Return cached DB row if within TTL (protocol params only change at epoch boundaries ~5 days)
+    const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes — matches client cache TTL
+    if (now - this.lastParamsFetchTime < PROTOCOL_PARAMS_TTL_MS) {
+      const existing = await tx.run(
+        SELECT.one.from(LedgerProtocolParameter).where({ network })
+      );
+      if (existing) return existing;
+    }
+
+    // Fetch from provider (client has 5-min in-memory TTL cache, so this is cheap)
     const protocolParamsInfo = await this.client.getProtocolParameters();
-    // map to protocol parameter row
     const protocolParams = mapProtocolParameters(protocolParamsInfo);
-    // store in DB for future use
     await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
+    this.lastParamsFetchTime = now;
 
     return protocolParams;
   }

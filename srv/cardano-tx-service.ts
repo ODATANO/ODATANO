@@ -58,15 +58,12 @@ module.exports = (srv: cds.Service) => {
 
     // parse optional assets JSON (for locking native assets at script addresses)
     if (assetsJson) {
-      try {
-        const parsedAssets = JSON.parse(assetsJson);
-        if (!Array.isArray(parsedAssets)) {
-          return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be a JSON array', 'assetsJson');
-        }
-        cleanData.assets = parsedAssets;
-      } catch {
-        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be valid JSON', 'assetsJson');
+      const jsonResult = validateJsonWithLimits(assetsJson, 'assetsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'assetsJson');
+      if (!Array.isArray(jsonResult.parsed)) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be a JSON array', 'assetsJson');
       }
+      cleanData.assets = jsonResult.parsed;
       delete cleanData.assetsJson;
     }
 

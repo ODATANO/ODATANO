@@ -373,7 +373,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       index: utxo.outputIndex,
       blockHash: utxo.blockHash,
       utxodata_dataHash: utxo.datumHash,
-      utxodata_inlineDatum: null,
+      utxodata_inlineDatum: utxo.inlineDatum || null,
       utxodata_referenceScriptHash: utxo.scriptRef,
       lovelace: lovelace,
       validFrom: validFrom,
