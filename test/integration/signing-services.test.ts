@@ -469,6 +469,241 @@ describe('Signing Services Integration Tests', () => {
   });
 
   // ==========================================================================
+  // Branch Coverage: Additional Edge Case Tests
+  // ==========================================================================
+
+  describe('Branch Coverage: verifyBuildOwnership address mismatch', () => {
+    it('should reject when address does not match build owner', async () => {
+      const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
+        signingRequestId: createData.id,
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+        address: 'addr_test1vr8nl4u0u6fmtfnawx2rxfz95dy7m46t6dhzdftp2uha87syeufdg', // different from build sender
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('does not match build owner');
+    });
+  });
+
+  describe('Branch Coverage: GetSigningRequest non-pending status', () => {
+    it('should skip expiry check for non-pending status', async () => {
+      const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+
+      // Manually set status to 'verified'
+      await cds.run(
+        UPDATE.entity('CardanoSignService.SigningRequests')
+          .set({ status: 'verified' })
+          .where({ id: createData.id })
+      );
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/GetSigningRequest', {
+        signingRequestId: createData.id,
+      });
+      expect(status).to.equal(200);
+      expect(data.status).to.equal('verified');
+    });
+  });
+
+  describe('Branch Coverage: VerifySignature edge cases', () => {
+    it('should succeed without address parameter (skip ownership check)', async () => {
+      const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/VerifySignature', {
+        signingRequestId: createData.id,
+        signedTxCbor: TEST_FIXTURES.signedTxCbor1,
+        signerType: 'cardano-cli',
+        // no address parameter
+      });
+
+      expect(status).to.equal(200);
+      expect(data.isValid).to.equal(true);
+    });
+
+    it('should reject non-pending signing request', async () => {
+      const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
+        buildId: testBuildId,
+      });
+
+      // Set status to 'verified' so it's not 'pending'
+      await cds.run(
+        UPDATE.entity('CardanoSignService.SigningRequests')
+          .set({ status: 'verified' })
+          .where({ id: createData.id })
+      );
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/VerifySignature', {
+        signingRequestId: createData.id,
+        signedTxCbor: TEST_FIXTURES.signedTxCbor1,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include("expected 'pending'");
+    });
+  });
+
+  describe('Branch Coverage: SubmitVerifiedTransaction edge cases', () => {
+    it('should reject non-existent signing request', async () => {
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
+        signingRequestId: '00000000-0000-0000-0000-000000000000',
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('not found');
+    });
+
+    it('should reject signing request with no associated build', async () => {
+      // Insert signing request directly with no build_id
+      const reqId = 'no-build-req-1234';
+      await cds.run(
+        INSERT.into('CardanoSignService.SigningRequests').entries({
+          id: reqId,
+          txBodyHash: TEST_FIXTURES.txBodyHash,
+          unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
+          status: 'pending',
+          expiresAt: new Date(Date.now() + 300000).toISOString(),
+          validFrom: new Date().toISOString(),
+          validTo: new Date(Date.now() + 300000).toISOString(),
+        })
+      );
+
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
+        signingRequestId: reqId,
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('no associated build');
+    });
+  });
+
+  describe('Branch Coverage: SignWithHsm address mismatch', () => {
+    it('should reject when build sender does not match HSM address', async () => {
+      // Create a build with a different sender address
+      const mismatchBuildId = 'mismatch-build-1234';
+      await cds.run(
+        INSERT.into('CardanoSignService.TransactionBuilds').entries({
+          id: mismatchBuildId,
+          network: TEST_FIXTURES.network,
+          senderAddress: 'addr_test1vr8nl4u0u6fmtfnawx2rxfz95dy7m46t6dhzdftp2uha87syeufdg', // different from HSM
+          unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
+          txBodyHash: TEST_FIXTURES.txBodyHash,
+          status: 'built',
+          builderType: 'csl',
+          createdAt: Date.now(),
+          validFrom: new Date().toISOString(),
+          validTo: new Date(Date.now() + 300000).toISOString(),
+        })
+      );
+
+      setHsmSigner(createMockHsmSigner());
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SignWithHsm', {
+        buildId: mismatchBuildId,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('does not match HSM address');
+    });
+  });
+
+  describe('Branch Coverage: SignAndSubmitWithHsm edge cases', () => {
+    it('should reject when build sender does not match HSM address', async () => {
+      const mismatchBuildId = 'mismatch-build-5678';
+      await cds.run(
+        INSERT.into('CardanoSignService.TransactionBuilds').entries({
+          id: mismatchBuildId,
+          network: TEST_FIXTURES.network,
+          senderAddress: 'addr_test1vr8nl4u0u6fmtfnawx2rxfz95dy7m46t6dhzdftp2uha87syeufdg',
+          unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
+          txBodyHash: TEST_FIXTURES.txBodyHash,
+          status: 'built',
+          builderType: 'csl',
+          createdAt: Date.now(),
+          validFrom: new Date().toISOString(),
+          validTo: new Date(Date.now() + 300000).toISOString(),
+        })
+      );
+
+      setHsmSigner(createMockHsmSigner());
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SignAndSubmitWithHsm', {
+        buildId: mismatchBuildId,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('does not match HSM address');
+    });
+
+    it('should reject when HSM signature verification fails', async () => {
+      // Create mock HSM that produces invalid signature (fake bytes)
+      const { Cbor, CborArray, CborBytes, CborMap, CborUInt } = require('@harmoniclabs/cbor');
+      const { fromHex, toHex } = require('@harmoniclabs/uint8array-utils');
+
+      const badSigner = {
+        isConnected: () => true,
+        getAddress: () => TEST_FIXTURES.addressWithAssets,
+        getPublicKeyHash: () => Buffer.alloc(28, 0xcc).toString('hex'),
+        getStatus: () => ({
+          connected: true,
+          keyId: '0x0001',
+          keyLabel: 'test-key',
+          publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
+          address: TEST_FIXTURES.addressWithAssets,
+        }),
+        sign: () => ({
+          signatureHex: Buffer.alloc(64, 0xbb).toString('hex'),
+          publicKeyHex: Buffer.alloc(32, 0xaa).toString('hex'),
+          publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
+        }),
+        signTransaction: (unsignedTxCbor: string) => {
+          // Produce CBOR with fake (invalid) signature
+          const txObj = Cbor.parse(fromHex(unsignedTxCbor));
+          const vkeyWitness = new CborArray([
+            new CborBytes(Buffer.alloc(32, 0xaa)),
+            new CborBytes(Buffer.alloc(64, 0xbb)),
+          ]);
+          const origWs = txObj.array[1];
+          if (origWs instanceof CborMap) {
+            const entries = origWs.map.filter(
+              (e: any) => !(e.k instanceof CborUInt && Number(e.k.num) === 0)
+            );
+            entries.push({ k: new CborUInt(0), v: new CborArray([vkeyWitness]) });
+            txObj.array[1] = new CborMap(entries, { indefinite: origWs.indefinite });
+          }
+          return toHex(Cbor.encode(new CborArray(txObj.array, { indefinite: txObj.indefinite })).toBuffer());
+        },
+        shutdown: jest.fn(),
+      } as any;
+
+      setHsmSigner(badSigner);
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-sign/SignAndSubmitWithHsm', {
+        buildId: testBuildId,
+      }).catch((err: any) => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.include('verification failed');
+    });
+  });
+
+  // ==========================================================================
   // HSM Signing Tests
   // ==========================================================================
 
@@ -483,7 +718,7 @@ describe('Signing Services Integration Tests', () => {
       expect(data.keyId).to.equal('0x0001');
       expect(data.keyLabel).to.equal('test-key');
       expect(data.publicKeyHash).to.exist;
-      expect(data.cardanoAddress).to.equal('addr_test1mockaddress');
+      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithAssets);
     });
 
     it('should return disconnected status when HSM is not configured', async () => {
@@ -687,37 +922,45 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   const { Cbor, CborArray, CborBytes, CborMap, CborUInt } = require('@harmoniclabs/cbor');
   const { fromHex, toHex } = require('@harmoniclabs/uint8array-utils');
+  const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
 
-  const fakePublicKey = Buffer.alloc(32, 0xaa);
-  const fakeSignature = Buffer.alloc(64, 0xbb);
-  const fakeKeyHash = Buffer.alloc(28, 0xcc).toString('hex');
+  // Generate a real Ed25519 keypair so signatures pass verification
+  const privateKey = CSL.PrivateKey.generate_ed25519();
+  const publicKey = privateKey.to_public();
+  const realPublicKeyBytes = publicKey.as_bytes();
+  const realKeyHash = publicKey.hash().to_hex();
 
   return {
     isConnected: () => connected,
-    getAddress: () => 'addr_test1mockaddress',
-    getPublicKeyHash: () => fakeKeyHash,
+    getAddress: () => TEST_FIXTURES.addressWithAssets,
+    getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({
       connected,
       keyId: '0x0001',
       keyLabel: 'test-key',
-      publicKeyHash: connected ? fakeKeyHash : undefined,
-      address: connected ? 'addr_test1mockaddress' : undefined,
+      publicKeyHash: connected ? realKeyHash : undefined,
+      address: connected ? TEST_FIXTURES.addressWithAssets : undefined,
     }),
-    sign: (_txBodyHash: Buffer) => {
+    sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;
+      const sig = privateKey.sign(txBodyHash);
       return {
-        signatureHex: fakeSignature.toString('hex'),
-        publicKeyHex: fakePublicKey.toString('hex'),
-        publicKeyHash: fakeKeyHash,
+        signatureHex: Buffer.from(sig.to_bytes()).toString('hex'),
+        publicKeyHex: Buffer.from(realPublicKeyBytes).toString('hex'),
+        publicKeyHash: realKeyHash,
       };
     },
-    signTransaction: (unsignedTxCbor: string, _txBodyHash: string) => {
+    signTransaction: (unsignedTxCbor: string, txBodyHash: string) => {
       if (signError) throw signError;
+
+      // Sign the tx body hash with the real private key
+      const sig = privateKey.sign(Buffer.from(txBodyHash, 'hex'));
+      const sigBytes = sig.to_bytes();
 
       const txObj = Cbor.parse(fromHex(unsignedTxCbor));
       const vkeyWitness = new CborArray([
-        new CborBytes(fakePublicKey),
-        new CborBytes(fakeSignature),
+        new CborBytes(Uint8Array.from(realPublicKeyBytes)),
+        new CborBytes(Uint8Array.from(sigBytes)),
       ]);
 
       const origWs = txObj.array[1];

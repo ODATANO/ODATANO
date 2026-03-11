@@ -1,12 +1,12 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
+import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
-import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH } from './utils/const';
+import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX } from './utils/const';
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -16,7 +16,7 @@ const logger = cds.log('CardanoTxService');
  * Handles transaction building and submission operations & some additional data queries.
  */
 module.exports = (srv: cds.Service) => {
-  logger.info('Module loaded - registering handlers');
+  logger.debug('Module loaded - registering handlers');
 
   const {
     TransactionBuilds,
@@ -44,34 +44,32 @@ module.exports = (srv: cds.Service) => {
       ['senderAddress', 'recipientAddress', 'lovelaceAmount']
     );
     throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
+    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
+      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid changeAddress format', 'changeAddress');
+    }
 
     // parse optional output datum
     const cleanData = { ...req.data };
     if (outputDatumJson) {
-      try {
-        cleanData.outputDatum = JSON.parse(outputDatumJson);
-      } catch {
-        return req.reject(400, 'Invalid outputDatumJson: must be valid JSON');
-      }
+      const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
+      cleanData.outputDatum = jsonResult.parsed;
     }
 
     // parse optional assets JSON (for locking native assets at script addresses)
     if (assetsJson) {
-      try {
-        const parsedAssets = JSON.parse(assetsJson);
-        if (!Array.isArray(parsedAssets)) {
-          return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be a JSON array', 'assetsJson');
-        }
-        cleanData.assets = parsedAssets;
-      } catch {
-        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be valid JSON', 'assetsJson');
+      const jsonResult = validateJsonWithLimits(assetsJson, 'assetsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'assetsJson');
+      if (!Array.isArray(jsonResult.parsed)) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'assetsJson must be a JSON array', 'assetsJson');
       }
+      cleanData.assets = jsonResult.parsed;
       delete cleanData.assetsJson;
     }
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
+      logger.debug({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
 
       return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
     });
@@ -90,14 +88,17 @@ module.exports = (srv: cds.Service) => {
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
     );
     throwIfValidationErrors(req, 'BuildTransactionWithMetadata', errors);
+    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
+      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid changeAddress format', 'changeAddress');
+    }
 
     // Parse metadataJson (already validated as valid JSON)
     const parsedMetadata = JSON.parse(metadataJson);
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
-        { senderAddress, recipientAddress, lovelaceAmount, metadataJson: parsedMetadata },
+      logger.debug(
+        { senderAddress, recipientAddress, lovelaceAmount, metadataKeyCount: Object.keys(parsedMetadata).length },
         'Building transaction with metadata'
       );
 
@@ -119,16 +120,19 @@ module.exports = (srv: cds.Service) => {
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
     );
     throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
+    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
+      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid changeAddress format', 'changeAddress');
+    }
 
     // Parse assetsJson (already validated as valid JSON by validateTransactionInputs)
     const parsedAssets = JSON.parse(assetsJson);
     if (!Array.isArray(parsedAssets)) {
-      rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must be a JSON array', 'assetsJson');
+      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must be a JSON array', 'assetsJson');
     }
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets, hasDatum: !!outputDatumJson },
         'Building multi-asset transaction'
       );
@@ -138,17 +142,15 @@ module.exports = (srv: cds.Service) => {
 
       // parse optional output datum (for locking assets at script addresses)
       if (outputDatumJson) {
-        try {
-          cleanData.outputDatum = JSON.parse(outputDatumJson);
-        } catch {
-          return rejectInvalid(req, 'BuildMultiAssetTransaction', 'outputDatumJson must be valid JSON', 'outputDatumJson');
-        }
+        const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+        if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
+        cleanData.outputDatum = jsonResult.parsed;
         delete cleanData.outputDatumJson;
       }
 
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
-      logger.info({ result }, 'Multi-asset transaction build result');
+      logger.debug({ id: result.id, fee: result.fee, size: result.size }, 'Multi-asset transaction build result');
       return result;
     });
   });
@@ -167,30 +169,43 @@ module.exports = (srv: cds.Service) => {
       ['senderAddress', 'recipientAddress', 'mintActionsJson', 'mintingPolicyScript']
     );
     throwIfValidationErrors(req, 'BuildMintTransaction', errors);
+    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
+      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid changeAddress format', 'changeAddress');
+    }
 
     // Parse mintActionsJson and convert quantity strings to bigint
     const parsedMintActionsRaw = JSON.parse(mintActionsJson);
     if (!Array.isArray(parsedMintActionsRaw)) {
-      rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
+      return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
     }
-    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => ({
-      ...action,
-      quantity: BigInt(action.quantity)
-    }));
+    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => {
+      if (!action || typeof action !== 'object') {
+        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
+      }
+      if (typeof action.quantity !== 'string') {
+        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
+      }
+      if (!/^-?\d+$/.test(action.quantity)) {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+      }
+      try {
+        return { ...action, quantity: BigInt(action.quantity) };
+      } catch {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}" — cannot parse as integer`, 'mintActionsJson');
+      }
+    });
 
     // Parse and validate optional requiredSignersJson
     let requiredSigners: string[] | undefined;
     if (requiredSignersJson) {
-      try {
-        requiredSigners = JSON.parse(requiredSignersJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
-      }
+      const jsonResult = validateJsonWithLimits(requiredSignersJson, 'requiredSignersJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'requiredSignersJson');
+      requiredSigners = jsonResult.parsed as string[];
       if (!Array.isArray(requiredSigners)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
       }
       for (const signer of requiredSigners) {
-        if (typeof signer !== 'string' || !/^[a-f0-9]{56}$/i.test(signer)) {
+        if (typeof signer !== 'string' || !ED25519_KEY_HASH_REGEX.test(signer)) {
           return rejectInvalid(req, 'BuildMintTransaction', 'Invalid Ed25519 key hash: must be 56 hex chars', 'requiredSignersJson');
         }
       }
@@ -199,11 +214,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional scriptParamsJson
     let scriptParams: any[] | undefined;
     if (scriptParamsJson) {
-      try {
-        scriptParams = JSON.parse(scriptParamsJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
-      }
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
@@ -212,26 +225,27 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional inlineDatumJson
     let inlineDatum: any | undefined;
     if (inlineDatumJson) {
-      try {
-        inlineDatum = JSON.parse(inlineDatumJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
-      }
+      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'inlineDatumJson');
+      inlineDatum = jsonResult.parsed;
     }
 
     // Parse and validate optional mintRedeemerJson
     let mintRedeemer: any | undefined;
     if (mintRedeemerJson) {
-      try {
-        mintRedeemer = JSON.parse(mintRedeemerJson);
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', 'mintRedeemerJson must be valid JSON', 'mintRedeemerJson');
-      }
+      const jsonResult = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'mintRedeemerJson');
+      mintRedeemer = jsonResult.parsed;
+    }
+
+    // Validate lockOnScript requires scriptParamsJson
+    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
+      return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
         'Building minting transaction'
       );
@@ -263,7 +277,7 @@ module.exports = (srv: cds.Service) => {
         if (lockOnScript) {
           const scriptAddr = scriptHashToEnterpriseAddress(appliedPolicyId, getCardanoClient().network);
           cleanData.recipientAddress = scriptAddr;
-          logger.info({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
+          logger.debug({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
         }
       }
 
@@ -295,7 +309,7 @@ module.exports = (srv: cds.Service) => {
           updates.scriptAddress = buildResult.scriptAddress;
         }
 
-        if (Object.keys(updates).length > 0) {
+        if (buildResult.id && Object.keys(updates).length > 0) {
           const { TransactionBuilds } = cds.entities('CardanoTransactionService');
           await db.run(UPDATE.entity(TransactionBuilds).set(updates).where({ id: buildResult.id }));
         }
@@ -319,10 +333,13 @@ module.exports = (srv: cds.Service) => {
       ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
     );
     throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
+    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
+      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Invalid changeAddress format', 'changeAddress');
+    }
 
     // Validate scriptOutputIndex separately (it's a number, not caught by required-fields check for empty string)
     if (scriptOutputIndex === undefined || scriptOutputIndex === null) {
-      rejectMissing(req, 'BuildPlutusSpendTransaction', 'scriptOutputIndex');
+      return rejectMissing(req, 'BuildPlutusSpendTransaction', 'scriptOutputIndex');
     }
 
     // Parse redeemer JSON
@@ -334,16 +351,14 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional requiredSignersJson
     let requiredSigners: string[] | undefined;
     if (requiredSignersJson) {
-      try {
-        requiredSigners = JSON.parse(requiredSignersJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be valid JSON', 'requiredSignersJson');
-      }
+      const jsonResult = validateJsonWithLimits(requiredSignersJson, 'requiredSignersJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'requiredSignersJson');
+      requiredSigners = jsonResult.parsed as string[];
       if (!Array.isArray(requiredSigners)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'requiredSignersJson must be a JSON array', 'requiredSignersJson');
       }
       for (const signer of requiredSigners) {
-        if (typeof signer !== 'string' || !/^[a-f0-9]{56}$/i.test(signer)) {
+        if (typeof signer !== 'string' || !ED25519_KEY_HASH_REGEX.test(signer)) {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Invalid Ed25519 key hash: must be 56 hex chars', 'requiredSignersJson');
         }
       }
@@ -352,11 +367,9 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional scriptParamsJson
     let scriptParams: any[] | undefined;
     if (scriptParamsJson) {
-      try {
-        scriptParams = JSON.parse(scriptParamsJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be valid JSON', 'scriptParamsJson');
-      }
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
@@ -365,19 +378,21 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional inlineDatumJson
     let inlineDatum: any | undefined;
     if (inlineDatumJson) {
-      try {
-        inlineDatum = JSON.parse(inlineDatumJson);
-      } catch {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'inlineDatumJson must be valid JSON', 'inlineDatumJson');
-      }
+      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'inlineDatumJson');
+      inlineDatum = jsonResult.parsed;
+    }
+
+    // Validate lockOnScript requires scriptParamsJson
+    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
+      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
     return handleRequest(req, async (db) => {
-      logger.info(
+      logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
         'Building Plutus spending transaction'
       );
-
 
       // Apply script parameters if provided (for parameterized validators)
       let finalValidatorScript = validatorScript;
@@ -410,13 +425,13 @@ module.exports = (srv: cds.Service) => {
         const derivedScriptHash = appliedScript.hash.toString();
         const scriptAddr = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
         cleanData.recipientAddress = scriptAddr;
-        logger.info({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
+        logger.debug({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
       }
 
       const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
 
       // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
-      if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash) {
+      if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash && buildResult.id) {
         const scriptAddr = scriptHashToEnterpriseAddress(buildResult.scriptHash, getCardanoClient().network);
         buildResult.scriptAddress = scriptAddr;
         const { TransactionBuilds } = cds.entities('CardanoTransactionService');
@@ -442,7 +457,7 @@ module.exports = (srv: cds.Service) => {
     // handle the request / fetching the build details
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!existing) rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
+      if (!existing) return rejectInvalid(req, 'GetBuildDetails', 'Build not found', 'buildId');
       return existing;
     });
   });
@@ -461,9 +476,6 @@ module.exports = (srv: cds.Service) => {
       return req.reject(400, 'SetCollateral: Invalid or missing Bech32 address');
     }
 
-    const COLLATERAL_LOVELACE = 5_000_000n;
-    const FEE_BUFFER_LOVELACE = 1_000_000n;
-
     // Fetch UTxOs and validate before entering handleRequest (req.reject inside handleRequest gets wrapped as 500)
     const utxos = await getCardanoClient().getAddressUtxos(address);
 
@@ -474,7 +486,12 @@ module.exports = (srv: cds.Service) => {
     const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
 
     if (qualifyingUtxos.length >= 2) {
-      return req.reject(409, `SetCollateral: Collateral already available — found ${qualifyingUtxos.length} UTxOs with >= 5 ADA`);
+      return {
+        id: cds.utils.uuid(),
+        network: getCardanoClient().network,
+        senderAddress: address,
+        collateralAvailable: true,
+      };
     }
 
     const totalLovelace = utxos.reduce((sum, u) => sum + getLovelace(u), 0n);
@@ -484,15 +501,16 @@ module.exports = (srv: cds.Service) => {
     }
 
     // Build self-send transaction: address → address, 5 ADA
-    logger.info({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
+    logger.debug({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
     return handleRequest(req, async (db) => {
-      return await getCardanoIndexer().indexSimpleBuildResult(db, {
+      const result = await getCardanoIndexer().indexSimpleBuildResult(db, {
         network: getCardanoClient().network,
         senderAddress: address,
         recipientAddress: address,
         lovelaceAmount: Number(COLLATERAL_LOVELACE),
         changeAddress: address,
       });
+      return { ...result, collateralAvailable: false };
     });
   });
 
@@ -515,7 +533,7 @@ module.exports = (srv: cds.Service) => {
 
       // Validate build exists
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!existing) rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
+      if (!existing) return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
 
       // Use txBodyHash from build
       const txHash = existing.txBodyHash;
@@ -541,7 +559,7 @@ module.exports = (srv: cds.Service) => {
           await db.run(DELETE_FROM.from(Addresses).where({ address: addrBuild.address_address }));
           await db.run(DELETE_FROM.from(AddressUTxOs).where({ address_address: addrBuild.address_address }));
           await db.run(DELETE_FROM.from(AddressAssets).where({ address_address: addrBuild.address_address }));
-          logger.info(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
+          logger.debug(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
         }
       } catch (err: any) {
         logger.error({ txHash, error: err.message }, 'Transaction submission failed');
@@ -561,7 +579,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionSubmission} Transaction submission details
    */
   srv.on('SubmitSignedTransaction', async (req: Request) => {
-    logger.info('SubmitSignedTransaction Action handler called');
+    logger.debug('SubmitSignedTransaction Action handler called');
     const { signedTxCbor } = req.data;
 
     // Validate inputs (includes CBOR format validation)
@@ -609,7 +627,7 @@ module.exports = (srv: cds.Service) => {
 
     return handleRequest(req, async (db) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
-      if (!submission) rejectInvalid(req, 'CheckSubmissionStatus', 'Submission not found', 'submissionId');
+      if (!submission) return rejectInvalid(req, 'CheckSubmissionStatus', 'Submission not found', 'submissionId');
 
       // Query blockchain for confirmation
       try {
@@ -623,9 +641,15 @@ module.exports = (srv: cds.Service) => {
           submission.status = 'confirmed';
           logger.info({ submissionId, txHash: submission.txHash }, 'Transaction confirmed on chain');
         }
-      } catch {
-        // Transaction not yet confirmed on chain — status stays 'submitted'
-        logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
+      } catch (err: any) {
+        if (err instanceof NotFoundError || err?.statusCode === 404) {
+          // Transaction genuinely not yet confirmed on chain
+          logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
+        } else {
+          // Provider error — don't mask as "pending", let caller know
+          logger.warn({ submissionId, txHash: submission.txHash, error: err.message }, 'Failed to check transaction confirmation status');
+          throw err;
+        }
       }
 
       return submission;
@@ -641,8 +665,8 @@ module.exports = (srv: cds.Service) => {
     logger.debug('GetTransactionBuildsByAddress Action handler called');
     const { address } = req.data;
     // Validate inputs
-    if (!address) rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
-    if (!isValidBech32Address(address)) rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
+    if (!address) return rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
+    if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
     // Fetch the address-build associations
     return handleRequest(req, async (db) => {
       return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));

@@ -5,6 +5,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 // Assets to send (using the minted TokenM from mint-token-preview.ts)
 const policyId = "def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea";
@@ -39,7 +41,7 @@ async function main() {
 
     // Build Multi-Asset Transaction
     console.log('\nBuilding Multi-Asset Transaction...');
-    const buildResponse = await axios.post(`${ODATA_URL}/BuildMultiAssetTransaction`, BUILD_BODY);
+    const buildResponse = await axios.post(`${ODATA_URL}/BuildMultiAssetTransaction`, BUILD_BODY, axiosConfig);
     const buildData = buildResponse.data;
 
     const buildId = buildData.id;
@@ -95,7 +97,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

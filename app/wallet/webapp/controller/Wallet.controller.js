@@ -5,10 +5,25 @@ sap.ui.define([
     "sap/m/MessageToast",
     "sap/ui/core/Fragment",
     "sap/base/Log",
+    "sap/ui/model/Filter",
+    "sap/ui/model/FilterOperator",
     "odatanoview/wallet/service/WalletService",
     "odatanoview/wallet/model/formatter"
-], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, Log, WalletService, formatter) {
+], function (Controller, JSONModel, MessageBox, MessageToast, Fragment, Log, Filter, FilterOperator, WalletService, formatter) {
     "use strict";
+
+    // Bech32 address: prefix + "1" + bech32 chars (lowercase alphanumeric except 1, b, i, o)
+    var BECH32_ADDRESS_RE = /^addr(_test)?1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{38,98}$/;
+    // UUID v4 (signing request IDs)
+    var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    function isValidBech32Address(s) {
+        return typeof s === "string" && BECH32_ADDRESS_RE.test(s);
+    }
+
+    function isValidUuid(s) {
+        return typeof s === "string" && UUID_RE.test(s);
+    }
 
     var INITIAL_FLOW_STATE = {
         selectedTab: "dashboard",
@@ -151,7 +166,7 @@ sap.ui.define([
             var oWalletModel = this._walletService.getModel();
             var sAddress = (oWalletModel.getProperty("/manualAddress") || "").trim();
 
-            if (!sAddress || (!sAddress.startsWith("addr_test1") && !sAddress.startsWith("addr1"))) {
+            if (!isValidBech32Address(sAddress)) {
                 MessageBox.error("Please enter a valid Cardano address (addr_test1... or addr1...)");
                 return;
             }
@@ -417,8 +432,9 @@ sap.ui.define([
             if (!oSignModel) return;
 
             var that = this;
-            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined, undefined, {
-                $filter: "address_address eq '" + sPrimaryAddress + "'",
+            if (!isValidBech32Address(sPrimaryAddress)) return;
+            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined,
+                [new Filter("address_address", FilterOperator.EQ, sPrimaryAddress)], {
                 $expand: "signingRequest"
             });
             oListBinding.requestContexts(0, 100).then(function (aContexts) {
@@ -449,8 +465,9 @@ sap.ui.define([
             if (!oTxModel) return;
 
             var that = this;
-            var oListBinding = oTxModel.bindList("/AddressTransactionBuilds", undefined, undefined, undefined, {
-                $filter: "address_address eq '" + sPrimaryAddress + "'",
+            if (!isValidBech32Address(sPrimaryAddress)) return;
+            var oListBinding = oTxModel.bindList("/AddressTransactionBuilds", undefined, undefined,
+                [new Filter("address_address", FilterOperator.EQ, sPrimaryAddress)], {
                 $expand: "txBuild"
             });
             oListBinding.requestContexts(0, 100).then(function (aContexts) {
@@ -886,8 +903,11 @@ sap.ui.define([
 
         _loadSignedCborForRequest: function (oSignModel, sSigningRequestId) {
             var that = this;
+            if (!isValidUuid(sSigningRequestId)) {
+                return Promise.reject(new Error("Invalid signing request ID"));
+            }
             var sUrl = oSignModel.getServiceUrl() +
-                "SignatureVerifications?$filter=signingRequest_id eq '" + sSigningRequestId +
+                "SignatureVerifications?$filter=signingRequest_id eq '" + encodeURIComponent(sSigningRequestId) +
                 "'&$select=signedTxCbor,isValid,witnessCount,signerKeyHashes,txBodyHash&$top=1";
             return fetch(sUrl, { headers: { "Accept": "application/json" } })
                 .then(function (response) { return response.json(); })
@@ -927,8 +947,9 @@ sap.ui.define([
             // Race condition guard: discard stale results
             var iGeneration = ++this._requestLoadGeneration;
             var that = this;
-            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined, undefined, {
-                $filter: "address_address eq '" + sPrimaryAddress + "'",
+            if (!isValidBech32Address(sPrimaryAddress)) return Promise.resolve();
+            var oListBinding = oSignModel.bindList("/AddressSigningRequests", undefined, undefined,
+                [new Filter("address_address", FilterOperator.EQ, sPrimaryAddress)], {
                 $expand: "signingRequest"
             });
 

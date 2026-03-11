@@ -247,7 +247,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('POST /GetEpochByNumber – read Epoch by number', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 300 });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 1136 });
             expect(data).to.have.property('epoch');
             expect(status).to.equal(200);
           });
@@ -258,11 +258,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
             // make sure DB is empty
-            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 200 }));
+            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 1136 }));
             expect(before.length).to.equal(0);
             // call the GET endpoint
-            const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=200)`);
-            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 200 }));
+            const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=1136)`);
+            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 1136 }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
           });
@@ -271,11 +271,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
             // make sure DB is empty
-            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 250 }));
+            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 1000 }));
             expect(before.length).to.equal(0);
             // call the POST endpoint
-            const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 250 });
-            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 250 }));
+            const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 1000 });
+            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 1000 }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
           });

@@ -31,7 +31,7 @@ services:
       
       # Blockfrost API credentials
       # Get your API key from https://blockfrost.io
-      - BLOCKFROST_KEY=${BLOCKFROST_KEY:-your-blockfrost-api-key-here}
+      - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY:-your-blockfrost-api-key-here}
       
       # Koios API credentials (optional)
       - KOIOS_API_KEY=${KOIOS_API_KEY:-}
@@ -57,7 +57,7 @@ services:
     restart: unless-stopped
     
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/$metadata"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/odata/v4/cardano-odata/$metadata"]
       interval: 30s
       timeout: 10s
       retries: 3

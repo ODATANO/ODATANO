@@ -37,6 +37,8 @@ export async function handleRequest(
   handler: (db: any) => Promise<any>):
   Promise<any> {
   const context = req.target?.name || req.event;
+  // cds.tx(req) returns the request's managed transaction — CAP auto-rolls back
+  // on req.reject()/req.error() (called by mapError). No explicit rollback needed.
   const db = cds.tx(req);
   try {
     return await handler(db);

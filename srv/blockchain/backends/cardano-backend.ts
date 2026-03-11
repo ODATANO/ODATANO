@@ -14,18 +14,18 @@ import {
 
 /**
  * CardanoBackend - Interface Definition for multiple backends (Blockfrost, Koios, Ogmios, etc.)
- * 
+ *
  * Defines the standard methods that any Cardano backend must implement to be used interchangeably.
  */
 export interface CardanoBackend {
 
-  /** 
-   * Backend name 
+  /**
+   * Backend name
    */
   name: string;
 
   /**
-   * Initialize the backend 
+   * Initialize the backend
    */
   init(): Promise<boolean>;
 
@@ -36,7 +36,7 @@ export interface CardanoBackend {
    */
   getTransaction(txHash: string): Promise<Transaction>;
 
-  /** 
+  /**
    * Get Address Data
    * @param address bech32 address
    * @returns {Promise<Address>} address data
@@ -70,7 +70,7 @@ export interface CardanoBackend {
    */
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
 
-  /** 
+  /**
    * Get Block Data
    * @param blockHash block hash (hex)
    * @returns {Promise<BlockData>} block data
@@ -84,26 +84,26 @@ export interface CardanoBackend {
    */
   getEpoch(epochNumber: number): Promise<EpochData>;
 
-  /** 
+  /**
    * Get Latest Epoch Data
    * @returns {Promise<EpochData>} latest epoch data
    */
   getLatestEpoch(): Promise<EpochData>;
 
-  /** 
+  /**
    * Get Latest Block Data
    * @returns {Promise<BlockData>} latest block data
    */
   getLatestBlock(): Promise<BlockData>;
 
-  /** 
+  /**
    * Get Pool Data
    * @param poolId pool id
    * @returns {Promise<PoolData>} pool data
    */
   getPool(poolId: string): Promise<PoolData>;
 
-  /** 
+  /**
    * Get Drep Data
    * @param drepId drep id
    * @returns {Promise<DrepData>} drep data
@@ -129,6 +129,25 @@ export interface CardanoBackend {
    * @returns {Promise<string>} transaction hash
    */
   submitTransaction(signedTxCbor: string): Promise<string>;
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * Used by the indexer to separate hash listing from detail fetching.
+   * Optional: falls back to getAddressTransactions() + map to hashes if not implemented.
+   * @param address bech32 address
+   * @param limit maximum number of transaction hashes to return
+   * @returns {Promise<string[]>} list of transaction hashes (most recent first)
+   */
+  getAddressTransactionHashes?(address: string, limit: number): Promise<string[]>;
+
+  /**
+   * Batch fetch multiple transactions by hash.
+   * Koios implements natively via POST /tx_info; Blockfrost uses concurrency-limited parallel calls.
+   * Optional: falls back to individual getTransaction() calls if not implemented.
+   * @param txHashes array of transaction hashes (hex)
+   * @returns {Promise<Map<string, Transaction>>} map of txHash -> Transaction
+   */
+  getTransactionsBatch?(txHashes: string[]): Promise<Map<string, Transaction>>;
 }
 
 /**

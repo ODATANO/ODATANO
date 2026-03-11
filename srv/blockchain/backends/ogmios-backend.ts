@@ -89,10 +89,32 @@ export class OgmiosBackend implements EvaluatingBackend {
     this.ogmiosUrl = ogmiosUrl;
   }
 
-  /** 
+  /** Validate Ogmios URL scheme and reject dangerous protocols */
+  private static validateOgmiosUrl(rawUrl: string): void {
+    const url = new URL(rawUrl);
+
+    // Only allow WebSocket schemes (block file://, http://, etc.)
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+      throw new BackendInitError('ogmios', new Error(`Invalid Ogmios URL scheme "${url.protocol}" — only ws:// and wss:// are allowed`));
+    }
+
+    // In production, block link-local / metadata IPs (SSRF prevention).
+    // Private/loopback IPs are allowed since Ogmios typically runs on the local node.
+    const host = url.hostname.toLowerCase();
+    const dangerousPatterns = [
+      /^169\.254\./, // AWS/cloud metadata endpoint range
+      /^\[?fe80/     // IPv6 link-local
+    ];
+    if (dangerousPatterns.some(p => p.test(host))) {
+      throw new BackendInitError('ogmios', new Error('Ogmios URL must not point to a link-local or metadata address'));
+    }
+  }
+
+  /**
    * Initialize the Ogmios backend connection
    */
   async init(): Promise<boolean> {
+    OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
     const url = new URL(this.ogmiosUrl);
     const connection = {
       host: url.hostname,
@@ -300,7 +322,8 @@ export class OgmiosBackend implements EvaluatingBackend {
 
       // Extract pool from response - stakePools returns object keyed by poolId
       const pool = pools[poolId];
-      
+      if (!pool) throw new NotFoundError('Pool', this.name);
+
       return {
         poolId,
         vrfKeyHash: pool.vrf || pool.vrfKeyHash || '',
@@ -515,7 +538,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       const epochSlot = slot % CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
 
       return {
-        time: blockTime, // Already in milliseconds
+        time: Math.floor(blockTime / 1000), // Convert ms to seconds (mapBlock expects seconds)
         height,
         hash,
         slot,

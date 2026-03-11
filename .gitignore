@@ -3,6 +3,12 @@ _out
 *.db
 *.sqlite
 connection.properties
+
+# Benchmark results
+scripts/perf/perf-results.json
+scripts/perf/perf-compare-results.json
+scripts/perf/perf-ogmios-eval-results.json
+scripts/perf/perf-utxo-fetch-results.json
 default-*.json
 .cdsrc-private.json
 gen/
@@ -76,6 +82,7 @@ mta*
 dist/
 
 M3_RELEASE_CHECK.md
-
+CATALYST_CLOSEOUT_REPORT.md
 *.drawio.png
 *.drawio
+output

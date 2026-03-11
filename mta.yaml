@@ -13,7 +13,7 @@ build-parameters:
         - npx cds-typer "*" --outputDirectory @cds-models
         - npx tsc -p tsconfig.build.json
         - npx cds build --production
-        - node scripts/gen-srv-package.js
+        - node scripts/build/gen-srv-package.js
 modules:
   - name: odatano-srv
     type: nodejs

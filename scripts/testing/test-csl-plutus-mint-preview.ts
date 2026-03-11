@@ -29,6 +29,8 @@ import { join } from 'path';
  */
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 // ---------------------------------------------------------------------------
 // Configuration — adjust to your wallet
@@ -120,7 +122,7 @@ async function main() {
     // Step 0: Verify server is running
     console.log('\n[0/3] Checking ODATANO server...');
     try {
-      await axios.get('http://localhost:4004/odata/v4/cardano-transaction/$metadata');
+      await axios.get('http://localhost:4004/odata/v4/cardano-transaction/$metadata', axiosConfig);
       console.log('Server is running.');
     } catch {
       console.error('ERROR: ODATANO server not reachable at http://localhost:4004');
@@ -132,7 +134,7 @@ async function main() {
     console.log('\n[1/3] Building PlutusV3 Mint Transaction (CSL builder)...');
     console.log('       scriptParamsJson applied → policyId derived from applied script');
 
-    const buildResponse = await axios.post(`${ODATA_URL}/BuildMintTransaction`, BUILD_BODY);
+    const buildResponse = await axios.post(`${ODATA_URL}/BuildMintTransaction`, BUILD_BODY, axiosConfig);
     const buildData = buildResponse.data;
 
     if (!buildData || !buildData.unsignedTxCbor) {
@@ -196,7 +198,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

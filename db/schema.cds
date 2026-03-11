@@ -849,6 +849,10 @@ entity TransactionBuilds : temporal {
         @title      : 'Script Address'
         @description: 'Enterprise script address derived from the applied script hash (bech32). Only set when lockOnScript=true.'
         scriptAddress  : String(120);
+
+        @title      : 'Collateral Available'
+        @description: 'Indicates if collateral UTxOs were already available (SetCollateral only). When true, no transaction build was needed.'
+        collateralAvailable : Boolean;
 }
 
 @title      : 'Transaction Build Inputs'
@@ -1063,7 +1067,7 @@ entity AddressTransactions {
 
         @title      : 'Net Amount (Lovelace)'
         @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
-        netAmount   : Int64;
+        netAmount   : Decimal(20, 0);
 
         @title      : 'Block Time'
         @description: 'Block time of the transaction (denormalized for sorting)'

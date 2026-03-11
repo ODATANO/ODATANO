@@ -7,7 +7,30 @@ using { Blake2b256, Bech32 } from '../db/types';
  * Handles external read-only queries for Cardano blockchain data, including:
  * - Retrieving network information, blocks, epochs, pools, dreps, transactions, accounts, addresses, UTxOs, assets, and metadata
  * - Providing actions for fetching specific data by identifiers (hashes, addresses, etc.) and for retrieving the latest blockchain state (latest block, epoch, protocol parameters)
+ *
+ * ## Security: Authentication & Authorization
+ *
+ * All services use `@requires: 'authenticated-user'` (service-level gate).
+ * The XSUAA scopes defined in xs-security.json (Read, Transact, Sign) are available
+ * for consumer-level role assignment but are NOT enforced per-action in ODATANO itself.
+ *
+ * This is intentional — ODATANO is a blockchain bridge, not a multi-tenant application.
+ * Per-resource ownership checks (IDOR prevention) are deliberately omitted because:
+ *
+ * 1. **Blockchain security model**: Unsigned transaction CBOR is not exploitable without
+ *    the corresponding private key. Viewing a build/signing request does not enable
+ *    fund theft — only the key holder can sign and submit.
+ *
+ * 2. **Cross-address operations are legitimate**: Smart contract interactions routinely
+ *    require building transactions for addresses the caller does not own — e.g. script
+ *    redemptions, multi-party Plutus workflows, or DApp backends building on behalf of users.
+ *    Enforcing sender == authenticated user would break these use cases.
+ *
+ * 3. **Consumer responsibility**: Consumers deploying ODATANO in multi-user environments
+ *    should add their own authorization layer (e.g. `@restrict` annotations, custom
+ *    middleware) that maps JWT claims to allowed wallet addresses if needed.
  */
+@requires: 'authenticated-user'
 service CardanoODataService @(impl: './cardano-service') {
 
     // ---------------------------------------------------------------------------

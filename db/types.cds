@@ -105,6 +105,7 @@ type SigningStatus    : String(20) enum {
     pending = 'pending';
     signed = 'signed';
     verified = 'verified';
+    submitting = 'submitting';
     submitted = 'submitted';
     expired = 'expired';
     failed = 'failed';

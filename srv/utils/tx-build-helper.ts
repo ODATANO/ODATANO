@@ -101,36 +101,85 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
 }
 
 /**
+ * Parse optional JSON string, returning undefined if not provided.
+ * Throws with a descriptive message on parse failure.
+ */
+export function parseOptionalJson(json: string | undefined, fieldName: string): any | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`);
+  }
+}
+
+/**
+ * Parse optional JSON string that must be an array.
+ * Returns undefined if not provided, throws on invalid JSON or non-array.
+ */
+export function parseOptionalJsonArray(json: string | undefined, fieldName: string): any[] | undefined {
+  if (!json) return undefined;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON array`);
+  }
+  return parsed;
+}
+
+/** Allowed keys in PlutusData JSON — strip anything else for defense-in-depth */
+const PLUTUS_DATA_ALLOWED_KEYS = new Set([
+  'constructor', 'constr', 'fields', 'int', 'bytes', 'list', 'map', 'k', 'v'
+]);
+
+/** Strip keys not in the PlutusData whitelist */
+function sanitizePlutusKeys(obj: Record<string, any>): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const key of Object.keys(obj)) {
+    if (PLUTUS_DATA_ALLOWED_KEYS.has(key)) {
+      clean[key] = obj[key];
+    }
+  }
+  return clean;
+}
+
+/**
  * Normalize PlutusData JSON from cardano-cli format ("constructor") to
  * Buildooor format ("constr"), recursively through fields/list/map.
+ * Also strips unrecognized keys for safety.
  */
 function normalizeConstructorKey(obj: Record<string, any>): Record<string, any> {
-  if (Object.hasOwn(obj, 'constructor') && !Object.hasOwn(obj, 'constr')) {
-    const result: Record<string, any> = { constr: obj.constructor };
-    if (Array.isArray(obj.fields)) {
-      result.fields = obj.fields.map((f: any) =>
+  const safe = sanitizePlutusKeys(obj);
+  if (Object.hasOwn(safe, 'constructor') && !Object.hasOwn(safe, 'constr')) {
+    const result: Record<string, any> = { constr: safe.constructor };
+    if (Array.isArray(safe.fields)) {
+      result.fields = safe.fields.map((f: any) =>
         typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
       );
     }
     return result;
   }
-  if ('list' in obj && Array.isArray(obj.list)) {
-    return { list: obj.list.map((item: any) =>
+  if ('list' in safe && Array.isArray(safe.list)) {
+    return { list: safe.list.map((item: any) =>
       typeof item === 'object' && item !== null && !Array.isArray(item) ? normalizeConstructorKey(item) : item
     )};
   }
-  if ('map' in obj && Array.isArray(obj.map)) {
-    return { map: obj.map.map((entry: any) => ({
+  if ('map' in safe && Array.isArray(safe.map)) {
+    return { map: safe.map.map((entry: any) => ({
       k: typeof entry.k === 'object' && entry.k !== null ? normalizeConstructorKey(entry.k) : entry.k,
       v: typeof entry.v === 'object' && entry.v !== null ? normalizeConstructorKey(entry.v) : entry.v,
     }))};
   }
-  if ('constr' in obj && Array.isArray(obj.fields)) {
-    return { constr: obj.constr, fields: obj.fields.map((f: any) =>
+  if ('constr' in safe && Array.isArray(safe.fields)) {
+    return { constr: safe.constr, fields: safe.fields.map((f: any) =>
       typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
     )};
   }
-  return obj;
+  return safe;
 }
 
 /**

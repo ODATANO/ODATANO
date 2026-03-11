@@ -23,7 +23,7 @@ export const TEST_FIXTURES = {
   validPoolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
   validTxHash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83',
   txWithMetadata: '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1',
-  validBlockHash: 'cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39',
+  validBlockHash: '890af88d47433ecc9eccf16369aef16df40fc7f41b9d38a8d758c8ca1968a886',
   transactionMetadataLabel: '1990',
   validUnit: 'eadc69a5d2d1357acc9b9d49ec5390fcdf6e080c7a40139917223dcba971c6765a1acab1d7849f4f032195cf69c4ab486ac6dedec9533103',
   validDrepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',

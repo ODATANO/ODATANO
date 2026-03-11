@@ -130,7 +130,7 @@ When an HSM is configured, ODATANO supports automated server-side signing. The p
 HSM_ENABLED=true
 HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
 HSM_SLOT=0
-HSM_PIN=0001password
+HSM_PIN=                      # Set via credential store in production
 HSM_KEY_LABEL=cardano-signing-key
 ```
 
@@ -316,15 +316,15 @@ Plutus transactions require collateral. Use `SetCollateral` to create a dedicate
 ## Examples
 
 ### Postman Collection
-- [ODATANO Full Service Catalog](https://github.com/ODATANO/ODATANO/blob/main/scripts/ODATANO%20M2%20-%20Full%20Service%20Catalog.postman_collection.json)
+- [ODATANO Full Service Catalog](https://github.com/ODATANO/ODATANO/blob/main/scripts/postman/ODATANO%20M2%20-%20Full%20Service%20Catalog.postman_collection.json)
 
 ### TypeScript Scripts
-- [Simple ADA Transfer](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-preview.ts)
-- [Metadata Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-with-metadata-preview.ts)
-- [Minting Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts)
-- [Multi-Asset Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-multi-asset-preview.ts)
-- [Plutus Spend Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/plutus-spend-preview.ts)
-- [HSM Signing Example](https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-hsm-preview.ts)
+- [Simple ADA Transfer](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-ada-preview.ts)
+- [Metadata Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-ada-with-metadata-preview.ts)
+- [Minting Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/mint-token-preview.ts)
+- [Multi-Asset Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-multi-asset-preview.ts)
+- [Plutus Spend Transaction](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/plutus-spend-preview.ts)
+- [HSM Signing Example](https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-ada-hsm-preview.ts)
 
 ---
 

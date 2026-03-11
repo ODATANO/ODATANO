@@ -5,10 +5,12 @@ import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
  */
 export type Hex = string;
 
-/** 
- * Lovelace amount (integer) - usually represented as number of lovelace (1 ADA = 1,000,000 lovelace) 
+/**
+ * Lovelace amount (integer) - represented as string to preserve precision for values > Number.MAX_SAFE_INTEGER.
+ * Cardano max supply = 45B ADA = 45,000,000,000,000,000 lovelace (exceeds MAX_SAFE_INTEGER).
+ * Provider APIs (Blockfrost, Koios) return lovelace as strings. Harmonic Labs uses bigint internally.
  */
-export type Lovelace = number;
+export type Lovelace = number | string;
 
 /** 
  * JSON Value Type - Represents any valid JSON value 
@@ -567,6 +569,8 @@ export interface HsmConfig {
   keyId?: string;
   /** Key label for CKA_LABEL lookup */
   keyLabel?: string;
+  /** Optional CDS role required for HSM actions (SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus). When set, only users with this role can invoke HSM operations. */
+  requiresRole?: string;
 }
 
 /**

@@ -45,6 +45,11 @@ export const EXECUTION_UNIT_BUFFER = 1.1;
 export const  WITNESS_BUFFER_BYTES =  50;
 
 
+/** Collateral amount in lovelace (5 ADA) */
+export const COLLATERAL_LOVELACE = 5_000_000n;
+/** Fee buffer in lovelace (1 ADA) */
+export const FEE_BUFFER_LOVELACE = 1_000_000n;
+
 export const HRP = {
   mainnet: { addr: /^addr1[0-9a-z]{50,100}$/, stake: /^stake1[0-9a-z]{53,}$/ },
   preview: { addr: /^addr_test1[0-9a-z]{50,100}$/, stake: /^stake_test1[0-9a-z]{53,}$/ },
@@ -78,6 +83,17 @@ export const DREP_ID_BYTES = 29;
 export const POLICY_ID_HEX_LENGTH = 56;
 /** Minimum length of a full asset unit (policyId + at least 1 char assetName) */
 export const MIN_FULL_ASSET_UNIT_LENGTH = POLICY_ID_HEX_LENGTH + 1; // 57
+/** Length of a hex-encoded Ed25519 key hash (28 bytes = 56 hex chars) */
+export const ED25519_KEY_HASH_HEX_LENGTH = 56;
+/** Regex for validating Ed25519 key hash hex strings */
+export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
+/** Minimum lovelace for a change output carrying native assets (2 ADA) */
+export const MIN_CHANGE_LOVELACE = 2_000_000;
+
+/**
+ * Generic 64-character hex string (used for block hashes and other 32-byte hex identifiers)
+ */
+export const HEX_64_REGEX = /^[a-f0-9]{64}$/;
 
 /**
  * Transaction hash Regex - 64-character hexadecimal string
@@ -87,7 +103,7 @@ export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
 /**
  * Asset unit Regex - policy ID (56 hex chars) + asset name (0-128 hex chars)
  */
-export const ASSET_UNIT_REGEX = /^[a-f0-9]{56,192}$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars)
+export const ASSET_UNIT_REGEX = /^[a-f0-9]{56}([a-f0-9]{2})*$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars, even length)
 
 /**
  *  Pool ID Regex - bech32 with HRP "pool" and 28 bytes payload

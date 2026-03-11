@@ -2,6 +2,7 @@ import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
+import { RequestCoalescer } from './request-coalescer';
 
 import {
   Transaction,
@@ -28,7 +29,7 @@ const logger = cds.log('CardanoClient');
 const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
   getAddress: { preferLive: true },
-  getAddressUtxos: { preferLive: true },
+  getAddressUtxos: { preferLive: false },
   getAddressTransactions: { preferLive: false },
   getNetworkInformation: { preferLive: true },
   getTransactionMetadata: { preferLive: false },
@@ -78,7 +79,12 @@ export class CardanoClient {
   network: Network;
   max_age_ms: number = 60000; // default 1 minute for temporary caching
   private protocolParamsCache?: { data: LedgerProtocolParameters; fetchedAt: number };
+  private protocolParamsFetchPromise: Promise<LedgerProtocolParameters> | null = null;
   private static readonly PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  // Request coalescers — deduplicate concurrent fetches for the same resource
+  private txCoalescer = new RequestCoalescer<Transaction>();
+  private addrCoalescer = new RequestCoalescer<Address>();
 
   /** 
    * Constructor for CardanoClient
@@ -270,7 +276,7 @@ export class CardanoClient {
     methodName: string,
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
-    const config = METHOD_ROUTING[methodName];
+    const config = METHOD_ROUTING[methodName] ?? { preferLive: false };
     return this.executeWithPriority(fn, config.preferLive);
   }
 
@@ -280,7 +286,9 @@ export class CardanoClient {
    * @returns {Promise<Transaction>} transaction data
    */
   getTransaction(txHash: string): Promise<Transaction> {
-    return this.route('getTransaction', b => b.getTransaction(txHash));
+    return this.txCoalescer.get(txHash, () =>
+      this.route('getTransaction', b => b.getTransaction(txHash))
+    );
   }
   
   /** 
@@ -289,7 +297,9 @@ export class CardanoClient {
    * @returns {Promise<Address>} address data
    */
   getAddress(address: string): Promise<Address> {
-    return this.route('getAddress', b => b.getAddress(address));
+    return this.addrCoalescer.get(address, () =>
+      this.route('getAddress', b => b.getAddress(address))
+    );
   }
 
   /**
@@ -372,6 +382,69 @@ export class CardanoClient {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
   }
 
+  //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * Uses getAddressTransactionHashes() if backend supports it, otherwise
+   * falls back to getAddressTransactions() and extracts hashes.
+   * @param address bech32 address
+   * @param limit maximum number of hashes
+   * @returns {Promise<string[]>} list of transaction hashes
+   */
+  async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
+    // Try backends with getAddressTransactionHashes support
+    const allBackends = this.getOrderedBackends(false); // historical preferred
+    for (const backend of allBackends) {
+      if (backend.getAddressTransactionHashes) {
+        try {
+          return await backend.getAddressTransactionHashes(address, limit);
+        } catch { /* fall through to next backend */ }
+      }
+    }
+    // Fallback: full fetch and extract hashes
+    const txs = await this.getAddressTransactions(address, limit);
+    return txs.map(tx => tx.hash);
+  }
+
+  /**
+   * Batch fetch multiple transactions by hash.
+   * Uses getTransactionsBatch() if backend supports it, otherwise
+   * falls back to individual getTransaction() calls (still coalesced).
+   * @param txHashes array of transaction hashes
+   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
+   */
+  async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
+    // Try backends with batch support
+    const allBackends = this.getOrderedBackends(false); // historical preferred
+    for (const backend of allBackends) {
+      if (backend.getTransactionsBatch) {
+        try {
+          return await backend.getTransactionsBatch(txHashes);
+        } catch { /* fall through to next backend */ }
+      }
+    }
+    // Fallback: individual coalesced calls
+    const entries = await Promise.all(
+      txHashes.map(h => this.getTransaction(h).then(tx => [h, tx] as const))
+    );
+    return new Map(entries);
+  }
+
+  /**
+   * Get ordered backends based on preference (live vs historical).
+   * Used by batch methods to find batch-capable backends.
+   */
+  private getOrderedBackends(preferLive: boolean): CardanoBackend[] {
+    const backends: CardanoBackend[] = [];
+    if (preferLive && this.liveBackend) backends.push(this.liveBackend);
+    backends.push(...this.historicalBackends);
+    if (!preferLive && this.liveBackend) backends.push(this.liveBackend);
+    return backends;
+  }
+
   /**
    * Get protocol parameters with caching (5 minute TTL)
    * Protocol parameters rarely change (once per epoch at most), so caching improves performance
@@ -384,10 +457,21 @@ export class CardanoClient {
       return this.protocolParamsCache.data;
     }
 
-    logger.debug('Fetching fresh protocol parameters');
-    const params = await this.route('getProtocolParameters', b => b.getProtocolParameters());
-    this.protocolParamsCache = { data: params, fetchedAt: now };
-    return params;
+    // Promise coalescing: deduplicate concurrent requests during cache miss
+    if (!this.protocolParamsFetchPromise) {
+      logger.debug('Fetching fresh protocol parameters');
+      this.protocolParamsFetchPromise = this.route('getProtocolParameters', b => b.getProtocolParameters())
+        .then(params => {
+          this.protocolParamsCache = { data: params, fetchedAt: Date.now() };
+          this.protocolParamsFetchPromise = null;
+          return params;
+        })
+        .catch(err => {
+          this.protocolParamsFetchPromise = null;
+          throw err;
+        });
+    }
+    return this.protocolParamsFetchPromise;
   }
 
   /**
@@ -398,9 +482,12 @@ export class CardanoClient {
 
     // Shutdown live backend if it has a shutdown method
     if (this.liveBackend && 'shutdown' in this.liveBackend && typeof this.liveBackend.shutdown === 'function') {
-    
+      try {
         await this.liveBackend.shutdown();
         logger.debug(`Live backend ${this.liveBackend.name} shut down`);
+      } catch (err) {
+        logger.error(`Error shutting down live backend ${this.liveBackend.name}: ${err}`);
+      }
     }
 
     // Shutdown historical backends

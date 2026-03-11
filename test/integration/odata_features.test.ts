@@ -35,7 +35,7 @@ describe('OData Query Features', () => {
 
         if (data.value.length > 0) {
           data.value.forEach((tx: any) => {
-            expect(tx.fee).to.be.greaterThan(100000);
+            expect(Number(tx.fee)).to.be.greaterThan(100000);
           });
         }
       });
@@ -165,7 +165,7 @@ describe('OData Query Features', () => {
 
         if (data.value.length >= 2) {
           for (let i = 0; i < data.value.length - 1; i++) {
-            expect(data.value[i].fee).to.be.at.most(data.value[i + 1].fee);
+            expect(Number(data.value[i].fee)).to.be.at.most(Number(data.value[i + 1].fee));
           }
         }
       });
@@ -176,7 +176,7 @@ describe('OData Query Features', () => {
 
         if (data.value.length >= 2) {
           for (let i = 0; i < data.value.length - 1; i++) {
-            expect(data.value[i].fee).to.be.at.least(data.value[i + 1].fee);
+            expect(Number(data.value[i].fee)).to.be.at.least(Number(data.value[i + 1].fee));
           }
         }
       });
@@ -187,7 +187,7 @@ describe('OData Query Features', () => {
 
         if (data.value.length >= 2) {
           for (let i = 0; i < data.value.length - 1; i++) {
-            expect(data.value[i].totalLovelace).to.be.at.least(data.value[i + 1].totalLovelace);
+            expect(Number(data.value[i].totalLovelace)).to.be.at.least(Number(data.value[i + 1].totalLovelace));
           }
         }
       });
@@ -260,7 +260,7 @@ describe('OData Query Features', () => {
           const tx = data.value[0];
           expect(tx).to.have.property('hash');
           expect(tx).to.have.property('fee');
-          expect(tx.fee).to.be.greaterThan(100000);
+          expect(Number(tx.fee)).to.be.greaterThan(100000);
         }
       });
 
@@ -271,7 +271,7 @@ describe('OData Query Features', () => {
 
         if (data.value.length > 0) {
           data.value.forEach((addr: any) => {
-            expect(addr.totalLovelace).to.be.greaterThan(1000000);
+            expect(Number(addr.totalLovelace)).to.be.greaterThan(1000000);
           });
         }
       });

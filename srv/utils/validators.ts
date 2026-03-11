@@ -1,6 +1,6 @@
 import { bech32 } from "bech32";
-import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,ASSET_UNIT_REGEX,
-  POOL_ID_REGEX, DREP_ID_REGEX, HRP
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX
 } from "./const";
 
 import { getCardanoClient } from "../server";
@@ -22,11 +22,15 @@ function safeTrimString(s: unknown): string | null {
  * @returns { prefix: string; words: number[] } decoded bech32 parts or null if invalid
  */
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
+  try {
     const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
     if (allowedHrp.includes(decoded.prefix)) {
       return { prefix: decoded.prefix, words: decoded.words };
     }
-  return null;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 
@@ -55,7 +59,7 @@ interface JsonValidationResult {
  * @param fieldName - Name of the field (for error messages)
  * @returns JsonValidationResult with parsed value or error message
  */
-function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
+export function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
   // Check size limit first (before parsing)
   if (jsonString.length > MAX_JSON_SIZE) {
     return { valid: false, error: `${fieldName} exceeds maximum size of ${MAX_JSON_SIZE} bytes` };
@@ -152,7 +156,7 @@ export function isAssetUnit(s: unknown): s is string {
  * @returns { boolean } true if s is a valid block hash false otherwise
  */
 export function isBlockHash(s: unknown): s is string {
-  return typeof s === "string" && TX_HASH_REGEX.test(s);
+  return typeof s === "string" && HEX_64_REGEX.test(s);
 }
 
 /**
@@ -208,9 +212,9 @@ export function isValidBech32Address(addrRaw: string): addrRaw is string {
   const allowed = ["addr", "addr_test"];
   const decoded = tryDecodeBech32WithHrp(addr, allowed);
   if (decoded) {
-  // avoid absurdly short/long decoded payloads
+  // Cardano addresses: 29 bytes (enterprise/reward) to 57 bytes (base address)
   const len = wordsToBytesLen(decoded.words);
-  return len >= 1 && len <= 128;
+  return len >= 29 && len <= 57;
   }
   return false;
 }
@@ -258,6 +262,24 @@ export function isValidCbor(cborRaw: unknown): cborRaw is string {
   if (!cbor) return false;
   // basic validation: must be even-length hex string
   return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
+}
+
+/**
+ * Validate an array of Ed25519 key hashes (hex, 28 bytes / 56 hex chars each).
+ * @param signers - The parsed JSON array to validate
+ * @returns validated string array
+ * @throws Error if any signer is invalid
+ */
+export function validateRequiredSigners(signers: any[]): string[] {
+  if (!Array.isArray(signers)) {
+    throw new Error('requiredSignersJson must be a JSON array');
+  }
+  for (const signer of signers) {
+    if (typeof signer !== 'string' || !ED25519_KEY_HASH_REGEX.test(signer)) {
+      throw new Error('Invalid Ed25519 key hash: must be 56 hex chars');
+    }
+  }
+  return signers;
 }
 
 /**
@@ -347,12 +369,31 @@ export function validateTransactionInputs(
     });
   }
 
-  // Validate CBOR format
+  // Validate lovelaceAmount is a positive integer (string-based to avoid precision loss for large values)
+  if (inputs.lovelaceAmount !== undefined && inputs.lovelaceAmount !== null) {
+    const s = String(inputs.lovelaceAmount);
+    if (!/^\d+$/.test(s) || s === '0') {
+      errors.push({
+        type: 'invalid',
+        field: 'lovelaceAmount',
+        message: 'lovelaceAmount must be a positive integer'
+      });
+    }
+  }
+
+  // Validate CBOR format and size (max 32K hex chars = 16KB binary)
+  const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
     errors.push({
       type: 'invalid',
       field: 'signedTxCbor',
       message: 'Invalid signedTxCbor format'
+    });
+  } else if (inputs.signedTxCbor && typeof inputs.signedTxCbor === 'string' && inputs.signedTxCbor.length > MAX_CBOR_HEX_LENGTH) {
+    errors.push({
+      type: 'invalid',
+      field: 'signedTxCbor',
+      message: `signedTxCbor exceeds maximum size of ${MAX_CBOR_HEX_LENGTH} hex characters`
     });
   }
 

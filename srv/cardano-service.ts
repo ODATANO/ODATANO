@@ -4,7 +4,7 @@ import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress,
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
 
-const { SELECT, DELETE } = cds.ql;
+const { SELECT } = cds.ql;
 
 const logger = cds.log(`CardanoService`);
 
@@ -36,6 +36,7 @@ function indexOnMissRead(
 
     return handleRequest(req, async (db) => {
       if (key) {
+        // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
         const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
         if (!existing) return await indexFn(db, key);
         return existing;
@@ -64,6 +65,7 @@ function indexOnMissAction(
     if (!validate(key)) rejectInvalid(req, actionName, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
+      // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
       const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
       if (!existing) return await indexFn(db, key);
       return existing;
@@ -105,20 +107,18 @@ module.exports = (srv: cds.Service) => {
   // Network Information (singleton - no key field)
   // ---------------------------------------------------------------------------
 
+  async function fetchNetworkInformation(db: any) {
+    const existing = await db.run(SELECT.one.from(NetworkInformation));
+    if (!existing) return await indexer().indexNetworkInformation(db);
+    return existing;
+  }
+
   srv.on('READ', NetworkInformation, async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(NetworkInformation));
-      if (!existing) return await indexer().indexNetworkInformation(db);
-      return existing;
-    });
+    return handleRequest(req, fetchNetworkInformation);
   });
 
   srv.on('GetNetworkInformation', async (req: Request) => {
-    return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.one.from(NetworkInformation));
-      if (!existing) return await indexer().indexNetworkInformation(db);
-      return existing;
-    });
+    return handleRequest(req, fetchNetworkInformation);
   });
 
   // ---------------------------------------------------------------------------
@@ -190,8 +190,7 @@ module.exports = (srv: cds.Service) => {
           seen.set(asset.unit, asset);
         }
       }
-      const deduped = Array.from(seen.values());
-      return deduped;
+      return Array.from(seen.values());
     });
   });
 
@@ -207,8 +206,7 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {
-        // No valid cached data — delete any expired remnants and re-index fresh
-        await db.run(DELETE.from(AddressUTxOs).where({ address_address: address }));
+        // No valid cached data — re-index fresh (UPSERT is idempotent, no DELETE needed)
         await indexer().indexAddress(db, address);
         const fresh = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
         return fresh;
@@ -222,8 +220,7 @@ module.exports = (srv: cds.Service) => {
           seen.set(key, utxo);
         }
       }
-      const deduped = Array.from(seen.values());
-      return deduped;
+      return Array.from(seen.values());
     });
   });
 
@@ -281,10 +278,15 @@ module.exports = (srv: cds.Service) => {
     const { address, limit } = req.data as { address?: string, limit?: number };
     if (!address) rejectMissing(req, 'GetLatestTransactionsByAddress', 'address');
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetLatestTransactionsByAddress', 'Invalid bech32 address format', 'address');
-    const txLimit = limit && limit > 0 ? limit : 10;
+    const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(AddressTransactions).where({ address }).limit(txLimit));
+      const existing = await db.run(
+        SELECT.from(AddressTransactions)
+          .where({ address_address: address })
+          .orderBy('blockTime desc')
+          .limit(txLimit)
+      );
       if (!existing || existing.length === 0) {
         return indexer().indexAddressTransactions(db, address, txLimit);
       }

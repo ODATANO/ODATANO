@@ -1,9 +1,12 @@
+import cds from '@sap/cds';
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
+
+const logger = cds.log('KoiosBackend');
 
 import {
   Transaction,
@@ -69,7 +72,26 @@ export class KoiosBackend implements CardanoBackend {
     return true;
   }
 
-  /** 
+  /**
+   * Retry a Koios API call once if the result is an empty array.
+   * Koios sometimes returns [] transiently for valid queries.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async fetchWithRetryOnEmpty(
+    fn: () => Promise<{ data: any[] }>,
+    label: string
+  ): Promise<any[]> {
+    const first = await fn();
+    if (Array.isArray(first.data) && first.data.length === 0) {
+      logger.warn(`${label}: Koios returned empty array, retrying once...`);
+      await new Promise(r => setTimeout(r, 500));
+      const second = await fn();
+      return second.data;
+    }
+    return first.data;
+  }
+
+  /**
    * Get Transaction Data for specified transaction hash
    * @param hash transaction hash (hex)
    * @returns {Promise<Transaction>} transaction data
@@ -95,75 +117,7 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const tx = data[0];
-
-        let labels: MetadataLabelTx[] = [];
-
-        if (tx.metadata) {
-          labels = Object.entries(tx.metadata).map(
-            ([label, json]) => ({
-              txHash: hash,
-              label: +label,
-              json: json as JSONValue,
-            }));
-        }
-
-        return {
-          hash: tx.tx_hash,
-          blockHash: tx.block_hash,
-          blockHeight: Number(tx.block_height),
-          blockTime: tx.tx_timestamp ?? tx.block_time,
-          slot: tx.absolute_slot ?? tx.slot_no,
-          index: tx.tx_index,
-          fee: tx.tx_fee || '0',
-          deposit: tx.deposit || '0',
-          size: tx.tx_size,
-          inputs: tx.inputs.map((input: any) => {
-            const amount: Amount[] = [
-              { unit: 'lovelace', quantity: input.value }
-            ];
-            if (input.asset_list && Array.isArray(input.asset_list)) {
-              for (const asset of input.asset_list) {
-                amount.push({
-                  unit: `${asset.policy_id}${asset.asset_name}`,
-                  quantity: asset.quantity
-                });
-              }
-            }
-            return {
-              address: input.payment_addr?.bech32 || input.address,
-              txHash: input.tx_hash,
-              outputIndex: input.tx_index,
-              amount: amount,
-              dataHash: input.datum_hash || null,
-              inlineDatum: input.inline_datum || null,
-              referenceScriptHash: input.reference_script || null,
-            };
-          }),
-          outputs: tx.outputs.map((output: any) => {
-            const amount: Amount[] = [
-              { unit: 'lovelace', quantity: output.value }
-            ];
-            if (output.asset_list && Array.isArray(output.asset_list)) {
-              for (const asset of output.asset_list) {
-                amount.push({
-                  unit: `${asset.policy_id}${asset.asset_name}`,
-                  quantity: asset.quantity
-                });
-              }
-            }
-            return {
-              address: output.payment_addr?.bech32 || output.address,
-              amount: amount,
-              txHash: tx.tx_hash,
-              outputIndex: output.tx_index,
-              dataHash: output.datum_hash || null,
-              inlineDatum: output.inline_datum || null,
-              isCollateral: false,
-              referenceScriptHash: output.reference_script || null,
-            };
-          }),
-          metadata: labels
-        };
+        return this._mapKoiosTx(tx);
       },
       this.name
     );
@@ -178,8 +132,16 @@ export class KoiosBackend implements CardanoBackend {
 
     return handleBackendRequest(
       async () => {
-        const blockData = await this.api.post('/block_info', { _block_hashes: [blockHash] });
-        const data = blockData.data[0];
+        const results = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_info', { _block_hashes: [blockHash] }),
+          `getBlock(${blockHash})`
+        );
+
+        if (!results || results.length === 0) {
+          throw new NotFoundError('Block', this.name);
+        }
+
+        const data = results[0];
 
         return {
           time: data.block_time,
@@ -207,16 +169,16 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
 
-        // get data of the given epoch
-        let epochData;
+        const results = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } }),
+          `getEpoch(${epochNumber})`
+        );
 
-        epochData = await this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } });
-
-        if (!epochData.data || !Array.isArray(epochData.data) || epochData.data.length === 0) {
+        if (!results || results.length === 0) {
           throw new NotFoundError('Epoch', this.name);
         }
 
-        const data = epochData.data[0];
+        const data = results[0];
 
         return {
           epoch: data.epoch_no,
@@ -386,6 +348,11 @@ export class KoiosBackend implements CardanoBackend {
         // Fallback for preview/preprod network where /totals doesn't work
         // Use genesis endpoint to get max supply; remaining fields default to '0'
         const { data: genesisData } = await this.api.get('/genesis');
+
+        if (!genesisData || !Array.isArray(genesisData) || genesisData.length === 0) {
+          throw new NotFoundError('Genesis', this.name);
+        }
+
         const genesis = genesisData[0];
         const maxSupply = genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
 
@@ -534,10 +501,14 @@ export class KoiosBackend implements CardanoBackend {
         const addressDataResponse = await this.api.post('/account_addresses', body);
 
         // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-        const addressesFlat = addressDataResponse.data.flatMap((item: any) => item.addresses);
-        const addresses = await Promise.all(
-          addressesFlat.map((addr: string) => this.getAddress(addr))
-        );
+        const addressesFlat: string[] = addressDataResponse.data.flatMap((item: any) => item.addresses);
+        const addresses: Address[] = [];
+        const concurrent = 10;
+        for (let i = 0; i < addressesFlat.length; i += concurrent) {
+          const chunk = addressesFlat.slice(i, i + concurrent);
+          const chunkResults = await Promise.all(chunk.map((addr: string) => this.getAddress(addr)));
+          addresses.push(...chunkResults);
+        }
 
         const accountData = data[0];
         return {
@@ -643,8 +614,16 @@ export class KoiosBackend implements CardanoBackend {
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/tip');
-        return await this.getBlock(data[0].hash);
+        const tipData = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/tip'),
+          'getLatestBlock'
+        );
+
+        if (!tipData || tipData.length === 0) {
+          throw new NotFoundError('LatestBlock', this.name);
+        }
+
+        return await this.getBlock(tipData[0].hash);
       },
       this.name
     );
@@ -657,11 +636,174 @@ export class KoiosBackend implements CardanoBackend {
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/tip');
-        // /tip returns an array, access first element
-        return this.getEpoch(data[0].epoch_no);
+        const tipData = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/tip'),
+          'getLatestEpoch'
+        );
+
+        if (!tipData || tipData.length === 0) {
+          throw new NotFoundError('LatestEpoch', this.name);
+        }
+
+        const epochNo = tipData[0].epoch_no;
+        try {
+          return await this.getEpoch(epochNo);
+        } catch {
+          // Current epoch may not be available yet on Koios — fall back to previous
+          return await this.getEpoch(epochNo - 1);
+        }
       },
       this.name
     );
+  }
+
+  //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * @param address bech32 address
+   * @param limit maximum number of hashes
+   * @returns {Promise<string[]>} most recent tx hashes
+   */
+  async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.post('/address_txs', { _addresses: [address] });
+        return data.slice(0, limit).map((tx: { tx_hash: string }) => tx.tx_hash);
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Batch fetch multiple transactions by hash using Koios POST /tx_info.
+   * Sends all hashes in one request (chunked at 100 per Koios limit).
+   * @param txHashes array of transaction hashes
+   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
+   */
+  async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
+    return handleBackendRequest(
+      async () => {
+        const BATCH_SIZE = 100;
+        const result = new Map<string, Transaction>();
+
+        for (let i = 0; i < txHashes.length; i += BATCH_SIZE) {
+          const chunk = txHashes.slice(i, i + BATCH_SIZE);
+          const { data } = await this.api.post('/tx_info', {
+            _tx_hashes: chunk,
+            _inputs: true,
+            _metadata: true,
+            _assets: true,
+            _withdrawals: false,
+            _certs: false,
+            _scripts: false,
+            _bytecode: false,
+          });
+
+          if (data && Array.isArray(data)) {
+            for (const tx of data) {
+              result.set(tx.tx_hash, this._mapKoiosTx(tx));
+            }
+          }
+        }
+
+        // Warn about any missing transactions (requested but not returned by Koios)
+        const missing = txHashes.filter(h => !result.has(h));
+        if (missing.length > 0) {
+          logger.warn({ missing, total: txHashes.length, returned: result.size }, 'getTransactionsBatch: some transactions not found');
+        }
+
+        return result;
+      },
+      this.name
+    );
+  }
+
+  //-----------------------------------------------------------------------------
+  // Private Helpers
+  //-----------------------------------------------------------------------------
+
+  /**
+   * Map a Koios /tx_info response object to the normalized Transaction type.
+   */
+  private _mapKoiosTx(tx: any): Transaction {
+    let labels: MetadataLabelTx[] = [];
+
+    if (tx.metadata) {
+      labels = Object.entries(tx.metadata).map(
+        ([label, json]) => ({
+          txHash: tx.tx_hash,
+          label: +label,
+          json: json as JSONValue,
+        }));
+    }
+
+    return {
+      hash: tx.tx_hash,
+      blockHash: tx.block_hash,
+      blockHeight: Number(tx.block_height),
+      blockTime: tx.tx_timestamp ?? tx.block_time,
+      slot: tx.absolute_slot ?? tx.slot_no,
+      index: tx.tx_index,
+      fee: tx.tx_fee || '0',
+      deposit: tx.deposit || '0',
+      size: tx.tx_size,
+      inputs: tx.inputs.map((input: any) => {
+        const amount: Amount[] = [
+          { unit: 'lovelace', quantity: input.value }
+        ];
+        if (input.asset_list && Array.isArray(input.asset_list)) {
+          for (const asset of input.asset_list) {
+            amount.push({
+              unit: `${asset.policy_id}${asset.asset_name}`,
+              quantity: asset.quantity
+            });
+          }
+        }
+        return {
+          address: input.payment_addr?.bech32 || input.address,
+          txHash: input.tx_hash,
+          outputIndex: input.tx_index,
+          amount: amount,
+          dataHash: input.datum_hash || null,
+          inlineDatum: this._sanitizeInlineDatum(input.inline_datum),
+          referenceScriptHash: input.reference_script || null,
+        };
+      }),
+      outputs: tx.outputs.map((output: any) => {
+        const amount: Amount[] = [
+          { unit: 'lovelace', quantity: output.value }
+        ];
+        if (output.asset_list && Array.isArray(output.asset_list)) {
+          for (const asset of output.asset_list) {
+            amount.push({
+              unit: `${asset.policy_id}${asset.asset_name}`,
+              quantity: asset.quantity
+            });
+          }
+        }
+        return {
+          address: output.payment_addr?.bech32 || output.address,
+          amount: amount,
+          txHash: tx.tx_hash,
+          outputIndex: output.tx_index,
+          dataHash: output.datum_hash || null,
+          inlineDatum: this._sanitizeInlineDatum(output.inline_datum),
+          isCollateral: false,
+          referenceScriptHash: output.reference_script || null,
+        };
+      }),
+      metadata: labels
+    };
+  }
+
+  /** Sanitize inline datum from Koios: filter out hollow objects like {"bytes": null, "value": null} */
+  private _sanitizeInlineDatum(datum: any): any {
+    if (!datum || typeof datum !== 'object') return datum || null;
+    const values = Object.values(datum);
+    if (values.length > 0 && values.every(v => v === null)) return null;
+    return datum;
   }
 }

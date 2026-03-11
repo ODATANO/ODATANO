@@ -33,8 +33,8 @@ function setupKoiosTip() {
 
 function setupBlockfrostHealth() {
   nock(BLOCKFROST_BASE)
-    .get('/api/health')
-    .reply(200, { is_healthy: true });
+    .get('/api/v0/blocks/latest')
+    .reply(200, { hash: 'test-block-hash', height: 1000000 });
 }
 
 describe('Error Path Tests', () => {

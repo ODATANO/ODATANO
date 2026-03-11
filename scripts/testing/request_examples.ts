@@ -3,6 +3,7 @@ import axios, { AxiosError } from 'axios';
 const COMPONENT_NAME = 'RequestExamples';
 
 const BASE_URL = 'http://localhost:4004/odata/v4/cardano-odata';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
 
 interface ExampleRequest {
   name: string;
@@ -167,7 +168,10 @@ const examples: ExampleRequest[] = [
     try {
       const config = {
         timeout: 60_000, // Increased to 60 seconds for backend API calls
-        headers: ex.method === 'POST' ? { 'Content-Type': 'application/json' } : {},
+        headers: {
+          'Authorization': AUTH_HEADER,
+          ...(ex.method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+        },
       };
 
       const res = ex.method === 'POST' 

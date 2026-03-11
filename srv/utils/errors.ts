@@ -278,16 +278,18 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
   return 'Unknown error';
 }
 
-/** 
+/**
  * Normalizes any backend error into a typed BackendError
- * 
- * Priority:
- * 1. Check message for "not found" → 404 (even if provider returns 5xx)
- * 2. Check HTTP status 429 or rate limit messages → 429
- * 3. Check HTTP status 404 → 404
- * 4. Check HTTP status 5xx → 503 (retry-able)
- * 5. Check HTTP status 4xx → 404 if "not found", otherwise 503
- * 6. Unknown/network errors → 503
+ *
+ * Priority (checked in order):
+ * 1. TX Submission — Already submitted/duplicate → 409
+ * 2. TX Submission — Validation/Signature errors → 400
+ * 3. Message indicates "not found" → 404 (even if provider returns 5xx)
+ * 4. Rate limiting (status 429 or message patterns) → 429
+ * 5. Explicit 404 status → 404
+ * 6. 5xx errors → 503 (Provider unavailable, retry-able)
+ * 7. Other 4xx → 503
+ * 8. Unknown/network errors → 503 (default fallback)
  */
 export function normalizeBackendError(
   err: any,
@@ -296,9 +298,9 @@ export function normalizeBackendError(
   // Already normalized
   if (err instanceof BackendError) return err;
 
-  // Check for uninitialized backend client (TypeError from accessing null/undefined)
-  if (err instanceof TypeError && 
-      (err.message.includes('Cannot read properties of null') || 
+  // Check for uninitialized backend client (TypeError from calling methods on null/undefined client)
+  if (err instanceof TypeError &&
+      (err.message.includes('Cannot read properties of null') ||
        err.message.includes('Cannot read properties of undefined') ||
        err.message.includes('null is not an object') ||
        err.message.includes('undefined is not an object'))) {
@@ -363,7 +365,7 @@ export function normalizeBackendError(
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 2: Rate limiting detection (status 429 or message patterns)
+  // Priority 4: Rate limiting detection (status 429 or message patterns)
   if (status === 429 ||
     messageLower.includes('rate limit') ||
     messageLower.includes('too many requests') ||
@@ -379,12 +381,12 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 3: Explicit 404 status
+  // Priority 5: Explicit 404 status
   if (status === 404) {
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 4: 5xx errors → Provider unavailable (retry-able)
+  // Priority 6: 5xx errors → Provider unavailable (retry-able)
   if (status >= 500) {
     return new ProviderUnavailableError(
       message || 'Provider returned server error',
@@ -394,9 +396,17 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 5: Other 4xx → Check if it's a disguised "not found"
+  // Priority 7: Other 4xx → differentiate by status code
+  if (status === 400 || status === 422) {
+    return new TransactionValidationError(
+      message || `Provider returned ${status}: invalid request`, err);
+  }
+  if (status === 401 || status === 403) {
+    return new BackendError(
+      `Provider authentication failed (${status}): ${message}`,
+      status, ERROR_CODES.PROVIDER_UNAVAILABLE, backendName, err);
+  }
   if (status >= 400) {
-    // Other 4xx like bad requests → treat as unavailable
     return new ProviderUnavailableError(
       message || 'Provider request failed',
       backendName,
@@ -405,7 +415,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 6: Unknown/network errors → treat as unavailable (default fallback)
+  // Priority 8: Unknown/network errors → treat as unavailable (default fallback)
   return new ProviderUnavailableError(
     message || 'Unknown backend error',
     backendName,

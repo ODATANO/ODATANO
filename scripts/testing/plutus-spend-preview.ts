@@ -5,6 +5,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
+const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
+const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 // ---------------------------------------------------------------------------
 // Configuration - Adjust these values for your use case
@@ -82,7 +84,8 @@ async function main() {
     console.log('\n[1/3] Building Plutus Spend Transaction...');
     const buildResponse = await axios.post(
       `${ODATA_URL}/BuildPlutusSpendTransaction`,
-      BUILD_BODY
+      BUILD_BODY,
+      axiosConfig
     );
     const buildData = buildResponse.data;
 
@@ -137,7 +140,7 @@ async function main() {
     const submitResponse = await axios.post(`${ODATA_URL}/SubmitTransaction`, {
       buildId: buildId,
       signedTxCbor: signedTxCbor
-    });
+    }, axiosConfig);
 
     console.log('Response Status:', submitResponse.status);
 

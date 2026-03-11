@@ -96,8 +96,8 @@ Integration of the CAP service with Cardano blockchain data sources using Blockf
 - Integration Tests (Blockfrost): https://github.com/ODATANO/ODATANO/blob/main/test/integration/core.blockfrost.test.ts  
 - Integration Tests (Koios): https://github.com/ODATANO/ODATANO/blob/main/test/integration/core.koios.test.ts  
 - OData Features Tests: https://github.com/ODATANO/ODATANO/blob/main/test/integration/odata_features.test.ts  
-- Postman Collection (Complete API Catalog): https://github.com/ODATANO/ODATANO/blob/main/scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json  
-- Request Examples: https://github.com/ODATANO/ODATANO/blob/main/scripts/request_examples.ts  
+- Postman Collection (Complete API Catalog): https://github.com/ODATANO/ODATANO/blob/main/scripts/postman/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json
+- Request Examples: https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/request_examples.ts
 - Demonstration Query (End-to-End Test): https://www.youtube.com/watch?v=jDw6MXgbfR0  
 - Milestone Release v0.1-milestone1: https://github.com/ODATANO/ODATANO/releases/tag/v0.1-milestone1  
 
@@ -231,8 +231,8 @@ Comprehensive documentation package covering all aspects of the project includin
 
 **Code Examples & Tools**
 
-- Postman Collection (Complete API Catalog): https://github.com/ODATANO/ODATANO/blob/main/scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json  
-- TypeScript Request Examples: https://github.com/ODATANO/ODATANO/blob/main/scripts/request_examples.ts  
+- Postman Collection (Complete API Catalog): https://github.com/ODATANO/ODATANO/blob/main/scripts/postman/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json
+- TypeScript Request Examples: https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/request_examples.ts
 
 **Configuration Files**
 
@@ -350,10 +350,10 @@ Reference implementations and scripts demonstrating the full build–sign–subm
 
 **Example Scripts**
 
-- Send ADA Script (Build → Sign → Submit): https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-preview.ts
-- Send ADA with Metadata Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/send-ada-with-metadata-preview.ts
-- Mint Token Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/mint-token-preview.ts
-- Send Multi-Asset Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/send-multi-asset-preview.ts
+- Send ADA Script (Build → Sign → Submit): https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-ada-preview.ts
+- Send ADA with Metadata Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-ada-with-metadata-preview.ts
+- Mint Token Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/mint-token-preview.ts
+- Send Multi-Asset Script: https://github.com/ODATANO/ODATANO/blob/main/scripts/testing/send-multi-asset-preview.ts
 
 **Postman Collection**
 

@@ -47,6 +47,35 @@ describe('OgmiosBackend', () => {
     });
   });
 
+  describe('URL Validation', () => {
+    it('should reject invalid URL scheme (http://)', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'http://localhost:1337');
+      expect(backend.init()).rejects.toThrow(BackendInitError);
+    });
+
+    it('should reject invalid URL scheme (https://)', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'https://localhost:1337');
+      expect(backend.init()).rejects.toThrow(BackendInitError);
+    });
+
+    it('should reject link-local/metadata IP (169.254.x.x)', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'ws://169.254.169.254:1337');
+      expect(backend.init()).rejects.toThrow(BackendInitError);
+    });
+
+    it('should reject IPv6 link-local (fe80::)', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, 'ws://[fe80::1]:1337');
+      expect(backend.init()).rejects.toThrow(BackendInitError);
+    });
+
+    it('should accept wss:// scheme', () => {
+      // Will fail on connection, but URL validation should pass
+      new OgmiosBackend(NETWORK, TIMEOUT_MS, 'wss://ogmios.example.com:1337');
+      // validateOgmiosUrl is called in init(), which will fail on createInteractionContext, not URL validation
+      expect(() => (OgmiosBackend as any).validateOgmiosUrl('wss://ogmios.example.com:1337')).not.toThrow();
+    });
+  });
+
   describe('convertOgmiosValue', () => {
     let backend: OgmiosBackend;
 
@@ -129,6 +158,18 @@ describe('OgmiosBackend', () => {
       expect(result).toEqual([
         { unit: 'lovelace', quantity: '10000000' }
       ]);
+    });
+
+    it('should handle empty value object', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const result = (backend as any).convertOgmiosValue({});
+      expect(result).toEqual([]);
+    });
+
+    it('should handle value with ada but no lovelace', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const result = (backend as any).convertOgmiosValue({ ada: {} });
+      expect(result).toEqual([]);
     });
 
     it('should handle BigInt lovelace values', () => {
@@ -545,6 +586,368 @@ describe('OgmiosBackend', () => {
       expect((backend as any).stateQueryClient).toBe(null);
       expect((backend as any).txSubmissionClient).toBe(null);
       expect((backend as any).context).toBe(null);
+    });
+  });
+
+  describe('getPool', () => {
+    it('should return pool data for valid pool', async () => {
+      const mockStateQueryClient = {
+        stakePools: jest.fn().mockResolvedValue({
+          'pool1abc': {
+            vrf: 'vrf123',
+            stake: { ada: { lovelace: 50000000000n } },
+            pledge: 1000000000n,
+            margin: 0.05,
+            cost: 340000000n,
+            rewardAccount: 'stake1u8reward'
+          }
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getPool('pool1abc');
+      expect(result.poolId).toBe('pool1abc');
+      expect(result.vrfKeyHash).toBe('vrf123');
+      expect(result.liveStake).toBe('50000000000');
+      expect(result.pledge).toBe('1000000000');
+      expect(result.margin).toBe(0.05);
+      expect(result.fixedCost).toBe('340000000');
+      expect(result.rewardAccount).toBe('stake1u8reward');
+    });
+
+    it('should throw NotFoundError when pool does not exist', async () => {
+      const mockStateQueryClient = {
+        stakePools: jest.fn().mockResolvedValue({})
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      await expect(backend.getPool('pool1notfound')).rejects.toThrow('Pool');
+    });
+
+    it('should handle pool with missing optional fields', async () => {
+      const mockStateQueryClient = {
+        stakePools: jest.fn().mockResolvedValue({
+          'pool1minimal': {}
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getPool('pool1minimal');
+      expect(result.vrfKeyHash).toBe('');
+      expect(result.liveStake).toBe('0');
+      expect(result.pledge).toBe('0');
+      expect(result.margin).toBe(0);
+      expect(result.fixedCost).toBe('0');
+      expect(result.rewardAccount).toBe('');
+    });
+
+    it('should use vrfKeyHash fallback when vrf is missing', async () => {
+      const mockStateQueryClient = {
+        stakePools: jest.fn().mockResolvedValue({
+          'pool1abc': { vrfKeyHash: 'vrfhash456' }
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getPool('pool1abc');
+      expect(result.vrfKeyHash).toBe('vrfhash456');
+    });
+  });
+
+  describe('getAccount - object format response', () => {
+    it('should handle rewardAccountSummaries returning object instead of array', async () => {
+      // Ogmios may return a record keyed by stake address
+      const mockStateQueryClient = {
+        rewardAccountSummaries: jest.fn().mockResolvedValue({
+          'stake1u8test': {
+            controlledAmount: 25000000,
+            rewards: 500000,
+            withdrawals: 100000,
+            delegate: { id: 'pool1delegated' },
+            vote: { id: 'drep1voted' }
+          }
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getAccount('stake1u8test');
+      expect(result.controlledAmount).toBe('25000000');
+      expect(result.rewardsSum).toBe('500000');
+      expect(result.withdrawalsSum).toBe('100000');
+      expect(result.poolId).toBe('pool1delegated');
+      expect(result.drepId).toBe('drep1voted');
+    });
+  });
+
+  describe('getAddress', () => {
+    it('should handle UTxO with null transaction', async () => {
+      const mockStateQueryClient = {
+        utxo: jest.fn().mockResolvedValue([{
+          transaction: null,
+          index: 0,
+          address: 'addr_test1qtest',
+          value: { ada: { lovelace: 5000000 } }
+        }])
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getAddress('addr_test1qtest');
+      expect(result.utxos[0].txHash).toBe('');
+      expect(result.amount[0].quantity).toBe('5000000');
+    });
+
+    it('should handle UTxO with missing address fallback', async () => {
+      const mockStateQueryClient = {
+        utxo: jest.fn().mockResolvedValue([{
+          transaction: { id: 'txhash123' },
+          index: 2,
+          value: { ada: { lovelace: 3000000 } }
+          // no address field
+        }])
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getAddress('addr_test1qfallback');
+      expect(result.utxos[0].address).toBe('addr_test1qfallback');
+    });
+
+    it('should handle UTxO with datumHash and scriptRef', async () => {
+      const mockStateQueryClient = {
+        utxo: jest.fn().mockResolvedValue([{
+          transaction: { id: 'txhash456' },
+          index: 0,
+          address: 'addr_test1qscript',
+          value: { ada: { lovelace: 2000000 } },
+          datumHash: 'datum_hash_abc',
+          script: { hash: 'script_hash_def' }
+        }])
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getAddress('addr_test1qscript');
+      expect(result.utxos[0].datumHash).toBe('datum_hash_abc');
+      expect(result.utxos[0].scriptRef).toBe('script_hash_def');
+    });
+  });
+
+  describe('getLatestBlock', () => {
+    it('should handle origin tip (genesis block)', async () => {
+      const mockStateQueryClient = {
+        ledgerTip: jest.fn().mockResolvedValue('origin'),
+        networkBlockHeight: jest.fn().mockResolvedValue('origin'),
+        epoch: jest.fn().mockResolvedValue(0),
+        eraStart: jest.fn().mockResolvedValue({
+          time: { seconds: 1654041600n },
+          slot: 0
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getLatestBlock();
+      expect(result.height).toBe(0);
+      expect(result.hash).toBe('');
+      expect(result.slot).toBe(0);
+    });
+
+    it('should return block data with correct epoch slot calculation', async () => {
+      const mockStateQueryClient = {
+        ledgerTip: jest.fn().mockResolvedValue({ slot: 432123, id: 'blockhash123' }),
+        networkBlockHeight: jest.fn().mockResolvedValue(100000),
+        epoch: jest.fn().mockResolvedValue(1),
+        eraStart: jest.fn().mockResolvedValue({
+          time: { seconds: 1654041600n },
+          slot: 0
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getLatestBlock();
+      expect(result.height).toBe(100000);
+      expect(result.hash).toBe('blockhash123');
+      expect(result.slot).toBe(432123);
+      expect(result.epoch).toBe(1);
+    });
+  });
+
+  describe('getProtocolParameters', () => {
+    it('should handle missing optional fields with zero defaults', async () => {
+      const mockStateQueryClient = {
+        protocolParameters: jest.fn().mockResolvedValue({}),
+        epoch: jest.fn().mockResolvedValue(100)
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getProtocolParameters();
+      expect(result.epoch).toBe(100);
+      expect(result.minUtxo).toBe('0');
+      expect(result.minFeeA).toBe(0);
+      expect(result.minFeeB).toBe(0);
+      expect(result.maxBlockSize).toBe(0);
+      expect(result.priceMem).toBe(0);
+      expect(result.priceStep).toBe(0);
+      expect(result.maxTxExMem).toBe('0');
+      expect(result.maxTxExSteps).toBe('0');
+      expect(result.maxBlockExMem).toBe('0');
+      expect(result.maxBlockExSteps).toBe('0');
+      expect(result.maxValSize).toBe('0');
+      expect(result.collateralPercent).toBe(0);
+      expect(result.maxCollateralInputs).toBe(0);
+      expect(result.coinsPerUtxoSize).toBe('0');
+      expect(result.maxBlockHeaderSize).toBe(0);
+      expect(result.maxTxSize).toBe(0);
+      expect(result.keyDeposit).toBe('0');
+      expect(result.minPoolCost).toBe('0');
+      expect(result.poolDeposit).toBe('0');
+      expect(result.protocolMajorVer).toBe(0);
+      expect(result.protocolMinorVer).toBe(0);
+      expect(result.source).toBe('ogmios');
+    });
+
+    it('should handle fully populated protocol parameters', async () => {
+      const mockStateQueryClient = {
+        protocolParameters: jest.fn().mockResolvedValue({
+          minUtxoDepositCoefficient: 4310,
+          minFeeCoefficient: 44,
+          minFeeConstant: { ada: { lovelace: 155381 } },
+          maxBlockBodySize: { bytes: 90112 },
+          scriptExecutionPrices: { memory: 0.0577, cpu: 0.0000721 },
+          maxExecutionUnitsPerTransaction: { memory: 14000000, cpu: 10000000000 },
+          maxExecutionUnitsPerBlock: { memory: 62000000, cpu: 40000000000 },
+          maxValueSize: { bytes: 5000 },
+          collateralPercentage: 150,
+          maxCollateralInputs: 3,
+          maxBlockHeaderSize: { bytes: 1100 },
+          maxTransactionSize: { bytes: 16384 },
+          stakeCredentialDeposit: { ada: { lovelace: 2000000 } },
+          minStakePoolCost: { ada: { lovelace: 170000000 } },
+          stakePoolDeposit: { ada: { lovelace: 500000000 } },
+          stakePoolRetirementEpochBound: 18,
+          desiredNumberOfStakePools: 500,
+          stakePoolPledgeInfluence: 0.3,
+          treasuryExpansion: 0.2,
+          monetaryExpansion: 0.003,
+          version: { major: 9, minor: 0 },
+          plutusCostModels: {}
+        }),
+        epoch: jest.fn().mockResolvedValue(450)
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getProtocolParameters();
+      expect(result.epoch).toBe(450);
+      expect(result.minFeeA).toBe(44);
+      expect(result.minFeeB).toBe(155381);
+      expect(result.maxBlockSize).toBe(90112);
+      expect(result.collateralPercent).toBe(150);
+      expect(result.maxCollateralInputs).toBe(3);
+      expect(result.protocolMajorVer).toBe(9);
+      expect(result.eMax).toBe(18);
+      expect(result.nOpt).toBe(500);
+    });
+  });
+
+  describe('shutdown - CONNECTING socket state', () => {
+    it('should terminate socket in CONNECTING state', async () => {
+      const mockSocket = {
+        readyState: 0, // CONNECTING
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: jest.fn()
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = null;
+      (backend as any).txSubmissionClient = null;
+      (backend as any).context = { socket: mockSocket };
+      (backend as any).isShutdown = false;
+
+      await backend.shutdown();
+      expect(mockSocket.terminate).toHaveBeenCalled();
+      expect((backend as any).isShutdown).toBe(true);
+    });
+
+    it('should handle close timeout during shutdown', async () => {
+      jest.useFakeTimers();
+      const mockSocket = {
+        readyState: 1, // OPEN
+        OPEN: 1,
+        CONNECTING: 0,
+        once: jest.fn(), // Never calls the callback — simulates timeout
+        terminate: jest.fn()
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = null;
+      (backend as any).txSubmissionClient = null;
+      (backend as any).context = { socket: mockSocket };
+      (backend as any).isShutdown = false;
+
+      const shutdownPromise = backend.shutdown();
+      jest.advanceTimersByTime(3000);
+      await shutdownPromise;
+
+      expect(mockSocket.terminate).toHaveBeenCalled();
+      expect((backend as any).isShutdown).toBe(true);
+      jest.useRealTimers();
+    });
+  });
+
+  describe('getLatestEpoch', () => {
+    it('should return epoch data with calculated boundaries', async () => {
+      const mockStateQueryClient = {
+        epoch: jest.fn().mockResolvedValue(100),
+        eraStart: jest.fn().mockResolvedValue({
+          time: { seconds: 1654041600n },
+          slot: 0
+        }),
+        ledgerTip: jest.fn().mockResolvedValue({ slot: 43200100, id: 'tiphash' })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getLatestEpoch();
+      expect(result.epoch).toBe(100);
+      expect(result.block_count).toBe(0);
+      expect(result.tx_count).toBe(0);
     });
   });
 

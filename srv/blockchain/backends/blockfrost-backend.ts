@@ -190,7 +190,7 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const txMetadata = await this.api.txsMetadata(tx_hash);
 
-        if (txMetadata.length === 0 || txMetadata === null) {
+        if (!txMetadata || txMetadata.length === 0) {
           throw new NotFoundError('Transaction metadata', this.name);
         }
 
@@ -245,11 +245,17 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+        const txHashes = address_txs.map(tx => tx.tx_hash);
 
-        const transactions = await Promise.all(address_txs.map(async (tx) => {
-          return this.getTransaction(tx.tx_hash);
-        }));
+        // Batch fetch instead of N+1 individual calls
+        const batchResult = await this.getTransactionsBatch(txHashes);
 
+        // Preserve original order from address_txs
+        const transactions: Transaction[] = [];
+        for (const hash of txHashes) {
+          const tx = batchResult.get(hash);
+          if (tx) transactions.push(tx);
+        }
         return transactions;
       },
       this.name
@@ -343,9 +349,13 @@ export class BlockfrostBackend implements CardanoBackend {
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
         const addressData = await this.api.accountsAddresses(stakeAddress);
-        const addresses = await Promise.all(
-          addressData.map(address => this.getAddress(address.address))
-        );
+        const addresses: Address[] = [];
+        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
+        for (let i = 0; i < addressData.length; i += concurrent) {
+          const chunk = addressData.slice(i, i + concurrent);
+          const chunkResults = await Promise.all(chunk.map(a => this.getAddress(a.address)));
+          addresses.push(...chunkResults);
+        }
         return {
           stakeaddress: accountData.stake_address,
           active: accountData.active,
@@ -478,6 +488,54 @@ export class BlockfrostBackend implements CardanoBackend {
           txCount: blockdata.tx_count,
           fees: blockdata.fees,
         };
+      },
+      this.name
+    );
+  }
+
+  //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /** Max concurrent Blockfrost API calls (free tier: ~10 req/s) */
+  private static readonly MAX_CONCURRENT = 10;
+
+  /**
+   * Get transaction hashes for an address (lightweight — no full tx details).
+   * @param address bech32 address
+   * @param limit maximum number of hashes
+   * @returns {Promise<string[]>} most recent tx hashes
+   */
+  async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
+    return handleBackendRequest(
+      async () => {
+        const txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+        return txs.map(tx => tx.tx_hash);
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Batch fetch multiple transactions by hash.
+   * Blockfrost has no batch endpoint — uses concurrency-limited parallel calls.
+   * @param txHashes array of transaction hashes
+   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
+   */
+  async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
+    return handleBackendRequest(
+      async () => {
+        const result = new Map<string, Transaction>();
+        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
+
+        for (let i = 0; i < txHashes.length; i += concurrent) {
+          const chunk = txHashes.slice(i, i + concurrent);
+          const txs = await Promise.all(chunk.map(h => this.getTransaction(h)));
+          for (const tx of txs) {
+            result.set(tx.hash, tx);
+          }
+        }
+        return result;
       },
       this.name
     );

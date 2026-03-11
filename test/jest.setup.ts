@@ -1,7 +1,14 @@
+// Disable telemetry plugin before any CDS modules load
+// Must be set before @cap-js/telemetry/cds-plugin.js is required
+process.env.NO_TELEMETRY = 'true';
+
 /**
  * Jest Setup File
- * Suppress console output during tests
+ * - Set privileged default user so tests pass @requires: 'authenticated-user' without auth headers
+ * - Suppress console output during tests
  */
+import cds from '@sap/cds';
+cds.User.default = cds.User.Privileged as unknown as cds.User;
 
 /* eslint-disable no-console */
 

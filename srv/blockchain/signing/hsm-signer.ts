@@ -81,6 +81,8 @@ export class HsmSigner {
 
       // 3. Login with PIN
       this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER, this.config.pin);
+      // Clear PIN from memory after successful login — PIN is no longer needed
+      this.config = { ...this.config, pin: '' };
       logger.debug('PKCS#11 login successful');
 
       // 4. Find private key by label or ID
@@ -184,9 +186,11 @@ export class HsmSigner {
       ]);
 
       // Merge into witness set (txObj.array[1])
+      // Single-signer design: HSM is the sole signer for unsigned transactions.
+      // Multi-sig (e.g. wallet + HSM) uses combineTransactionWithWitnesses() instead.
       const origWs = txObj.array[1];
       if (origWs instanceof CborMap) {
-        // Remove existing VKey witnesses (key 0), add HSM witness
+        // Replace VKey witnesses (key 0) with HSM witness only
         // Preserves all other entries (redeemers key 5, datums key 4, scripts keys 1-3, 6-7)
         const entries = origWs.map.filter(
           (e: any) => !(e.k instanceof CborUInt && Number(e.k.num) === 0)

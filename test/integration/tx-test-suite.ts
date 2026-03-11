@@ -112,7 +112,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i); // Valid hex
         });
         it('POST /BuildSimpleAdaTransaction - verify build is persisted in DB', async () => {
@@ -208,7 +208,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('id');
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
         });
       });
 
@@ -226,7 +226,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
         });
 
@@ -301,7 +301,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
           // Transaction should build successfully with change going to senderAddress
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
         });
       });
 
@@ -592,7 +592,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
           expect(data.wasSubmitted).to.equal(false);
-          expect(data.fee).to.be.greaterThan(0);
+          expect(Number(data.fee)).to.be.greaterThan(0);
           expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i);
         });
 
@@ -827,16 +827,16 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
       describe('lockOnScript', () => {
 
-        it('POST /BuildMintTransaction - lockOnScript=true without scriptParamsJson has no scriptAddress', async () => {
+        it('POST /BuildMintTransaction - lockOnScript=true without scriptParamsJson rejects with 400', async () => {
           const requestBody = {
             ...mintingRequestBody,
             lockOnScript: true
           };
 
-          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody);
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', requestBody).catch(err => err.response);
 
-          expect(status).to.equal(200);
-          expect(data.scriptAddress).to.be.oneOf([null, undefined, '']);
+          expect(status).to.equal(400);
+          expect(data.error.message).to.include('lockOnScript requires scriptParamsJson');
         });
 
         it('POST /BuildMintTransaction - lockOnScript=false does not set scriptAddress', async () => {
@@ -879,7 +879,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('fee');
         });
 
-        it('POST /SetCollateral - rejects 409 when collateral already available', async () => {
+        it('POST /SetCollateral - returns 200 with collateralAvailable=true when collateral already exists', async () => {
           setupUtxoMock([
             {
               tx_hash: 'aabb00112233445566778899aabbccddeeff00112233445566778899aabbccdd',
@@ -899,11 +899,13 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             }
           ]);
 
-          const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
             address: TEST_FIXTURES.addressWithFunds,
-          }).catch(err => err.response);
+          });
 
-          expect(status).to.equal(409);
+          expect(status).to.equal(200);
+          expect(data).to.have.property('collateralAvailable', true);
+          expect(data).to.not.have.property('unsignedTxCbor');
         });
 
         it('POST /SetCollateral - rejects 400 when insufficient funds', async () => {
@@ -960,6 +962,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
         it('POST /CheckSubmissionStatus - retrieve submission status', async () => {
           const TxService = await cds.connect.to('CardanoTransactionService');
           const { TransactionSubmissions } = TxService.entities;
+
+          // Mock tx_info returning empty array (tx not yet confirmed on-chain)
+          nock('https://preview.koios.rest')
+            .post('/api/v1/tx_info', (body: any) => body._tx_hashes?.includes('dummyhash'))
+            .reply(200, []);
 
           await cds.run(INSERT.into(TransactionSubmissions).entries({
             id: '12345678-1234-1234-1234-1234567890ab',

@@ -72,7 +72,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction } from '../utils/types';
 
 const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
@@ -94,6 +94,7 @@ const logger = cds.log('CardanoIndexer');
 export class CardanoIndexer {
   private client: CardanoClient;
   private txBuilder: CardanoTransactionBuilder;
+  private lastParamsFetchTime = 0;
 
   /**
    * Create a new CardanoIndexer instance
@@ -172,10 +173,12 @@ export class CardanoIndexer {
   async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
     const addrData = await this.client.getAddress(addr);
 
-    logger.debug(`indexAddress: provider response for address ${addr}`);
-    logger.debug({ addrData }, 'indexAddress: provider response');
+    logger.debug(`indexAddress: provider response for ${addr}: ${addrData.amount?.length ?? 0} amounts, ${addrData.utxos?.length ?? 0} utxos`);
 
     const AddrEntity = mapAddress(addr, addrData, this.client.max_age_ms);
+    const now = new Date().toISOString();
+    const validFrom = AddrEntity.validFrom ?? now;
+    const validTo = AddrEntity.validTo ?? now;
 
     await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
@@ -190,39 +193,25 @@ export class CardanoIndexer {
       }
     }
 
-    const assetEntities = mapAddressAssets(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      addrData.amount
-    );
+    const assetEntities = mapAddressAssets(addr, validFrom, validTo, addrData.amount);
 
-    logger.debug({ assetEntities }, 'indexAddress: asset entities');
+    logger.debug(`indexAddress: ${assetEntities.length} asset entities`);
 
     if (assetEntities.length > 0) {
       await tx.run(UPSERT.into(AddressAssets).entries(assetEntities));
     }
 
     // UTxOs are included in getAddress response
-    const utxoEntities = mapAddressUtxos(
-      addr,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString(),
-      addrData.utxos
-    );
+    const utxoEntities = mapAddressUtxos(addr, validFrom, validTo, addrData.utxos);
 
-    logger.debug({ utxoEntities }, 'indexAddress: utxo entities');
+    logger.debug(`indexAddress: ${utxoEntities.length} utxo entities`);
 
     if (utxoEntities.length) {
       await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
     }
 
-    const utxoAssetEntities = mapAddressUtxoAssets(
-      addrData.utxos,
-      AddrEntity.validFrom ?? new Date().toISOString(),
-      AddrEntity.validTo ?? new Date().toISOString()
-    );
-    logger.debug({ utxoAssetEntities }, 'indexAddress: utxo asset entities');
+    const utxoAssetEntities = mapAddressUtxoAssets(addrData.utxos, validFrom, validTo);
+    logger.debug(`indexAddress: ${utxoAssetEntities.length} utxo asset entities`);
 
     if (utxoAssetEntities.length) {
       // Remove possible duplicates before upsert
@@ -236,13 +225,21 @@ export class CardanoIndexer {
 
       logger.debug(`indexAddress: ${utxoAssetEntities.length} assets, ${uniqueAssets.length} unique (removed ${utxoAssetEntities.length - uniqueAssets.length} duplicates)`);
       await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
-
-      try {
-        await this.indexAddressTransactions(tx, addr, 10);
-      } catch (err) {
-        logger.error(`indexAddressTransactions failed for address ${addr}: ${(err as Error).message}`);
-      }
     }
+
+    // Always pre-index recent transactions (regardless of asset presence)
+    try {
+      const txEntities = await this.indexAddressTransactions(tx, addr, 10);
+      if (txEntities.length > 0) {
+        await tx.run(
+          UPDATE.entity(Addresses).set({ hasTransactions: true }).where({ address: addr })
+        );
+        AddrEntity.hasTransactions = true;
+      }
+    } catch (err) {
+      logger.error(`indexAddressTransactions failed for address ${addr}: ${(err as Error).message}`);
+    }
+
     return AddrEntity;
   }
 
@@ -256,14 +253,36 @@ export class CardanoIndexer {
   async indexAddressTransactions(tx: CapTransaction, addr: string, limit: number): Promise<AddressTransactions[]> {
     logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
 
-    // Fetch transactions for this address
-    const transactions = await this.client.getAddressTransactions(addr, limit);
+    // Layer 4: Hash-only listing (lightweight, 1 API call)
+    const txHashes = await this.client.getAddressTransactionHashes(addr, limit);
 
-    logger.debug(`indexAddressTransactions: found ${transactions.length} transactions for ${addr}`);
+    logger.debug(`indexAddressTransactions: found ${txHashes.length} tx hashes for ${addr}`);
 
-    // Index each transaction
-    for (const txData of transactions) {
-      await this.indexTransaction(tx, txData.hash);
+    if (txHashes.length === 0) return [];
+
+    // Layer 3: DB-first dedup + batch fetch
+    const batchFetched = await this.ensureTransactionsIndexed(tx, txHashes);
+
+    // For address-transaction mapping we need full provider tx data (inputs/outputs for net amounts).
+    // Transactions already in DB were not re-fetched — batch-fetch those separately.
+    const allTxData: ProviderTransaction[] = [];
+    const missingFromBatch: string[] = [];
+
+    for (const hash of txHashes) {
+      const fromBatch = batchFetched.get(hash);
+      if (fromBatch) {
+        allTxData.push(fromBatch);
+      } else {
+        missingFromBatch.push(hash);
+      }
+    }
+
+    if (missingFromBatch.length > 0) {
+      const fetched = await this.client.getTransactionsBatch(missingFromBatch);
+      for (const hash of missingFromBatch) {
+        const providerTx = fetched.get(hash);
+        if (providerTx) allTxData.push(providerTx);
+      }
     }
 
     // Create address-transaction mapping entries
@@ -272,7 +291,7 @@ export class CardanoIndexer {
 
     const transactionsEntities = mapAddressTransactions(
       addr,
-      transactions,
+      allTxData,
       now,
       validTo
     );
@@ -283,6 +302,8 @@ export class CardanoIndexer {
       await tx.run(UPSERT.into(AddressTransactions).entries(transactionsEntities));
     }
 
+    // Sort by blockTime descending for consistency with GetLatestTransactionsByAddress
+    transactionsEntities.sort((a: any, b: any) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return transactionsEntities as AddressTransactions[];
   }
 
@@ -359,7 +380,12 @@ export class CardanoIndexer {
    */
   async indexBlock(tx: CapTransaction, blockHash: string): Promise<Block> {
     const blockInfo = await this.client.getBlock(blockHash);
-    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    let epoch: Epoch | undefined;
+    try {
+      epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    } catch {
+      // Epoch data may not be available (e.g., Koios drops old/in-progress epochs)
+    }
     const blockEntity = mapBlock(blockInfo, epoch);
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
@@ -490,16 +516,23 @@ export class CardanoIndexer {
    * @returns {Promise<LedgerProtocolParameter>} protocol parameters entity data
    */
   async indexProtocolParameters(tx: CapTransaction): Promise<LedgerProtocolParameter> {
-    // first, check if we have recent protocol parameters
-    const existing = await tx.run(SELECT.one.from(LedgerProtocolParameter));
+    const network = this.client.network;
+    const now = Date.now();
 
-    if (existing) return existing;
-    // otherwise, fetch new protocol parameters from provider
+    // Return cached DB row if within TTL (protocol params only change at epoch boundaries ~5 days)
+    const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes — matches client cache TTL
+    if (now - this.lastParamsFetchTime < PROTOCOL_PARAMS_TTL_MS) {
+      const existing = await tx.run(
+        SELECT.one.from(LedgerProtocolParameter).where({ network })
+      );
+      if (existing) return existing;
+    }
+
+    // Fetch from provider (client has 5-min in-memory TTL cache, so this is cheap)
     const protocolParamsInfo = await this.client.getProtocolParameters();
-    // map to protocol parameter row
     const protocolParams = mapProtocolParameters(protocolParamsInfo);
-    // store in DB for future use
     await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
+    this.lastParamsFetchTime = now;
 
     return protocolParams;
   }
@@ -793,7 +826,12 @@ export class CardanoIndexer {
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
 
     const blockInfo = await this.client.getLatestBlock();
-    const epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    let epoch: Epoch | undefined;
+    try {
+      epoch = await this.indexEpoch(tx, blockInfo.epoch!);
+    } catch {
+      // Epoch data may not be available (e.g., Koios drops old/in-progress epochs)
+    }
     const blockEntity = mapBlock(blockInfo, epoch);
 
     await tx.run(UPSERT.into(Block).entries(blockEntity));
@@ -801,11 +839,76 @@ export class CardanoIndexer {
   }
 
   //-----------------------------------------------------------------------------
+  // Batch Methods (N+1 Optimization)
+  //-----------------------------------------------------------------------------
+
+  /** Max addresses to index concurrently (avoid overloading backends) */
+  private static readonly ADDR_CONCURRENCY = 5;
+
+  /**
+   * Ensure a set of transactions are indexed — batch DB-check + batch fetch.
+   * 1. Deduplicate hashes
+   * 2. Check which hashes already exist in DB
+   * 3. Batch-fetch missing transactions from backend
+   * 4. UPSERT all entities (Transactions, Inputs, Outputs, Assets, Metadata)
+   *
+   * @param tx       CAP transaction (cds.tx)
+   * @param txHashes array of transaction hashes to ensure
+   * @returns Map of txHash → provider Transaction (all requested, from DB fetch or backend)
+   */
+  async ensureTransactionsIndexed(
+    tx: CapTransaction,
+    txHashes: string[]
+  ): Promise<Map<string, ProviderTransaction>> {
+    const unique = [...new Set(txHashes)];
+    if (unique.length === 0) return new Map();
+
+    // DB check — which hashes are already indexed?
+    const existingRows = await tx.run(
+      SELECT.from(Transactions).columns('hash').where({ hash: { in: unique } })
+    );
+    const existingSet = new Set((existingRows as any[]).map((r: any) => r.hash));
+    const missing = unique.filter(h => !existingSet.has(h));
+
+    logger.debug(`ensureTransactionsIndexed: ${unique.length} unique, ${existingSet.size} cached, ${missing.length} to fetch`);
+
+    // Batch-fetch missing from backend
+    let fetched = new Map<string, ProviderTransaction>();
+    if (missing.length > 0) {
+      fetched = await this.client.getTransactionsBatch(missing);
+
+      // UPSERT all fetched transactions + child entities
+      for (const [, providerTx] of fetched) {
+        const txRow = mapTransaction(providerTx);
+        await tx.run(UPSERT.into(Transactions).entries(txRow));
+
+        if (providerTx.inputs) {
+          const inputRows = mapTransactionInputs(providerTx.hash, providerTx.inputs);
+          const inputAssetRows = mapTransactionInputAssets(providerTx.hash, providerTx.inputs);
+          if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
+          if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
+
+          const outputRows = mapTransactionOutputs(providerTx.hash, providerTx.outputs);
+          const outputAssetRows = mapTransactionOutputAssets(providerTx.hash, providerTx.outputs);
+          if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
+          if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
+        }
+
+        const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
+        if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+      }
+    }
+
+    return fetched;
+  }
+
+  //-----------------------------------------------------------------------------
   // Private Helpers
   //-----------------------------------------------------------------------------
 
   /**
-   * Index multiple addresses with assets
+   * Index multiple addresses with concurrency-limited parallelism.
+   * Processes addresses in chunks to avoid overwhelming backends.
    * @param tx CAP transaction object
    * @param bech32List array of bech32 addresses
    */
@@ -813,8 +916,10 @@ export class CardanoIndexer {
     tx: CapTransaction,
     bech32List: string[]
   ): Promise<void> {
-    for (const bech32 of bech32List) {
-      await this.indexAddress(tx, bech32);
+    const concurrency = CardanoIndexer.ADDR_CONCURRENCY;
+    for (let i = 0; i < bech32List.length; i += concurrency) {
+      const chunk = bech32List.slice(i, i + concurrency);
+      await Promise.all(chunk.map(addr => this.indexAddress(tx, addr)));
     }
   }
 }

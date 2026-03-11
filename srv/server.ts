@@ -4,6 +4,7 @@ import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
+import { ConfigError } from './utils/errors';
 
 import { env } from 'process';
 
@@ -36,7 +37,7 @@ async function initializeAppContext(
   protocolParams?: LedgerProtocolParameters,
   hsmConfig?: HsmConfig,
 ): Promise<AppContext> {
-  logger.info('Initializing blockchain components...');
+  logger.debug('Initializing blockchain components...');
 
   // Create CardanoClient from configuration
   const cardanoClient = new CardanoClient(config);
@@ -54,7 +55,7 @@ async function initializeAppContext(
       const hsmSigner = new HsmSigner(hsmConfig);
       await hsmSigner.init(config.network);
       setHsmSigner(hsmSigner);
-      logger.info('HSM signer initialized');
+      logger.debug('HSM signer initialized');
     } catch (err) {
       logger.error('Failed to initialize HSM signer:', err);
       setHsmSigner(null);
@@ -105,12 +106,23 @@ export function getCardanoTxBuilder(): CardanoTransactionBuilder {
   return getAppContext().cardanoTxBuilder;
 }
 
+let hsmConfigInstance: HsmConfig | undefined;
+
+/**
+ * Get the HSM configuration (if HSM is enabled).
+ * Used by sign service to check requiresRole.
+ */
+export function getHsmConfig(): HsmConfig | undefined {
+  return hsmConfigInstance;
+}
+
 /**
  * Initialize from a pre-built config (used by plugin's src/index.ts)
  * @param config - validated CardanoClientConfig
  * @param protocolParams - Optional protocol parameters (for tests)
  */
 export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
+  hsmConfigInstance = hsmConfig;
   appContext = await initializeAppContext(config, protocolParams, hsmConfig);
 }
 
@@ -119,6 +131,9 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
  * Allows tests to inject their own instances
  */
 export function resetAppContext(context: AppContext | null): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('resetAppContext() is not available in production');
+  }
   appContext = context;
   logger.debug('Application context reset');
 }
@@ -137,21 +152,26 @@ export async function createTestContext(
   protocolParams?: LedgerProtocolParameters
 ): Promise<AppContext> {
   // Set TX_BUILDERS env so TxBuilderRegistry.createDefault() uses the correct builder
+  const previousTxBuilders = env.TX_BUILDERS;
   env.TX_BUILDERS = txBuilderName;
 
-  const config: CardanoClientConfig = {
-    network: (env.NETWORK as Network) || 'preview',
-    backends,
-    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-    koiosApiKey: env.KOIOS_API_KEY || '',
-    ogmiosUrl: env.OGMIOS_URL || '',
-    transactionBuilders: [txBuilderName],
-    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,
-    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
-  };
+  try {
+    const config: CardanoClientConfig = {
+      network: (env.NETWORK as Network) || 'preview',
+      backends,
+      blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+      koiosApiKey: env.KOIOS_API_KEY || '',
+      ogmiosUrl: env.OGMIOS_URL || '',
+      transactionBuilders: [txBuilderName],
+      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
+      fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+      indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+    };
 
-  return initializeAppContext(config, protocolParams);
+    return await initializeAppContext(config, protocolParams);
+  } finally {
+    env.TX_BUILDERS = previousTxBuilders;
+  }
 }
 
 /**
@@ -167,7 +187,7 @@ export async function shutdownAppContext(): Promise<void> {
     if (hsm) {
       hsm.shutdown();
       setHsmSigner(null);
-      logger.info('HSM signer shutdown');
+      logger.debug('HSM signer shutdown');
     }
 
     await appContext.cardanoClient.shutdown();
@@ -212,14 +232,20 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   }
   const txBuilders = txBuilderStrings as TransactionBuilderName[];
 
-  const primaryTimeout = cdsConfig.primaryTimeoutMs || env.PRIMARY_TIMEOUT_MS;
-  const fallbackTimeout = cdsConfig.fallbackTimeoutMs || env.FALLBACK_TIMEOUT_MS;
+  const primaryTimeout = cdsConfig.primaryTimeoutMs ?? env.PRIMARY_TIMEOUT_MS;
+  const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;
 
   if (primaryTimeout && isNaN(Number(primaryTimeout))) {
     throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
   }
+  if (primaryTimeout && Number(primaryTimeout) <= 0) {
+    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
+  }
   if (fallbackTimeout && isNaN(Number(fallbackTimeout))) {
     throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
+  }
+  if (fallbackTimeout && Number(fallbackTimeout) <= 0) {
+    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
   }
 
   const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';
@@ -241,9 +267,9 @@ export function loadConfigFromEnv(): CardanoClientConfig {
     koiosApiKey,
     ogmiosUrl,
     transactionBuilders: txBuilders,
-    primaryTimeoutMs: Number(primaryTimeout) || 30000,
+    primaryTimeoutMs: Number(primaryTimeout) || 30000,   // || intentional: NaN (missing config) falls back to default
     fallbackTimeoutMs: Number(fallbackTimeout) || 60000,
-    indexTtlMs: Number(cdsConfig.indexTtlMs || env.INDEX_TTL_MS) || 3600000,
+    indexTtlMs: Number(cdsConfig.indexTtlMs ?? env.INDEX_TTL_MS) || 3600000,
   };
 }
 
@@ -273,13 +299,19 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
     throw new Error('HSM_PIN is required when HSM is enabled');
   }
 
+  const slot = Number(hsmCds.slot ?? env.HSM_SLOT ?? 0);
+  if (!Number.isInteger(slot) || slot < 0) {
+    throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}" — must be a non-negative integer`);
+  }
+
   return {
     enabled: true,
     pkcs11Module,
-    slot: Number(hsmCds.slot ?? env.HSM_SLOT ?? 0),
+    slot,
     pin,
     keyId: hsmCds.keyId || env.HSM_KEY_ID,
     keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,
+    requiresRole: hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || undefined,
   };
 }
 
@@ -296,6 +328,7 @@ cds.on('served', async () => {
 
   const config = loadConfigFromEnv();
   const hsmConfig = loadHsmConfigFromEnv();
+  hsmConfigInstance = hsmConfig;
 
   try {
     appContext = await initializeAppContext(config, undefined, hsmConfig);

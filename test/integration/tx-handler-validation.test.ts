@@ -485,4 +485,248 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect(data.status).toBe('submitted');
     });
   });
+
+  // ==========================================================================
+  // BuildMintTransaction — Additional Branch Coverage
+  // ==========================================================================
+
+  describe('BuildMintTransaction — additional branch coverage', () => {
+    it('should reject lockOnScript without scriptParamsJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        lockOnScript: true,
+        // scriptParamsJson omitted
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject lockOnScript with empty scriptParamsJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        lockOnScript: true,
+        scriptParamsJson: '[]',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject requiredSignersJson that is not a JSON array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        requiredSignersJson: '"not-an-array"',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject requiredSignersJson with non-string elements', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        requiredSignersJson: JSON.stringify([123]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject requiredSignersJson with invalid hex key hash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        requiredSignersJson: JSON.stringify(['gg' + 'a'.repeat(54)]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject scriptParamsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        scriptParamsJson: '{"not": "array"}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject invalid inlineDatumJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        inlineDatumJson: 'invalid{json',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject invalid mintRedeemerJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintRedeemerJson: 'broken{json',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // BuildPlutusSpendTransaction — Additional Branch Coverage
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction — additional branch coverage', () => {
+    it('should reject lockOnScript without scriptParamsJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        lockOnScript: true,
+        // scriptParamsJson omitted
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject requiredSignersJson that is not a JSON array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        requiredSignersJson: '"not-an-array"',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject requiredSignersJson with invalid hex key hash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        requiredSignersJson: JSON.stringify(['tooshort']),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject scriptParamsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        scriptParamsJson: '{"not": "array"}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject invalid inlineDatumJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        inlineDatumJson: 'broken{json',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // SetCollateral — Additional Branch Coverage
+  // ==========================================================================
+
+  describe('SetCollateral — additional branch coverage', () => {
+    it('should return collateralAvailable when 2+ qualifying UTxOs exist', async () => {
+      setupUtxoMock([
+        {
+          tx_hash: 'a'.repeat(64),
+          tx_index: 0,
+          address: TEST_FIXTURES.addressWithAssets,
+          value: '5500000',
+          asset_list: [],
+        },
+        {
+          tx_hash: 'b'.repeat(64),
+          tx_index: 1,
+          address: TEST_FIXTURES.addressWithAssets,
+          value: '6000000',
+          asset_list: [],
+        },
+      ]);
+
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+        address: TEST_FIXTURES.addressWithAssets,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(status).toBe(200);
+      expect(data.collateralAvailable).toBe(true);
+    });
+
+    it('should reject when insufficient funds (< 6 ADA)', async () => {
+      setupUtxoMock([
+        {
+          tx_hash: 'c'.repeat(64),
+          tx_index: 0,
+          address: TEST_FIXTURES.addressWithAssets,
+          value: '3000000',
+          asset_list: [],
+        },
+      ]);
+
+      const { status } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+        address: TEST_FIXTURES.addressWithAssets,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+  });
 });

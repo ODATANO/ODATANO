@@ -300,7 +300,7 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(data).to.have.property('unsignedTxCbor');
       expect(data).to.have.property('txBodyHash');
       expect(data.wasSubmitted).to.equal(false);
-      expect(data.fee).to.be.greaterThan(0);
+      expect(Number(data.fee)).to.be.greaterThan(0);
       expect(data.unsignedTxCbor).to.match(/^[0-9a-f]+$/i); // Valid hex
     });
   });
