@@ -341,10 +341,10 @@ describe('server.ts', () => {
 
     afterEach(async () => {
       jest.restoreAllMocks();
+      await shutdownAppContext();
       resetAppContext(null);
       setHsmSigner(null);
       delete env.SKIP_AUTO_INIT;
-      await shutdownAppContext();
     });
 
     it('should initialize from pre-built config', async () => {
