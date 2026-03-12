@@ -78,6 +78,50 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
+  // buildUnsignedTransfer — branch coverage
+  // =========================================================================
+
+  describe('buildUnsignedTransfer — branch coverage', () => {
+    it('should throw insufficient funds when no UTxOs are provided', async () => {
+      const req = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+      } as any;
+
+      const ctx = {
+        utxos: [],
+        protocolParameters: {} as any,
+      } as any;
+
+      await expect(builder.buildUnsignedTransfer(req, ctx)).rejects.toThrow('Insufficient lovelace');
+    });
+  });
+
+  // =========================================================================
+  // _parseInlineDatum — branch coverage
+  // =========================================================================
+
+  describe('_parseInlineDatum — branch coverage', () => {
+    const parseInlineDatum = (value: any) => (builder as any)._parseInlineDatum(value);
+
+    it('should parse CBOR hex inline datum strings', () => {
+      const parsed = parseInlineDatum('d87980');
+      expect(parsed).toBeDefined();
+    });
+
+    it('should parse JSON string inline datum', () => {
+      const parsed = parseInlineDatum('{"int": 42}');
+      expect(parsed).toBeDefined();
+    });
+
+    it('should throw for hollow inline datum objects', () => {
+      expect(() => parseInlineDatum({ bytes: null, value: null })).toThrow('Inline datum object has only null values');
+    });
+  });
+
+  // =========================================================================
   // buildUnsignedMintTransaction — error/branch paths
   // =========================================================================
 

@@ -1,7 +1,9 @@
+import cds from '@sap/cds';
 import { env } from 'process';
 import {
   loadConfigFromEnv,
   loadHsmConfigFromEnv,
+  initializeFromConfig,
   getAppContext,
   getCardanoIndexer,
   getCardanoClient,
@@ -9,7 +11,8 @@ import {
   resetAppContext,
   shutdownAppContext,
 } from '../../srv/server';
-import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
+import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
+import { HsmSigner, getHsmSigner, setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
 
 describe('server.ts', () => {
 
@@ -106,6 +109,18 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Must be a number');
     });
 
+    it('should throw when PRIMARY_TIMEOUT_MS is zero', () => {
+      env.PRIMARY_TIMEOUT_MS = '0';
+      expect(() => loadConfigFromEnv()).toThrow('Invalid PRIMARY_TIMEOUT_MS "0"');
+      expect(() => loadConfigFromEnv()).toThrow('Must be a positive number');
+    });
+
+    it('should throw when FALLBACK_TIMEOUT_MS is negative', () => {
+      env.FALLBACK_TIMEOUT_MS = '-1';
+      expect(() => loadConfigFromEnv()).toThrow('Invalid FALLBACK_TIMEOUT_MS "-1"');
+      expect(() => loadConfigFromEnv()).toThrow('Must be a positive number');
+    });
+
     it('should warn but succeed when blockfrost backend has no API key', () => {
       env.BACKENDS = 'blockfrost';
       // No BLOCKFROST_API_KEY set — should still return config (warning is logged)
@@ -146,6 +161,19 @@ describe('server.ts', () => {
 
       // Cleanup
       resetAppContext(null);
+    });
+
+    it('should throw when resetAppContext is called in production mode', () => {
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+
+      expect(() => resetAppContext(null)).toThrow('resetAppContext() is not available in production');
+
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
     });
   });
 
@@ -283,6 +311,101 @@ describe('server.ts', () => {
 
       const config = loadHsmConfigFromEnv();
       expect(config!.slot).toBe(0);
+    });
+
+    it('should throw on invalid negative HSM slot', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
+      env.HSM_PIN = '1234';
+      env.HSM_SLOT = '-1';
+
+      expect(() => loadHsmConfigFromEnv()).toThrow('Invalid HSM slot');
+    });
+  });
+
+  // ============================================================================
+  // initializeFromConfig / served hook error paths
+  // ============================================================================
+  describe('initializeFromConfig / served hook', () => {
+    const baseConfig = {
+      network: 'preview',
+      backends: ['koios'],
+      blockfrostApiKey: '',
+      koiosApiKey: '',
+      ogmiosUrl: '',
+      transactionBuilders: ['csl'],
+      primaryTimeoutMs: 30000,
+      fallbackTimeoutMs: 60000,
+      indexTtlMs: 3600000,
+    } as any;
+
+    afterEach(async () => {
+      jest.restoreAllMocks();
+      resetAppContext(null);
+      setHsmSigner(null);
+      delete env.SKIP_AUTO_INIT;
+      await shutdownAppContext();
+    });
+
+    it('should initialize from pre-built config', async () => {
+      const txBuilderInitSpy = jest
+        .spyOn(CardanoTransactionBuilder.prototype, 'init')
+        .mockResolvedValue(undefined);
+
+      await initializeFromConfig(baseConfig);
+
+      expect(txBuilderInitSpy).toHaveBeenCalled();
+      expect(getAppContext()).toBeDefined();
+    });
+
+    it('should initialize HSM signer when hsm config is enabled', async () => {
+      jest
+        .spyOn(CardanoTransactionBuilder.prototype, 'init')
+        .mockResolvedValue(undefined);
+      const hsmInitSpy = jest
+        .spyOn(HsmSigner.prototype, 'init')
+        .mockResolvedValue(undefined);
+
+      await initializeFromConfig(baseConfig, undefined, {
+        enabled: true,
+        pkcs11Module: '/tmp/mock.so',
+        slot: 0,
+        pin: '1234',
+      } as any);
+
+      expect(hsmInitSpy).toHaveBeenCalledWith('preview');
+      expect(getHsmSigner()).toBeTruthy();
+    });
+
+    it('should not fail app init when HSM init throws', async () => {
+      jest
+        .spyOn(CardanoTransactionBuilder.prototype, 'init')
+        .mockResolvedValue(undefined);
+      const hsmInitSpy = jest
+        .spyOn(HsmSigner.prototype, 'init')
+        .mockRejectedValue(new Error('hsm unavailable'));
+
+      await expect(initializeFromConfig(baseConfig, undefined, {
+        enabled: true,
+        pkcs11Module: '/tmp/mock.so',
+        slot: 0,
+        pin: '1234',
+      } as any)).resolves.toBeUndefined();
+
+      expect(hsmInitSpy).toHaveBeenCalled();
+      expect(getHsmSigner()).toBeNull();
+    });
+
+    it('should rethrow served hook initialization errors', async () => {
+      const txBuilderInitSpy = jest
+        .spyOn(CardanoTransactionBuilder.prototype, 'init')
+        .mockRejectedValue(new Error('init failed in served'));
+
+      resetAppContext(null);
+      delete env.SKIP_AUTO_INIT;
+
+      await expect((cds as any).emit('served')).rejects.toThrow('init failed in served');
+      expect(txBuilderInitSpy).toHaveBeenCalled();
     });
   });
 

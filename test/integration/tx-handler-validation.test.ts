@@ -57,12 +57,52 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect(status).toBe(400);
     });
 
+    it('should reject invalid changeAddress format', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        changeAddress: 'not-a-bech32-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
     it('should reject assetsJson that is not an array', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
         recipientAddress: TEST_FIXTURES.addressWithAssets,
         lovelaceAmount: '2000000',
         assetsJson: '"not-an-array"',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should accept valid outputDatumJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        outputDatumJson: JSON.stringify({ int: 42 }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(200);
+    });
+  });
+
+  // ==========================================================================
+  // BuildTransactionWithMetadata — Input Validations
+  // ==========================================================================
+
+  describe('BuildTransactionWithMetadata validations', () => {
+    it('should reject invalid changeAddress format', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildTransactionWithMetadata', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        metadataJson: JSON.stringify({ 721: { test: 'metadata' } }),
+        changeAddress: 'not-a-bech32-address',
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect(status).toBe(400);
@@ -74,6 +114,18 @@ describe('CardanoTransactionService Handler Validations', () => {
   // ==========================================================================
 
   describe('BuildMultiAssetTransaction validations', () => {
+    it('should reject invalid changeAddress format', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        assetsJson: JSON.stringify([{ unit: 'lovelace', quantity: '1000000' }]),
+        changeAddress: 'not-a-bech32-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
     it('should reject assetsJson that is not an array', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
@@ -91,6 +143,19 @@ describe('CardanoTransactionService Handler Validations', () => {
   // ==========================================================================
 
   describe('BuildMintTransaction validations', () => {
+    it('should reject invalid changeAddress format', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        changeAddress: 'not-a-bech32-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
     it('should reject mintActionsJson that is not an array', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
@@ -102,6 +167,42 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(400);
     });
+
+    it('should reject mint action when entry is not an object', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([null]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject mint action when quantity is not a string', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: 1 }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject mint action when quantity format is invalid', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1.5' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
   });
 
   // ==========================================================================
@@ -109,6 +210,21 @@ describe('CardanoTransactionService Handler Validations', () => {
   // ==========================================================================
 
   describe('BuildPlutusSpendTransaction validations', () => {
+    it('should reject invalid changeAddress format', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        changeAddress: 'not-a-bech32-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
     it('should reject when scriptOutputIndex is missing', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
@@ -357,6 +473,50 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
+  // T10b: SubmitTransaction — cache invalidation branch (lines 559-562)
+  // ==========================================================================
+
+  describe('SubmitTransaction — cache invalidation', () => {
+    it('should execute sender cache invalidation when AddressTransactionBuilds exists', async () => {
+      const buildId = 'test-build-cache-invalidate';
+      const senderAddress = TEST_FIXTURES.addressWithAssets;
+      const now = Date.now();
+
+      await cds.run(
+        INSERT.into('CardanoTransactionService.TransactionBuilds').entries({
+          id: buildId,
+          network: 'preview',
+          senderAddress,
+          unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
+          txBodyHash: TEST_FIXTURES.txBodyHash,
+          status: 'built',
+          builderType: 'csl',
+          createdAt: now,
+          validFrom: new Date(now).toISOString(),
+          validTo: new Date(now + 300000).toISOString(),
+        })
+      );
+
+      await cds.run(
+        INSERT.into('CardanoTransactionService.AddressTransactionBuilds').entries({
+          address_address: senderAddress,
+          txBuild_id: buildId,
+        })
+      );
+
+      setupTxResponseMock();
+
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/SubmitTransaction', {
+        buildId,
+        signedTxCbor: TEST_FIXTURES.signedTxCbor1,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(status).toBe(200);
+      expect(data.status).toBe('submitted');
+    });
+  });
+
+  // ==========================================================================
   // T11: CheckSubmissionStatus — tx confirmed on chain (lines 667-675)
   // ==========================================================================
 
@@ -397,6 +557,38 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(200);
       expect(data.status).toBe('confirmed');
+    });
+  });
+
+  // ==========================================================================
+  // T11b: CheckSubmissionStatus — provider error branch (lines 650-651)
+  // ==========================================================================
+
+  describe('CheckSubmissionStatus — provider error', () => {
+    it('should propagate non-404 backend errors when checking confirmation', async () => {
+      const submissionId = 'a0000000-0000-0000-0000-000000000012';
+      const txHash = TEST_FIXTURES.validTxHash;
+
+      await cds.run(
+        INSERT.into('CardanoTransactionService.TransactionSubmissions').entries({
+          id: submissionId,
+          txHash,
+          network: 'preview',
+          status: 'submitted',
+          signedTxCbor: TEST_FIXTURES.signedTxCbor1,
+          submittedAt: new Date().toISOString(),
+        })
+      );
+
+      nock('https://preview.koios.rest')
+        .post('/api/v1/tx_info')
+        .reply(500, { error: 'upstream unavailable' });
+
+      const { status } = await test.post(
+        `/odata/v4/cardano-transaction/TransactionSubmissions(${submissionId})/CardanoTransactionService.CheckSubmissionStatus`, {}
+      ).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect([500, 503]).toContain(status);
     });
   });
 

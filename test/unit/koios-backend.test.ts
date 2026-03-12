@@ -14,6 +14,7 @@ import { CARDANO_DEFAULTS } from '../../srv/utils/const';
 
 describe('KoiosBackend', () => {
   let backend: KoiosBackend;
+  const TEST_ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
 
   const NETWORK = 'mainnet' as const;
   const TIMEOUT_MS = 5000;
@@ -190,6 +191,153 @@ describe('KoiosBackend', () => {
         .reply(500, { error: 'Internal server error' });
 
       await expect(backend.getProtocolParameters()).rejects.toThrow();
+    });
+  });
+
+  describe('getAddressTransactions', () => {
+    it('should fetch only up to the requested limit', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_txs')
+        .reply(200, [
+          { tx_hash: 'a'.repeat(64) },
+          { tx_hash: 'b'.repeat(64) },
+          { tx_hash: 'c'.repeat(64) },
+        ]);
+
+      const getTxSpy = jest.spyOn(backend, 'getTransaction')
+        .mockResolvedValueOnce({ hash: 'a'.repeat(64) } as any)
+        .mockResolvedValueOnce({ hash: 'b'.repeat(64) } as any);
+
+      const result = await backend.getAddressTransactions(TEST_ADDR, 2);
+
+      expect(result).toHaveLength(2);
+      expect(getTxSpy).toHaveBeenCalledTimes(2);
+      expect(getTxSpy).toHaveBeenNthCalledWith(1, 'a'.repeat(64));
+      expect(getTxSpy).toHaveBeenNthCalledWith(2, 'b'.repeat(64));
+    });
+  });
+
+  describe('not found and fallback branches', () => {
+    it('should throw when getBlock receives empty results after retry', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/block_info')
+        .times(2)
+        .reply(200, []);
+
+      await expect(backend.getBlock('a'.repeat(64))).rejects.toThrow();
+    });
+
+    it('should throw when /totals is empty and /genesis has no rows', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/totals')
+        .query({ order: 'epoch_no.desc', limit: 1 })
+        .reply(200, []);
+
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/genesis')
+        .reply(200, []);
+
+      await expect(backend.getNetworkInformation()).rejects.toThrow();
+    });
+
+    it('should throw when latest block tip is empty after retry', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .times(2)
+        .reply(200, []);
+
+      await expect(backend.getLatestBlock()).rejects.toThrow();
+    });
+
+    it('should fallback to previous epoch when current epoch is unavailable', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .reply(200, [{ hash: 'tiphash', epoch_no: 100 }]);
+
+      const epoch99 = {
+        epoch: 99,
+        start_time: 1700000000,
+        end_time: 1700001000,
+        first_block_time: 1700000001,
+        last_block_time: 1700000999,
+        block_count: 10,
+        tx_count: 20,
+        output: '1000',
+        fees: '5',
+        active_stake: '2000',
+      };
+
+      const epochSpy = jest.spyOn(backend, 'getEpoch')
+        .mockRejectedValueOnce(new Error('current epoch not indexed yet'))
+        .mockResolvedValueOnce(epoch99 as any);
+
+      const result = await backend.getLatestEpoch();
+
+      expect(result.epoch).toBe(99);
+      expect(epochSpy).toHaveBeenNthCalledWith(1, 100);
+      expect(epochSpy).toHaveBeenNthCalledWith(2, 99);
+    });
+  });
+
+  describe('batch and datum helpers', () => {
+    it('should return partial batch map when some transactions are missing', async () => {
+      const txHash1 = 'a'.repeat(64);
+      const txHash2 = 'b'.repeat(64);
+
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info')
+        .reply(200, [
+          {
+            tx_hash: txHash1,
+            block_hash: 'c'.repeat(64),
+            block_height: 1,
+            tx_timestamp: 1700000000,
+            absolute_slot: 10,
+            tx_index: 0,
+            tx_fee: '170000',
+            deposit: '0',
+            tx_size: 300,
+            inputs: [
+              {
+                payment_addr: { bech32: TEST_ADDR },
+                tx_hash: 'd'.repeat(64),
+                tx_index: 0,
+                value: '5000000',
+                datum_hash: null,
+                inline_datum: null,
+                reference_script: null,
+                asset_list: [],
+              },
+            ],
+            outputs: [
+              {
+                payment_addr: { bech32: TEST_ADDR },
+                tx_index: 0,
+                value: '4800000',
+                datum_hash: null,
+                inline_datum: null,
+                reference_script: null,
+                asset_list: [],
+              },
+            ],
+            metadata: null,
+          },
+        ]);
+
+      const result = await backend.getTransactionsBatch([txHash1, txHash2]);
+
+      expect(result.size).toBe(1);
+      expect(result.has(txHash1)).toBe(true);
+      expect(result.has(txHash2)).toBe(false);
+    });
+
+    it('should sanitize inline datum variants', () => {
+      const sanitize = (backend as any)._sanitizeInlineDatum.bind(backend);
+
+      expect(sanitize(null)).toBeNull();
+      expect(sanitize('inline-cbor')).toBe('inline-cbor');
+      expect(sanitize({ bytes: null, value: null })).toBeNull();
+      expect(sanitize({ constructor: 0, fields: [] })).toEqual({ constructor: 0, fields: [] });
     });
   });
 });

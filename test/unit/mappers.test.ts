@@ -8,6 +8,8 @@ import {
   mapTransactionInputAssets,
   mapTransactionOutputAssets,
   mapAddress,
+  mapAddressTransactions,
+  mapAddressAssets,
   mapAddressUtxos,
   mapBuildResult,
   normalizeCostModels,
@@ -275,6 +277,44 @@ describe('mappers', () => {
       expect(result.totalLovelace).toBe('0');
       expect(result.hasAssets).toBe(false);
       expect(result.hasUTxOs).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // mapAddressTransactions
+  // ==========================================================================
+  describe('mapAddressTransactions', () => {
+    it('should include net native asset deltas in netAssets JSON', () => {
+      const addr = 'addr_test1abc';
+      const unit = 'a'.repeat(56) + '546f6b656e4d'; // policy + "TokenM" hex
+
+      const rows = mapAddressTransactions(addr, [{
+        hash: 'tx123',
+        blockTime: 1700000000,
+        inputs: [{ txHash: 'in1', outputIndex: 0, address: addr, amount: [{ unit, quantity: '2' }] }],
+        outputs: [{ txHash: 'tx123', outputIndex: 0, address: addr, amount: [{ unit, quantity: '5' }], dataHash: null, inlineDatum: null, isCollateral: false }],
+      } as any], '2024-01-01', '2025-01-01');
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].hasAssets).toBe(true);
+      const parsed = JSON.parse(rows[0].netAssets!);
+      expect(parsed[0].unit).toBe(unit);
+      expect(parsed[0].quantity).toBe('3');
+    });
+  });
+
+  // ==========================================================================
+  // mapAddressAssets
+  // ==========================================================================
+  describe('mapAddressAssets', () => {
+    it('should map invalid/short asset units with null policyId and raw assetName', () => {
+      const rows = mapAddressAssets('addr_test1abc', '2024-01-01', '2025-01-01', [
+        { unit: 'nothex', quantity: '10' } as any,
+      ]);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].asset_policyId).toBeNull();
+      expect(rows[0].asset_assetName).toBe('nothex');
     });
   });
 
