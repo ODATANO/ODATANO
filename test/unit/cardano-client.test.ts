@@ -560,6 +560,47 @@ describe('CardanoClient Configuration', () => {
   });
 
   // ============================================================================
+  // Batch/hash fallback helpers
+  // ============================================================================
+  describe('batch/hash fallback helpers', () => {
+    it('should fall back to getAddressTransactions when no backend exposes getAddressTransactionHashes', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      (client as any).historicalBackends = [{ name: 'plain-backend' } as any];
+      (client as any).liveBackend = undefined;
+      (client as any).initialized = true;
+
+      const txs = [{ hash: 'a'.repeat(64) }, { hash: 'b'.repeat(64) }] as any;
+      jest.spyOn(client, 'getAddressTransactions').mockResolvedValue(txs);
+
+      const result = await client.getAddressTransactionHashes('addr_test1x', 2);
+      expect(result).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+    });
+
+    it('should fall back to individual getTransaction calls when no batch method is available', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      (client as any).historicalBackends = [{ name: 'plain-backend' } as any];
+      (client as any).liveBackend = undefined;
+      (client as any).initialized = true;
+
+      const txHash1 = 'a'.repeat(64);
+      const txHash2 = 'b'.repeat(64);
+      const getTxSpy = jest.spyOn(client, 'getTransaction')
+        .mockResolvedValueOnce({ hash: txHash1 } as any)
+        .mockResolvedValueOnce({ hash: txHash2 } as any);
+
+      const result = await client.getTransactionsBatch([txHash1, txHash2]);
+
+      expect(getTxSpy).toHaveBeenCalledTimes(2);
+      expect(result.get(txHash1)?.hash).toBe(txHash1);
+      expect(result.get(txHash2)?.hash).toBe(txHash2);
+    });
+  });
+
+  // ============================================================================
   // shutdown - Historical backends + error handling
   // ============================================================================
   describe('shutdown - backend cleanup', () => {
@@ -626,6 +667,45 @@ describe('CardanoClient Configuration', () => {
       await client.shutdown();
 
       expect(mockLiveBackend.shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it('should catch and continue when live backend shutdown throws', async () => {
+      setupKoiosTipMock();
+      setupNetworkInfoMocks();
+
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      await client.getNetworkInformation();
+
+      const failingLiveBackend = {
+        name: 'ogmios',
+        shutdown: jest.fn().mockRejectedValue(new Error('live shutdown failed')),
+      };
+      (client as any).liveBackend = failingLiveBackend;
+
+      await expect(client.shutdown()).resolves.not.toThrow();
+      expect(failingLiveBackend.shutdown).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ============================================================================
+  // evaluateTransaction - success path
+  // ============================================================================
+  describe('evaluateTransaction - success path', () => {
+    it('should return evaluation results from live evaluating backend', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const evaluation = [{ validator: 'v1', budget: { memory: 1000, cpu: 2000 } }];
+      (client as any).initialized = true;
+      (client as any).liveBackend = {
+        name: 'ogmios',
+        evaluateTransaction: jest.fn().mockResolvedValue(evaluation),
+      };
+
+      const result = await client.evaluateTransaction('deadbeef');
+      expect(result).toEqual(evaluation);
     });
   });
 

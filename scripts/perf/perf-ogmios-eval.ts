@@ -22,7 +22,6 @@ import * as path from "path";
 import * as dotenv from "dotenv";
 import axios from "axios";
 import {
-  Endpoint,
   CallResult,
   EndpointResult,
   BenchmarkReport,
@@ -86,7 +85,7 @@ async function waitForServer(maxWaitMs: number = 120_000): Promise<number> {
         headers: { Authorization: AUTH_HEADER },
       });
       if (res.status === 200) return Date.now() - start;
-    } catch {}
+    } catch { }
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new Error(`Server did not start within ${maxWaitMs / 1000}s`);
@@ -115,7 +114,7 @@ function startServer(config: BackendConfig): ChildProcess {
 function cleanDatabase() {
   const projectDir = path.join(__dirname, "..");
   for (const file of ["db.sqlite", "db.sqlite-shm", "db.sqlite-wal"]) {
-    try { fs.unlinkSync(path.join(projectDir, file)); } catch {}
+    try { fs.unlinkSync(path.join(projectDir, file)); } catch { }
   }
   execSync("npx cds deploy", { cwd: projectDir, stdio: "ignore" });
 }
@@ -129,7 +128,7 @@ async function killServer(proc: ChildProcess): Promise<void> {
     } else {
       proc.kill("SIGTERM");
     }
-    setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} resolve(); }, 5000);
+    setTimeout(() => { try { proc.kill("SIGKILL"); } catch { } resolve(); }, 5000);
   });
 }
 

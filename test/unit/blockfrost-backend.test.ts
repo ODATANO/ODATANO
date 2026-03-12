@@ -226,6 +226,46 @@ describe('BlockfrostBackend getAddressUtxos', () => {
   });
 });
 
+describe('BlockfrostBackend getAddressTransactions', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should preserve requested order and skip hashes missing from batch result', async () => {
+    const txHashA = 'a'.repeat(64);
+    const txHashB = 'b'.repeat(64);
+    const txHashC = 'c'.repeat(64);
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      addressesTransactions: jest.fn().mockResolvedValue([
+        { tx_hash: txHashB },
+        { tx_hash: txHashA },
+        { tx_hash: txHashC },
+      ]),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const txA = { hash: txHashA } as any;
+    const txC = { hash: txHashC } as any;
+    const batchSpy = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
+      new Map<string, any>([
+        [txHashA, txA],
+        [txHashC, txC],
+      ])
+    );
+
+    const result = await backend.getAddressTransactions('addr_test1qexample', 3);
+
+    expect(batchSpy).toHaveBeenCalledWith([txHashB, txHashA, txHashC]);
+    expect(result).toEqual([txA, txC]);
+  });
+});
+
 describe('BlockfrostBackend getProtocolParameters', () => {
   beforeEach(() => {
     jest.clearAllMocks();

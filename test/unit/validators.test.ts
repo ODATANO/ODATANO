@@ -13,6 +13,7 @@ import {
   isValidBech32StakeAddress,
   isEpochNumber,
   isValidCbor,
+  validateRequiredSigners,
   validateTransactionInputs,
 } from '../../srv/utils/validators';
 import { getCardanoClient } from '../../srv/server';
@@ -194,6 +195,11 @@ describe('Validator Helper Methods and Type Guards', () => {
   // ==========================================================================
   describe('isValidDrepId', () => {
 
+    it('should return true for valid DRep ID', () => {
+      const validDrepId = 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0';
+      expect(isValidDrepId(validDrepId)).toBe(true);
+    });
+
     it('should return false for DRep ID with wrong HRP', () => {
       const invalidDrepId = 'pool1vpzcgfrlgdh4jnw9jvlvs9r0xkjfz4h7xs0x9q2wv3r9qgqxj7v';
       expect(isValidDrepId(invalidDrepId)).toBe(false);
@@ -220,6 +226,11 @@ describe('Validator Helper Methods and Type Guards', () => {
   // isValidBech32Address
   // ==========================================================================
   describe('isValidBech32Address', () => {
+
+    it('should return true for valid testnet address', () => {
+      const validAddr = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+      expect(isValidBech32Address(validAddr)).toBe(true);
+    });
 
     it('should return false for address with wrong HRP', () => {
       const invalidAddr = 'stake1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
@@ -258,6 +269,11 @@ describe('Validator Helper Methods and Type Guards', () => {
   // isValidBech32StakeAddress
   // ==========================================================================
   describe('isValidBech32StakeAddress', () => {
+
+    it('should return true for valid testnet stake address', () => {
+      const validStake = 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p';
+      expect(isValidBech32StakeAddress(validStake)).toBe(true);
+    });
 
     it('should return false for stake address with wrong HRP', () => {
       const invalidStake = 'addr1u9ttjzthqhmvn2p6eewpzhf8m6hpx8hgue8czs3mfe4gfvqw42lgy';
@@ -356,6 +372,28 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isValidCbor("123")).toBe(false);
       expect(isValidCbor("null")).toBe(false);
       expect(isValidCbor("undefined")).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // validateRequiredSigners
+  // ==========================================================================
+  describe('validateRequiredSigners', () => {
+    it('should return signers when all key hashes are valid', () => {
+      const signers = ['a'.repeat(56), 'b'.repeat(56)];
+      expect(validateRequiredSigners(signers)).toEqual(signers);
+    });
+
+    it('should throw when input is not an array', () => {
+      expect(() => validateRequiredSigners('not-an-array' as any)).toThrow('requiredSignersJson must be a JSON array');
+    });
+
+    it('should throw when signer hash has invalid length', () => {
+      expect(() => validateRequiredSigners(['a'.repeat(55)])).toThrow('Invalid Ed25519 key hash');
+    });
+
+    it('should throw when signer hash is not hexadecimal', () => {
+      expect(() => validateRequiredSigners(['g'.repeat(56)])).toThrow('Invalid Ed25519 key hash');
     });
   });
 
