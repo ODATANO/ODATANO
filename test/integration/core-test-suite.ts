@@ -238,6 +238,16 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       // Epochs
       // ============================================================================
       describe('Epochs Entity Tests', () => {
+        // Dynamically resolve epoch numbers from the live network to avoid flaky tests
+        let recentEpoch: number;
+        let coldEpoch: number;
+
+        beforeAll(async () => {
+          const { data: latest } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
+          recentEpoch = latest.epoch - 5;
+          coldEpoch = latest.epoch - 10;
+        });
+
         describe('READ Epochs Entity', () => {
           it('GET /Epochs – read Epochs collection', async () => {
             const { status, data } = await test.get(`/odata/v4/cardano-odata/Epochs`);
@@ -247,7 +257,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('POST /GetEpochByNumber – read Epoch by number', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 1136 });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: recentEpoch });
             expect(data).to.have.property('epoch');
             expect(status).to.equal(200);
           });
@@ -258,11 +268,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
             // make sure DB is empty
-            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 1136 }));
+            const before = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(before.length).to.equal(0);
             // call the GET endpoint
-            const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=1136)`);
-            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 1136 }));
+            const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=${recentEpoch})`);
+            const after = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
           });
@@ -271,11 +281,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
             // make sure DB is empty
-            const before = await cds.run(SELECT.from(Epochs).where({ epoch: 1000 }));
+            const before = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(before.length).to.equal(0);
             // call the POST endpoint
-            const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 1000 });
-            const after = await cds.run(SELECT.from(Epochs).where({ epoch: 1000 }));
+            const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: coldEpoch });
+            const after = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
           });
