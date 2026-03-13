@@ -219,34 +219,38 @@ describe('KoiosBackend', () => {
 
   describe('not found and fallback branches', () => {
     it('should throw when getBlock receives empty results after retry', async () => {
-      nock(KOIOS_BASE_URL)
+      const blockInfoScope = nock(KOIOS_BASE_URL)
         .post('/api/v1/block_info')
         .times(2)
         .reply(200, []);
 
       await expect(backend.getBlock('a'.repeat(64))).rejects.toThrow();
+      expect(blockInfoScope.isDone()).toBe(true);
     });
 
     it('should throw when /totals is empty and /genesis has no rows', async () => {
-      nock(KOIOS_BASE_URL)
+      const totalsScope = nock(KOIOS_BASE_URL)
         .get('/api/v1/totals')
         .query({ order: 'epoch_no.desc', limit: 1 })
         .reply(200, []);
 
-      nock(KOIOS_BASE_URL)
+      const genesisScope = nock(KOIOS_BASE_URL)
         .get('/api/v1/genesis')
         .reply(200, []);
 
       await expect(backend.getNetworkInformation()).rejects.toThrow();
+      expect(totalsScope.isDone()).toBe(true);
+      expect(genesisScope.isDone()).toBe(true);
     });
 
     it('should throw when latest block tip is empty after retry', async () => {
-      nock(KOIOS_BASE_URL)
+      const tipScope = nock(KOIOS_BASE_URL)
         .get('/api/v1/tip')
         .times(2)
         .reply(200, []);
 
       await expect(backend.getLatestBlock()).rejects.toThrow();
+      expect(tipScope.isDone()).toBe(true);
     });
 
     it('should fallback to previous epoch when current epoch is unavailable', async () => {
