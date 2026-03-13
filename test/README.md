@@ -6,8 +6,8 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 1122
-- **Total Test Suites**: 29 (19 unit + 10 integration)
+- **Total Tests**: 1285
+- **Total Test Suites**: 31 (21 unit + 10 integration)
 - **Statement Coverage**: 99%
 - **Branch Coverage**: 81%+
 - **Networks**: Cardano Preview testnet
@@ -58,6 +58,8 @@ test/
 │   ├── cip14-fingerprint.test.ts          # CIP-14 asset fingerprint tests (11 tests)
 │   ├── circuit-breaker.test.ts            # Circuit breaker logic tests (15 tests)
 │   ├── concurrency.test.ts                # Concurrency & race condition tests (5 tests)
+│   ├── request-coalescer.test.ts          # Request coalescing tests (3 tests)
+│   ├── cardano-indexer.test.ts            # Cardano indexer unit tests (19 tests)
 │   └── error-paths.test.ts                # Error path coverage tests (8 tests)
 └── README.md                              # This file
 ```
@@ -433,6 +435,23 @@ Concurrency and race condition tests:
 - Concurrent backend requests
 - Parallel execution safety
 - Race condition guards
+
+### request-coalescer.test.ts (3 tests)
+
+Request coalescing pattern tests:
+
+- Concurrent request deduplication for same key
+- Failed request cleanup and retry
+- Independent key isolation
+
+### cardano-indexer.test.ts (19 tests)
+
+CardanoIndexer edge case and branch coverage tests:
+
+- Entity mapping and UPSERT logic
+- Cache TTL validation and refresh
+- Error handling for backend failures
+- Transaction metadata indexing edge cases
 
 ### error-paths.test.ts (8 tests)
 

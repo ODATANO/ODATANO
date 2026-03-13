@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v0.3-milestone3 | **Last Updated:** March 2026
+**Version:** v1.0 | **Last Updated:** March 2026
 
 ---
 
@@ -578,7 +578,7 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 29 test files, 99% statement coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 31 test files, 99% statement coverage
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -587,5 +587,5 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ---
 
-**Version:** v0.3-milestone3\
+**Version:** v1.0\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

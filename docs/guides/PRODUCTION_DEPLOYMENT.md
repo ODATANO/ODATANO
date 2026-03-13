@@ -1,6 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v0.3-milestone3 | **Last Updated:** March 2026
+**Version:** v1.0 | **Last Updated:** March 2026
 ---
 
 ## Table of Contents
@@ -122,7 +122,7 @@ BTP Cloud Foundry
 ```yaml
 _schema-version: 3.3.0
 ID: odatano
-version: 0.3.24
+version: 1.0.0
 
 build-parameters:
   before-all:
@@ -230,7 +230,7 @@ cd ~/ODATANO && npm ci && mbt build
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
 # Deploy MTA
-cf deploy mta_archives/odatano_0.3.24.mtar
+cf deploy mta_archives/odatano_1.0.0.mtar
 
 # Set blockchain env vars
 cf set-env odatano-srv NETWORK "mainnet"

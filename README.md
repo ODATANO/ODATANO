@@ -27,13 +27,13 @@ Cardano transaction building with dual-builder architecture (CSL & Buildooor), 4
 
 [Milestone 2: Transaction Build & Submit](https://milestones.projectcatalyst.io/projects/1400109/milestones/2)
 
-### Milestone 3 (Completed March 2026) ✅ - pending approval 
+### Milestone 3 (Completed March 2026) ✅
 Extension of the transaction module & external workflow to export unsigned Cardano transactions via OData, enabling deterministic external signing (e.g. Cardano CLI or browser wallets) with full key separation and no private-key handling in the CAP service.
 Includes Plutus smart contract support (BuildPlutusSpendTransaction, SetCollateral), end-to-end external signer integration, SAP S/4HANA business process examples, enterprise use cases, a sample Fiori wallet viewer app, and comprehensive automated integration and security tests.
 
 [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3)
 
-### Final Milestone (Upcoming April/May 2026) 
+### Final Milestone (Upcoming April/May 2026) ⏳
 A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, compliance, and sustainability use cases, accompanied by transparent community announcements. The milestone is closed with a formal Catalyst close-out report and a short end-to-end video summarizing results, lessons learned, and future plans.
 
 [Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4)
@@ -48,7 +48,7 @@ A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, co
 - **Lazy On-Demand Indexing**: TTL-based refresh for changing blockchain data for performance optimization
 - **Enterprise-Grade Validation**: Strict input validation and error handling
 - **HSM Signing**: Optional server-side transaction signing via PKCS#11 Hardware Security Modules (YubiHSM, AWS CloudHSM, Thales Luna)
-- **Comprehensive Testing**: 1122 tests across 29 test suites, 99% statement coverage
+- **Comprehensive Testing**: 1285 tests across 31 test suites, 99% statement coverage
 
 ## Architecture Overview
 
@@ -165,7 +165,7 @@ See [User Guide](docs/guides/USER_GUIDE.md) for complete API reference.
 ## Testing
 
 ```bash
-npm test                    # Run all 1122 tests
+npm test                    # Run all 1285 tests
 npm run test:coverage       # With coverage report
 npm run test:integration    # Integration tests only
 npm run test:unit           # Unit tests only
@@ -185,7 +185,7 @@ See [Test Documentation](test/README.md) for details.
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
 | [Data Model](docs/concepts%20&%20architecture/MM_DATAMODEL.md) | Entity relationships |
 | [Error Handling](docs/concepts%20&%20architecture/ERROR_HANDLING.md) | Error codes and handling |
-| [Test Documentation](test/README.md) | Test suite overview (1122 tests) |
+| [Test Documentation](test/README.md) | Test suite overview (1285 tests) |
 
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)

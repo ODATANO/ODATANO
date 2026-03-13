@@ -1,6 +1,6 @@
 # Error Handling in ODATANO
 
-**Version:** v0.3-milestone3 | **Last Updated:** March 2026
+**Version:** v1.0 | **Last Updated:** March 2026
 
 This documentation describes error handling in ODATANO, specifically how backend
 errors are normalized and propagated to the client.

@@ -626,3 +626,157 @@ Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed te
 - new project Homepage: https://odatano.dev
 - published as npm package: https://www.npmjs.com/package/@odatano/core
 
+---
+---
+
+# Proof of Achievement – Final Milestone (v1.0)
+
+---
+
+## A. Output: Wallet Viewer Fiori App – Demonstration Mode Video
+
+Presentation of the existing Fiori Wallet Viewer App in demonstration mode to illustrate real use cases (e.g., Audit & Compliance View, Sustainability View). The video shows filtered views by metadata and Explorer integration for real transactions on Cardano Preview testnet.
+
+### Acceptance criteria
+
+- Wallet Viewer App demonstration shows filtered views for balances, tokens, and transaction history
+- Explorer integration for real transactions demonstrated
+- Real use cases illustrated (Audit & Compliance, Sustainability)
+
+### Evidence
+
+- Demo Video: <!-- TODO: Add YouTube link -->
+
+---
+
+## B. Output: Community Announcement & Transparency
+
+Forum and social-media announcements linking the final release, documentation, and video to the Cardano community. Public visibility of the v1.0 production release across Catalyst and Cardano community channels.
+
+### Acceptance criteria
+
+- Cardano Forum post announcing v1.0 release with links to repository, documentation, and demo videos
+- Social media announcement (X/Twitter, LinkedIn) linking the final release
+- Catalyst milestone submission completed
+
+### Evidence
+
+- Cardano Forum Post: <!-- TODO: Add forum link -->
+- Social Media Announcement: <!-- TODO: Add link -->
+
+---
+
+## C. Output: Final Close-Out Report
+
+Formal report summarizing project scope, achievements, budget use, lessons learned, and future plans. Submitted to Catalyst and published in the repository.
+
+### Acceptance criteria
+
+- Report covers: project scope, achievements per milestone, budget utilization, lessons learned, and future roadmap
+- Report published in repository `/docs` folder
+- Report submitted to Catalyst portal
+
+### Evidence
+
+- Catalyst Close-Out Report: https://github.com/ODATANO/ODATANO/blob/main/docs/CATALYST_CLOSEOUT_REPORT.md
+
+---
+
+## D. Output: Final Close-Out Video
+
+End-to-end integration video (~5 min) showing SAP → OData → Cardano → SAP flow, short Wallet Viewer demo, and highlighting key impacts for enterprise adoption.
+
+### Acceptance criteria
+
+- Video demonstrates end-to-end integration: SAP system triggers OData call → Cardano transaction → confirmation returned to SAP
+- Wallet Viewer App walk-through included
+- Key impacts for enterprise Cardano adoption highlighted
+
+### Evidence
+
+- Close-Out Video: <!-- TODO: Add YouTube link -->
+
+---
+
+## E. Output: Performance Report
+
+Performance benchmarks documenting response times and throughput across all backends and configurations. Published in `/docs` folder with raw benchmark data.
+
+### Acceptance criteria
+
+- Response times documented for all 3 backends (Blockfrost, Koios, Ogmios)
+- Cold vs. warm (cached) performance comparison
+- Raw benchmark result files available
+
+### Evidence
+
+- Performance Report: https://github.com/ODATANO/ODATANO/blob/main/docs/PERFORMANCE_REPORT.md
+- Raw Benchmark Results: https://github.com/ODATANO/ODATANO/tree/main/docs/performance
+
+---
+
+## F. Output: Production-Ready v1.0 Release
+
+Open-source v1.0 release including all code, SDK (npm package), Wallet Viewer UI app, and comprehensive documentation. All Catalyst milestone requirements fulfilled.
+
+### Acceptance criteria
+
+- GitHub release tag v1.0 with complete source code
+- npm package `@odatano/core` published at v1.0.0
+- All documentation updated to v1.0
+- 1285 automated tests passing (31 suites, 99% statement coverage)
+- Code review completed: 31 findings resolved (5 critical, 7 high, 11 medium, 8 low)
+- Authentication enabled on all 3 services (`@requires: 'authenticated-user'`)
+
+### Evidence
+
+**Release & Package**
+
+- GitHub Release v1.0: https://github.com/ODATANO/ODATANO/releases/tag/v1.0
+- npm Package v1.0.0: https://www.npmjs.com/package/@odatano/core
+- CHANGELOG: https://github.com/ODATANO/ODATANO/blob/main/CHANGELOG.md
+
+**Test & Quality**
+
+- Test Suite: 31 test files (21 unit + 10 integration), 1285 tests, 99% statement coverage
+- Test Documentation: https://github.com/ODATANO/ODATANO/blob/main/test/README.md
+- CI/CD Pipeline: https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml
+- Code Coverage: https://codecov.io/gh/ODATANO/ODATANO
+
+**Documentation**
+
+- README: https://github.com/ODATANO/ODATANO/blob/main/README.md
+- Quick Start Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/QUICK_START.md
+- User Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/USER_GUIDE.md
+- Developer Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/DEVELOPER_GUIDE.md
+- Transaction Workflow: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/TRANSACTION_WORKFLOW.md
+- Security Guide: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SECURITY_GUIDE.md
+- Production Deployment: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/PRODUCTION_DEPLOYMENT.md
+- SAP Integration Examples: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/SAP_INTEGRATION_EXAMPLES.md
+- Backend Configuration: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/BACKEND_CONFIGURATION.md
+- Docker Deployment: https://github.com/ODATANO/ODATANO/blob/main/docs/guides/DOCKER_DEPLOYMENT.md
+
+**Advanced Use Case**
+
+- TRACE Supply Chain Demo (Plutus V3): https://github.com/ODATANO/TRACE
+- Project Homepage: https://odatano.dev
+
+---
+
+## Final Milestone Summary
+
+| Metric | Target | Achieved |
+|--------|--------|----------|
+| CDS Entities | 15+ | **29** |
+| Read Actions | 10+ | **15** |
+| Transaction Actions | 5+ | **11** |
+| Signing Actions | — | **8** |
+| Backends | 2+ | **3** (Blockfrost, Koios, Ogmios) |
+| Networks | 2+ | **3** (mainnet, preview, preprod) |
+| Automated Tests | 100+ | **1285** |
+| Code Coverage | 70%+ | **99%** statement |
+| Smart Contract Support | Basic | **Full Plutus V3** (mint, spend, parameterized) |
+| Documentation | Setup guide | **10+ guides** |
+| Signing Methods | 1+ | **3** (CLI, CIP-30 Wallet, HSM) |
+| SAP Integration | Example | **8 ABAP classes** + Fiori App + BTP Guide |
+

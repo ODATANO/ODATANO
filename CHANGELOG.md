@@ -5,6 +5,49 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0] - 12-03-2026 - Production Release
+
+### Added
+
+- **Request Coalescing**: Deduplicates concurrent backend requests for the same resource, reducing redundant API calls and improving performance under load
+- **CardanoIndexer Unit Tests**: 19 new tests covering entity mapping, cache TTL validation, error handling, and metadata indexing edge cases
+- **Request Coalescer Tests**: 3 new tests for concurrent deduplication, retry-after-failure, and key isolation
+- **Expanded Test Coverage**: Additional branch coverage tests for validators, backends, transaction handlers, and builders
+
+### Changed
+
+- **Hardened Error Handling**: Improved null/undefined guards across service layer, address flags, and debug logging
+- **Protocol Parameters Refresh**: Hardened refresh logic with improved input validation and datum mapping
+- **Koios Backend Resilience**: Added retry-on-empty-array for block and epoch queries, null/array validation before array access
+- **Service Layer Resilience**: Strengthened error propagation, edge case handling, and fallback behavior
+- **Performance Optimizations**: Batch methods and request coalescing for transaction fetching (N+1 query elimination)
+- **Authentication**: Added `@requires: 'authenticated-user'` on all 3 services with XSUAA production configf
+
+### Fixed
+
+- Type safety improvements across codebase
+- Edge cases in protocol parameter parsing and cost model handling
+- Plutus datum mapping errors for spend transactions with Koios/Buildooor combination
+- Various small bugs in backend logic and service handlers
+
+### Documentation
+
+- Updated all documentation to v1.0
+- Reworked performance report with raw benchmark result files
+- Updated test statistics: 31 test suites (21 unit + 10 integration), 1285 tests, 99% statement coverage
+
+### Stats
+
+- **Test Suites**: 31 (21 unit + 10 integration)
+- **Tests**: 1285 (all passing)
+- **Statement Coverage**: 99%
+- **CDS Entities**: 29
+- **Actions**: 34 (15 read + 11 transaction + 8 signing)
+- **Services**: 3 (CardanoODataService, CardanoTransactionService, CardanoSignService)
+- **Backends**: 3 (Blockfrost, Koios, Ogmios)
+
+---
+
 ## [v0.3-milestone3] - 26-02-2026 - Milestone 3: External Signing & SAP Integration
 
 ### Added
@@ -256,6 +299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Links
 
 - [GitHub Repository](https://github.com/ODATANO/ODATANO)
+- [v1.0 Release](https://github.com/ODATANO/ODATANO/releases/tag/v1.0)
 - [Milestone 1 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.1-milestone1)
 - [Milestone 2 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.2-milestone2)
 - [Milestone 3 Release](https://github.com/ODATANO/ODATANO/releases/tag/v0.3-milestone3)
