@@ -283,6 +283,62 @@ describe('KoiosBackend', () => {
     });
   });
 
+  describe('getEpoch', () => {
+    it('should return epoch data for a valid epoch number', async () => {
+      const epochResponse = [{
+        epoch_no: 100,
+        start_time: 1700000000,
+        end_time: 1700086400,
+        first_block_time: 1700000010,
+        last_block_time: 1700086390,
+        block_count: 21600,
+        tx_count: 5000,
+        total_output: '50000000000000',
+        total_fees: '25000000',
+        active_stake: '15000000000000000',
+      }];
+
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/epoch_info')
+        .query({ _epoch_no: 100 })
+        .reply(200, epochResponse);
+
+      const result = await backend.getEpoch(100);
+
+      expect(result).toEqual({
+        epoch: 100,
+        start_time: 1700000000,
+        end_time: 1700086400,
+        first_block_time: 1700000010,
+        last_block_time: 1700086390,
+        block_count: 21600,
+        tx_count: 5000,
+        output: '50000000000000',
+        fees: '25000000',
+        active_stake: '15000000000000000',
+      });
+    });
+
+    it('should throw NotFoundError when epoch_info returns empty array after retry', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/epoch_info')
+        .query({ _epoch_no: 99999 })
+        .times(2)
+        .reply(200, []);
+
+      await expect(backend.getEpoch(99999)).rejects.toThrow('Epoch');
+    });
+
+    it('should throw on API error', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/epoch_info')
+        .query({ _epoch_no: 100 })
+        .reply(500, { error: 'Internal server error' });
+
+      await expect(backend.getEpoch(100)).rejects.toThrow();
+    });
+  });
+
   describe('batch and datum helpers', () => {
     it('should return partial batch map when some transactions are missing', async () => {
       const txHash1 = 'a'.repeat(64);
