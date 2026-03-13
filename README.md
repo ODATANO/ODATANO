@@ -190,7 +190,7 @@ See [Test Documentation](test/README.md) for details.
 **Postman Collections:**
 - [M1 - Read Operations](scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json)
 - [M2 - Transaction Operations](scripts/ODATANO%20M2%20-%20Full%20Service%20Catalog.postman_collection.json)
-- [M3 - Transaction Operations](scripts/ODATANO%20M3%20-%20Full%20Service%20Catalog.postman_collection.json)
+- [M3 - Signing Operations](scripts/ODATANO%20M3%20-%20Full%20Service%20Catalog.postman_collection.json)
 
 ## API Overview
 
