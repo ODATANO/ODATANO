@@ -20,19 +20,19 @@ November 2025
 
 ## Date Project Completed
 
-March 2026
+April 2026
 
 ## List of Challenge KPIs and How the Project Addressed Them
 
-**Challenge:** Sponsored by Leftovers — enabling enterprise adoption of Cardano through developer tooling.
+**Challenge:** Enabling enterprise adoption of Cardano through a open source ODATA V4 API deployable in SAP BTP via Cloud Foundry. 
 
 | Challenge KPI | How Addressed |
 |--------------|---------------|
 | Open-source tooling for Cardano | Published under Apache 2.0 on GitHub and npm (`@odatano/core`) |
-| Enterprise integration capability | Built on SAP CAP — the standard framework used by 400,000+ SAP customers |
-| Developer accessibility | Standard OData V4 protocol — SAP developers need zero blockchain knowledge |
-| Production readiness | 1285 automated tests, 99% statement coverage, SAP BTP deployment guide |
-| Community engagement | 3 milestone demo videos, public repository, Catalyst milestone reviews |
+| Enterprise integration capability | Built on SAP CAP(Cloud Application Model) which provides managed Services, high availability, and easy integration with SAP solutions across multi-Cloud infrastructre |
+| Developer accessibility | Standard OData V4 protocol with Cardano specific Entitys & Actions. SAP developers need zero Blockchain knowledge to acess Cardano specific Data and perform Cardano specific Actions  |
+| Production readiness | 1285 automated tests, 99% statement coverage, Integration tests running against preview network |
+| Community engagement | Milestone demo videos, public repository, Catalyst milestone reviews, Homepage, X Account SAP Blog Article and more |
 
 ## List of Project KPIs and How the Project Addressed Them
 
@@ -46,26 +46,26 @@ March 2026
 | Code coverage | 70%+ | **99% statement coverage** |
 | Warm response time | < 500ms | **< 5ms avg** (96.5% cache speedup) |
 | Network support | 2+ | **3 networks** (mainnet, preview, preprod) |
-| Smart contract support | Basic | **Full Plutus V3** — mint, spend, parameterized validators, inline datums |
+| Smart contract support | Basic | **Full Plutus V3** — mint, spend, parameterized validators, inline datums etc. |
 | Documentation | Setup guide | **10+ guides** (Quick Start, User Guide, Developer Guide, Security, Production Deployment, Docker, SAP Integration, Backend Config, Transaction Workflow) |
 
 ## Key Achievements
 
-**Milestone 1 — Read Operations (January 2026)**
+**Milestone 1: Read Operations (January 2026)**
 - Fully functional OData V4 service with 18 entities and 15 read actions
-- Multi-backend architecture with Blockfrost (primary) and Koios (fallback)
-- Lazy on-demand indexing into SQLite with TTL-based cache refresh
-- Docker deployment, CI/CD pipeline with multi-Node.js version testing
+- Multi-backend architecture with Blockfrost (primary) and Koios (fallback) with fallback logic 
+- Lazy on-demand indexing into SQLite (dev) & SAP HANA (prod) with TTL-based cache refresh
+- Standalone Docker deployment, CI/CD pipeline with multi-Node.js version testing
 - 340 automated tests with 96% code coverage
 
-**Milestone 2 — Transaction Building (February 2026)**
+**Milestone 2: Transaction Building (February 2026)**
 - Build → Sign → Submit transaction flow for ADA and native assets
-- Dual transaction builder support (Cardano Serialization Library + Buildooor)
+- Dual transaction builder support implementation (Cardano Serialization Library + Harmoniclabs Buildooor)
 - Fee estimation, coin selection, multi-asset transfers
 - Plutus smart contract support (lock, spend, mint with parameterized validators)
 - 740 automated tests with 97% code coverage
 
-**Milestone 3 — External Signing & Wallet Integration (March 2026)**
+**Milestone 3: External Signing & Wallet Integration (March 2026)**
 - CardanoSignService with 8 signing actions for CIP-30 browser wallets, CLI, and HSM
 - Signing request state machine (pending → verified → submitted)
 - HSM integration via PKCS#11 for enterprise hardware security modules
@@ -86,17 +86,17 @@ March 2026
 
 | Metric | Value |
 |--------|-------|
-| Total automated tests | 1,122 |
+| Total automated tests | 1,285 |
 | Statement coverage | 99% |
 | OData endpoints | 23 (15 actions + 8 entity reads) |
 | CDS entities | 29 |
 | Avg warm response time | 3.93 ms |
 | Cache speedup (cold → warm) | 96.5% |
 | Blockchain backends supported | 3 (Blockfrost, Koios, Ogmios) |
-| Cardano networks supported | 3 (mainnet, preview, preprod) |
+| Cardano networks supported | 3 (preview, preprod, mainnet) |
 | Documentation guides | 10+ |
 | ABAP integration examples | 8 classes |
-| Postman collections | 3 (one per milestone) |
+| Postman collections | 3 (one per Service & Milestone) |
 | npm package | @odatano/core (public) |
 
 ### Enterprise Use Cases Enabled
@@ -105,24 +105,24 @@ March 2026
 - **Supply Chain Tracking:** Mint NFTs with inline datums, transfer custody with Plutus spend validators
 - **Sustainability Reporting:** Track on-chain carbon credit tokens, query asset holdings by address
 - **Payment Processing:** Build, sign, and submit ADA/token transfers from SAP workflows
-- **SAP ERP Integration:** ABAP classes for direct Cardano access from SAP S/4HANA, BTP, and Fiori apps
+- **SAP ERP Integration:** ABAP classes for direct Cardano access from SAP non Cloud Systems
 
 ## Why Is This Project Important?
 
-ODATANO bridges two worlds that have never been connected before: the SAP enterprise ecosystem — used by 77% of the world's transaction revenue — and the Cardano blockchain.
+ODATANO bridges two worlds that have never been connected before: the SAP enterprise ecosystem used by 77% of the world's transaction revenue and the Cardano blockchain.
 
-Before ODATANO, an SAP developer who wanted to read a Cardano transaction or submit a payment had to learn Cardano-specific APIs, handle CBOR serialization, manage multiple blockchain providers, and build custom caching layers. This is a months-long effort that most enterprise teams cannot justify.
+Before ODATANO, an SAP developer who wanted to read a Cardano address details or submit a payment had to learn Cardano-specific APIs, handle CBOR serialization, manage blockchain providers, build custom caching layers, and learn specific Input/Output logic for building Transactions. This is a months-long effort that most enterprise teams cannot justify to integrate Cardano into there SAP workflows.
 
-With ODATANO, that same developer writes a standard OData query — the same protocol they use every day for SAP data. A transaction lookup is `GET /Transactions('hash')`. A wallet balance check is `POST /GetAddressByBech32`. Building and submitting a payment is three OData calls. No blockchain knowledge required.
+With ODATANO, that same developer writes a standard OData query, the same protocol they use every day for SAP data. A transaction lookup is `GET /Transactions('hash')`. A wallet balance check is `POST /GetAddressByBech32`. Building and submitting a payment is just three OData calls. (Build/Sign/Submit). No deep blockchain knowledge required.
 
 This matters for Cardano adoption because:
 
 1. **Scale of reach:** SAP serves 400,000+ customers globally. ODATANO makes Cardano accessible to every SAP developer through a protocol they already know.
-2. **Production-grade:** 1285 tests, 99% coverage, HSM signing, XSUAA authentication — this is enterprise-ready, not a proof of concept.
+2. **Production-grade:** 1285 tests, 99% coverage, HSM signing, XSUAA authentication. ODATANO is enterprise-ready, not just a proof of concept.
 3. **Zero friction:** `npm install @odatano/core` and add three lines of config. The CAP plugin auto-registers services, auto-discovers models, and handles all blockchain complexity internally.
-4. **Open standard:** OData V4 is an OASIS/ISO standard. ODATANO doesn't lock enterprises into a proprietary SDK — any OData client (SAP, Microsoft, Salesforce, custom) can consume the API.
+4. **Open standard:** OData V4 is an OASIS/ISO standard. ODATANO doesn't lock enterprises into a proprietary SDK any OData client (SAP, Microsoft, Salesforce, or any custom OData Consumer) can consume the API.
 
-The Cardano community should be excited because ODATANO opens the door to real enterprise transaction volume on Cardano — not through theoretical whitepapers, but through production-ready tooling that speaks the language enterprises already use.
+The Cardano community should be excited because ODATANO opens the door to real enterprise transaction volume on Cardano, not just through theoretical whitepapers, but through production-ready tooling that speaks the language enterprises already use.
 
 ## Links to Relevant Project Sources and Documents
 
