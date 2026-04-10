@@ -645,7 +645,7 @@ Presentation of the existing Fiori Wallet Viewer App in demonstration mode to il
 
 ### Evidence
 
-- Demo Video: <!-- TODO: Add YouTube link -->
+- Demo Video TRACE: <!-- TODO: Add YouTube link -->
 
 ---
 
@@ -661,6 +661,7 @@ Forum and social-media announcements linking the final release, documentation, a
 
 ### Evidence
 
+- SAP Forum Post: <!-- TODO: Add forum link -->
 - Cardano Forum Post: <!-- TODO: Add forum link -->
 - Social Media Announcement: <!-- TODO: Add link -->
 
@@ -670,12 +671,6 @@ Forum and social-media announcements linking the final release, documentation, a
 
 Formal report summarizing project scope, achievements, budget use, lessons learned, and future plans. Submitted to Catalyst and published in the repository.
 
-### Acceptance criteria
-
-- Report covers: project scope, achievements per milestone, budget utilization, lessons learned, and future roadmap
-- Report published in repository `/docs` folder
-- Report submitted to Catalyst portal
-
 ### Evidence
 
 - Catalyst Close-Out Report: https://github.com/ODATANO/ODATANO/blob/main/docs/CATALYST_CLOSEOUT_REPORT.md
@@ -684,17 +679,16 @@ Formal report summarizing project scope, achievements, budget use, lessons learn
 
 ## D. Output: Final Close-Out Video
 
-End-to-end integration video (~5 min) showing SAP → OData → Cardano → SAP flow, short Wallet Viewer demo, and highlighting key impacts for enterprise adoption.
+Final video summarizing the project journey, key features, demo highlights, and future outlook. Aimed at both technical and non-technical audiences to showcase the impact of the project.
 
-### Acceptance criteria
+Part 1: General Close-Out Video
 
-- Video demonstrates end-to-end integration: SAP system triggers OData call → Cardano transaction → confirmation returned to SAP
-- Wallet Viewer App walk-through included
-- Key impacts for enterprise Cardano adoption highlighted
+Part 2: Demo Highlights of Intgation into a Supply Chain Use Case with a custom Fiori App and ODATANO as a plugin for on-chain traceability.
 
 ### Evidence
 
 - Close-Out Video: <!-- TODO: Add YouTube link -->
+- Trace Supply Chain Demo: https://github.com/ODATANO/TRACE
 
 ---
 
@@ -725,7 +719,6 @@ Open-source v1.0 release including all code, SDK (npm package), Wallet Viewer UI
 - npm package `@odatano/core` published at v1.0.0
 - All documentation updated to v1.0
 - 1285 automated tests passing (31 suites, 99% statement coverage)
-- Code review completed: 31 findings resolved (5 critical, 7 high, 11 medium, 8 low)
 - Authentication enabled on all 3 services (`@requires: 'authenticated-user'`)
 
 ### Evidence
@@ -759,6 +752,7 @@ Open-source v1.0 release including all code, SDK (npm package), Wallet Viewer UI
 **Advanced Use Case**
 
 - TRACE Supply Chain Demo (Plutus V3): https://github.com/ODATANO/TRACE
+- TRACE App Walkthrough: https://github.com/ODATANO/TRACE/blob/main/docs/APP_WALKTHROUGH.MD
 - Project Homepage: https://odatano.dev
 
 ---

@@ -45,7 +45,6 @@ April 2026
 | Automated tests | 100+ | **1285 tests** (unit + integration) |
 | Code coverage | 70%+ | **99% statement coverage** |
 | Warm response time | < 500ms | **< 5ms avg** (96.5% cache speedup) |
-| Network support | 2+ | **3 networks** (mainnet, preview, preprod) |
 | Smart contract support | Basic | **Full Plutus V3** — mint, spend, parameterized validators, inline datums etc. |
 | Documentation | Setup guide | **10+ guides** (Quick Start, User Guide, Developer Guide, Security, Production Deployment, Docker, SAP Integration, Backend Config, Transaction Workflow) |
 
@@ -73,12 +72,6 @@ April 2026
 - ABAP integration examples (8 classes) for SAP ERP systems
 - 1285 automated tests with 99% code coverage
 
-**Cross-Cutting Achievements:**
-- Published on npm as `@odatano/core` — installable as a CAP plugin with a single `npm install`
-- N+1 query optimization reducing test runtime by 37% (request coalescing, batch backend calls)
-- Code review: all 31 findings resolved (5 critical, 7 high, 11 medium, 8 low)
-- Authentication: `@requires: 'authenticated-user'` on all services, XSUAA for production
-- Performance monitoring via `@cap-js/telemetry` OpenTelemetry integration
 
 ## Impact
 
@@ -107,6 +100,8 @@ April 2026
 - **Payment Processing:** Build, sign, and submit ADA/token transfers from SAP workflows
 - **SAP ERP Integration:** ABAP classes for direct Cardano access from SAP non Cloud Systems
 
+See one Implemented Use Case in the TRACE Supply Chain Demo: https://github.com/ODATANO/TRACE
+
 ## Why Is This Project Important?
 
 ODATANO bridges two worlds that have never been connected before: the SAP enterprise ecosystem used by 77% of the world's transaction revenue and the Cardano blockchain.
@@ -121,6 +116,8 @@ This matters for Cardano adoption because:
 2. **Production-grade:** 1285 tests, 99% coverage, HSM signing, XSUAA authentication. ODATANO is enterprise-ready, not just a proof of concept.
 3. **Zero friction:** `npm install @odatano/core` and add three lines of config. The CAP plugin auto-registers services, auto-discovers models, and handles all blockchain complexity internally.
 4. **Open standard:** OData V4 is an OASIS/ISO standard. ODATANO doesn't lock enterprises into a proprietary SDK any OData client (SAP, Microsoft, Salesforce, or any custom OData Consumer) can consume the API.
+
+See more details & reasoning in the Whitepaper: Link to Whitepaper
 
 The Cardano community should be excited because ODATANO opens the door to real enterprise transaction volume on Cardano, not just through theoretical whitepapers, but through production-ready tooling that speaks the language enterprises already use.
 
