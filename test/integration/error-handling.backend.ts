@@ -37,7 +37,7 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 				});
 
 				it('GET / single Address with nonexistent data', async () => {
-					const nonexistentAddr = 'addr_test1qz8l0rdwg7aw07r6hzzrcej8v9muph6yx5vx9wpf42negtytvg4qzukeyzwe42e3n5sc70vkag4xrh8ph0l0pzrxcv4q438kmr';
+					const nonexistentAddr = 'addr_test1qqns7y665ffcmf8hs3qjjfwus7rasqgl9x9vtymzc595k9k4pmvf8elwh69vagtlrdalh7vcdpzd65ewayutac2tv0wqw85yzn';
 					const { status, data } = await GET(`/odata/v4/cardano-odata/Addresses('${nonexistentAddr}')`).catch(err => err.response);
 					expect(data.error).to.exist;
 					expect(data.error.message).to.match(/not found/i);
@@ -61,14 +61,14 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 				});
 
 				it('POST / Address with no assets: GetAssetsByAddress returns 404', async () => {
-					const addressWithNoAssets = 'addr_test1qz8l0rdwg7aw07r6hzzrcej8v9muph6yx5vx9wpf42negtytvg4qzukeyzwe42e3n5sc70vkag4xrh8ph0l0pzrxcv4q438kmr';
+					const addressWithNoAssets = 'addr_test1qqns7y665ffcmf8hs3qjjfwus7rasqgl9x9vtymzc595k9k4pmvf8elwh69vagtlrdalh7vcdpzd65ewayutac2tv0wqw85yzn';
 					const { status, data } = await POST('/odata/v4/cardano-odata/GetAssetsByAddress', { address: addressWithNoAssets }).catch(err => err.response);
 					expect(data.error.message).to.match(/not found/i);
 					expect(status).to.equal(404);
 				});
 
 				it('POST / Address with no UTxOs: GetUTxOsByAddress returns 404 if no utxos exist on address', async () => {
-					const addressWithNoUtxos = 'addr_test1qz8l0rdwg7aw07r6hzzrcej8v9muph6yx5vx9wpf42negtytvg4qzukeyzwe42e3n5sc70vkag4xrh8ph0l0pzrxcv4q438kmr';
+					const addressWithNoUtxos = 'addr_test1qqns7y665ffcmf8hs3qjjfwus7rasqgl9x9vtymzc595k9k4pmvf8elwh69vagtlrdalh7vcdpzd65ewayutac2tv0wqw85yzn';
 					const { status, data } = await POST('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: addressWithNoUtxos }).catch(err => err.response);
 					expect(data.error.message).to.match(/not found/i);
 					expect(status).to.equal(404);
