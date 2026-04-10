@@ -75,7 +75,7 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 				});
 
 				it('POST / Valid but non-existent poolId with no pool data: GetPoolById returns 404', async () => {
-					const nonexistentPoolId = 'pool1t48fj09ft70czzd5sfqyz4zwvpc5m84w2pdv07jl443luentvxq';
+					const nonexistentPoolId = 'pool1llllllllllllllllllllllllllllllllllllllllllll76pswtf';
 					const { status, data } = await POST('/odata/v4/cardano-odata/GetPoolById', { poolId: nonexistentPoolId }).catch(err => err.response);
 					expect(data.error).to.exist;
 					expect(data.error.message).to.match(/not found/i);
