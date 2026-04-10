@@ -83,7 +83,7 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 				});
 
 				it('POST / Valid but non-existent account: GetAccountByAddress returns 404', async () => {
-					const nonexistentAccountAddr = 'stake_test1uz9ky2spwtvjp8v64vce6gv08ktw52npmnsmhlhs3pnvx2spyrgsx';
+					const nonexistentAccountAddr = 'stake_test1urllllllllllllllllllllllllllllllllllllllllllllcv85576';
 					const { status, data } = await POST('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: nonexistentAccountAddr }).catch(err => err.response);
 					expect(data.error).to.exist;
 					expect(data.error.message).to.match(/not found/i);
