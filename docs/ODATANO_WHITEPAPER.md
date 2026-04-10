@@ -2,7 +2,7 @@
 
 ## Making Blockchain Enterprise-Native with OData
 
-**Whitepaper — Version 1.1 (Revised)**
+**Whitepaper — Version 1.0**
 **April 2026**
 **Author:** Maximilian Weber
 **Project:** ODATANO (Cardano Catalyst Fund 14)
@@ -337,11 +337,13 @@ This stack represents the real long-term value.
 
 Beyond the current v1.0 release, ODATANO's roadmap focuses on two areas: deeper integration with enterprise systems and ongoing protocol evolution. Near-term priorities (v1.x) are event-driven integration and governance/compliance tooling. Medium-term targets include SAP BTP integration and cross-company verification extensions. Longer-term efforts — the multi-chain OData surface with NIGHTGATE and AI agent optimization — depend on ecosystem maturity and partner demand.
 
-### Enterprise System Integrations
+### Enterprise Systems & Integrations
 
-**SAP S/4HANA and ERP integration.** Procurement, logistics, and financial accounting in S/4HANA already consume OData services for master data and transactional workflows. Connecting ODATANO as an external OData source means purchase orders, goods receipts, or invoice verifications can trigger on-chain records that anchor critical business events on Cardano without changing the ERP workflow. A concrete target is the procurement-to-pay flow: purchase order creation triggers a blockchain-anchored commitment, goods receipt confirms delivery on-chain, and invoice verification closes the cycle with an immutable audit trail.
+**ODATANO as a Service.** I'm planning to offer Odatano as a publicly hosted service that allows enterprises and individual developers to try out the platform directly on our infrastructure, without the need to deploy or maintain their own environment. The service will run on a public server with free usage available to anyone who wants to get started, making it easy to explore core features, prototype integrations, and evaluate Odatano in real-world scenarios. For users with more demanding requirements, later maybe introduce subscription tiers that unlock higher usage limits, additional features, and dedicated support, providing a clear path from initial experimentation to productive, large-scale use. This model ensures that both curious developers and enterprise teams can access Odatano in a way that matches their needs, while giving us a sustainable foundation to grow the service and continuously improve it based on community feedback.
 
-**SAP Business Technology Platform (BTP).** BTP's Integration Suite and API Management layer are designed to compose OData services into enterprise workflows. ODATANO as a managed OData destination on BTP would make Cardano accessible to any BTP-connected application, including SAP Build, SAP Analytics Cloud, and custom Fiori apps — all through the same service catalog enterprises already use for OData integrations.
+**SAP S/4HANA and ERP integration Example.** Procurement, logistics, and financial accounting in S/4HANA already consume OData services for master data and transactional workflows. Connecting ODATANO as an external OData source means purchase orders, goods receipts, or invoice verifications can trigger on-chain records that anchor critical business events on Cardano without changing the ERP workflow. I will be activly looking for potial integration & pilot partners in the SAP ecosystem to explore these scenarios.
+
+**SAP Business Technology Platform (BTP) Integration.** BTP's Integration Suite and API Management layer are designed to compose OData services into enterprise workflows. ODATANO as a managed OData destination on BTP would make Cardano accessible to any BTP-connected application, including SAP Build, SAP Analytics Cloud, and custom Fiori apps — all through the same service catalog enterprises already use for OData integrations.
 
 **Cross-company verification and supply chain.** The TRACE pharma example points to a broader pattern: multi-party business processes in which each participant writes to Cardano via ODATANO and verifies counterparty records via the same OData interface. Planned extensions include industry-specific entity models for automotive supply chain (CATENA-X compatibility), pharmaceutical track-and-trace (EU FMD/DSCSA), and carbon credit certification.
 

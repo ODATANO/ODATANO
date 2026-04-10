@@ -319,11 +319,11 @@ describe('KoiosBackend', () => {
       });
     });
 
-    it('should throw NotFoundError when epoch_info returns empty array after retry', async () => {
+    it('should throw NotFoundError when epoch_info returns empty array after retries', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/epoch_info')
         .query({ _epoch_no: 99999 })
-        .times(2)
+        .times(4) // 1 initial + 3 retries
         .reply(200, []);
 
       await expect(backend.getEpoch(99999)).rejects.toThrow('Epoch');

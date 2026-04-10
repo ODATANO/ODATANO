@@ -73,22 +73,35 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   /**
-   * Retry a Koios API call once if the result is an empty array.
-   * Koios sometimes returns [] transiently for valid queries.
+   * Retry a Koios API call up to 3 times with exponential backoff if the
+   * result is an empty array.  Koios sometimes returns [] transiently for
+   * valid queries — a single retry is not always sufficient for historical
+   * epoch lookups, so we retry with increasing delays (500 → 1000 → 2000 ms).
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async fetchWithRetryOnEmpty(
     fn: () => Promise<{ data: any[] }>,
     label: string
   ): Promise<any[]> {
-    const first = await fn();
-    if (Array.isArray(first.data) && first.data.length === 0) {
-      logger.warn(`${label}: Koios returned empty array, retrying once...`);
-      await new Promise(r => setTimeout(r, 500));
-      const second = await fn();
-      return second.data;
+    const maxRetries = 3;
+    const baseDelayMs = 500;
+
+    const result = await fn();
+    if (!Array.isArray(result.data) || result.data.length > 0) {
+      return result.data;
     }
-    return first.data;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      logger.warn(`${label}: Koios returned empty array, retry ${attempt}/${maxRetries} after ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+      const retry = await fn();
+      if (Array.isArray(retry.data) && retry.data.length > 0) {
+        return retry.data;
+      }
+    }
+
+    return [];
   }
 
   /**
