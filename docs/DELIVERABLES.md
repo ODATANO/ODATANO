@@ -661,9 +661,9 @@ Forum and social-media announcements linking the final release, documentation, a
 
 ### Evidence
 
-- SAP Forum Post: <!-- TODO: Add forum link -->
-- Cardano Forum Post: <!-- TODO: Add forum link -->
-- Social Media Announcement: <!-- TODO: Add link -->
+- SAP Forum Post: <!-- TODO: Add after release & publishing -->
+- Cardano Forum Post: <!-- TODO: Add after release & publishing -->
+- Social Media Announcement: <!-- TODO: Add after release & publishing -->
 
 ---
 
@@ -681,9 +681,9 @@ Formal report summarizing project scope, achievements, budget use, lessons learn
 
 Final video summarizing the project journey, key features, demo highlights, and future outlook. Aimed at both technical and non-technical audiences to showcase the impact of the project.
 
-Part 1: General Close-Out Video
+Part 1: General Close-Out Video: Overview of the project, key features, architecture, and achievements. Highlights of the development process and technical innovations.
 
-Part 2: Demo Highlights of Intgation into a Supply Chain Use Case with a custom Fiori App and ODATANO as a plugin for on-chain traceability.
+Part 2: Demo Highlights of Integration into a Supply Chain Use Case with a custom Fiori App and ODATANO as a plugin for on-chain traceability.
 
 ### Evidence
 

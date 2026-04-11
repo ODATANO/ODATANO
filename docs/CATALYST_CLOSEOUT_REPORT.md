@@ -117,9 +117,8 @@ This matters for Cardano adoption because:
 3. **Zero friction:** `npm install @odatano/core` and add three lines of config. The CAP plugin auto-registers services, auto-discovers models, and handles all blockchain complexity internally.
 4. **Open standard:** OData V4 is an OASIS/ISO standard. ODATANO doesn't lock enterprises into a proprietary SDK any OData client (SAP, Microsoft, Salesforce, or any custom OData Consumer) can consume the API.
 
-See more details & reasoning in the Whitepaper: Link to Whitepaper
+See more details & reasoning in the Whitepaper: [Link to Whitepaper](https://github.com/ODATANO/ODATANO/blob/main/docs/ODATANO_WHITEPAPER.md)
 
-The Cardano community should be excited because ODATANO opens the door to real enterprise transaction volume on Cardano, not just through theoretical whitepapers, but through production-ready tooling that speaks the language enterprises already use.
 
 ## Links to Relevant Project Sources and Documents
 

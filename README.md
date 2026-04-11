@@ -33,8 +33,8 @@ Includes Plutus smart contract support (BuildPlutusSpendTransaction, SetCollater
 
 [Milestone 3: External Signing & SAP Integration](https://milestones.projectcatalyst.io/projects/1400109/milestones/3)
 
-### Final Milestone (Upcoming April/May 2026) ⏳
-A demonstration-mode video of the Wallet Viewer Fiori App illustrating audit, compliance, and sustainability use cases, accompanied by transparent community announcements. The milestone is closed with a formal Catalyst close-out report and a short end-to-end video summarizing results, lessons learned, and future plans.
+### Final Milestone (Completed April 2026) ✅
+Final Release & Catalyst Closeout inkl a demonstration video of the TRACE Fiori App illustrating a concrete Integration use case for Supply Chain Tracking, accompanied by transparent community announcements. The milestone is closed with a formal Catalyst close-out report and a Catalyst close out video summarizing the results of the Project.
 
 [Final Milestone: Finalization, Advanced Use Cases & Project Close-Out](https://milestones.projectcatalyst.io/projects/1400109/milestones/4)
 
