@@ -37,8 +37,8 @@ services:
       - KOIOS_API_KEY=${KOIOS_API_KEY:-}
       
       # Timeout configuration (in milliseconds)
-      - PRIMARY_TIMEOUT_MS=8000
-      - FALLBACK_TIMEOUT_MS=10000
+      - PRIMARY_TIMEOUT_MS=15000
+      - FALLBACK_TIMEOUT_MS=15000
       - INDEX_TTL_MS=600000
       
       # Logging
