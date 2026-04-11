@@ -156,4 +156,5 @@ See more details & reasoning in the Whitepaper: [Link to Whitepaper](https://git
 
 ## Link to Close-Out Video
 
-<!-- TODO: Replace with YouTube/Vimeo link after recording -->
+- Final Milestone Part 1: (General Close-Out Video): https://youtu.be/S66ZLZQMRNQ
+- Final Milestone Part 2: (TRACE Supply Chain Demo with Fiori App Integration): https://youtu.be/nz_96Ug5ENU

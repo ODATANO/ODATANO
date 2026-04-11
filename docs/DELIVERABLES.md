@@ -633,19 +633,20 @@ Integration Tests Passing: ≥ 90 % coverage and 100 % pass rate for designed te
 
 ---
 
-## A. Output: Wallet Viewer Fiori App – Demonstration Mode Video
+## A. Output: Advanced Fiori Application – Demonstration Mode Video
 
-Presentation of the existing Fiori Wallet Viewer App in demonstration mode to illustrate real use cases (e.g., Audit & Compliance View, Sustainability View). The video shows filtered views by metadata and Explorer integration for real transactions on Cardano Preview testnet.
-
+Presentation of a advanced Fiori App in demonstration mode to illustrate real use cases.
 ### Acceptance criteria
 
-- Wallet Viewer App demonstration shows filtered views for balances, tokens, and transaction history
+- Advanced Fiori App developed showcasing integration with OData API on a supply chain tracking application using ODATANO as a plugin for on-chain traceability. 
 - Explorer integration for real transactions demonstrated
 - Real use cases illustrated (Audit & Compliance, Sustainability)
 
 ### Evidence
 
-- Demo Video TRACE: <!-- TODO: Add YouTube link -->
+- Demo Video TRACE: https://youtu.be/nz_96Ug5ENU
+- Source Code: https://github.com/ODATANO/TRACE
+
 
 ---
 
@@ -687,8 +688,9 @@ Part 2: Demo Highlights of Integration into a Supply Chain Use Case with a custo
 
 ### Evidence
 
-- Close-Out Video: <!-- TODO: Add YouTube link -->
-- Trace Supply Chain Demo: https://github.com/ODATANO/TRACE
+- Final Milestone Part 1: (General Close-Out Video): https://youtu.be/S66ZLZQMRNQ
+- Final Milestone Part 2: (TRACE Supply Chain Demo with Fiori App Integration): https://youtu.be/nz_96Ug5ENU
+- Supply Chain Demo Application Source Code: https://github.com/ODATANO/TRACE
 
 ---
 
@@ -766,7 +768,6 @@ Open-source v1.0 release including all code, SDK (npm package), Wallet Viewer UI
 | Transaction Actions | 5+ | **11** |
 | Signing Actions | — | **8** |
 | Backends | 2+ | **3** (Blockfrost, Koios, Ogmios) |
-| Networks | 2+ | **3** (mainnet, preview, preprod) |
 | Automated Tests | 100+ | **1285** |
 | Code Coverage | 70%+ | **99%** statement |
 | Smart Contract Support | Basic | **Full Plutus V3** (mint, spend, parameterized) |
