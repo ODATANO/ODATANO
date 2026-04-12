@@ -240,4 +240,79 @@ describe('BuildooorTxBuilder', () => {
         .rejects.toThrow('No ADA-only UTxO available for collateral');
     });
   });
+
+  // =========================================================================
+  // _partitionForcedInputs — pure function tests
+  // =========================================================================
+
+  describe('_partitionForcedInputs', () => {
+    const partition = (utxos: UTxO[], forceInputs?: Array<{ txHash: string; outputIndex: number }>) =>
+      (builder as any)._partitionForcedInputs(utxos, forceInputs);
+
+    const mkUtxo = (txHash: string, outputIndex: number, lovelace = '5000000'): UTxO => ({
+      txHash, outputIndex, address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: lovelace }],
+    });
+
+    it('should split UTxOs into forced and rest (1 of 3 forced)', () => {
+      const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0), mkUtxo('cccc', 0)];
+      const { forced, rest } = partition(utxos, [{ txHash: 'bbbb', outputIndex: 0 }]);
+
+      expect(forced).toHaveLength(1);
+      expect(forced[0].txHash).toBe('bbbb');
+      expect(rest).toHaveLength(2);
+      expect(rest.map((u: UTxO) => u.txHash)).toEqual(['aaaa', 'cccc']);
+    });
+
+    it('should return all UTxOs as rest when forceInputs is undefined', () => {
+      const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0)];
+      const { forced, rest } = partition(utxos, undefined);
+
+      expect(forced).toHaveLength(0);
+      expect(rest).toBe(utxos); // same reference (short-circuit)
+    });
+
+    it('should return all UTxOs as rest when forceInputs is empty array', () => {
+      const utxos = [mkUtxo('aaaa', 0)];
+      const { forced, rest } = partition(utxos, []);
+
+      expect(forced).toHaveLength(0);
+      expect(rest).toEqual(utxos);
+    });
+
+    it('should silently ignore refs not present in the UTxO pool', () => {
+      const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0)];
+      const { forced, rest } = partition(utxos, [
+        { txHash: 'ffff', outputIndex: 0 }, // not in pool
+        { txHash: 'aaaa', outputIndex: 0 }, // in pool
+      ]);
+
+      expect(forced).toHaveLength(1);
+      expect(forced[0].txHash).toBe('aaaa');
+      expect(rest).toHaveLength(1);
+      expect(rest[0].txHash).toBe('bbbb');
+    });
+
+    it('should distinguish by outputIndex when txHash matches multiple entries', () => {
+      const utxos = [mkUtxo('aaaa', 0), mkUtxo('aaaa', 1), mkUtxo('aaaa', 2)];
+      const { forced, rest } = partition(utxos, [{ txHash: 'aaaa', outputIndex: 1 }]);
+
+      expect(forced).toHaveLength(1);
+      expect(forced[0].outputIndex).toBe(1);
+      expect(rest.map((u: UTxO) => u.outputIndex)).toEqual([0, 2]);
+    });
+
+    it('should handle multiple forced refs in one call', () => {
+      const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0), mkUtxo('cccc', 0), mkUtxo('dddd', 0)];
+      const { forced, rest } = partition(utxos, [
+        { txHash: 'aaaa', outputIndex: 0 },
+        { txHash: 'cccc', outputIndex: 0 },
+      ]);
+
+      expect(forced).toHaveLength(2);
+      expect(forced.map((u: UTxO) => u.txHash).sort()).toEqual(['aaaa', 'cccc']);
+      expect(rest).toHaveLength(2);
+      expect(rest.map((u: UTxO) => u.txHash).sort()).toEqual(['bbbb', 'dddd']);
+    });
+  });
 });

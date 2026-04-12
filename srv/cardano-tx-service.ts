@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
@@ -10,6 +10,35 @@ import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, 
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
+
+/**
+ * Parse and validate forceInputsJson. Returns { parsed } on success (possibly undefined
+ * for empty array → treated as no-op) or { error } on validation failure.
+ */
+function parseForceInputs(
+  forceInputsJson: string | undefined
+): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
+  if (!forceInputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(forceInputsJson, 'forceInputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'forceInputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  const refs: Array<{ txHash: string; outputIndex: number }> = [];
+  for (const entry of jsonResult.parsed) {
+    if (!entry || typeof entry !== 'object') {
+      return { error: 'Each forceInputs entry must be an object with txHash and outputIndex' };
+    }
+    if (!isTxHash((entry as any).txHash)) {
+      return { error: 'Each forceInputs entry must have a valid 64-hex txHash' };
+    }
+    const idx = (entry as any).outputIndex;
+    if (!Number.isInteger(idx) || idx < 0) {
+      return { error: 'Each forceInputs entry must have a non-negative integer outputIndex' };
+    }
+    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+  }
+  return { parsed: refs };
+}
 
 /**
  * Cardano Transaction Service Implementation
@@ -36,7 +65,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
@@ -50,6 +79,12 @@ module.exports = (srv: cds.Service) => {
 
     // parse optional output datum
     const cleanData = { ...req.data };
+
+    // parse optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', forceInputsResult.error, 'forceInputsJson');
+    cleanData.forceInputs = forceInputsResult.parsed;
+    delete cleanData.forceInputsJson;
     if (outputDatumJson) {
       const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
@@ -161,7 +196,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -243,10 +278,15 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
+    // Parse and validate optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
+    const forceInputs = forceInputsResult.parsed;
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
+        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0 },
         'Building minting transaction'
       );
 
@@ -258,6 +298,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.inlineDatumJson;
       delete cleanData.mintRedeemerJson;
       delete cleanData.lockOnScript;
+      delete cleanData.forceInputsJson;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
@@ -287,7 +328,8 @@ module.exports = (srv: cds.Service) => {
         mintingPolicyScript: finalMintingPolicyScript,
         requiredSigners,
         inlineDatum,
-        mintRedeemer
+        mintRedeemer,
+        forceInputs
       });
 
       // Post-build: compute CIP-14 fingerprint and scriptAddress
@@ -325,7 +367,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -388,6 +430,11 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
+    // Parse and validate optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
+    const forceInputs = forceInputsResult.parsed;
+
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
@@ -412,12 +459,14 @@ module.exports = (srv: cds.Service) => {
           datum: parsedDatum,
         },
         requiredSigners,
-        inlineDatum
+        inlineDatum,
+        forceInputs
       };
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
       delete cleanData.inlineDatumJson;
       delete cleanData.lockOnScript;
+      delete cleanData.forceInputsJson;
 
       // lockOnScript: route continuing output to enterprise script address
       if (lockOnScript && scriptParams && scriptParams.length > 0) {

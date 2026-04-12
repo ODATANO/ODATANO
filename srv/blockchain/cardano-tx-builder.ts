@@ -5,7 +5,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
-import { InsufficientFundsError } from '../utils/errors';
+import { InsufficientFundsError, TransactionValidationError } from '../utils/errors';
 
 const logger = cds.log('CardanoTransactionBuilder');
 
@@ -80,11 +80,13 @@ export class CardanoTransactionBuilder {
         const builder = await this.ensureInitialized();
 
         // prepare the transaction build context
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
         const txContext: TxBuildContext = {
-            utxos: await this._fetchUtxosForAddress(req.senderAddress),
+            utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced)`);
         // Build the unsigned transfer transaction
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
@@ -103,11 +105,13 @@ export class CardanoTransactionBuilder {
         const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
         const txContext: TxBuildContext = {
-            utxos: await this._fetchUtxosForAddress(req.senderAddress),
+            utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced)`);
         // Build the unsigned transaction with metadata
         const txBuildResult = await builder.buildUnsignedTransactionWithMetadata(req, txContext);
         logger.debug(`Built transaction with metadata successfully.`);
@@ -129,11 +133,13 @@ export class CardanoTransactionBuilder {
         const builder = await this.ensureInitialized();
 
         // Prepare the transaction build context
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
         const txContext: TxBuildContext = {
-            utxos: await this._fetchUtxosForAddress(req.senderAddress),
+            utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced)`);
         // Build the unsigned transfer transaction (unified with simple ADA transfer)
         const txBuildResult = await builder.buildUnsignedTransfer(req, txContext);
 
@@ -163,15 +169,17 @@ export class CardanoTransactionBuilder {
         const cardanoClient = this.client;
 
         // Prepare the transaction build context
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
         const txContext: TxBuildContext = {
-            utxos: await this._fetchUtxosForAddress(req.senderAddress),
+            utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters,
             // Pass evaluator if Ogmios is available for dynamic execution unit calculation
             evaluateTransaction: cardanoClient.hasOgmiosBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced)`);
 
         if (txContext.evaluateTransaction) {
             logger.debug(`Ogmios available - will use dynamic script evaluation`);
@@ -235,14 +243,19 @@ export class CardanoTransactionBuilder {
             });
         }
 
+        // Resolve forced inputs (may overlap with sender UTxOs or the script UTxO — dedup below).
+        // The builder itself will skip any forced ref that matches scriptRef.
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], allUtxos);
+        const mergedUtxos = mergeUtxosUnique(allUtxos, forcedUtxos);
+
         const txContext: TxBuildContext = {
-            utxos: allUtxos,
+            utxos: mergedUtxos,
             protocolParameters: protocolParameters,
             evaluateTransaction: cardanoClient.hasOgmiosBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script)`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script + ${forcedUtxos.length} forced)`);
 
         if (txContext.evaluateTransaction) {
             logger.debug(`Ogmios available - will use dynamic script evaluation`);
@@ -254,6 +267,65 @@ export class CardanoTransactionBuilder {
 
         logger.debug(`Built Plutus spending transaction successfully.`);
         return txBuildResult;
+    }
+
+    /**
+     * Resolve a list of {txHash, outputIndex} refs to full UTxO records.
+     * Prefers matching against already-fetched sender UTxOs to avoid extra backend calls.
+     * Throws TransactionValidationError if any ref cannot be resolved (missing or spent).
+     * Deduplicates input refs before lookup.
+     *
+     * @param refs forced-input refs from the request
+     * @param senderUtxos sender UTxOs already fetched (for cheap matching)
+     * @returns resolved UTxOs, in the same order as deduped refs
+     */
+    private async _resolveForceInputs(
+        refs: Array<{ txHash: string; outputIndex: number }>,
+        senderUtxos: UTxO[]
+    ): Promise<UTxO[]> {
+        if (!refs || refs.length === 0) return [];
+        // Dedup by "txHash#index" key
+        const seen = new Set<string>();
+        const dedupedRefs = refs.filter(r => {
+            const key = `${r.txHash}#${r.outputIndex}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        const resolved: UTxO[] = [];
+        for (const ref of dedupedRefs) {
+            // 1) Cheap path: already in sender UTxOs
+            const local = senderUtxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
+            if (local) {
+                resolved.push(local);
+                continue;
+            }
+            // 2) Fallback: fetch the producing transaction and look up the output.
+            // If the output does not exist OR the UTxO has already been spent, treat as missing.
+            let tx;
+            try {
+                tx = await this.client.getTransaction(ref.txHash);
+            } catch (err: any) {
+                throw new TransactionValidationError(
+                    `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
+                    err
+                );
+            }
+            const output = tx?.outputs?.find(o => o.outputIndex === ref.outputIndex);
+            if (!output) {
+                throw new TransactionValidationError(
+                    `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
+                );
+            }
+            resolved.push({
+                txHash: ref.txHash,
+                outputIndex: ref.outputIndex,
+                address: output.address,
+                amount: output.amount,
+                inlineDatum: output.inlineDatum,
+            });
+        }
+        return resolved;
     }
 
     /**
@@ -275,4 +347,22 @@ export class CardanoTransactionBuilder {
         }
         return utxos;
     }
+}
+
+/**
+ * Merge two UTxO lists, skipping refs already present in the first.
+ * Used to add forced UTxOs to a context without duplicating existing entries.
+ */
+function mergeUtxosUnique(base: UTxO[], extra: UTxO[]): UTxO[] {
+    if (extra.length === 0) return base;
+    const seen = new Set(base.map(u => `${u.txHash}#${u.outputIndex}`));
+    const result = [...base];
+    for (const u of extra) {
+        const key = `${u.txHash}#${u.outputIndex}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            result.push(u);
+        }
+    }
+    return result;
 }

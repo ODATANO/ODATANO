@@ -331,6 +331,13 @@ export type TxBuildRequest = {
   mintRedeemer?: JSONValue;
   /** When true, route output to enterprise script address derived from applied script hash */
   lockOnScript?: boolean;
+  /**
+   * Optional UTxOs that MUST be consumed as inputs. Resolved and added to the TxBuilder
+   * BEFORE coin selection runs. Coin selection then only covers the remaining shortfall.
+   * Deduplicated against plutusScriptExecution.scriptUtxo in spend transactions.
+   * Primary use case: one-shot minting seeds (policy parameterized with a specific TxOutRef).
+   */
+  forceInputs?: Array<{ txHash: string; outputIndex: number }>;
 };
 
 /**
@@ -399,6 +406,8 @@ export type TxBuildResult = {
   scriptHash?: string;
   /** Enterprise script address derived from applied script hash (bech32). Set when lockOnScript=true. */
   scriptAddress?: string;
+  /** Number of forced inputs actually included in the built transaction (0 if forceInputs was not used). */
+  forcedInputsUsed?: number;
 };
 
 /**

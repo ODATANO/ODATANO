@@ -850,6 +850,10 @@ entity TransactionBuilds : temporal {
         @description: 'Enterprise script address derived from the applied script hash (bech32). Only set when lockOnScript=true.'
         scriptAddress  : String(120);
 
+        @title      : 'Forced Inputs Used'
+        @description: 'Number of forced inputs (from forceInputsJson) actually included in the built transaction. 0 when forceInputsJson was not provided.'
+        forcedInputsUsed : Integer;
+
         @title      : 'Collateral Available'
         @description: 'Indicates if collateral UTxOs were already available (SetCollateral only). When true, no transaction build was needed.'
         collateralAvailable : Boolean;

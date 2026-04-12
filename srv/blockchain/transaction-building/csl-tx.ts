@@ -43,7 +43,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       }
       const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
       const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
-      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
       // Build output value (lovelace + optional native assets)
@@ -56,13 +55,20 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       this._attachInlineDatum(out, req.outputDatum);
       txb.add_output(out);
 
+      // Partition forced vs candidate UTxOs. Forced inputs are committed first; coin
+      // selection then appends additional candidates via add_inputs_from().
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      if (forced.length > 0) {
+        txb.set_inputs(this._buildForcedInputsBuilder(forced));
+      }
+      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(rest);
       txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
       txb.add_change_if_needed(changeAddress);
 
       const unsignedTx = txb.build_tx();
       const txDetails = this._extractTxDetails(unsignedTx);
-      logger.info(`Built unsigned transaction successfully.`);
-      return this._buildResult(req, ctx, txDetails);
+      logger.info(`Built unsigned transaction successfully (${forced.length} forced inputs).`);
+      return this._buildResult(req, ctx, txDetails, { forcedInputsUsed: forced.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -72,7 +78,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     try {
       const recipientAddress = CSL.Address.from_bech32(req.recipientAddress);
       const changeAddress = CSL.Address.from_bech32(req.changeAddress ?? req.senderAddress);
-      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(ctx.utxos);
       const txb = CSL.TransactionBuilder.new(this.txBuilderConfig);
 
       const amount = CSL.BigNum.from_str(String(req.lovelaceAmount));
@@ -85,13 +90,19 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         txb.set_metadata(metadata);
       }
 
+      // Partition forced vs candidate UTxOs
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      if (forced.length > 0) {
+        txb.set_inputs(this._buildForcedInputsBuilder(forced));
+      }
+      const cslUtxos = this._mapMultiAssetUtxosToCslUtxos(rest);
       txb.add_inputs_from(cslUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
       txb.add_change_if_needed(changeAddress);
 
       const unsignedTx = txb.build_tx();
       const txDetails = this._extractTxDetails(unsignedTx);
-      logger.info(`Built unsigned transaction with metadata successfully.`);
-      return this._buildResult(req, ctx, txDetails);
+      logger.info(`Built unsigned transaction with metadata successfully (${forced.length} forced inputs).`);
+      return this._buildResult(req, ctx, txDetails, { forcedInputsUsed: forced.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -109,7 +120,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const { hashHex: scriptHash } = this._computeScriptHash(req.mintingPolicyScript);
 
       logger.info(`Built unsigned minting transaction successfully. Fee: ${txDetails.feeLovelace}`);
-      return this._buildResult(req, ctx, txDetails, { scriptHash });
+      return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: (req.forceInputs ?? []).length });
     } catch (error: any) {
       logger.error(`BuildUnsignedMintTransaction error: ${error?.message || error}`);
       mapBuilderError(error);
@@ -178,19 +189,31 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     this._attachInlineDatum(recipientOutput, req.inlineDatum);
     txb.add_output(recipientOutput);
 
-    // Collateral + funding UTxO separation
-    const { fundingUtxos } = this._setupCollateral(txb, ctx.utxos);
+    // Partition forced vs candidate UTxOs. Forced inputs are always consumed; collateral
+    // + coin selection operate on candidates only.
+    const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+
+    // Collateral + funding UTxO separation (from candidates only)
+    const { fundingUtxos } = this._setupCollateral(txb, rest);
 
     // Greedy coin selection: only include funding UTxOs until we have enough ADA.
     // We still add inputs explicitly (not via add_inputs_from) because CSL does not
     // properly forward native tokens from selected inputs to the change output
     // during Plutus minting transactions, causing ValueNotConservedUTxO.
     const requiredLovelace = BigInt(req.lovelaceAmount) + COLLATERAL_LOVELACE; // output + buffer for fee + min change
-    const selectedFundingUtxos = this._selectMinimalUtxos(fundingUtxos, requiredLovelace);
-    logger.debug(`Coin selection: ${selectedFundingUtxos.length}/${fundingUtxos.length} UTxOs selected for CSL mint`);
+    // Subtract lovelace already contributed by forced inputs from the coin-selection target
+    const forcedLovelace = forced.reduce((sum, u) => sum + BigInt(getLovelace(u)), 0n);
+    const remainingLovelace = requiredLovelace > forcedLovelace ? requiredLovelace - forcedLovelace : 0n;
+    const selectedFundingUtxos = remainingLovelace > 0n
+      ? this._selectMinimalUtxos(fundingUtxos, remainingLovelace)
+      : [];
+    logger.debug(`Coin selection: ${selectedFundingUtxos.length}/${fundingUtxos.length} candidate UTxOs selected (${forced.length} forced) for CSL mint`);
+
+    // Combined input set: forced + selected funding (forced first for stable ordering)
+    const allInputUtxos: OdatanoUtxo[] = [...forced, ...selectedFundingUtxos];
 
     const fundingInputsBuilder = CSL.TxInputsBuilder.new();
-    for (const u of selectedFundingUtxos) {
+    for (const u of allInputUtxos) {
       const fTxHash = CSL.TransactionHash.from_bytes(Buffer.from(u.txHash, 'hex'));
       const fInput = CSL.TransactionInput.new(fTxHash, u.outputIndex);
       const fAddress = CSL.Address.from_bech32(u.address);
@@ -199,11 +222,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
     txb.set_inputs(fundingInputsBuilder);
 
-    // Create explicit change output for native tokens from selected funding UTxOs.
+    // Create explicit change output for native tokens from input UTxOs.
     // CSL's add_change_if_needed does not forward native tokens from inputs
     // to the change output during Plutus minting transactions.
     const fundingNativeAssets = new Map<string, Map<string, bigint>>();
-    for (const u of selectedFundingUtxos) {
+    for (const u of allInputUtxos) {
       for (const a of u.amount) {
         if (a.unit.toLowerCase() === 'lovelace') continue;
         if (BigInt(a.quantity) <= 0n) continue;
@@ -267,8 +290,12 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const txDetails = this._extractTxDetails(unsignedTx);
       const { hashHex: scriptHash } = this._computeScriptHash(req.plutusScriptExecution!.validatorScript);
 
+      const scriptUtxoRef = req.plutusScriptExecution!.scriptUtxo;
+      const forcedUsed = (req.forceInputs ?? []).filter(
+        r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
+      ).length;
       logger.info(`Built unsigned Plutus spending transaction. Fee: ${txDetails.feeLovelace}`);
-      return this._buildResult(req, ctx, txDetails, { scriptHash });
+      return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: forcedUsed });
     } catch (error: any) {
       logger.error(`buildUnsignedPlutusSpendTransaction error: ${error?.message || error}`);
       mapBuilderError(error);
@@ -330,7 +357,6 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
 
     scriptInputsBuilder.add_plutus_script_input(plutusWitness, scriptInput, scriptUtxoValue);
-    txb.set_inputs(scriptInputsBuilder);
 
     this._addRequiredSigners(txb, req.requiredSigners);
 
@@ -339,8 +365,24 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
     );
 
-    // Collateral + funding UTxO separation (from sender UTxOs only)
-    const { fundingUtxos } = this._setupCollateral(txb, senderUtxos);
+    // Partition forced inputs (excluding any ref that matches the script UTxO — silently ignored)
+    const forceInputsFiltered = (req.forceInputs ?? []).filter(
+      r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
+    );
+    const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered);
+
+    // Add forced UTxOs to the inputs builder alongside the script input
+    for (const u of forced) {
+      const fTxHash = CSL.TransactionHash.from_bytes(Buffer.from(u.txHash, 'hex'));
+      const fInput = CSL.TransactionInput.new(fTxHash, u.outputIndex);
+      const fAddress = CSL.Address.from_bech32(u.address);
+      const fValue = this._buildCslValue(getLovelace(u), u.amount);
+      scriptInputsBuilder.add_regular_input(fAddress, fInput, fValue);
+    }
+    txb.set_inputs(scriptInputsBuilder);
+
+    // Collateral + funding UTxO separation (from candidate sender UTxOs only)
+    const { fundingUtxos } = this._setupCollateral(txb, rest);
 
     // Create output for recipient with multi-assets from the script UTxO
     const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || MIN_CHANGE_LOVELACE)));
@@ -351,7 +393,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     this._attachInlineDatum(recipientOutput, req.inlineDatum);
     txb.add_output(recipientOutput);
 
-    // Coin selection from funding UTxOs
+    // Coin selection from candidate funding UTxOs
     const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
     txb.add_inputs_from(cslFundingUtxos, CSL.CoinSelectionStrategyCIP2.LargestFirstMultiAsset);
 
@@ -486,7 +528,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   private _buildResult(
     req: TxBuildRequest, ctx: TxBuildContext,
     txDetails: ReturnType<CSLTxBuilder['_extractTxDetails']>,
-    extra?: { scriptHash?: string }
+    extra?: { scriptHash?: string; forcedInputsUsed?: number }
   ): TxBuildResult {
     // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
     const inputs = txDetails.inputRefs.map(ref => {
@@ -579,6 +621,42 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
 
     return defaultUnits;
+  }
+
+  /**
+   * Split UTxOs into forced inputs (must be consumed) and remaining candidates.
+   * Refs in forceInputs not present in utxos are silently ignored.
+   */
+  private _partitionForcedInputs(
+    utxos: OdatanoUtxo[],
+    forceInputs?: Array<{ txHash: string; outputIndex: number }>
+  ): { forced: OdatanoUtxo[]; rest: OdatanoUtxo[] } {
+    if (!forceInputs || forceInputs.length === 0) return { forced: [], rest: utxos };
+    const forcedKeys = new Set(forceInputs.map(r => `${r.txHash}#${r.outputIndex}`));
+    const forced: OdatanoUtxo[] = [];
+    const rest: OdatanoUtxo[] = [];
+    for (const u of utxos) {
+      if (forcedKeys.has(`${u.txHash}#${u.outputIndex}`)) forced.push(u);
+      else rest.push(u);
+    }
+    return { forced, rest };
+  }
+
+  /**
+   * Build a TxInputsBuilder seeded with the given forced UTxOs. Caller is responsible
+   * for wiring the returned builder to the TransactionBuilder via set_inputs(). Coin
+   * selection (add_inputs_from) then appends additional candidates on top.
+   */
+  private _buildForcedInputsBuilder(forced: OdatanoUtxo[]): CSL.TxInputsBuilder {
+    const builder = CSL.TxInputsBuilder.new();
+    for (const u of forced) {
+      const txHash = CSL.TransactionHash.from_bytes(Buffer.from(u.txHash, 'hex'));
+      const input = CSL.TransactionInput.new(txHash, u.outputIndex);
+      const address = CSL.Address.from_bech32(u.address);
+      const value = this._buildCslValue(getLovelace(u), u.amount);
+      builder.add_regular_input(address, input, value);
+    }
+    return builder;
   }
 
   /**

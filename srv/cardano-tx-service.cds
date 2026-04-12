@@ -88,7 +88,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      outputDatumJson: String,
                                      @title: 'Assets JSON'
                                      @description: 'Optional JSON array of native assets to include in the output ([{"unit":"policyId+assetName","quantity":"amount"}]). Use when locking tokens at a script address.'
-                                     assetsJson: String)       returns TransactionBuilds;
+                                     assetsJson: String,
+                                     @title: 'Force Inputs JSON'
+                                     @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
+                                     forceInputsJson: String)  returns TransactionBuilds;
 
     @title      : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -166,7 +169,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 mintRedeemerJson: String,
                                 @title: 'Lock on Script Address'
                                 @description: 'When true and scriptParamsJson is provided, routes the output to the enterprise script address derived from the applied script hash instead of recipientAddress. Returns scriptAddress in the response.'
-                                lockOnScript: Boolean)         returns TransactionBuilds;
+                                lockOnScript: Boolean,
+                                @title: 'Force Inputs JSON'
+                                @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
+                                forceInputsJson: String)       returns TransactionBuilds;
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
@@ -236,7 +242,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        inlineDatumJson: String,
                                        @title: 'Lock on Script Address'
                                        @description: 'When true and scriptParamsJson is provided, routes the output to the enterprise script address derived from the applied script hash instead of recipientAddress. Returns scriptAddress in the response.'
-                                       lockOnScript: Boolean)  returns TransactionBuilds;
+                                       lockOnScript: Boolean,
+                                       @title: 'Force Inputs JSON'
+                                       @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
+                                       forceInputsJson: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'

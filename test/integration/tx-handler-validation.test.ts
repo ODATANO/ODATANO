@@ -89,6 +89,50 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(200);
     });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: '"not-an-array"',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: JSON.stringify([{ txHash: 'too-short', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -1 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
   });
 
   // ==========================================================================
@@ -203,6 +247,58 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(400);
     });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: '{"txHash":"a","outputIndex":0}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: JSON.stringify([{ txHash: 'too-short', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -1 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
   });
 
   // ==========================================================================
@@ -234,6 +330,66 @@ describe('CardanoTransactionService Handler Validations', () => {
         scriptTxHash: 'a'.repeat(64),
         // scriptOutputIndex intentionally missing
         redeemerJson: '{"int": 0}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: '42',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: JSON.stringify([{ txHash: 'NOT_HEX_!!', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -5 }]),
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect(status).toBe(400);

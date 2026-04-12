@@ -60,8 +60,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       if (!ctx.utxos || ctx.utxos.length === 0) {
         throw new InsufficientFundsError('lovelace', BigInt(req.lovelaceAmount || 0), 0n);
       }
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const allInputs = ledgerUtxos.map(utxo => ({ utxo }));
 
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
@@ -75,14 +73,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.outputDatum)];
 
-      // Coin selection: only include UTxOs needed to cover the output value
-      const inputs = this.txBuilder.keepRelevant(outputValue, allInputs);
-      logger.debug(`Coin selection: ${inputs.length}/${allInputs.length} UTxOs selected for transfer`);
+      // Partition: forced UTxOs become fixed inputs; rest is the coin-selection pool
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+      const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+
+      // Coin selection on candidates only; forced inputs are prepended unconditionally
+      const selected = this.txBuilder.keepRelevant(outputValue, candidateInputs);
+      const inputs = [...forcedInputs, ...selected];
+      logger.debug(`Coin selection: ${selected.length}/${candidateInputs.length} UTxOs selected (${forcedInputs.length} forced) for transfer`);
 
       const tx = await this.txBuilder.build({ inputs, outputs, changeAddress });
 
       logger.debug(`Built unsigned transaction successfully.`);
-      return this._buildResult(req, ctx, this._extractTxDetails(tx));
+      return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -90,9 +94,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   public async buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
-      const ledgerUtxos: LedgerUTxO[] = ctx.utxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const allInputs = ledgerUtxos.map(utxo => ({ utxo }));
-
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
       const amount = BigInt(String(req.lovelaceAmount));
@@ -101,14 +102,19 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const outputValue = Value.lovelaces(amount);
       const outputs = [new TxOut({ address: recipientAddress, value: outputValue })];
 
-      // Coin selection: only include UTxOs needed to cover the output value
-      const inputs = this.txBuilder.keepRelevant(outputValue, allInputs);
-      logger.debug(`Coin selection: ${inputs.length}/${allInputs.length} UTxOs selected for metadata transfer`);
+      // Partition: forced UTxOs become fixed inputs; rest is the coin-selection pool
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+      const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+
+      const selected = this.txBuilder.keepRelevant(outputValue, candidateInputs);
+      const inputs = [...forcedInputs, ...selected];
+      logger.debug(`Coin selection: ${selected.length}/${candidateInputs.length} UTxOs selected (${forcedInputs.length} forced) for metadata transfer`);
 
       const tx = await this.txBuilder.build({ inputs, outputs, changeAddress, metadata });
 
       logger.debug(`Built unsigned transaction successfully.`);
-      return this._buildResult(req, ctx, this._extractTxDetails(tx));
+      return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -157,15 +163,21 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       outputValue = Value.add(outputValue, mintValue);
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.inlineDatum)];
 
-      // Collateral + funding separation
-      const { collateralUtxos, fundingUtxos } = this._setupCollateral(ctx.utxos);
+      // Partition forced vs candidate UTxOs. Forced inputs are already committed;
+      // collateral and coin selection operate on the remainder only.
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+
+      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
+      const { collateralUtxos, fundingUtxos } = this._setupCollateral(rest);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
 
       // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from thin air)
       const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
-      const inputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
-      logger.debug(`Coin selection: ${inputs.length}/${allFundingInputs.length} UTxOs selected for mint`);
+      const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+      const inputs = [...forcedInputs, ...selectedFunding];
+      logger.debug(`Coin selection: ${selectedFunding.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for mint`);
 
       // Evaluate execution units
       const finalExUnits = await this._evaluateExUnits(
@@ -187,7 +199,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       });
 
       logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
-      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString() });
+      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -243,15 +255,22 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.inlineDatum)];
 
-      // Collateral + funding separation (from sender UTxOs only)
-      const { collateralUtxos, fundingUtxos } = this._setupCollateral(senderUtxos);
+      // Partition forced inputs (excluding any ref that matches the script UTxO — silently ignored)
+      const forceInputsFiltered = (req.forceInputs ?? []).filter(
+        r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
+      );
+      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered);
+      const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+
+      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
+      const { collateralUtxos, fundingUtxos } = this._setupCollateral(rest);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // Coin selection: funding UTxOs only need to cover fee + min change (script UTxO covers the output)
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount || MIN_CHANGE_LOVELACE));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
-      logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected for Plutus spend`);
+      logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for Plutus spend`);
 
       // Helper to build inputs with specified execution units
       const buildInputs = (exUnits: { mem: number; cpu: number }) => {
@@ -259,7 +278,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           utxo: scriptLedgerUtxo,
           inputScript: { script, datum, redeemer: redeemerData, executionUnits: exUnits }
         };
-        return [scriptInput, ...selectedFundingInputs];
+        return [scriptInput, ...forcedInputs, ...selectedFundingInputs];
       };
 
       // Evaluate execution units
@@ -285,7 +304,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       });
 
       logger.debug(`Built unsigned Plutus spending transaction successfully with fee: ${tx.body.fee.toString()}`);
-      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString() });
+      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -323,7 +342,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private _buildResult(
     req: TxBuildRequest, ctx: TxBuildContext,
     txDetails: ReturnType<BuildooorTxBuilder['_extractTxDetails']>,
-    extra?: { scriptHash?: string }
+    extra?: { scriptHash?: string; forcedInputsUsed?: number }
   ): TxBuildResult {
     // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
     const inputs = txDetails.inputRefs.map(ref => {
@@ -393,6 +412,26 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const adjustedMinFee = calculatedFee + BigInt(WITNESS_BUFFER_BYTES);
     logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
     return this.txBuilder.build({ ...buildParams, fee: adjustedMinFee });
+  }
+
+  /**
+   * Split UTxOs into forced inputs (must be consumed) and remaining candidates (free for
+   * coin selection / collateral). Refs in forceInputs that are not present in utxos are
+   * silently ignored — the resolver upstream has already validated existence.
+   */
+  private _partitionForcedInputs(
+    utxos: OdatanoUtxo[],
+    forceInputs?: Array<{ txHash: string; outputIndex: number }>
+  ): { forced: OdatanoUtxo[]; rest: OdatanoUtxo[] } {
+    if (!forceInputs || forceInputs.length === 0) return { forced: [], rest: utxos };
+    const forcedKeys = new Set(forceInputs.map(r => `${r.txHash}#${r.outputIndex}`));
+    const forced: OdatanoUtxo[] = [];
+    const rest: OdatanoUtxo[] = [];
+    for (const u of utxos) {
+      if (forcedKeys.has(`${u.txHash}#${u.outputIndex}`)) forced.push(u);
+      else rest.push(u);
+    }
+    return { forced, rest };
   }
 
   /**

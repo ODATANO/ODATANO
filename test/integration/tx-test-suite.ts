@@ -159,6 +159,42 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('txBodyHash');
         });
+
+        it('POST /BuildSimpleAdaTransaction - forceInputsJson pins a specific sender UTxO as input', async () => {
+          const TxService = await cds.connect.to('CardanoTransactionService');
+          const { TransactionBuildInputs } = TxService.entities;
+
+          // Use one of the known mock sender UTxOs as the forced input
+          const forcedRef = {
+            txHash: mockUtxosAdaOnly[0].tx_hash,
+            outputIndex: mockUtxosAdaOnly[0].tx_index,
+          };
+          const requestBody = {
+            ...simpleRequestBody,
+            forceInputsJson: JSON.stringify([forcedRef]),
+          };
+
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data.forcedInputsUsed).to.equal(1);
+
+          // Verify the forced ref made it into the persisted input list
+          const inputs = await cds.run(SELECT.from(TransactionBuildInputs).where({ build_id: data.id }));
+          const match = inputs.find((i: any) => i.txHash === forcedRef.txHash && i.outputIndex === forcedRef.outputIndex);
+          expect(match, 'forced UTxO should appear in TransactionBuildInputs').to.exist;
+        });
+
+        it('POST /BuildSimpleAdaTransaction - empty forceInputsJson array is a no-op', async () => {
+          const requestBody = {
+            ...simpleRequestBody,
+            forceInputsJson: '[]',
+          };
+          const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', requestBody);
+
+          expect(status).to.equal(200);
+          expect(data.forcedInputsUsed).to.equal(0);
+        });
       });
 
       // ============================================================================
