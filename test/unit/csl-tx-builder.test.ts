@@ -8,7 +8,7 @@
 
 import { CSLTxBuilder } from '../../srv/blockchain/transaction-building/csl-tx';
 import { mapBuilderError } from '../../srv/utils/tx-build-helper';
-import { InsufficientFundsError } from '../../srv/utils/errors';
+import { InsufficientFundsError, TransactionValidationError } from '../../srv/utils/errors';
 
 // Mock cds.log
 jest.mock('@sap/cds', () => ({
@@ -507,6 +507,171 @@ describe('CSLTxBuilder', () => {
 
       // Output should have plutus data
       expect(output.plutus_data()).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // FR-2: _appendExtraOutputsCsl — extra outputs with min-ADA enforcement
+  // =========================================================================
+
+  describe('_appendExtraOutputsCsl (FR-2)', () => {
+    const TEST_ADDR = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
+    const ASSET_UNIT_FOR_TEST = 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d';
+
+    // Spy-backed txb stub: CSL.TransactionBuilder doesn't expose .outputs() directly in v15,
+    // so we capture add_output calls via a jest.fn() and inspect the pushed TransactionOutput objects.
+    const newStubBuilder = () => {
+      const outputs: any[] = [];
+      return {
+        add_output: jest.fn((out: any) => { outputs.push(out); }),
+        outputs,
+      };
+    };
+
+    beforeEach(() => {
+      (builder as any).protocolParameters = { coinsPerUtxoSize: '4310' };
+    });
+
+    it('adds extra outputs to the CSL TransactionBuilder in declared order', () => {
+      const stub = newStubBuilder();
+      (builder as any)._appendExtraOutputsCsl(stub, [
+        { address: TEST_ADDR, lovelaceAmount: '2000000' },
+        { address: TEST_ADDR, lovelaceAmount: '3000000' },
+      ]);
+      expect(stub.add_output).toHaveBeenCalledTimes(2);
+      expect(stub.outputs[0].amount().coin().to_str()).toBe('2000000');
+      expect(stub.outputs[1].amount().coin().to_str()).toBe('3000000');
+    });
+
+    it('throws TransactionValidationError when an extra output is below required min-ADA', () => {
+      const stub = newStubBuilder();
+      expect(() => (builder as any)._appendExtraOutputsCsl(stub, [
+        { address: TEST_ADDR, lovelaceAmount: '100000' },
+      ])).toThrow(TransactionValidationError);
+      expect(() => (builder as any)._appendExtraOutputsCsl(stub, [
+        { address: TEST_ADDR, lovelaceAmount: '100000' },
+      ])).toThrow(/below required min-ADA/);
+    });
+
+    it('throws TransactionValidationError when coinsPerUtxoSize is missing in protocol parameters', () => {
+      (builder as any).protocolParameters = { coinsPerUtxoSize: undefined };
+      const stub = newStubBuilder();
+      expect(() => (builder as any)._appendExtraOutputsCsl(stub, [
+        { address: TEST_ADDR, lovelaceAmount: '2000000' },
+      ])).toThrow(/coinsPerUtxoSize not set/);
+    });
+
+    it('attaches inline datum on the pushed extra output', () => {
+      const stub = newStubBuilder();
+      (builder as any)._appendExtraOutputsCsl(stub, [{
+        address: TEST_ADDR,
+        lovelaceAmount: '2000000',
+        inlineDatum: { constructor: 0, fields: [{ int: 7 }] },
+      }]);
+      expect(stub.outputs).toHaveLength(1);
+      expect(stub.outputs[0].plutus_data()).toBeDefined();
+    });
+
+    it('is a no-op when extraOutputs is undefined or empty', () => {
+      const stub = newStubBuilder();
+      (builder as any)._appendExtraOutputsCsl(stub, undefined);
+      (builder as any)._appendExtraOutputsCsl(stub, []);
+      expect(stub.add_output).not.toHaveBeenCalled();
+    });
+
+    it('builds CSL Value with native assets via _buildCslValue', () => {
+      const stub = newStubBuilder();
+      (builder as any)._appendExtraOutputsCsl(stub, [{
+        address: TEST_ADDR,
+        lovelaceAmount: '2500000',
+        assets: [{ unit: ASSET_UNIT_FOR_TEST, quantity: '5' }],
+      }]);
+      expect(stub.outputs).toHaveLength(1);
+      expect(stub.outputs[0].amount().multiasset()).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // FR-3: _rejectIndexPlaceholders — CSL guard against __INPUT_IDX__
+  // =========================================================================
+
+  describe('_rejectIndexPlaceholders (FR-3 CSL guard)', () => {
+    const HASH = 'aa'.repeat(32);
+    const placeholder = `__INPUT_IDX:${HASH}#0__`;
+
+    it('throws TransactionValidationError when redeemer contains a placeholder', () => {
+      const req = {
+        plutusScriptExecution: { redeemer: { fields: [{ int: placeholder }] } },
+      };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(TransactionValidationError);
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(/require the Buildooor/);
+    });
+
+    it('throws when datum contains a placeholder', () => {
+      const req = {
+        plutusScriptExecution: { datum: { fields: [{ int: placeholder }] } },
+      };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(TransactionValidationError);
+    });
+
+    it('throws when inlineDatum contains a placeholder', () => {
+      const req = { inlineDatum: { fields: [{ int: placeholder }] } };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(TransactionValidationError);
+    });
+
+    it('throws when mintRedeemer contains a placeholder', () => {
+      const req = { mintRedeemer: { fields: [{ int: placeholder }] } };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(TransactionValidationError);
+    });
+
+    it('throws when any extraOutputs[i].inlineDatum contains a placeholder', () => {
+      const req = {
+        extraOutputs: [
+          { address: 'a', lovelaceAmount: '1' },
+          { address: 'b', lovelaceAmount: '1', inlineDatum: { fields: [{ int: placeholder }] } },
+        ],
+      };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).toThrow(TransactionValidationError);
+    });
+
+    it('does NOT throw when no placeholders are present anywhere', () => {
+      const req = {
+        plutusScriptExecution: { redeemer: { constructor: 0, fields: [{ int: 0 }] } },
+        inlineDatum: { constructor: 0, fields: [{ bytes: 'cafe' }] },
+        extraOutputs: [{ address: 'a', lovelaceAmount: '1' }],
+      };
+      expect(() => (builder as any)._rejectIndexPlaceholders(req)).not.toThrow();
+    });
+  });
+
+  // =========================================================================
+  // FR-1: _buildResult — mintScriptHash forwarding (CSL)
+  // =========================================================================
+
+  describe('_buildResult — mintScriptHash forwarding (FR-1, CSL)', () => {
+    beforeEach(() => {
+      (builder as any).cardanoClient = { network: 'preview' };
+    });
+
+    it('includes mintScriptHash in the result when extra contains it', () => {
+      const result = (builder as any)._buildResult(
+        { senderAddress: 'addr', network: 'preview' },
+        { utxos: [] },
+        { unsignedTxCbor: 'aa', txBodyHash: 'bb', sizeBytes: 1, feeLovelace: '0', inputRefs: [], outputs: [] },
+        { scriptHash: 'spend-hash', mintScriptHash: 'mint-hash', forcedInputsUsed: 0 }
+      );
+      expect(result.scriptHash).toBe('spend-hash');
+      expect(result.mintScriptHash).toBe('mint-hash');
+    });
+
+    it('omits mintScriptHash when extra does not provide it', () => {
+      const result = (builder as any)._buildResult(
+        { senderAddress: 'addr', network: 'preview' },
+        { utxos: [] },
+        { unsignedTxCbor: 'aa', txBodyHash: 'bb', sizeBytes: 1, feeLovelace: '0', inputRefs: [], outputs: [] },
+        { scriptHash: 'spend-hash' }
+      );
+      expect(result.mintScriptHash).toBeUndefined();
     });
   });
 });

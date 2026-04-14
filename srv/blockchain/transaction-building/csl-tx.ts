@@ -4,7 +4,8 @@ import blake2b from "blake2b";
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
 import { getLovelace, mapBuilderError, parseAssetUnit } from "../../utils/tx-build-helper";
-import { InsufficientFundsError } from "../../utils/errors";
+import { InsufficientFundsError, TransactionValidationError } from "../../utils/errors";
+import { containsIndexPlaceholder } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, COLLATERAL_LOVELACE, MIN_CHANGE_LOVELACE } from '../../utils/const';
@@ -110,6 +111,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
   public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
+      this._rejectIndexPlaceholders(req);
       const finalExUnits = await this._evaluateExUnits(
         (exUnits) => this._buildMintTx(req, ctx, exUnits),
         ctx.evaluateTransaction
@@ -281,6 +283,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
 
   public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
+      this._rejectIndexPlaceholders(req);
       const finalExUnits = await this._evaluateExUnits(
         (exUnits) => this._buildPlutusSpendTx(req, ctx, exUnits),
         ctx.evaluateTransaction
@@ -289,13 +292,16 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const unsignedTx = this._buildPlutusSpendTx(req, ctx, finalExUnits);
       const txDetails = this._extractTxDetails(unsignedTx);
       const { hashHex: scriptHash } = this._computeScriptHash(req.plutusScriptExecution!.validatorScript);
+      const mintScriptHash = (req.mintActions && req.mintActions.length > 0 && req.mintingPolicyScript)
+        ? this._computeScriptHash(req.mintingPolicyScript).hashHex
+        : undefined;
 
       const scriptUtxoRef = req.plutusScriptExecution!.scriptUtxo;
       const forcedUsed = (req.forceInputs ?? []).filter(
         r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
       ).length;
       logger.info(`Built unsigned Plutus spending transaction. Fee: ${txDetails.feeLovelace}`);
-      return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: forcedUsed });
+      return this._buildResult(req, ctx, txDetails, { scriptHash, mintScriptHash, forcedInputsUsed: forcedUsed });
     } catch (error: any) {
       logger.error(`buildUnsignedPlutusSpendTransaction error: ${error?.message || error}`);
       mapBuilderError(error);
@@ -384,14 +390,57 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     // Collateral + funding UTxO separation (from candidate sender UTxOs only)
     const { fundingUtxos } = this._setupCollateral(txb, rest);
 
+    // FR-1: Combined spend+mint. When mintActions are present, set up a MintBuilder and
+    // (when no extraOutputs handle the assets) fold positive mints into the recipient output.
+    const hasMint = !!(req.mintActions && req.mintActions.length > 0 && req.mintingPolicyScript);
+    let mintedToPrimaryValue: CSL.Value | undefined;
+    if (hasMint) {
+      const { plutusScript: mintScript, cslHash: mintScriptCslHash } = this._computeScriptHash(req.mintingPolicyScript!);
+      const mintScriptSource = CSL.PlutusScriptSource.new(mintScript);
+      const mintBuilder = CSL.MintBuilder.new();
+      const mintExUnits = CSL.ExUnits.new(CSL.BigNum.from_str(exUnits.mem), CSL.BigNum.from_str(exUnits.cpu));
+      const mintRedeemerData = req.mintRedeemer
+        ? this._toPlutusData(req.mintRedeemer)
+        : CSL.PlutusData.new_integer(CSL.BigInt.from_str('0'));
+      const mintRedeemer = CSL.Redeemer.new(
+        CSL.RedeemerTag.new_mint(),
+        CSL.BigNum.from_str('0'),
+        mintRedeemerData,
+        mintExUnits
+      );
+      const mintWitness = CSL.MintWitness.new_plutus_script(mintScriptSource, mintRedeemer);
+      const positiveAssetsForPrimary: Array<{ unit: string; quantity: string }> = [];
+      const mintScriptHashHex = Buffer.from(mintScriptCslHash.to_bytes()).toString('hex');
+      for (const action of req.mintActions!) {
+        const { assetName } = parseAssetUnit(action.assetUnit);
+        const cslAssetName = CSL.AssetName.new(Buffer.from(assetName, 'hex'));
+        const qtyStr = String(action.quantity);
+        const mintQty = qtyStr.startsWith('-')
+          ? CSL.Int.new_negative(CSL.BigNum.from_str(qtyStr.slice(1)))
+          : CSL.Int.new(CSL.BigNum.from_str(qtyStr));
+        mintBuilder.add_asset(mintWitness, cslAssetName, mintQty);
+        if (!qtyStr.startsWith('-') && (!req.extraOutputs || req.extraOutputs.length === 0)) {
+          positiveAssetsForPrimary.push({ unit: mintScriptHashHex + assetName, quantity: qtyStr });
+        }
+      }
+      txb.set_mint_builder(mintBuilder);
+      if (positiveAssetsForPrimary.length > 0) {
+        mintedToPrimaryValue = this._buildCslValue('0', positiveAssetsForPrimary);
+      }
+    }
+
     // Create output for recipient with multi-assets from the script UTxO
     const outputValue = CSL.Value.new(CSL.BigNum.from_str(String(req.lovelaceAmount || MIN_CHANGE_LOVELACE)));
     if (scriptNonAdaAssets.length > 0) {
       outputValue.set_multiasset(this._buildCslMultiAsset(scriptNonAdaAssets));
     }
-    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, outputValue);
+    const finalOutputValue = mintedToPrimaryValue ? outputValue.checked_add(mintedToPrimaryValue) : outputValue;
+    const recipientOutput = CSL.TransactionOutput.new(recipientAddress, finalOutputValue);
     this._attachInlineDatum(recipientOutput, req.inlineDatum);
     txb.add_output(recipientOutput);
+
+    // Append extra outputs (FR-2) — each is min-ADA checked before being added.
+    this._appendExtraOutputsCsl(txb, req.extraOutputs);
 
     // Coin selection from candidate funding UTxOs
     const cslFundingUtxos = this._mapMultiAssetUtxosToCslUtxos(fundingUtxos);
@@ -528,7 +577,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   private _buildResult(
     req: TxBuildRequest, ctx: TxBuildContext,
     txDetails: ReturnType<CSLTxBuilder['_extractTxDetails']>,
-    extra?: { scriptHash?: string; forcedInputsUsed?: number }
+    extra?: { scriptHash?: string; mintScriptHash?: string; forcedInputsUsed?: number }
   ): TxBuildResult {
     // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
     const inputs = txDetails.inputRefs.map(ref => {
@@ -568,6 +617,63 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   private _attachInlineDatum(output: CSL.TransactionOutput, datum?: JSONValue): void {
     if (datum) {
       output.set_plutus_data(this._toPlutusData(datum));
+    }
+  }
+
+  /**
+   * FR-3 guard: the CSL builder cannot resolve __INPUT_IDX__ placeholders because
+   * CSL's add_inputs_from selects funding internally and we cannot enumerate the
+   * resulting input order without a throwaway first-pass build. Reject up-front so
+   * consumers get a clear error pointing at the active builder.
+   */
+  private _rejectIndexPlaceholders(req: TxBuildRequest & { plutusScriptExecution?: { redeemer?: JSONValue; datum?: JSONValue } }): void {
+    const candidates: Array<JSONValue | undefined> = [
+      req.plutusScriptExecution?.redeemer,
+      req.plutusScriptExecution?.datum,
+      req.inlineDatum,
+      req.mintRedeemer
+    ];
+    if (req.extraOutputs) {
+      for (const e of req.extraOutputs) candidates.push(e.inlineDatum);
+    }
+    for (const c of candidates) {
+      if (c !== undefined && containsIndexPlaceholder(c)) {
+        throw new TransactionValidationError(
+          'Input-index placeholders (__INPUT_IDX:...__) require the Buildooor transaction builder. Pre-resolve indices client-side or set TX_BUILDERS=buildooor.'
+        );
+      }
+    }
+  }
+
+  /**
+   * Append parsed extraOutputs (FR-2) to a CSL TransactionBuilder, enforcing min-ADA per entry.
+   * Mirrors BuildooorTxBuilder._appendExtraOutputs so both engines produce equivalent layouts.
+   */
+  private _appendExtraOutputsCsl(
+    txb: CSL.TransactionBuilder,
+    extraOutputs?: TxBuildRequest['extraOutputs']
+  ): void {
+    if (!extraOutputs || extraOutputs.length === 0) return;
+    const coinsPerByte = this.protocolParameters.coinsPerUtxoSize;
+    if (!coinsPerByte) {
+      throw new TransactionValidationError('Cannot enforce min-ADA on extraOutputs: coinsPerUtxoSize not set in protocol parameters');
+    }
+    const dataCost = CSL.DataCost.new_coins_per_byte(CSL.BigNum.from_str(String(coinsPerByte)));
+
+    for (let i = 0; i < extraOutputs.length; i++) {
+      const extra = extraOutputs[i];
+      const addr = CSL.Address.from_bech32(extra.address);
+      const value = this._buildCslValue(extra.lovelaceAmount, extra.assets);
+      const out = CSL.TransactionOutput.new(addr, value);
+      this._attachInlineDatum(out, extra.inlineDatum);
+      const requiredMin = CSL.min_ada_for_output(out, dataCost);
+      const requestedLovelace = CSL.BigNum.from_str(String(extra.lovelaceAmount));
+      if (requestedLovelace.compare(requiredMin) < 0) {
+        throw new TransactionValidationError(
+          `extraOutputs[${i}].lovelaceAmount (${extra.lovelaceAmount}) is below required min-ADA ${requiredMin.to_str()} for the given address/assets/datum`
+        );
+      }
+      txb.add_output(out);
     }
   }
 

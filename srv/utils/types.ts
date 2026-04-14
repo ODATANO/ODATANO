@@ -338,6 +338,17 @@ export type TxBuildRequest = {
    * Primary use case: one-shot minting seeds (policy parameterized with a specific TxOutRef).
    */
   forceInputs?: Array<{ txHash: string; outputIndex: number }>;
+  /**
+   * Optional additional outputs appended after the primary recipient output, before change.
+   * Each extra output is independently min-ADA checked. Used for multi-output state-machine
+   * transitions (e.g. counter update + batch NFT outputs in a single transaction).
+   */
+  extraOutputs?: Array<{
+    address: string;
+    lovelaceAmount: string;
+    assets?: Array<{ unit: string; quantity: string }>;
+    inlineDatum?: JSONValue;
+  }>;
 };
 
 /**
@@ -404,6 +415,8 @@ export type TxBuildResult = {
   warnings: string[];
   /** Blake2b-224 hash of the script (= policy ID for minting), if a script was provided */
   scriptHash?: string;
+  /** Blake2b-224 hash of the minting policy script (= policy ID), set in combined spend+mint transactions. */
+  mintScriptHash?: string;
   /** Enterprise script address derived from applied script hash (bech32). Set when lockOnScript=true. */
   scriptAddress?: string;
   /** Number of forced inputs actually included in the built transaction (0 if forceInputs was not used). */

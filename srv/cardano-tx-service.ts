@@ -1,12 +1,13 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX } from './utils/const';
+import type { JSONValue } from './utils/types';
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -38,6 +39,81 @@ function parseForceInputs(
     refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
   }
   return { parsed: refs };
+}
+
+/** Upper bound on extra outputs per transaction (defence against tx-size blow-up). */
+const MAX_EXTRA_OUTPUTS = 32;
+
+export interface ParsedExtraOutput {
+  address: string;
+  lovelaceAmount: string;
+  assets?: Array<{ unit: string; quantity: string }>;
+  inlineDatum?: JSONValue;
+}
+
+/**
+ * Parse and validate extraOutputsJson. Returns { parsed } on success (possibly undefined
+ * for empty array → no-op) or { error } on validation failure.
+ */
+function parseExtraOutputs(
+  extraOutputsJson: string | undefined
+): { parsed?: ParsedExtraOutput[]; error?: string } {
+  if (!extraOutputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(extraOutputsJson, 'extraOutputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'extraOutputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  if (jsonResult.parsed.length > MAX_EXTRA_OUTPUTS) {
+    return { error: `extraOutputsJson exceeds maximum of ${MAX_EXTRA_OUTPUTS} entries` };
+  }
+
+  const out: ParsedExtraOutput[] = [];
+  for (let i = 0; i < jsonResult.parsed.length; i++) {
+    const entry = jsonResult.parsed[i] as any;
+    if (!entry || typeof entry !== 'object') {
+      return { error: `extraOutputs[${i}] must be an object` };
+    }
+    if (typeof entry.address !== 'string' || !isValidBech32Address(entry.address)) {
+      return { error: `extraOutputs[${i}].address is not a valid Bech32 address` };
+    }
+    if (typeof entry.lovelaceAmount !== 'string' || !/^\d+$/.test(entry.lovelaceAmount) || entry.lovelaceAmount === '0') {
+      return { error: `extraOutputs[${i}].lovelaceAmount must be a positive integer string` };
+    }
+
+    let assets: Array<{ unit: string; quantity: string }> | undefined;
+    if (entry.assets !== undefined && entry.assets !== null) {
+      if (!Array.isArray(entry.assets)) {
+        return { error: `extraOutputs[${i}].assets must be an array` };
+      }
+      assets = [];
+      for (let j = 0; j < entry.assets.length; j++) {
+        const a = entry.assets[j];
+        if (!a || typeof a !== 'object') {
+          return { error: `extraOutputs[${i}].assets[${j}] must be an object` };
+        }
+        if (typeof a.unit !== 'string' || a.unit.toLowerCase() === 'lovelace' || !isAssetUnit(a.unit)) {
+          return { error: `extraOutputs[${i}].assets[${j}].unit must be a valid asset unit (policyId + assetName hex)` };
+        }
+        if (typeof a.quantity !== 'string' || !/^\d+$/.test(a.quantity) || a.quantity === '0') {
+          return { error: `extraOutputs[${i}].assets[${j}].quantity must be a positive integer string` };
+        }
+        assets.push({ unit: a.unit, quantity: a.quantity });
+      }
+    }
+
+    let inlineDatum: JSONValue | undefined;
+    if (entry.inlineDatumJson !== undefined && entry.inlineDatumJson !== null) {
+      if (typeof entry.inlineDatumJson !== 'string') {
+        return { error: `extraOutputs[${i}].inlineDatumJson must be a JSON string` };
+      }
+      const datumResult = validateJsonWithLimits(entry.inlineDatumJson, `extraOutputs[${i}].inlineDatumJson`);
+      if (!datumResult.valid) return { error: datumResult.error! };
+      inlineDatum = datumResult.parsed as JSONValue;
+    }
+
+    out.push({ address: entry.address, lovelaceAmount: entry.lovelaceAmount, assets, inlineDatum });
+  }
+  return { parsed: out };
 }
 
 /**
@@ -367,7 +443,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -435,6 +511,42 @@ module.exports = (srv: cds.Service) => {
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
 
+    // Parse and validate optional extraOutputsJson
+    const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
+    if (extraOutputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', extraOutputsResult.error, 'extraOutputsJson');
+    const extraOutputs = extraOutputsResult.parsed;
+
+    // FR-1: Optional combined spend+mint parameters. mintActionsJson triggers the combined flow;
+    // mintingPolicyScript is required alongside it. mintRedeemerJson is optional.
+    let parsedMintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
+    let parsedMintRedeemer: any | undefined;
+    if (mintActionsJson) {
+      if (!mintingPolicyScript) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson requires mintingPolicyScript', 'mintingPolicyScript');
+      }
+      const mintJson = validateJsonWithLimits(mintActionsJson, 'mintActionsJson');
+      if (!mintJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mintJson.error!, 'mintActionsJson');
+      if (!Array.isArray(mintJson.parsed)) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
+      }
+      parsedMintActions = mintJson.parsed.map((action: any) => {
+        if (!action || typeof action !== 'object') {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
+        }
+        if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+        }
+        return { ...action, quantity: BigInt(action.quantity) };
+      });
+      if (mintRedeemerJson) {
+        const mrJson = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+        if (!mrJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mrJson.error!, 'mintRedeemerJson');
+        parsedMintRedeemer = mrJson.parsed;
+      }
+    } else if (mintingPolicyScript || mintRedeemerJson) {
+      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintingPolicyScript / mintRedeemerJson require mintActionsJson', 'mintActionsJson');
+    }
+
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
@@ -445,6 +557,15 @@ module.exports = (srv: cds.Service) => {
       let finalValidatorScript = validatorScript;
       if (scriptParams && scriptParams.length > 0) {
         finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
+      }
+
+      // FR-1: when the mint policy is byte-equal to the validator (multi-purpose script),
+      // re-use the script-params-applied validator hex. Otherwise pass the policy through unchanged.
+      let finalMintingPolicyScript: string | undefined;
+      if (parsedMintActions) {
+        finalMintingPolicyScript = (mintingPolicyScript === validatorScript)
+          ? finalValidatorScript
+          : mintingPolicyScript;
       }
 
       const cleanData: any = {
@@ -460,13 +581,20 @@ module.exports = (srv: cds.Service) => {
         },
         requiredSigners,
         inlineDatum,
-        forceInputs
+        forceInputs,
+        extraOutputs,
+        mintActions: parsedMintActions,
+        mintingPolicyScript: finalMintingPolicyScript,
+        mintRedeemer: parsedMintRedeemer
       };
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
       delete cleanData.inlineDatumJson;
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
+      delete cleanData.extraOutputsJson;
+      delete cleanData.mintActionsJson;
+      delete cleanData.mintRedeemerJson;
 
       // lockOnScript: route continuing output to enterprise script address
       if (lockOnScript && scriptParams && scriptParams.length > 0) {

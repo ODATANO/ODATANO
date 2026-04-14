@@ -245,7 +245,19 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        lockOnScript: Boolean,
                                        @title: 'Force Inputs JSON'
                                        @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
-                                       forceInputsJson: String) returns TransactionBuilds;
+                                       forceInputsJson: String,
+                                       @title: 'Extra Outputs JSON'
+                                       @description: 'Optional JSON array of additional outputs appended after the primary recipient output, before change. Each entry: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson?}. Use for multi-output state-machine transitions (counter updates + batch NFT outputs). Each extra output is independently min-ADA checked.'
+                                       extraOutputsJson: String,
+                                       @title: 'Mint Actions JSON'
+                                       @description: 'Optional JSON array of mint/burn actions ([{"assetUnit", "quantity"}]). When provided, triggers a combined spend+mint transaction in a single atomic step. Required together with mintingPolicyScript.'
+                                       mintActionsJson: String,
+                                       @title: 'Minting Policy Script'
+                                       @description: 'Optional Plutus minting policy CBOR hex. Required when mintActionsJson is provided. If byte-equal to validatorScript, scriptParamsJson is applied to it as well (multi-purpose script).'
+                                       mintingPolicyScript: String,
+                                       @title: 'Mint Redeemer JSON'
+                                       @description: 'Optional PlutusData JSON for the minting policy redeemer. Defaults to integer 0 if not specified. Supports __INPUT_IDX:txHash#n__ placeholders (Buildooor only).'
+                                       mintRedeemerJson: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'

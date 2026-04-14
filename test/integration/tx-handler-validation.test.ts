@@ -1077,4 +1077,272 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect(status).toBe(400);
     });
   });
+
+  // ==========================================================================
+  // FR-2: BuildPlutusSpendTransaction — extraOutputsJson validations
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction extraOutputsJson validations (FR-2)', () => {
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (extraOutputsJson: string) =>
+      test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, extraOutputsJson,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+    it('rejects extraOutputsJson that is not valid JSON', async () => {
+      const { status } = await post('not-valid-json{{{');
+      expect(status).toBe(400);
+    });
+
+    it('rejects extraOutputsJson that is not a JSON array', async () => {
+      const { status } = await post('{"not": "array"}');
+      expect(status).toBe(400);
+    });
+
+    it('rejects when extraOutputs length exceeds MAX_EXTRA_OUTPUTS (33 entries)', async () => {
+      const arr = Array.from({ length: 33 }, () => ({
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+      }));
+      const { status } = await post(JSON.stringify(arr));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with invalid Bech32 address', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: 'not-a-bech32-address', lovelaceAmount: '2000000' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with lovelaceAmount = "0"', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '0' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with negative lovelaceAmount string', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '-1000' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with non-numeric lovelaceAmount', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: 'abc' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with assets that is not an array', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000', assets: 'not-an-array' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with unit="lovelace"', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: 'lovelace', quantity: '5' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with non-hex unit', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: 'NOT_HEX_!!', quantity: '5' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with quantity "0"', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: TEST_FIXTURES.assetUnit, quantity: '0' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with inlineDatumJson that is not a string', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        inlineDatumJson: { not: 'a-string' } as any,
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with inlineDatumJson that is not valid JSON', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        inlineDatumJson: 'broken{json',
+      }]));
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // FR-1: BuildPlutusSpendTransaction — combined mint validations
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction combined mint validations (FR-1)', () => {
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (overrides: Record<string, any>) =>
+      test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, ...overrides,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+    it('rejects mintActionsJson without mintingPolicyScript', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintingPolicyScript without mintActionsJson', async () => {
+      const { status } = await post({ mintingPolicyScript: TEST_FIXTURES.validPlutusScript });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintRedeemerJson without mintActionsJson', async () => {
+      const { status } = await post({ mintRedeemerJson: '{"int": 0}' });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintActionsJson that is not valid JSON', async () => {
+      const { status } = await post({
+        mintActionsJson: 'broken{json',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintActionsJson that is not an array', async () => {
+      const { status } = await post({
+        mintActionsJson: '{"not": "array"}',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mint action with non-integer quantity string', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '3.5' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mint action that is not an object', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify(['not-an-object']),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintRedeemerJson that is not valid JSON', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintRedeemerJson: 'broken{json',
+      });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // FR-3: BuildPlutusSpendTransaction — CSL builder rejects __INPUT_IDX__
+  // (this test file runs with TX_BUILDERS=csl, so the guard fires here)
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction __INPUT_IDX__ rejection (FR-3, CSL)', () => {
+    const PLACEHOLDER = `__INPUT_IDX:${'aa'.repeat(32)}#0__`;
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (overrides: Record<string, any>) => {
+      // tx_info mock for the script UTxO so we get past the indexer lookup and into the builder.
+      setupTxInfoMock([{
+        ...mockScriptTxInfo[0],
+        tx_hash: 'a'.repeat(64),
+        outputs: [{ ...mockScriptTxInfo[0].outputs[0] }],
+      }]);
+      return test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, ...overrides,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+    };
+
+    it('rejects placeholder in redeemerJson under CSL builder with a builder hint', async () => {
+      const { status, data } = await post({
+        redeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+      // The TransactionValidationError surfaces — message mentions Buildooor
+      if (data?.error?.message) {
+        expect(data.error.message).toMatch(/Buildooor/i);
+      }
+    });
+
+    it('rejects placeholder in datumJson under CSL builder', async () => {
+      const { status } = await post({
+        datumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in inlineDatumJson under CSL builder', async () => {
+      const { status } = await post({
+        inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in mintRedeemerJson under CSL builder (combined spend+mint)', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintRedeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in extraOutputs[i].inlineDatumJson under CSL builder', async () => {
+      const { status } = await post({
+        extraOutputsJson: JSON.stringify([{
+          address: TEST_FIXTURES.emptyAddress,
+          lovelaceAmount: '2000000',
+          inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+        }]),
+      });
+      expect([400, 500]).toContain(status);
+    });
+  });
 });

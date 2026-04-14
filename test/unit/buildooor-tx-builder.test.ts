@@ -2,6 +2,7 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
+import { TransactionValidationError } from '../../srv/utils/errors';
 
 // Test addresses and script hex from integration test fixtures
 const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
@@ -313,6 +314,285 @@ describe('BuildooorTxBuilder', () => {
       expect(forced.map((u: UTxO) => u.txHash).sort()).toEqual(['aaaa', 'cccc']);
       expect(rest).toHaveLength(2);
       expect(rest.map((u: UTxO) => u.txHash).sort()).toEqual(['bbbb', 'dddd']);
+    });
+  });
+
+  // =========================================================================
+  // FR-2: _appendExtraOutputs — extraOutputs handling
+  // =========================================================================
+
+  describe('_appendExtraOutputs (FR-2)', () => {
+    // Initialised builder with mocked Buildooor TxBuilder that exposes getMinimumOutputLovelaces.
+    // We avoid full init() because that needs a CardanoClient; the helper only uses txBuilder.
+    let initialisedBuilder: BuildooorTxBuilder;
+
+    beforeEach(() => {
+      initialisedBuilder = new BuildooorTxBuilder();
+      // Inject a minimal txBuilder stub: returns a fixed min-ADA so we can drive the guard predictably.
+      (initialisedBuilder as any).txBuilder = {
+        getMinimumOutputLovelaces: jest.fn(() => 1_500_000n),
+      };
+    });
+
+    const append = (outputs: any[], extras: any) =>
+      (initialisedBuilder as any)._appendExtraOutputs(outputs, extras);
+
+    const validExtra = { address: TEST_ADDRESS, lovelaceAmount: '2000000' };
+
+    it('appends multiple extra outputs in declared order', () => {
+      const outputs: any[] = [];
+      append(outputs, [
+        { ...validExtra, lovelaceAmount: '2000000' },
+        { ...validExtra, lovelaceAmount: '3000000' },
+        { ...validExtra, lovelaceAmount: '4000000' },
+      ]);
+      expect(outputs).toHaveLength(3);
+      expect(outputs[0].value.lovelaces.toString()).toBe('2000000');
+      expect(outputs[1].value.lovelaces.toString()).toBe('3000000');
+      expect(outputs[2].value.lovelaces.toString()).toBe('4000000');
+    });
+
+    it('throws TransactionValidationError with min-ADA hint when lovelaceAmount is below required min', () => {
+      const outputs: any[] = [];
+      expect(() => append(outputs, [{ ...validExtra, lovelaceAmount: '500000' }]))
+        .toThrow(TransactionValidationError);
+      expect(() => append(outputs, [{ ...validExtra, lovelaceAmount: '500000' }]))
+        .toThrow(/below required min-ADA/);
+    });
+
+    it('attaches inline datum when inlineDatum is provided on the extra output', () => {
+      const outputs: any[] = [];
+      append(outputs, [{ ...validExtra, inlineDatum: { constructor: 0, fields: [{ int: 7 }] } }]);
+      expect(outputs).toHaveLength(1);
+      expect(outputs[0].datum).toBeDefined();
+    });
+
+    it('builds the TxOut with native assets via _buildLedgerValue', () => {
+      const outputs: any[] = [];
+      append(outputs, [{
+        ...validExtra,
+        lovelaceAmount: '2500000',
+        assets: [{ unit: ASSET_UNIT, quantity: '5' }],
+      }]);
+      expect(outputs).toHaveLength(1);
+      // Buildooor's Value exposes the asset under the policy hash; smoke-check it is non-empty
+      expect(outputs[0].value.toCborObj).toBeDefined();
+    });
+
+    it('is a no-op when extraOutputs is undefined or empty', () => {
+      const outputs: any[] = [];
+      append(outputs, undefined);
+      append(outputs, []);
+      expect(outputs).toHaveLength(0);
+    });
+  });
+
+  // =========================================================================
+  // FR-3: _computeSortedInputs / _resolveExtraOutputPlaceholders / _extractFundingRefs
+  // =========================================================================
+
+  describe('_computeSortedInputs (FR-3)', () => {
+    const compute = (script: any, forced: any[], funding: any[]) =>
+      (builder as any)._computeSortedInputs(script, forced, funding);
+
+    const mkUtxo = (txHash: string, outputIndex: number): UTxO => ({
+      txHash, outputIndex, address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '5000000' }],
+    });
+
+    it('places script + forced + funding refs into single Buildooor-equivalent lex order', () => {
+      const script = { txHash: 'aa'.repeat(32), outputIndex: 0 };
+      const forced = [mkUtxo('cc'.repeat(32), 0)];
+      const funding = [{ txHash: 'bb'.repeat(32), outputIndex: 0 }];
+
+      const sorted = compute(script, forced, funding);
+      expect(sorted.map((r: any) => r.txHash)).toEqual([
+        'aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32),
+      ]);
+    });
+
+    it('keeps tie-breaks on outputIndex within identical txHashes', () => {
+      const script = { txHash: 'aa'.repeat(32), outputIndex: 1 };
+      const forced = [mkUtxo('aa'.repeat(32), 0)];
+      const funding = [{ txHash: 'aa'.repeat(32), outputIndex: 2 }];
+
+      const sorted = compute(script, forced, funding);
+      expect(sorted.map((r: any) => r.outputIndex)).toEqual([0, 1, 2]);
+    });
+  });
+
+  describe('_resolveExtraOutputPlaceholders (FR-3)', () => {
+    const resolve = (extras: any, sortedInputs: any[]) =>
+      (builder as any)._resolveExtraOutputPlaceholders(extras, { sortedInputs });
+
+    const SORTED = [
+      { txHash: 'aa'.repeat(32), outputIndex: 0 },
+      { txHash: 'bb'.repeat(32), outputIndex: 0 },
+    ];
+
+    it('returns undefined or empty unchanged (no-op)', () => {
+      expect(resolve(undefined, SORTED)).toBeUndefined();
+      expect(resolve([], SORTED)).toEqual([]);
+    });
+
+    it('passes through entries that have no inlineDatum', () => {
+      const input = [{ address: 'addr', lovelaceAmount: '2000000' }];
+      const out = resolve(input, SORTED);
+      expect(out[0].inlineDatum).toBeUndefined();
+      expect(out[0].address).toBe('addr');
+    });
+
+    it('replaces placeholders inside extraOutputs[i].inlineDatum and preserves other fields', () => {
+      const input = [{
+        address: 'addr',
+        lovelaceAmount: '2000000',
+        inlineDatum: { constructor: 0, fields: [{ int: `__INPUT_IDX:${'bb'.repeat(32)}#0__` }] },
+      }];
+      const out = resolve(input, SORTED);
+      expect(out[0].inlineDatum).toEqual({ constructor: 0, fields: [{ int: 1 }] });
+      expect(out[0].address).toBe('addr');
+      expect(out[0].lovelaceAmount).toBe('2000000');
+    });
+  });
+
+  describe('_extractFundingRefs (FR-3)', () => {
+    const extract = (inputs: any[]) => (builder as any)._extractFundingRefs(inputs);
+
+    it('maps Buildooor funding-input shape to InputRef list (txHash + outputIndex)', () => {
+      const fundingInputs = [
+        { utxo: { utxoRef: { id: { toString: () => 'aa'.repeat(32) }, index: 1 } } },
+        { utxo: { utxoRef: { id: { toString: () => 'bb'.repeat(32) }, index: 2 } } },
+      ];
+      expect(extract(fundingInputs)).toEqual([
+        { txHash: 'aa'.repeat(32), outputIndex: 1 },
+        { txHash: 'bb'.repeat(32), outputIndex: 2 },
+      ]);
+    });
+  });
+
+  // =========================================================================
+  // FR-1: Combined spend+mint — branch / extra-field coverage
+  // =========================================================================
+
+  describe('buildUnsignedPlutusSpendTransaction — combined spend+mint (FR-1)', () => {
+    it('exercises the hasMint branch (parses mintingPolicyScript) before failing on no ADA-only collateral', async () => {
+      // ALL UTxOs carry native assets → no ADA-only available → throws AFTER FR-1 setup ran.
+      const scriptTxHash = '1234123412341234123412341234123412341234123412341234123412341234';
+      const scriptUtxo: UTxO = {
+        txHash: scriptTxHash,
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [
+          { unit: 'lovelace', quantity: '5000000' },
+          { unit: ASSET_UNIT, quantity: '1' },
+        ],
+      };
+      const fundingUtxo: UTxO = {
+        txHash: 'abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd',
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [
+          { unit: 'lovelace', quantity: '10000000' },
+          { unit: ASSET_UNIT, quantity: '50' },
+        ],
+      };
+
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+        },
+        // FR-1 inputs:
+        mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+        mintingPolicyScript: VALID_PLUTUS_SCRIPT,
+        mintRedeemer: { constructor: 0, fields: [] },
+      };
+
+      const ctx: TxBuildContext = {
+        utxos: [scriptUtxo, fundingUtxo],
+        protocolParameters: {} as any,
+      };
+
+      // FR-1 setup runs (Script.fromCbor on mintingPolicyScript), then setup throws on collateral
+      await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
+        .rejects.toThrow('No ADA-only UTxO available for collateral');
+    });
+
+    it('skips FR-1 setup entirely when mintActions is empty (no mintScriptHash branch)', async () => {
+      const scriptTxHash = '5678567856785678567856785678567856785678567856785678567856785678';
+      const scriptUtxo: UTxO = {
+        txHash: scriptTxHash,
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '5000000' }, { unit: ASSET_UNIT, quantity: '1' }],
+      };
+      const fundingUtxo: UTxO = {
+        txHash: 'cdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdefcdef',
+        outputIndex: 0,
+        address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '10000000' }, { unit: ASSET_UNIT, quantity: '50' }],
+      };
+
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: 2000000,
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+        },
+        mintActions: [], // empty → hasMint = false
+      };
+
+      const ctx: TxBuildContext = {
+        utxos: [scriptUtxo, fundingUtxo],
+        protocolParameters: {} as any,
+      };
+
+      // Reaches collateral check identically; just confirms the empty-mint branch is non-fatal.
+      await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
+        .rejects.toThrow('No ADA-only UTxO available for collateral');
+    });
+  });
+
+  describe('_buildResult — mintScriptHash forwarding (FR-1)', () => {
+    beforeEach(() => {
+      (builder as any).cardanoClient = { network: 'preview' };
+    });
+
+    it('includes mintScriptHash in the result when supplied via extra', () => {
+      const buildResult = (req: any, ctx: any, txDetails: any, extra: any) =>
+        (builder as any)._buildResult(req, ctx, txDetails, extra);
+
+      const result = buildResult(
+        { senderAddress: TEST_ADDRESS, network: 'preview' },
+        { utxos: [] },
+        { unsignedTxCbor: 'aa', txBodyHash: 'bb', sizeBytes: 1, feeLovelace: '0', inputRefs: [], outputs: [] },
+        { scriptHash: 'spend-hash', mintScriptHash: 'mint-hash', forcedInputsUsed: 0 }
+      );
+      expect(result.scriptHash).toBe('spend-hash');
+      expect(result.mintScriptHash).toBe('mint-hash');
+    });
+
+    it('omits mintScriptHash when not provided in extra', () => {
+      const buildResult = (req: any, ctx: any, txDetails: any, extra: any) =>
+        (builder as any)._buildResult(req, ctx, txDetails, extra);
+
+      const result = buildResult(
+        { senderAddress: TEST_ADDRESS, network: 'preview' },
+        { utxos: [] },
+        { unsignedTxCbor: 'aa', txBodyHash: 'bb', sizeBytes: 1, feeLovelace: '0', inputRefs: [], outputs: [] },
+        { scriptHash: 'spend-hash' }
+      );
+      expect(result.scriptHash).toBe('spend-hash');
+      expect(result.mintScriptHash).toBeUndefined();
     });
   });
 });
