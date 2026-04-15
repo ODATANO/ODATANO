@@ -566,6 +566,15 @@ module.exports = (srv: cds.Service) => {
         finalMintingPolicyScript = (mintingPolicyScript === validatorScript)
           ? finalValidatorScript
           : mintingPolicyScript;
+
+        if (finalMintingPolicyScript && scriptParams && scriptParams.length > 0 && mintingPolicyScript === validatorScript) {
+          const appliedPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
+          for (const action of parsedMintActions) {
+            if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+              action.assetUnit = appliedPolicyId + action.assetUnit;
+            }
+          }
+        }
       }
 
       const cleanData: any = {
