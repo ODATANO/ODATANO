@@ -172,7 +172,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 lockOnScript: Boolean,
                                 @title: 'Force Inputs JSON'
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
-                                forceInputsJson: String)       returns TransactionBuilds;
+                                forceInputsJson: String,
+                                @title: 'Reference Inputs JSON'
+                                @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
+                                referenceInputsJson: String)   returns TransactionBuilds;
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
@@ -257,7 +260,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        mintingPolicyScript: String,
                                        @title: 'Mint Redeemer JSON'
                                        @description: 'Optional PlutusData JSON for the minting policy redeemer. Defaults to integer 0 if not specified. Supports __INPUT_IDX:txHash#n__ placeholders (Buildooor only).'
-                                       mintRedeemerJson: String) returns TransactionBuilds;
+                                       mintRedeemerJson: String,
+                                       @title: 'Reference Inputs JSON'
+                                       @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
+                                       referenceInputsJson: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'

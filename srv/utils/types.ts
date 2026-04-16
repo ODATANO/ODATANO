@@ -339,6 +339,12 @@ export type TxBuildRequest = {
    */
   forceInputs?: Array<{ txHash: string; outputIndex: number }>;
   /**
+   * Optional CIP-31 reference inputs (read-only, not consumed). Resolved to full UTxOs
+   * and passed as readonlyRefInputs to Buildooor. The validator can read these UTxOs'
+   * datums/values without consuming them (e.g., oracle feeds, shared config).
+   */
+  referenceInputs?: Array<{ txHash: string; outputIndex: number }>;
+  /**
    * Optional additional outputs appended after the primary recipient output, before change.
    * Each extra output is independently min-ADA checked. Used for multi-output state-machine
    * transitions (e.g. counter update + batch NFT outputs in a single transaction).
@@ -395,6 +401,8 @@ export type TxBuildContext = {
   protocolParameters: LedgerProtocolParameter;
   /** Optional evaluator for dynamic script execution unit calculation (requires Ogmios) */
   evaluateTransaction?: TxEvaluator;
+  /** CIP-31 reference input UTxOs (read-only, not consumed). Resolved from referenceInputs refs. */
+  referenceInputUtxos?: UTxO[];
 };
 
 /**
@@ -421,6 +429,8 @@ export type TxBuildResult = {
   scriptAddress?: string;
   /** Number of forced inputs actually included in the built transaction (0 if forceInputs was not used). */
   forcedInputsUsed?: number;
+  /** Number of CIP-31 reference inputs included in the built transaction (0 if referenceInputs was not used). */
+  referenceInputsUsed?: number;
 };
 
 /**

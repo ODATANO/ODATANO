@@ -41,6 +41,35 @@ function parseForceInputs(
   return { parsed: refs };
 }
 
+/**
+ * Parse and validate referenceInputsJson (CIP-31 reference inputs).
+ * Same structure as forceInputsJson: JSON array of {txHash, outputIndex}.
+ */
+function parseReferenceInputs(
+  referenceInputsJson: string | undefined
+): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
+  if (!referenceInputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(referenceInputsJson, 'referenceInputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'referenceInputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  const refs: Array<{ txHash: string; outputIndex: number }> = [];
+  for (const entry of jsonResult.parsed) {
+    if (!entry || typeof entry !== 'object') {
+      return { error: 'Each referenceInputs entry must be an object with txHash and outputIndex' };
+    }
+    if (!isTxHash((entry as any).txHash)) {
+      return { error: 'Each referenceInputs entry must have a valid 64-hex txHash' };
+    }
+    const idx = (entry as any).outputIndex;
+    if (!Number.isInteger(idx) || idx < 0) {
+      return { error: 'Each referenceInputs entry must have a non-negative integer outputIndex' };
+    }
+    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+  }
+  return { parsed: refs };
+}
+
 /** Upper bound on extra outputs per transaction (defence against tx-size blow-up). */
 const MAX_EXTRA_OUTPUTS = 32;
 
@@ -272,7 +301,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -359,10 +388,15 @@ module.exports = (srv: cds.Service) => {
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
 
+    // Parse and validate optional referenceInputsJson (CIP-31)
+    const refInputsResult = parseReferenceInputs(referenceInputsJson);
+    if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
+    const referenceInputs = refInputsResult.parsed;
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0 },
+        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0 },
         'Building minting transaction'
       );
 
@@ -375,6 +409,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.mintRedeemerJson;
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
+      delete cleanData.referenceInputsJson;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
@@ -405,7 +440,8 @@ module.exports = (srv: cds.Service) => {
         requiredSigners,
         inlineDatum,
         mintRedeemer,
-        forceInputs
+        forceInputs,
+        referenceInputs
       });
 
       // Post-build: compute CIP-14 fingerprint and scriptAddress
@@ -443,7 +479,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
@@ -510,6 +546,11 @@ module.exports = (srv: cds.Service) => {
     const forceInputsResult = parseForceInputs(forceInputsJson);
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
+
+    // Parse and validate optional referenceInputsJson (CIP-31)
+    const refInputsResult = parseReferenceInputs(referenceInputsJson);
+    if (refInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', refInputsResult.error, 'referenceInputsJson');
+    const referenceInputs = refInputsResult.parsed;
 
     // Parse and validate optional extraOutputsJson
     const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
@@ -591,6 +632,7 @@ module.exports = (srv: cds.Service) => {
         requiredSigners,
         inlineDatum,
         forceInputs,
+        referenceInputs,
         extraOutputs,
         mintActions: parsedMintActions,
         mintingPolicyScript: finalMintingPolicyScript,
@@ -601,6 +643,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.inlineDatumJson;
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
+      delete cleanData.referenceInputsJson;
       delete cleanData.extraOutputsJson;
       delete cleanData.mintActionsJson;
       delete cleanData.mintRedeemerJson;

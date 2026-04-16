@@ -112,6 +112,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       this._rejectIndexPlaceholders(req);
+      this._rejectReferenceInputs(ctx);
       const finalExUnits = await this._evaluateExUnits(
         (exUnits) => this._buildMintTx(req, ctx, exUnits),
         ctx.evaluateTransaction
@@ -284,6 +285,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
   public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     try {
       this._rejectIndexPlaceholders(req);
+      this._rejectReferenceInputs(ctx);
       const finalExUnits = await this._evaluateExUnits(
         (exUnits) => this._buildPlutusSpendTx(req, ctx, exUnits),
         ctx.evaluateTransaction
@@ -1001,5 +1003,17 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     }
 
     throw new Error(`Unsupported metadata value type: ${typeof value}`);
+  }
+
+  /**
+   * Reject CIP-31 reference inputs on the CSL builder — not yet supported.
+   * Consumers must use Buildooor (TX_BUILDERS=buildooor) for reference input support.
+   */
+  private _rejectReferenceInputs(ctx: TxBuildContext): void {
+    if (ctx.referenceInputUtxos && ctx.referenceInputUtxos.length > 0) {
+      throw new TransactionValidationError(
+        'CIP-31 reference inputs (referenceInputsJson) require the Buildooor transaction builder. Set TX_BUILDERS=buildooor to use reference inputs.'
+      );
+    }
   }
 }

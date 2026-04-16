@@ -171,15 +171,19 @@ export class CardanoTransactionBuilder {
         // Prepare the transaction build context
         const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
         const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
+        // Resolve CIP-31 reference inputs (read-only, not consumed — kept separate from coin-selection set)
+        const referenceInputUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], senderUtxos);
+
         const txContext: TxBuildContext = {
             utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters,
             // Pass evaluator if Ogmios is available for dynamic execution unit calculation
             evaluateTransaction: cardanoClient.hasOgmiosBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
-                : undefined
+                : undefined,
+            referenceInputUtxos: referenceInputUtxos.length > 0 ? referenceInputUtxos : undefined
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced)`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${forcedUtxos.length} forced, ${referenceInputUtxos.length} reference inputs)`);
 
         if (txContext.evaluateTransaction) {
             logger.debug(`Ogmios available - will use dynamic script evaluation`);
@@ -248,14 +252,18 @@ export class CardanoTransactionBuilder {
         const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], allUtxos);
         const mergedUtxos = mergeUtxosUnique(allUtxos, forcedUtxos);
 
+        // Resolve CIP-31 reference inputs (read-only, not consumed — kept separate from coin-selection set)
+        const referenceInputUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], allUtxos);
+
         const txContext: TxBuildContext = {
             utxos: mergedUtxos,
             protocolParameters: protocolParameters,
             evaluateTransaction: cardanoClient.hasOgmiosBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
-                : undefined
+                : undefined,
+            referenceInputUtxos: referenceInputUtxos.length > 0 ? referenceInputUtxos : undefined
         };
-        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script + ${forcedUtxos.length} forced)`);
+        logger.debug(`Prepared build context: ${txContext.utxos.length} UTxOs for coin selection (${senderUtxos.length} sender + ${allUtxos.length - senderUtxos.length} script + ${forcedUtxos.length} forced + ${referenceInputUtxos.length} ref inputs)`);
 
         if (txContext.evaluateTransaction) {
             logger.debug(`Ogmios available - will use dynamic script evaluation`);
@@ -315,6 +323,56 @@ export class CardanoTransactionBuilder {
             if (!output) {
                 throw new TransactionValidationError(
                     `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
+                );
+            }
+            resolved.push({
+                txHash: ref.txHash,
+                outputIndex: ref.outputIndex,
+                address: output.address,
+                amount: output.amount,
+                inlineDatum: output.inlineDatum,
+            });
+        }
+        return resolved;
+    }
+
+    /**
+     * Resolve CIP-31 reference input refs to full UTxO records.
+     * Same resolution logic as _resolveForceInputs but with distinct error messages.
+     * Reference inputs are read-only — they are NOT merged into the coin-selection set.
+     */
+    private async _resolveReferenceInputs(
+        refs: Array<{ txHash: string; outputIndex: number }>,
+        knownUtxos: UTxO[]
+    ): Promise<UTxO[]> {
+        if (!refs || refs.length === 0) return [];
+        const seen = new Set<string>();
+        const dedupedRefs = refs.filter(r => {
+            const key = `${r.txHash}#${r.outputIndex}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        const resolved: UTxO[] = [];
+        for (const ref of dedupedRefs) {
+            const local = knownUtxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
+            if (local) {
+                resolved.push(local);
+                continue;
+            }
+            let tx;
+            try {
+                tx = await this.client.getTransaction(ref.txHash);
+            } catch (err: any) {
+                throw new TransactionValidationError(
+                    `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
+                    err
+                );
+            }
+            const output = tx?.outputs?.find(o => o.outputIndex === ref.outputIndex);
+            if (!output) {
+                throw new TransactionValidationError(
+                    `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
                 );
             }
             resolved.push({

@@ -193,12 +193,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         return mints;
       };
 
+      // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
+      const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
+
       // Evaluate execution units
       const finalExUnits = await this._evaluateExUnits(
         async () => {
           const evalTx = await this.txBuilder.build({
             inputs, outputs, changeAddress, mints: buildMints(HIGH_EXECUTION_UNITS),
-            collaterals: collateralUtxos, requiredSigners: req.requiredSigners
+            collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
+            ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
           });
           return toHex(evalTx.toCbor().toBuffer());
         },
@@ -209,11 +213,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const mints = buildMints(finalExUnits);
       const tx = await this._buildWithWitnessBuffer({
         inputs, outputs, changeAddress, mints,
-        collaterals: collateralUtxos, requiredSigners: req.requiredSigners
+        collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
+        ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
       });
 
       logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
-      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length });
+      return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length, referenceInputsUsed: readonlyRefInputs.length });
     } catch (err: any) {
       mapBuilderError(err);
     }
@@ -355,13 +360,17 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         return [scriptInput, ...forcedInputs, ...selectedFundingInputs];
       };
 
+      // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
+      const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
+
       // Evaluate execution units
       const finalExUnits = await this._evaluateExUnits(
         async () => {
           const evalTx = await this.txBuilder.build({
             inputs: buildInputs(HIGH_EXECUTION_UNITS), outputs, changeAddress,
             mints: buildMints?.(HIGH_EXECUTION_UNITS),
-            collaterals: collateralUtxos, requiredSigners: req.requiredSigners
+            collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
+            ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
           });
           if (!evalTx) {
             throw new Error('Buildooor txBuilder.build() returned null — check inputs, datum, and collateral configuration');
@@ -377,14 +386,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const tx = await this._buildWithWitnessBuffer({
         inputs, outputs, changeAddress,
         mints,
-        collaterals: collateralUtxos, requiredSigners: req.requiredSigners
+        collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
+        ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
       });
 
       logger.debug(`Built unsigned Plutus spending transaction successfully with fee: ${tx.body.fee.toString()}`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), {
         scriptHash: script.hash.toString(),
         mintScriptHash,
-        forcedInputsUsed: forcedInputs.length
+        forcedInputsUsed: forcedInputs.length,
+        referenceInputsUsed: readonlyRefInputs.length
       });
     } catch (err: any) {
       mapBuilderError(err);
@@ -423,7 +434,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private _buildResult(
     req: TxBuildRequest, ctx: TxBuildContext,
     txDetails: ReturnType<BuildooorTxBuilder['_extractTxDetails']>,
-    extra?: { scriptHash?: string; mintScriptHash?: string; forcedInputsUsed?: number }
+    extra?: { scriptHash?: string; mintScriptHash?: string; forcedInputsUsed?: number; referenceInputsUsed?: number }
   ): TxBuildResult {
     // Map actual tx inputs (from built CBOR) back to context UTxOs for lovelace amounts
     const inputs = txDetails.inputRefs.map(ref => {
@@ -513,6 +524,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       else rest.push(u);
     }
     return { forced, rest };
+  }
+
+  /**
+   * Map resolved CIP-31 reference input UTxOs to Buildooor LedgerUTxO format.
+   * Returns empty array when no reference inputs are provided.
+   */
+  private _mapReferenceInputs(referenceInputUtxos?: OdatanoUtxo[]): LedgerUTxO[] {
+    if (!referenceInputUtxos || referenceInputUtxos.length === 0) return [];
+    return referenceInputUtxos.map(u => this._mapMultiAssetUtxoToLedgerUtxo(u));
   }
 
   /**

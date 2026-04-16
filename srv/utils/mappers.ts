@@ -657,6 +657,7 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
     scriptHash: txbuildResult.scriptHash ?? null,
     mintScriptHash: txbuildResult.mintScriptHash ?? null,
     forcedInputsUsed: txbuildResult.forcedInputsUsed ?? 0,
+    referenceInputsUsed: txbuildResult.referenceInputsUsed ?? 0,
   }
 }
 
