@@ -334,8 +334,8 @@ cds.on('served', async () => {
     appContext = await initializeAppContext(config, undefined, hsmConfig);
     logger.info('CAP server bootstrap complete');
   } catch (err) {
+    // Don't throw - initialization failure shouldn't crash the host app (plugin contract)
     logger.error('Failed to initialize blockchain components:', err);
-    throw err;
   }
 });
 
