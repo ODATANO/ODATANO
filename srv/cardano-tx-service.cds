@@ -91,7 +91,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      assetsJson: String,
                                      @title: 'Force Inputs JSON'
                                      @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
-                                     forceInputsJson: String)  returns TransactionBuilds;
+                                     forceInputsJson: String,
+                                     @title: 'Validator Script'
+                                     @description: 'Optional Plutus validator CBOR hex. Required when lockOnScript=true. Used only to derive the target script address — the script itself is not attached to the transaction.'
+                                     validatorScript: String,
+                                     @title: 'Script Parameters JSON'
+                                     @description: 'Optional JSON array of PlutusData parameters to apply to validatorScript before deriving the script address. For parameterized validators.'
+                                     scriptParamsJson: String,
+                                     @title: 'Lock on Script Address'
+                                     @description: 'When true, validatorScript is required. Derives the enterprise script address from the (optionally param-applied) script and routes the output there instead of recipientAddress. Returns scriptAddress and scriptHash in the response.'
+                                     lockOnScript: Boolean)  returns TransactionBuilds;
 
     @title      : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -277,6 +286,31 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                          @title: 'Bech32 Address'
                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
                                          address: Bech32)   returns array of AddressTransactionBuilds;
+
+    @title      : 'Derive Script Address'
+    @description: 'Utility: Apply optional PlutusData parameters to a validator script and return its enterprise script address (bech32) and script hash (28-byte hex). Pure derivation, no transaction built, no blockchain call.'
+    action DeriveScriptAddress(
+                               @title: 'Validator Script'
+                               @description: 'The Plutus validator script in CBOR hex format'
+                               validatorScript: String,
+                               @title: 'Script Parameters JSON'
+                               @description: 'Optional JSON array of PlutusData parameters to apply to the script before hashing. For parameterized validators.'
+                               scriptParamsJson: String,
+                               @title: 'Network'
+                               @description: 'Optional network override (mainnet, preview, preprod). Defaults to the configured network.'
+                               network: String(10))           returns {
+                                   scriptAddress: String(120);
+                                   scriptHash: String(56);
+                               };
+
+    @title      : 'Extract Payment Key Hash'
+    @description: 'Utility: Decode a Bech32 Cardano address and return its 28-byte payment credential hash (hex). Pure bech32 decoding — no blockchain call. Use to obtain the key hash for requiredSignersJson on Plutus actions.'
+    action ExtractPaymentKeyHash(
+                                 @title: 'Address'
+                                 @description: 'The Bech32 encoded Cardano address (addr / addr_test)'
+                                 address: Bech32)              returns {
+                                     paymentKeyHash: String(56);
+                                 };
 
 }
 

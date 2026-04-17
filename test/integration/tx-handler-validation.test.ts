@@ -1345,4 +1345,129 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect([400, 500]).toContain(status);
     });
   });
+
+  // ==========================================================================
+  // BuildSimpleAdaTransaction — lockOnScript Validations (FR-A)
+  // ==========================================================================
+
+  describe('BuildSimpleAdaTransaction lockOnScript validations', () => {
+    const baseBody = {
+      senderAddress: TEST_FIXTURES.addressWithFunds,
+      recipientAddress: TEST_FIXTURES.emptyAddress,
+      lovelaceAmount: '2000000',
+      changeAddress: TEST_FIXTURES.addressWithFunds,
+    };
+
+    it('rejects lockOnScript=true without validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        lockOnScript: true,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects scriptParamsJson that is not a JSON array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        lockOnScript: true,
+        scriptParamsJson: JSON.stringify({ x: 1 }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects malformed validatorScript hex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        validatorScript: 'zzz',
+        lockOnScript: true,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // DeriveScriptAddress Validations (FR-B)
+  // ==========================================================================
+
+  describe('DeriveScriptAddress validations', () => {
+    it('rejects missing validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {})
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects non-hex validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: 'not_hex',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects odd-length hex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: 'abc',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects unknown network', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        network: 'testnet',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects non-array scriptParamsJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        scriptParamsJson: JSON.stringify({ x: 1 }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('accepts valid input and returns scriptAddress/scriptHash', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+      expect(data.scriptHash).toMatch(/^[0-9a-f]{56}$/);
+      expect(typeof data.scriptAddress).toBe('string');
+    });
+  });
+
+  // ==========================================================================
+  // ExtractPaymentKeyHash Validations (FR-C)
+  // ==========================================================================
+
+  describe('ExtractPaymentKeyHash validations', () => {
+    it('rejects missing address', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {})
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects invalid bech32', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: 'not-an-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects stake address (validator rejects non-payment bech32)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: TEST_FIXTURES.validStakeAddress,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('accepts a valid payment address and returns 56-char hex', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: TEST_FIXTURES.addressWithFunds,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+      expect(data.paymentKeyHash).toMatch(/^[0-9a-f]{56}$/);
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import cds, { Request } from '@sap/cds';
+import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit } from './utils/validators';
@@ -6,8 +7,11 @@ import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/t
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
-import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX } from './utils/const';
+import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX, BECH32_MAX_LENGTH } from './utils/const';
 import type { JSONValue } from './utils/types';
+
+const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
+type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
@@ -170,7 +174,7 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
@@ -207,11 +211,61 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.assetsJson;
     }
 
+    // parse optional scriptParamsJson (for parameterized validators)
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
+      if (!Array.isArray(scriptParams)) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+    }
+
+    // lockOnScript requires a validatorScript to derive the target address from
+    if (lockOnScript && !validatorScript) {
+      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'lockOnScript requires validatorScript to derive the script address', 'validatorScript');
+    }
+
+    // Pre-compute script hash + address when lockOnScript is set; override recipient before build.
+    let derivedScriptHash: string | undefined;
+    let derivedScriptAddress: string | undefined;
+    if (lockOnScript && validatorScript) {
+      try {
+        const finalScript = scriptParams && scriptParams.length > 0
+          ? applyScriptParameters(validatorScript, scriptParams)
+          : validatorScript;
+        derivedScriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+        derivedScriptAddress = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
+      } catch (err: any) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', `Failed to derive script address: ${err.message}`, 'validatorScript');
+      }
+      cleanData.recipientAddress = derivedScriptAddress;
+    }
+
+    delete cleanData.validatorScript;
+    delete cleanData.scriptParamsJson;
+    delete cleanData.lockOnScript;
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.debug({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
+      logger.debug({ senderAddress, recipientAddress: cleanData.recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson, lockOnScript: !!lockOnScript }, 'Building simple ADA transaction');
 
-      return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
+      const buildResult = await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
+
+      // Persist derived script address + hash on the build record when lockOnScript was applied
+      if (lockOnScript && derivedScriptHash && derivedScriptAddress && buildResult.id) {
+        buildResult.scriptHash = derivedScriptHash;
+        buildResult.scriptAddress = derivedScriptAddress;
+        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
+        await db.run(
+          UPDATE.entity(TransactionBuilds)
+            .set({ scriptHash: derivedScriptHash, scriptAddress: derivedScriptAddress })
+            .where({ id: buildResult.id })
+        );
+      }
+
+      return buildResult;
     });
   });
   /**
@@ -900,6 +954,76 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
     });
+  });
+
+  /**
+   * Derive the enterprise script address + script hash for a validator script,
+   * optionally after applying PlutusData parameters. No transaction is built.
+   */
+  srv.on('DeriveScriptAddress', async (req: Request) => {
+    const { validatorScript, scriptParamsJson, network } = req.data;
+
+    if (!validatorScript) return rejectMissing(req, 'DeriveScriptAddress', 'validatorScript');
+    if (typeof validatorScript !== 'string' || !/^[0-9a-fA-F]+$/.test(validatorScript) || validatorScript.length % 2 !== 0) {
+      return rejectInvalid(req, 'DeriveScriptAddress', 'validatorScript must be an even-length hex string', 'validatorScript');
+    }
+
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'DeriveScriptAddress', jsonResult.error!, 'scriptParamsJson');
+      if (!Array.isArray(jsonResult.parsed)) {
+        return rejectInvalid(req, 'DeriveScriptAddress', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+      scriptParams = jsonResult.parsed as any[];
+    }
+
+    let targetNetwork: DeriveNetwork;
+    if (network) {
+      if (!VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
+        return rejectInvalid(req, 'DeriveScriptAddress', `Invalid network "${network}". Must be one of: ${VALID_DERIVE_NETWORKS.join(', ')}`, 'network');
+      }
+      targetNetwork = network as DeriveNetwork;
+    } else {
+      targetNetwork = getCardanoClient().network as DeriveNetwork;
+    }
+
+    try {
+      const finalScript = scriptParams && scriptParams.length > 0
+        ? applyScriptParameters(validatorScript, scriptParams)
+        : validatorScript;
+      const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+      const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
+      return { scriptAddress, scriptHash };
+    } catch (err: any) {
+      return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${err.message}`, 'validatorScript');
+    }
+  });
+
+  /**
+   * Extract the 28-byte payment credential (key hash or script hash) from a Bech32
+   * Cardano address. Pure local decoding — no blockchain call.
+   */
+  srv.on('ExtractPaymentKeyHash', async (req: Request) => {
+    const { address } = req.data;
+
+    if (!address) return rejectMissing(req, 'ExtractPaymentKeyHash', 'address');
+    if (!isValidBech32Address(address)) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Invalid bech32 address format', 'address');
+    }
+
+    try {
+      const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
+      const bytes = Buffer.from(bech32.fromWords(decoded.words));
+      // Cardano address: 1 header byte + 28-byte payment credential + (optional 28-byte stake credential)
+      if (bytes.length < 29) {
+        return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address is too short to contain a payment credential', 'address');
+      }
+      const paymentKeyHash = bytes.slice(1, 29).toString('hex');
+      return { paymentKeyHash };
+    } catch (err: any) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${err.message}`, 'address');
+    }
   });
 
 };

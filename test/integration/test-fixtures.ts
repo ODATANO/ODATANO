@@ -481,6 +481,28 @@ export const extraOutputBelowMinAda = {
 };
 
 // ---------------------------------------------------------------------------
+// Fixtures — lockOnScript / DeriveScriptAddress / ExtractPaymentKeyHash
+// ---------------------------------------------------------------------------
+
+/** PlutusData JSON array used as params for script parameter application. */
+export const validScriptParamsJson = JSON.stringify([{ int: 42 }]);
+
+/** A different param set — used to assert that different params ⇒ different address. */
+export const altScriptParamsJson = JSON.stringify([{ int: 99 }]);
+
+/** BuildSimpleAdaTransaction body extended with lockOnScript. */
+export const simpleLockOnScriptRequestBody = {
+  ...simpleRequestBody,
+  validatorScript: TEST_FIXTURES.validPlutusScript,
+  lockOnScript: true,
+};
+
+export const simpleLockOnScriptWithParamsRequestBody = {
+  ...simpleLockOnScriptRequestBody,
+  scriptParamsJson: validScriptParamsJson,
+};
+
+// ---------------------------------------------------------------------------
 // FR-1 Fixtures — combined spend+mint on BuildPlutusSpendTransaction
 // ---------------------------------------------------------------------------
 
