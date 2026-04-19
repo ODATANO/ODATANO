@@ -176,10 +176,12 @@ describe('Error Path Tests', () => {
       setupBlockfrostHealth();
       setupKoiosTip();
 
-      // Blockfrost fails repeatedly
+      // Blockfrost fails on every HTTP attempt. Use .persist() because got (inside
+      // blockfrost-js) retries 5xx internally — a single backend-level call may
+      // consume multiple HTTP requests, so nock .times(N) counting is unreliable.
       nock(BLOCKFROST_BASE)
+        .persist()
         .get('/api/v0/network')
-        .times(3)
         .reply(500, { error: 'Internal error' });
 
       // Koios succeeds every time
@@ -193,18 +195,29 @@ describe('Error Path Tests', () => {
         }]);
 
       const client = new CardanoClient(config);
+      // Spy on the blockfrost backend after init so we can count how many times the
+      // circuit breaker actually let the request through (independent of HTTP retries).
+      // Only ogmios is a live backend; blockfrost + koios live in historicalBackends.
+      const blockfrostBackend = (client as any).historicalBackends.find(
+        (b: any) => b.name === 'blockfrost'
+      );
+      expect(blockfrostBackend?.name).toBe('blockfrost');
+      const blockfrostSpy = jest.spyOn(blockfrostBackend, 'getNetworkInformation');
 
       // First two calls: blockfrost fails, koios succeeds (circuit records 2 failures → opens)
       await client.getNetworkInformation();
       await client.getNetworkInformation();
 
-      // Third call: blockfrost circuit is open, should skip directly to koios
-      // The 3rd blockfrost nock should NOT be consumed
+      // Third call: blockfrost circuit is open → must be skipped at the CardanoClient
+      // layer before hitting the backend.
       const result = await client.getNetworkInformation();
       expect(result).toBeDefined();
 
-      // Verify blockfrost was only called twice (circuit opened after 2 failures)
-      expect(nock.pendingMocks().some(m => m.includes('blockfrost'))).toBe(true);
+      // Blockfrost backend.getNetworkInformation was invoked twice (not three times).
+      expect(blockfrostSpy).toHaveBeenCalledTimes(2);
+
+      // Clean up the persisted mock so it doesn't leak into the next test.
+      nock.cleanAll();
     });
 
     it('should not open circuit on 404 errors', async () => {

@@ -354,7 +354,26 @@ export type TxBuildRequest = {
     lovelaceAmount: string;
     assets?: Array<{ unit: string; quantity: string }>;
     inlineDatum?: JSONValue;
+    referenceScript?: string;
   }>;
+  /**
+   * Optional Plutus V3 validator CBOR hex to attach as a referenceScript on the primary
+   * recipient output (CIP-33). Adding a ref script significantly increases the output's
+   * min-ADA — consumers must provide enough lovelaceAmount to cover it.
+   */
+  referenceScript?: string;
+  /**
+   * Optional validity-interval start in Posix milliseconds. Sets `invalidBefore`
+   * on the built transaction so that Plutus validators checking
+   * `expect Finite(lower) = tx.validity_range.lower_bound.bound_type` see a finite bound.
+   * Defaults inside the builder to `Date.now() - 120_000` (script builds only).
+   */
+  validityStartMs?: string;
+  /**
+   * Optional validity-interval end in Posix milliseconds. Sets `invalidAfter` (ledger TTL).
+   * Defaults inside the builder to `Date.now() + 3_600_000` (script builds only).
+   */
+  validityEndMs?: string;
 };
 
 /**

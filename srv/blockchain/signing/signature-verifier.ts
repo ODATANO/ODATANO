@@ -1,7 +1,5 @@
 import cds from '@sap/cds';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { Tx } from '@harmoniclabs/cardano-ledger-ts';
-import { fromHex } from '@harmoniclabs/uint8array-utils';
 import { BackendError, TransactionValidationError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { SignatureVerificationResult, VerificationOptions } from '../../utils/types';
@@ -36,16 +34,19 @@ export class SignatureVerifier {
     };
 
     try {
-      // Parse the signed transaction CBOR using harmoniclabs.
-      const txBytesHarmonic = fromHex(signedTxCbor);
-      const txHarmonic = Tx.fromCbor(txBytesHarmonic);
-      const computedHash = txHarmonic.hash.toString();
+      // Compute the body hash via CSL.FixedTransaction, which preserves the
+      // original CBOR bytes and avoids re-serialization. This path is immune
+      // to the @harmoniclabs/cardano-ledger-ts@0.5.x AuxiliaryData.fromCbor bug
+      // that rejects metadata-only Conway aux_data (all four script-array fields
+      // are required non-optional even though the constructor handles undefined).
+      const txBytes = Buffer.from(signedTxCbor, 'hex');
+      const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
+      const computedHash = Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
       result.txBodyHash = computedHash;
 
-      logger.debug(`Computed transaction body hash (harmoniclabs): ${computedHash}`);
+      logger.debug(`Computed transaction body hash (CSL FixedTransaction): ${computedHash}`);
 
-      // Also parse with CSL for witness extraction and Ed25519 verification
-      const txBytes = Buffer.from(signedTxCbor, 'hex');
+      // Parse with CSL.Transaction for witness extraction and Ed25519 verification.
       const tx = CSL.Transaction.from_bytes(txBytes);
 
       // verify transaction body hash matches expected
@@ -163,9 +164,9 @@ export class SignatureVerifier {
    */
   public extractTxBodyHash(txCbor: string): string {
     try {
-      const txBytes = fromHex(txCbor);
-      const tx = Tx.fromCbor(txBytes);
-      return tx.hash.toString();
+      const txBytes = Buffer.from(txCbor, 'hex');
+      const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
+      return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
     } catch (error: any) {
       throw new BackendError(
         `Failed to extract transaction body hash: ${error.message}`,

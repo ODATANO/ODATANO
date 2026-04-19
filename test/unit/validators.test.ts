@@ -1065,5 +1065,58 @@ describe('Validator Helper Methods and Type Guards', () => {
         });
       });
     });
+
+    describe('validity bounds (validityStartMs / validityEndMs)', () => {
+      it('should accept valid numeric Posix-ms strings', () => {
+        const errors = validateTransactionInputs(
+          { validityStartMs: '1700000000000', validityEndMs: '1700003600000' },
+          []
+        );
+        expect(errors).toEqual([]);
+      });
+
+      it('should accept a single bound being set', () => {
+        const errors = validateTransactionInputs({ validityEndMs: '1700003600000' }, []);
+        expect(errors).toEqual([]);
+      });
+
+      it('should reject non-numeric validityStartMs', () => {
+        const errors = validateTransactionInputs({ validityStartMs: 'abc' }, []);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('validityStartMs');
+        expect(errors[0].type).toBe('invalid');
+      });
+
+      it('should reject negative-sign validityEndMs', () => {
+        const errors = validateTransactionInputs({ validityEndMs: '-1' }, []);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('validityEndMs');
+      });
+
+      it('should reject validityStartMs exceeding 13 digits', () => {
+        const errors = validateTransactionInputs({ validityStartMs: '17000000000000000' }, []);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('validityStartMs');
+      });
+
+      it('should reject when validityStartMs >= validityEndMs', () => {
+        const errors = validateTransactionInputs(
+          { validityStartMs: '1700000000000', validityEndMs: '1700000000000' },
+          []
+        );
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('validityEndMs');
+        expect(errors[0].message).toContain('greater than');
+      });
+
+      it('should not compare start/end when either is invalid (format error wins)', () => {
+        const errors = validateTransactionInputs(
+          { validityStartMs: 'bad', validityEndMs: '1' },
+          []
+        );
+        expect(errors).toHaveLength(1);
+        expect(errors[0].field).toBe('validityStartMs');
+      });
+    });
   });
 });

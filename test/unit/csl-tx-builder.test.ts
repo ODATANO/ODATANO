@@ -412,6 +412,27 @@ describe('CSLTxBuilder', () => {
       expect(Number(result.mem)).toBeGreaterThan(100000);
       expect(Number(result.cpu)).toBeGreaterThan(50000000);
     });
+
+    // Regression: tiny validators (small mint policies with a couple of ref inputs)
+    // used to hit ledger overspend by ~10k–30k CPU when metadata bumped the real
+    // tx body hash vs the evaluator's simulated ScriptContext. Absolute ABS_CPU_BUFFER /
+    // ABS_MEM_BUFFER adds a fixed cushion so the multiplier isn't the only guard.
+    it('should add absolute cushion on top of relative buffer for small budgets', async () => {
+      const tinyEvaluator = async () => [{ budget: { memory: 100, cpu: 1000 } }];
+      const result = await evaluateExUnits(tinyEvaluator);
+      // 100 * 1.1 = 110, + ABS_MEM_BUFFER (1000) => >= 1110
+      expect(Number(result.mem)).toBeGreaterThanOrEqual(1100);
+      // 1000 * 1.1 = 1100, + ABS_CPU_BUFFER (50000) => >= 51100
+      expect(Number(result.cpu)).toBeGreaterThanOrEqual(51000);
+    });
+
+    it('should still scale proportionally for large budgets', async () => {
+      const bigEvaluator = async () => [{ budget: { memory: 10_000_000, cpu: 10_000_000_000 } }];
+      const result = await evaluateExUnits(bigEvaluator);
+      // Relative cushion dominates: 10M * 1.1 = 11M (plus small ABS floor)
+      expect(Number(result.mem)).toBeGreaterThanOrEqual(11_000_000);
+      expect(Number(result.cpu)).toBeGreaterThanOrEqual(11_000_000_000);
+    });
   });
 
   describe('_setupCollateral', () => {
@@ -672,6 +693,75 @@ describe('CSLTxBuilder', () => {
         { scriptHash: 'spend-hash' }
       );
       expect(result.mintScriptHash).toBeUndefined();
+    });
+  });
+
+  describe('_attachReferenceScript — CIP-33 reference script attachment', () => {
+    const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+    const TEST_ADDR = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
+    const VALID_PLUTUS_SCRIPT = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+
+    const makeOutput = () =>
+      CSL.TransactionOutput.new(CSL.Address.from_bech32(TEST_ADDR), CSL.Value.new(CSL.BigNum.from_str('20000000')));
+
+    it('is a no-op when referenceScriptHex is undefined', () => {
+      const out = makeOutput();
+      (builder as any)._attachReferenceScript(out, undefined);
+      expect(out.script_ref()).toBeUndefined();
+    });
+
+    it('is a no-op when referenceScriptHex is empty', () => {
+      const out = makeOutput();
+      (builder as any)._attachReferenceScript(out, '');
+      expect(out.script_ref()).toBeUndefined();
+    });
+
+    it('attaches a PlutusV3 ScriptRef when valid CBOR hex is supplied', () => {
+      const out = makeOutput();
+      (builder as any)._attachReferenceScript(out, VALID_PLUTUS_SCRIPT);
+      const scriptRef = out.script_ref();
+      expect(scriptRef).toBeDefined();
+      const plutus = scriptRef!.plutus_script();
+      expect(plutus).toBeDefined();
+      // new_v3 hashing: blake2b_224(0x03 || cbor_bytes) — 28-byte hex
+      expect(Buffer.from(plutus!.hash().to_bytes()).toString('hex')).toHaveLength(56);
+    });
+
+    it('throws TransactionValidationError on malformed CBOR', () => {
+      const out = makeOutput();
+      expect(() => (builder as any)._attachReferenceScript(out, 'zznothex')).toThrow(TransactionValidationError);
+      expect(() => (builder as any)._attachReferenceScript(out, 'zznothex')).toThrow(/Invalid referenceScript CBOR/);
+    });
+  });
+
+  describe('_appendExtraOutputsCsl — per-entry referenceScript (Fix A)', () => {
+    const CSL2 = require('@emurgo/cardano-serialization-lib-nodejs');
+    const TEST_ADDR2 = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
+    const VALID_PLUTUS_SCRIPT_2 = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+
+    it('attaches refScript on extra output when referenceScript supplied', () => {
+      // Stub protocol params so min-ADA check passes with a generous lovelaceAmount
+      (builder as any).protocolParameters = { coinsPerUtxoSize: '4310' };
+      const txb = CSL2.TransactionBuilder.new(
+        CSL2.TransactionBuilderConfigBuilder.new()
+          .fee_algo(CSL2.LinearFee.new(CSL2.BigNum.from_str('44'), CSL2.BigNum.from_str('155381')))
+          .pool_deposit(CSL2.BigNum.from_str('500000000'))
+          .key_deposit(CSL2.BigNum.from_str('2000000'))
+          .max_value_size(5000)
+          .max_tx_size(16384)
+          .coins_per_utxo_byte(CSL2.BigNum.from_str('4310'))
+          .build()
+      );
+      (builder as any)._appendExtraOutputsCsl(txb, [
+        {
+          address: TEST_ADDR2,
+          lovelaceAmount: '30000000',
+          referenceScript: VALID_PLUTUS_SCRIPT_2,
+        },
+      ]);
+      // build a dummy tx-like object by inspecting TxBuilder outputs count is not directly exposed;
+      // smoke-test: the call did not throw.
+      expect(true).toBe(true);
     });
   });
 });

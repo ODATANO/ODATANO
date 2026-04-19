@@ -595,4 +595,204 @@ describe('BuildooorTxBuilder', () => {
       expect(result.mintScriptHash).toBeUndefined();
     });
   });
+
+  // =========================================================================
+  // _parseReferenceScript — CIP-33 reference script attachment
+  // =========================================================================
+
+  describe('_parseReferenceScript', () => {
+    const parseRefScript = (hex: string | undefined) => (builder as any)._parseReferenceScript(hex);
+
+    it('returns undefined when hex is missing', () => {
+      expect(parseRefScript(undefined)).toBeUndefined();
+      expect(parseRefScript('')).toBeUndefined();
+    });
+
+    it('parses a valid PlutusV3 CBOR hex into a Script', () => {
+      const script = parseRefScript(VALID_PLUTUS_SCRIPT);
+      expect(script).toBeDefined();
+      expect(typeof script.hash.toString()).toBe('string');
+      expect(script.hash.toString()).toHaveLength(56);
+    });
+
+    it('throws TransactionValidationError on malformed CBOR', () => {
+      expect(() => parseRefScript('zznothex')).toThrow(TransactionValidationError);
+      expect(() => parseRefScript('zznothex')).toThrow(/Invalid referenceScript CBOR/);
+    });
+  });
+
+  describe('_buildTxOut — refScript parameter', () => {
+    it('constructs TxOut without refScript when not supplied', () => {
+      const { Address, Value } = require('@harmoniclabs/cardano-ledger-ts');
+      const addr = Address.fromString(TEST_ADDRESS);
+      const out = (builder as any)._buildTxOut(addr, Value.lovelaces(2000000n));
+      expect(out).toBeDefined();
+      expect(out.refScript).toBeUndefined();
+    });
+
+    it('attaches refScript when Script is supplied', () => {
+      const { Address, Value } = require('@harmoniclabs/cardano-ledger-ts');
+      const addr = Address.fromString(TEST_ADDRESS);
+      const script = (builder as any)._parseReferenceScript(VALID_PLUTUS_SCRIPT);
+      const out = (builder as any)._buildTxOut(addr, Value.lovelaces(20000000n), undefined, script);
+      expect(out.refScript).toBeDefined();
+      expect(out.refScript.hash.toString()).toBe(script.hash.toString());
+    });
+  });
+
+  // =========================================================================
+  // _buildInputRefScript — input-side refScript preservation (Fix C)
+  // =========================================================================
+
+  describe('_buildInputRefScript', () => {
+    const buildInputRefScript = (utxo: any) => (builder as any)._buildInputRefScript(utxo);
+    const makeUtxo = (scriptRef: string | null | undefined): any => ({
+      txHash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83',
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '2000000' }],
+      scriptRef,
+    });
+
+    it('returns undefined when scriptRef is absent', () => {
+      expect(buildInputRefScript(makeUtxo(undefined))).toBeUndefined();
+      expect(buildInputRefScript(makeUtxo(null))).toBeUndefined();
+    });
+
+    it('returns undefined for hash-only scriptRef (56 hex chars) — Blockfrost/Ogmios case', () => {
+      const hashOnly = 'a'.repeat(56);
+      expect(buildInputRefScript(makeUtxo(hashOnly))).toBeUndefined();
+    });
+
+    it('parses full-bytes scriptRef into a Script — Koios case', () => {
+      const script = buildInputRefScript(makeUtxo(VALID_PLUTUS_SCRIPT));
+      expect(script).toBeDefined();
+      expect(script.hash.toString()).toHaveLength(56);
+    });
+
+    it('returns undefined (no throw) on malformed scriptRef', () => {
+      const malformed = 'zz' + VALID_PLUTUS_SCRIPT.slice(2);
+      expect(() => buildInputRefScript(makeUtxo(malformed))).not.toThrow();
+      expect(buildInputRefScript(makeUtxo(malformed))).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // _appendExtraOutputs — per-entry refScript (Fix A)
+  // =========================================================================
+
+  describe('_appendExtraOutputs — per-entry referenceScript', () => {
+    it('attaches refScript to extra outputs that supply referenceScript', () => {
+      // Stub txBuilder.getMinimumOutputLovelaces — bypass real protocol-params dependency
+      (builder as any).txBuilder = { getMinimumOutputLovelaces: () => 0n };
+      const outs: any[] = [];
+      (builder as any)._appendExtraOutputs(outs, [
+        {
+          address: TEST_ADDRESS,
+          lovelaceAmount: '20000000',
+          referenceScript: VALID_PLUTUS_SCRIPT,
+        },
+      ]);
+      expect(outs).toHaveLength(1);
+      expect(outs[0].refScript).toBeDefined();
+      expect(outs[0].refScript.hash.toString()).toHaveLength(56);
+    });
+
+    it('emits plain extra outputs (no refScript) when referenceScript is omitted', () => {
+      (builder as any).txBuilder = { getMinimumOutputLovelaces: () => 0n };
+      const outs: any[] = [];
+      (builder as any)._appendExtraOutputs(outs, [
+        { address: TEST_ADDRESS, lovelaceAmount: '2000000' },
+      ]);
+      expect(outs).toHaveLength(1);
+      expect(outs[0].refScript).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // _resolveValiditySlots — validity window resolution
+  // =========================================================================
+
+  describe('_resolveValiditySlots', () => {
+    // Use preview preset: systemStartPosixMs 1666656000000, slotLengthMs 1000, startSlotNo 0.
+    // posixToSlot(ms) = floor((ms - systemStart) / slotLength) + startSlotNo.
+    const PREVIEW_SYSTEM_START_MS = 1666656000000;
+    const fakePosixToSlot = (ms: number) => Math.floor((ms - PREVIEW_SYSTEM_START_MS) / 1000);
+
+    const resolve = (req: any, mode: 'script' | 'passthrough') =>
+      (builder as any)._resolveValiditySlots(req, mode);
+
+    beforeEach(() => {
+      (builder as any).txBuilder = { posixToSlot: fakePosixToSlot };
+    });
+
+    it('returns converted slots when both validity bounds are explicit (script mode)', () => {
+      const startMs = 1700000000000;
+      const endMs = 1700003600000;
+      const { invalidBefore, invalidAfter } = resolve({ validityStartMs: String(startMs), validityEndMs: String(endMs) }, 'script');
+
+      expect(invalidBefore).toBe(BigInt(fakePosixToSlot(startMs)));
+      expect(invalidAfter).toBe(BigInt(fakePosixToSlot(endMs)));
+      expect(invalidAfter! > invalidBefore!).toBe(true);
+    });
+
+    it('falls back to now-2min / now+1h defaults when bounds are absent (script mode)', () => {
+      const frozen = 1700000000000;
+      const spy = jest.spyOn(Date, 'now').mockReturnValue(frozen);
+      try {
+        const { invalidBefore, invalidAfter } = resolve({}, 'script');
+        expect(invalidBefore).toBe(BigInt(fakePosixToSlot(frozen - 120_000)));
+        expect(invalidAfter).toBe(BigInt(fakePosixToSlot(frozen + 3_600_000)));
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('returns empty object in passthrough mode when no bounds are provided', () => {
+      const result = resolve({}, 'passthrough');
+      expect(result).toEqual({});
+    });
+
+    it('applies bounds in passthrough mode only when explicitly set', () => {
+      const { invalidBefore, invalidAfter } = resolve({ validityStartMs: '1700000000000', validityEndMs: '1700003600000' }, 'passthrough');
+      expect(invalidBefore).toBeDefined();
+      expect(invalidAfter).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // _evaluateExUnits — relative multiplier + absolute cushion
+  // =========================================================================
+
+  describe('_evaluateExUnits', () => {
+    const evaluateExUnits = async (evaluator?: any) => {
+      const buildEvalTx = async () => 'deadbeef';
+      return (builder as any)._evaluateExUnits(buildEvalTx, evaluator);
+    };
+
+    it('returns defaults when no evaluator is provided', async () => {
+      const result = await evaluateExUnits(undefined);
+      expect(typeof result.mem).toBe('number');
+      expect(typeof result.cpu).toBe('number');
+    });
+
+    // Regression: tiny validators were hitting ledger overspend by ~10k–30k CPU
+    // because metadata presence shifted the real tx body vs evaluator's simulated
+    // ScriptContext. Fixed absolute cushion (ABS_*_BUFFER) guards that gap.
+    it('adds absolute cushion on top of the relative buffer for small budgets', async () => {
+      const tinyEvaluator = async () => [{ budget: { memory: 100, cpu: 1000 } }];
+      const result = await evaluateExUnits(tinyEvaluator);
+      // mem: ceil(100 * 1.1) + 1000 = 1110
+      expect(result.mem).toBeGreaterThanOrEqual(1100);
+      // cpu: ceil(1000 * 1.1) + 50000 = 51100
+      expect(result.cpu).toBeGreaterThanOrEqual(51000);
+    });
+
+    it('keeps proportional scaling for large budgets', async () => {
+      const bigEvaluator = async () => [{ budget: { memory: 10_000_000, cpu: 10_000_000_000 } }];
+      const result = await evaluateExUnits(bigEvaluator);
+      expect(result.mem).toBeGreaterThanOrEqual(11_000_000);
+      expect(result.cpu).toBeGreaterThanOrEqual(11_000_000_000);
+    });
+  });
 });

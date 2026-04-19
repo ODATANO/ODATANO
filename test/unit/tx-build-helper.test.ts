@@ -4,15 +4,8 @@
 
 import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
-import { Tx } from '@harmoniclabs/cardano-ledger-ts';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
-
-jest.mock('@harmoniclabs/cardano-ledger-ts', () => ({
-  Tx: {
-    fromCbor: jest.fn()
-  }
-}));
 
 describe('tx-build-helper utilities', () => {
   describe('getLovelace', () => {
@@ -89,13 +82,11 @@ describe('tx-build-helper utilities', () => {
   });
 
   describe('getTxHashFromCbor', () => {
-    // Valid signed transaction CBOR from testnet (minimal ADA transfer)
-    const validSignedTxCbor = '84a400818258203b40265111d8bb3c3c608d95b3a0bf83461ace32d79336579a1939b3aad1c0b700018182583900b0b59f4c9e9d7d4d6a0e3b5a9e1f2c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f7a8b91a001e84800282a1581c3b40265111d8bb3c3c608d95b3a0bf83461ace32d79336579a1939b3a14474657374193039021a0002b5690319138fa100818258203b40265111d8bb3c3c608d95b3a0bf83461ace32d79336579a1939b3aad1c0b75840deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeeff5f6';
-    const mockedTx = Tx as jest.Mocked<typeof Tx>;
-
-    afterEach(() => {
-      jest.resetAllMocks();
-    });
+    // Valid signed tx CBOR (minimal Conway ADA transfer, 1 vkey witness, metadata-only aux_data).
+    // Parsed successfully by CSL.FixedTransaction — used as the happy-path + metadata-regression fixture.
+    // Also doubles as the regression fixture for the harmoniclabs AuxiliaryData.fromCbor bug that
+    // rejected metadata-only aux_data (see new_error.md).
+    const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
 
     it('should throw for empty string input', () => {
       expect(() => getTxHashFromCbor('')).toThrow('Invalid input: signedTxCbor must be a non-empty string');
@@ -122,82 +113,25 @@ describe('tx-build-helper utilities', () => {
     });
 
     it('should throw for malformed CBOR (valid hex but invalid structure)', () => {
-      mockedTx.fromCbor.mockImplementation(() => {
-        throw new Error('CBOR decode error');
-      });
       expect(() => getTxHashFromCbor('deadbeef')).toThrow('Failed to parse transaction CBOR');
     });
 
-    it('should throw for truncated CBOR', () => {
-      mockedTx.fromCbor.mockImplementation(() => {
-        throw new Error('Unexpected end of CBOR');
-      });
-      const truncated = validSignedTxCbor.substring(0, 100);
-      expect(() => getTxHashFromCbor(truncated)).toThrow('Failed to parse transaction CBOR');
-    });
-
-    it('should return 64-character hex hash for valid signed transaction', () => {
-      const expectedHash = 'a'.repeat(64);
-      mockedTx.fromCbor.mockReturnValue({ hash: { toString: () => expectedHash } } as any);
-
-      const hash = getTxHashFromCbor(validSignedTxCbor);
+    it('should return 64-character lowercase hex hash for valid transaction CBOR', () => {
+      const hash = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR);
       expect(typeof hash).toBe('string');
       expect(hash).toMatch(/^[a-f0-9]{64}$/);
     });
 
-    it('should accept uppercase hex characters', () => {
-      mockedTx.fromCbor.mockImplementation(() => {
-        throw new Error('CBOR decode error');
-      });
-      const upperCaseCbor = 'DEADBEEF';
-      expect(() => getTxHashFromCbor(upperCaseCbor)).toThrow('Failed to parse transaction CBOR');
+    it('should be deterministic across repeated calls', () => {
+      const hash1 = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR);
+      const hash2 = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR);
+      expect(hash1).toBe(hash2);
     });
 
-    it('should accept mixed case hex characters', () => {
-      mockedTx.fromCbor.mockImplementation(() => {
-        throw new Error('CBOR decode error');
-      });
-      const mixedCaseCbor = 'DeAdBeEf1234';
-      expect(() => getTxHashFromCbor(mixedCaseCbor)).toThrow('Failed to parse transaction CBOR');
-    });
-  });
-
-  describe('getTxHashFromCbor (mocked)', () => {
-    const mockedTx = Tx as jest.Mocked<typeof Tx>;
-
-    afterEach(() => {
-      jest.resetAllMocks();
-    });
-
-    it('should throw when tx.hash is undefined', () => {
-      mockedTx.fromCbor.mockReturnValue({ body: {}, witnesses: {} } as any);
-
-      expect(() => getTxHashFromCbor('aabbccdd'))
-        .toThrow('Failed to extract transaction hash from CBOR');
-    });
-
-    it('should throw when tx.hash is null', () => {
-      mockedTx.fromCbor.mockReturnValue({ hash: null } as any);
-
-      expect(() => getTxHashFromCbor('aabbccdd'))
-        .toThrow('Failed to extract transaction hash from CBOR');
-    });
-
-    it('should return hash.toString() when tx.hash exists', () => {
-      const mockHash = { toString: () => 'abc123def456'.padEnd(64, '0') };
-      mockedTx.fromCbor.mockReturnValue({ hash: mockHash } as any);
-
-      const result = getTxHashFromCbor('aabbccdd');
-      expect(result).toBe('abc123def456'.padEnd(64, '0'));
-    });
-
-    it('should throw when Tx.fromCbor throws', () => {
-      mockedTx.fromCbor.mockImplementation(() => {
-        throw new Error('CBOR decode error');
-      });
-
-      expect(() => getTxHashFromCbor('aabbccdd'))
-        .toThrow('Failed to parse transaction CBOR');
+    it('should accept uppercase hex by normalizing through Buffer.from', () => {
+      const upperHash = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR.toUpperCase());
+      const lowerHash = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR);
+      expect(upperHash).toBe(lowerHash);
     });
   });
 

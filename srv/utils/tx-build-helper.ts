@@ -1,6 +1,6 @@
 import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
-import { Tx } from '@harmoniclabs/cardano-ledger-ts';
-import { fromHex } from '@harmoniclabs/uint8array-utils';
+import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
+import { toHex } from '@harmoniclabs/uint8array-utils';
 import { MixedAssetsError, InsufficientFundsError } from './errors';
 import { dataFromJson, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
@@ -47,19 +47,15 @@ export function getTxHashFromCbor(signedTxCbor: string): string {
     throw new Error('Invalid input: signedTxCbor must be a valid hex string');
   }
 
-  let tx;
+  // Use CSL.FixedTransaction: preserves original CBOR bytes (deterministic hash)
+  // and avoids the harmoniclabs AuxiliaryData.fromCbor bug on metadata-only aux_data.
   try {
-    const txBytes = fromHex(signedTxCbor);
-    tx = Tx.fromCbor(txBytes);
+    const txBytes = Buffer.from(signedTxCbor, 'hex');
+    const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
+    return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
   } catch {
     throw new Error('Failed to parse transaction CBOR');
   }
-
-  if (!tx?.hash) {
-    throw new Error('Failed to extract transaction hash from CBOR');
-  }
-
-  return tx.hash.toString();
 }
 
 /**
@@ -232,8 +228,7 @@ export function applyScriptParameters(scriptHex: string, params: JSONValue[]): s
 
   // 4. Create new program with applied body, flat-encode, CBOR-wrap
   const applied = new UPLCProgram(program.version, body);
-  const flatBits = compileUPLC(applied);
-  const { buffer } = flatBits.toBuffer();
-  const cborEncoded = Cbor.encode(new CborBytes(buffer));
-  return cborEncoded.toString();
+  const appliedFlatBytes = compileUPLC(applied);
+  const cborEncoded = Cbor.encode(new CborBytes(appliedFlatBytes));
+  return toHex(cborEncoded);
 }

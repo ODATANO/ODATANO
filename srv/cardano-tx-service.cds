@@ -100,7 +100,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      scriptParamsJson: String,
                                      @title: 'Lock on Script Address'
                                      @description: 'When true, validatorScript is required. Derives the enterprise script address from the (optionally param-applied) script and routes the output there instead of recipientAddress. Returns scriptAddress and scriptHash in the response.'
-                                     lockOnScript: Boolean)  returns TransactionBuilds;
+                                     lockOnScript: Boolean,
+                                     @title: 'Reference Script Hex'
+                                     @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA — lovelaceAmount must cover the inflated requirement.'
+                                     referenceScriptHex: String,
+                                     @title: 'Validity Start (Posix ms)'
+                                     @description: 'Optional. Validity-interval start in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                     validityStartMs: String,
+                                     @title: 'Validity End (Posix ms)'
+                                     @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                     validityEndMs: String)  returns TransactionBuilds;
 
     @title      : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -141,7 +150,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                       changeAddress: Bech32,
                                       @title: 'Output Datum JSON'
                                       @description: 'Optional inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address.'
-                                      outputDatumJson: String) returns TransactionBuilds;
+                                      outputDatumJson: String,
+                                      @title: 'Reference Script Hex'
+                                      @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA — lovelaceAmount must cover the inflated requirement.'
+                                      referenceScriptHex: String,
+                                      @title: 'Validity Start (Posix ms)'
+                                      @description: 'Optional. Validity-interval start in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                      validityStartMs: String,
+                                      @title: 'Validity End (Posix ms)'
+                                      @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                      validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Build Minting Transaction'
     @description: 'Build a transaction to mint or burn native assets'
@@ -184,7 +202,19 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 forceInputsJson: String,
                                 @title: 'Reference Inputs JSON'
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
-                                referenceInputsJson: String)   returns TransactionBuilds;
+                                referenceInputsJson: String,
+                                @title: 'Metadata JSON'
+                                @description: 'Optional transaction metadata as JSON (CIP-20 / label-674 etc.). Object keyed by numeric label string. Attached as auxiliary_data to the mint tx so chain-watchers can correlate off-chain context (receipt IDs, free-form notes).'
+                                metadataJson: String,
+                                @title: 'Reference Script Hex'
+                                @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA — lovelaceAmount must cover the inflated requirement.'
+                                referenceScriptHex: String,
+                                @title: 'Validity Start (Posix ms)'
+                                @description: 'Optional. Sets the transaction validity-interval start in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(lower) on tx.validity_range.lower_bound. Defaults to now − 120 000 ms when omitted.'
+                                validityStartMs: String,
+                                @title: 'Validity End (Posix ms)'
+                                @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
+                                validityEndMs: String)   returns TransactionBuilds;
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
@@ -259,7 +289,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
                                        forceInputsJson: String,
                                        @title: 'Extra Outputs JSON'
-                                       @description: 'Optional JSON array of additional outputs appended after the primary recipient output, before change. Each entry: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson?}. Use for multi-output state-machine transitions (counter updates + batch NFT outputs). Each extra output is independently min-ADA checked.'
+                                       @description: 'Optional JSON array of additional outputs appended after the primary recipient output, before change. Each entry: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson?, referenceScriptHex?}. Use for multi-output state-machine transitions (counter updates + batch NFT outputs) or per-output CIP-33 ref-script deploy. Each extra output is independently min-ADA checked.'
                                        extraOutputsJson: String,
                                        @title: 'Mint Actions JSON'
                                        @description: 'Optional JSON array of mint/burn actions ([{"assetUnit", "quantity"}]). When provided, triggers a combined spend+mint transaction in a single atomic step. Required together with mintingPolicyScript.'
@@ -272,7 +302,16 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        mintRedeemerJson: String,
                                        @title: 'Reference Inputs JSON'
                                        @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
-                                       referenceInputsJson: String) returns TransactionBuilds;
+                                       referenceInputsJson: String,
+                                       @title: 'Reference Script Hex'
+                                       @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Combines with the spend in one atomic tx. Significantly increases the output min-ADA — lovelaceAmount must cover the inflated requirement.'
+                                       referenceScriptHex: String,
+                                       @title: 'Validity Start (Posix ms)'
+                                       @description: 'Optional. Sets the transaction validity-interval start in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(lower) on tx.validity_range.lower_bound. Defaults to now − 120 000 ms when omitted.'
+                                       validityStartMs: String,
+                                       @title: 'Validity End (Posix ms)'
+                                       @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
+                                       validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'

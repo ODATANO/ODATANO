@@ -68,7 +68,7 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
     // Construct a new CborArray to avoid stale subCborRef pointing to the old bytes.
     const signedTxCbor = toHex(Cbor.encode(
       new CborArray(txObj.array, { indefinite: txObj.indefinite })
-    ).toBuffer());
+    ));
 
     logger.info({
       unsignedTxLength: unsignedTxCbor.length,

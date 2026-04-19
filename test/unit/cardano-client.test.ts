@@ -43,12 +43,13 @@ function setupKoiosTipMock() {
 }
 
 /**
- * Setup nock mocks for Blockfrost health endpoint (used for initialization)
+ * Setup nock mocks for Blockfrost init endpoint — BlockfrostBackend.init() calls
+ * api.blocksLatest(), which hits /api/v0/blocks/latest.
  */
 function setupBlockfrostHealthMock() {
   nock(BLOCKFROST_BASE_URL)
-    .get('/api/health')
-    .reply(200, { is_healthy: true });
+    .get('/api/v0/blocks/latest')
+    .reply(200, { hash: 'test-block-hash', height: 1000000 });
 }
 
 /**
@@ -154,9 +155,10 @@ describe('CardanoClient Configuration', () => {
       setupKoiosTipMock();
       setupNetworkInfoMocks();
 
-      // Blockfrost fails
+      // Blockfrost init fails — got retries 500s, so cover all attempts.
       nock(BLOCKFROST_BASE_URL)
-        .get('/api/health')
+        .get('/api/v0/blocks/latest')
+        .times(5)
         .reply(500, { error: 'Server error' });
 
       const config = createTestConfig({ backends: ['blockfrost', 'koios'] });
@@ -210,10 +212,11 @@ describe('CardanoClient Configuration', () => {
   // ============================================================================
   describe('Fallback Mechanism', () => {
     it('should fallback to koios when blockfrost fails', async () => {
-      // Blockfrost init succeeds but query fails
+      // Blockfrost init succeeds but query fails. got retries on 500 — cover all attempts.
       setupBlockfrostHealthMock();
       nock(BLOCKFROST_BASE_URL)
         .get('/api/v0/network')
+        .times(5)
         .reply(500, { error: 'Internal error' });
 
       // Koios succeeds
@@ -232,9 +235,10 @@ describe('CardanoClient Configuration', () => {
       // Koios init succeeds
       setupKoiosTipMock();
 
-      // But network info query fails
+      // /totals network-info query fails (GET, matches koios-backend call)
       nock(KOIOS_BASE_URL)
-        .post('/totals')
+        .get('/totals')
+        .query({ order: 'epoch_no.desc', limit: '1' })
         .reply(500, { error: 'Server error' });
 
       const config = createTestConfig({ backends: ['koios'] });

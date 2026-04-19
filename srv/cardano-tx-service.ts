@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit, isValidCbor } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
@@ -82,6 +82,7 @@ export interface ParsedExtraOutput {
   lovelaceAmount: string;
   assets?: Array<{ unit: string; quantity: string }>;
   inlineDatum?: JSONValue;
+  referenceScript?: string;
 }
 
 /**
@@ -144,7 +145,15 @@ function parseExtraOutputs(
       inlineDatum = datumResult.parsed as JSONValue;
     }
 
-    out.push({ address: entry.address, lovelaceAmount: entry.lovelaceAmount, assets, inlineDatum });
+    let referenceScript: string | undefined;
+    if (entry.referenceScriptHex !== undefined && entry.referenceScriptHex !== null) {
+      if (typeof entry.referenceScriptHex !== 'string' || !isValidCbor(entry.referenceScriptHex)) {
+        return { error: `extraOutputs[${i}].referenceScriptHex must be even-length hex` };
+      }
+      referenceScript = entry.referenceScriptHex;
+    }
+
+    out.push({ address: entry.address, lovelaceAmount: entry.lovelaceAmount, assets, inlineDatum, referenceScript });
   }
   return { parsed: out };
 }
@@ -174,11 +183,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount },
+      { senderAddress, recipientAddress, lovelaceAmount, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount']
     );
     throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
@@ -247,6 +256,11 @@ module.exports = (srv: cds.Service) => {
     delete cleanData.scriptParamsJson;
     delete cleanData.lockOnScript;
 
+    if (referenceScriptHex) {
+      cleanData.referenceScript = referenceScriptHex;
+    }
+    delete cleanData.referenceScriptHex;
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug({ senderAddress, recipientAddress: cleanData.recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson, lockOnScript: !!lockOnScript }, 'Building simple ADA transaction');
@@ -306,11 +320,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs (includes JSON parsing validation)
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, assetsJson },
+      { senderAddress, recipientAddress, lovelaceAmount, assetsJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
     );
     throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
@@ -342,6 +356,10 @@ module.exports = (srv: cds.Service) => {
         delete cleanData.outputDatumJson;
       }
 
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
+      delete cleanData.referenceScriptHex;
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
       logger.debug({ id: result.id, fee: result.fee, size: result.size }, 'Multi-asset transaction build result');
@@ -355,11 +373,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, metadataJson, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript },
+      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'mintActionsJson', 'mintingPolicyScript']
     );
     throwIfValidationErrors(req, 'BuildMintTransaction', errors);
@@ -447,10 +465,25 @@ module.exports = (srv: cds.Service) => {
     if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
     const referenceInputs = refInputsResult.parsed;
 
+    // Parse and validate optional metadataJson (auxiliary_data on the mint tx).
+    // validateTransactionInputs has already JSON-validated the string; re-parse here
+    // and enforce the label-object shape that the builder's metadata mapper expects.
+    let parsedMetadata: any | undefined;
+    if (metadataJson) {
+      try {
+        parsedMetadata = JSON.parse(metadataJson);
+      } catch (err: any) {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid metadataJson: ${err.message}`, 'metadataJson');
+      }
+      if (typeof parsedMetadata !== 'object' || parsedMetadata === null || Array.isArray(parsedMetadata)) {
+        return rejectInvalid(req, 'BuildMintTransaction', 'metadataJson must be an object with numeric label keys', 'metadataJson');
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0 },
+        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0, hasMetadata: !!parsedMetadata },
         'Building minting transaction'
       );
 
@@ -464,6 +497,16 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
       delete cleanData.referenceInputsJson;
+      if (parsedMetadata) {
+        cleanData.metadataJson = parsedMetadata;
+      } else {
+        delete cleanData.metadataJson;
+      }
+
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
+      delete cleanData.referenceScriptHex;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
@@ -533,11 +576,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson },
+      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
     );
     throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
@@ -692,6 +735,9 @@ module.exports = (srv: cds.Service) => {
         mintingPolicyScript: finalMintingPolicyScript,
         mintRedeemer: parsedMintRedeemer
       };
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
       delete cleanData.inlineDatumJson;
@@ -701,6 +747,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.extraOutputsJson;
       delete cleanData.mintActionsJson;
       delete cleanData.mintRedeemerJson;
+      delete cleanData.referenceScriptHex;
 
       // lockOnScript: route continuing output to enterprise script address
       if (lockOnScript && scriptParams && scriptParams.length > 0) {

@@ -5,7 +5,7 @@
 
 import cds from '@sap/cds';
 import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
-import { TEST_FIXTURES, plutusSpendRequestBody, mockScriptTxInfo } from './test-fixtures';
+import { TEST_FIXTURES, plutusSpendRequestBody, mockScriptTxInfo, mockUtxosWithAssets } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupTxResponseMock, teardownKoiosMocks, nock } from './mock-helpers';
 
 const { INSERT } = cds.ql;
@@ -1468,6 +1468,128 @@ describe('CardanoTransactionService Handler Validations', () => {
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
       expect(status).toBe(200);
       expect(data.paymentKeyHash).toMatch(/^[0-9a-f]{56}$/);
+    });
+  });
+
+  // ==========================================================================
+  // Validity bounds — cross-action validator smoke tests
+  //
+  // Verifies that validityStartMs / validityEndMs survive the CDS → handler →
+  // validators pipeline on all four Build actions. We only assert validator
+  // behavior (200/400), not on-chain correctness — that is covered by the
+  // builder unit tests and manual preview-network verification.
+  // ==========================================================================
+
+  describe('Validity bounds validation', () => {
+    const now = Date.now();
+    const validStart = String(now - 60_000);
+    const validEnd = String(now + 1_800_000);
+
+    it('BuildSimpleAdaTransaction accepts explicit validity window', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: validStart,
+        validityEndMs: validEnd,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('rejects non-numeric validityStartMs on BuildSimpleAdaTransaction', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: 'abc',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects validityStartMs >= validityEndMs', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: validEnd,
+        validityEndMs: validStart,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('BuildMultiAssetTransaction accepts explicit validity window', async () => {
+      setupUtxoMock(mockUtxosWithAssets);
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        assetsJson: JSON.stringify([{ unit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        validityStartMs: validStart,
+        validityEndMs: validEnd,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('BuildMintTransaction rejects malformed validityEndMs', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: 'aa'.repeat(28) + '4d', quantity: '1' }]),
+        mintingPolicyScript: '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009',
+        validityEndMs: '-1',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // BuildMintTransaction — metadataJson plumbing
+  //
+  // Validates that CIP-20 / label-674 style metadata survives the handler →
+  // builder pipeline and lands in the unsigned tx's auxiliary_data.
+  // ==========================================================================
+
+  describe('BuildMintTransaction metadataJson', () => {
+    const baseMintPayload = () => ({
+      senderAddress: TEST_FIXTURES.addressWithFunds,
+      recipientAddress: TEST_FIXTURES.emptyAddress,
+      lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
+      changeAddress: TEST_FIXTURES.addressWithFunds,
+      mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+      mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+    });
+
+    it('accepts metadataJson and persists a non-empty unsigned tx', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: JSON.stringify({ '674': { msg: ['hello mint'] } }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+      expect(status).toBe(200);
+      expect(typeof data.unsignedTxCbor).toBe('string');
+      expect(data.unsignedTxCbor.length).toBeGreaterThan(0);
+    });
+
+    it('still builds successfully when metadataJson is omitted', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', baseMintPayload())
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('rejects malformed metadataJson (invalid JSON)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: '{not valid json',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects metadataJson that is not an object (array)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: JSON.stringify([1, 2, 3]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
     });
   });
 });

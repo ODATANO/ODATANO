@@ -219,9 +219,12 @@ describe('KoiosBackend', () => {
 
   describe('not found and fallback branches', () => {
     it('should throw when getBlock receives empty results after retry', async () => {
+      // fetchWithRetryOnEmpty does 1 initial call + 3 retries = 4 attempts.
+      // Previous .times(2) let the 3rd/4th attempts hit nock no-match and leak
+      // unhandled async errors into later tests via their setTimeout callbacks.
       const blockInfoScope = nock(KOIOS_BASE_URL)
         .post('/api/v1/block_info')
-        .times(2)
+        .times(4)
         .reply(200, []);
 
       await expect(backend.getBlock('a'.repeat(64))).rejects.toThrow();
@@ -244,9 +247,10 @@ describe('KoiosBackend', () => {
     });
 
     it('should throw when latest block tip is empty after retry', async () => {
+      // 1 initial + 3 retries. See note on getBlock test above re: leak into later tests.
       const tipScope = nock(KOIOS_BASE_URL)
         .get('/api/v1/tip')
-        .times(2)
+        .times(4)
         .reply(200, []);
 
       await expect(backend.getLatestBlock()).rejects.toThrow();

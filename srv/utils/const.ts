@@ -33,9 +33,29 @@ export const HIGH_EXECUTION_UNITS = {
 };
 
 /**
- * Execution unit buffer multiplier (10% safety margin)
+ * Execution unit buffer — relative multiplier applied to evaluator output.
+ * Combined with ABS_* floors below so small validators also get a meaningful cushion.
  */
 export const EXECUTION_UNIT_BUFFER = 1.1;
+
+/**
+ * Absolute ExUnits floor added on top of the relative multiplier.
+ *
+ * Rationale: tiny validators (e.g. small mint policies with a couple of ref inputs)
+ * routinely show a ~10k–30k CPU / ~50–100 mem gap between the evaluator's
+ * ScriptContext simulation and the ledger's real evaluation — especially when
+ * auxiliary_data / metadata affects the tx body hash. A pure 10% multiplier on
+ * a 200_000_000-CPU budget gives plenty of headroom, but on a 50k-CPU budget
+ * it's only 5k — below the observed drift. A fixed absolute floor bounds the
+ * worst case regardless of validator size.
+ *
+ * Cardano's protocol `max_tx_ex_units` caps the total, so adding this cushion
+ * cannot push a tx past network limits — an over-large budget simply fails
+ * at build time with a clear error instead of at submit time with an opaque
+ * PlutusFailure/overspend.
+ */
+export const ABS_CPU_BUFFER = 50_000;
+export const ABS_MEM_BUFFER = 1_000;
 
 /**
  * Transaction building constants
@@ -89,6 +109,26 @@ export const ED25519_KEY_HASH_HEX_LENGTH = 56;
 export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
 /** Minimum lovelace for a change output carrying native assets (2 ADA) */
 export const MIN_CHANGE_LOVELACE = 2_000_000;
+
+/**
+ * Shelley-era genesis parameters per network, used to construct Buildooor's
+ * GenesisInfos so `TxBuilder.posixToSlot()` can convert validity-window
+ * Posix ms into ledger slots. `slotLengthMs` is 1000 ms on all current networks.
+ */
+export const GENESIS_INFOS_BY_NETWORK = {
+  mainnet: { systemStartPosixMs: 1596491091000, slotLengthMs: 1000, startSlotNo: 4492800 },
+  preprod: { systemStartPosixMs: 1655683200000, slotLengthMs: 1000, startSlotNo: 0 },
+  preview: { systemStartPosixMs: 1666656000000, slotLengthMs: 1000, startSlotNo: 0 },
+} as const;
+
+/** Default validity-window start offset: `now - 2 min` to absorb clock skew. */
+export const DEFAULT_VALIDITY_START_OFFSET_MS = 120_000;
+
+/** Default validity-window end offset: `now + 1 h` — generous enough for human-latency sign+submit flows. */
+export const DEFAULT_VALIDITY_END_OFFSET_MS = 60 * 60 * 1000;
+
+/** Max accepted digits in a Posix-ms string (13 digits covers up to ~year 9999). */
+export const MAX_POSIX_MS_DIGITS = 13;
 
 /**
  * Generic 64-character hex string (used for block hashes and other 32-byte hex identifiers)

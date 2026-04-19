@@ -5,6 +5,54 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.6.1] - 18-04-2026 - CIP-33 Reference Scripts + Buildooor 0.2.6 Upgrade
+
+### Added
+
+- **CIP-33 reference script deploy** (`referenceScriptHex` parameter): attach a Plutus V3 validator as a referenceScript on the primary output so consumers can deploy ref-scripts through ODATANO instead of bypassing it.
+  - Available on `BuildSimpleAdaTransaction`, `BuildMultiAssetTransaction`, `BuildMintTransaction`, `BuildPlutusSpendTransaction`.
+  - Supported by both Buildooor and CSL builders. CSL uses `PlutusScript.new_v3()` (CBOR-wrapped) per the v15 hashing rule.
+  - Note: attaching a ref script inflates output min-ADA significantly (typically 15–30+ ADA depending on script size). Consumers must supply enough `lovelaceAmount` to cover it — a `TransactionValidationError` is thrown upfront with the required min-ADA if underfunded.
+- **Per-extraOutput `referenceScriptHex`**: each entry in `extraOutputsJson` may now carry its own `referenceScriptHex`, enabling "spend + deploy ref-script on a dedicated extra output" flows in a single atomic transaction.
+- **Input-side `refScript` preservation** (Buildooor only, Koios-sourced UTxOs): when a forced or reference input carries its ref-script bytes, the Buildooor UTxO mapper now passes them through for local Plutus evaluation. Blockfrost and Ogmios backends return hash-only `scriptRef` today — those UTxOs continue to resolve server-side at validation.
+
+### Changed
+
+- **Buildooor upgrade**: `@harmoniclabs/buildooor` bumped from `^0.1.28` to `^0.2.6`. Buildooor's public API is byte-identical between these versions; the migration is driven entirely by transitive deps.
+- **Cardano ledger types**: `@harmoniclabs/cardano-ledger-ts` bumped from `^0.4.6` to `^0.5.1`.
+- **Cost models**: `@harmoniclabs/cardano-costmodels-ts` bumped from `~1.3.0` to `~1.4.0`. The 1.4.0 API dropped `.toBuffer()` on `costModelsToLanguageViewCbor()` return values, now a raw `Uint8Array`.
+- **CBOR / UPLC encoding sites**: removed `.toBuffer()` on nine call sites in `buildooor-tx.ts`, `csl-tx.ts`, `signing-helper.ts`, `hsm-signer.ts`, `tx-build-helper.ts`, and two integration test sites. The `@harmoniclabs/cbor` 2.x and `@harmoniclabs/uplc` 2.x packages now return `Uint8Array` directly, matching `toHex()` consumption.
+- **`applyScriptParameters` (tx-build-helper.ts)**: rewritten for uplc 2.x — `compileUPLC()` now returns `Uint8Array` directly; output `toString()` replaced with `toHex()` (needed because `Uint8Array.toString()` returns a CSV of bytes, not hex).
+- **Blockfrost-js pin**: `@blockfrost/blockfrost-js` narrowed from `^6.0.0` to `~6.0.0` to keep nock-based test mocks aligned with the 6.0.x HTTP behaviour (6.1.x retries trigger `times()` mock exhaustion).
+
+### Fixed
+
+- **Buildooor transaction build crashes** with `costModelsToLanguageViewCbor(...).toBuffer is not a function` — root cause was the v1.5.x `cardano-costmodels-ts` pin leaking 1.4.0 through the `^` range. The Buildooor upgrade + removed `.toBuffer()` calls close this permanently.
+- **Test suite hygiene** (caused by transitive-dep drift, not production regressions):
+  - `cardano-client.test.ts`: `setupBlockfrostHealthMock` was mocking `/api/health`, but `BlockfrostBackend.init()` hits `/api/v0/blocks/latest`. Corrected, plus added `.times(5)` on 500-response mocks to absorb got's default 5xx retries during init.
+  - `koios-backend.test.ts`: `fetchWithRetryOnEmpty` performs 1 initial + 3 retries = 4 attempts. Two tests that mocked `.times(2)` were leaking unhandled async errors (via the 2000 ms retry `setTimeout`) into subsequent tests. Corrected to `.times(4)`.
+  - `error-paths.test.ts` circuit-breaker test: `nock.pendingMocks()` counting was unreliable because got's internal retries consume multiple HTTP requests per backend-level call. Replaced with `jest.spyOn(backend, 'getNetworkInformation')` to count backend invocations directly.
+  - `hsm-signer.test.ts`: `jest.mock('pkcs11js', ...)` now uses `{ virtual: true }` so the suite runs on machines without the optional `pkcs11js` native module installed.
+  - `server.test.ts`: removed the stale "should rethrow served hook initialization errors" test — contradicts the served hook's intentional error-swallow (plugin contract: host app must not crash on plugin init failure).
+
+### Internal
+
+- CDS `extraOutputsJson` `@description` expanded to document the new per-entry `referenceScriptHex` field.
+- Version bumped `1.5.2` → `1.6.1` (first 1.6.x release).
+
+### Known limitations
+
+- **Hash-only `scriptRef` resolution**: Blockfrost and Ogmios return `referenceScriptHash` only, not the script bytes. A future release may add a `/scripts/{hash}/cbor` resolver so hash-only UTxOs reach Koios parity for local Plutus evaluation.
+- **CSL still rejects `__INPUT_IDX__` placeholders**: input-index placeholder substitution remains Buildooor-only (CSL's coin selection is opaque to enumeration).
+
+### Follow-ups (deferred)
+
+- `/scripts/{hash}/cbor` resolver across all three backends.
+- Normalizing `UTxO.scriptRef` into separate `referenceScriptHash` and `referenceScript` fields (currently overloaded).
+- Upgrading Buildooor beyond 0.2.6.
+
+---
+
 ## [v1.0] - 12-03-2026 - Production Release
 
 ### Added
