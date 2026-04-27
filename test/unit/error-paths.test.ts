@@ -47,9 +47,12 @@ describe('Error Path Tests', () => {
 
   describe('503 Provider Unavailable – Failover', () => {
     it('should failover from blockfrost 503 to koios', async () => {
-      // Blockfrost init succeeds but network query returns 503
+      // Blockfrost init succeeds but network query returns 503.
+      // .persist() because got retries 5xx internally; a single .reply() gets
+      // consumed by the first attempt and retries hit ERR_NOCK_NO_MATCH.
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
+        .persist()
         .get('/api/v0/network')
         .reply(503, { error: 'Service Unavailable' });
 
@@ -87,9 +90,11 @@ describe('Error Path Tests', () => {
 
   describe('429 Rate Limiting', () => {
     it('should failover on 429 rate limit from first backend', async () => {
-      // Blockfrost returns 429
+      // Blockfrost returns 429.
+      // .persist() because got retries 429 internally (same reason as the 503 test above).
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
+        .persist()
         .get('/api/v0/network')
         .reply(429, { error: 'Rate limit exceeded' }, { 'retry-after': '1' });
 
@@ -126,9 +131,12 @@ describe('Error Path Tests', () => {
 
   describe('Timeout Failover', () => {
     it('should failover when first backend times out', async () => {
-      // Blockfrost init succeeds but hangs on query
+      // Blockfrost init succeeds but hangs on query.
+      // .persist() because got retries on timeout/error; a single .reply() gets
+      // consumed by the first attempt and retries hit ERR_NOCK_NO_MATCH.
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
+        .persist()
         .get('/api/v0/network')
         .delay(3000) // exceeds 2s timeout
         .reply(200, { supply: {} });

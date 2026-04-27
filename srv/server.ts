@@ -334,7 +334,11 @@ cds.on('served', async () => {
     appContext = await initializeAppContext(config, undefined, hsmConfig);
     logger.info('CAP server bootstrap complete');
   } catch (err) {
-    // Don't throw - initialization failure shouldn't crash the host app (plugin contract)
+    // Don't throw - initialization failure shouldn't crash the host app (plugin contract).
+    // Write to stderr directly so the cause stays visible even when test runners
+    // suppress console.error (jest.setup.ts in this repo silences it).
+    const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err);
+    process.stderr.write(`[ODATANO] Failed to initialize blockchain components — backends={${config.backends.join(',')}} network=${config.network}\n${msg}\n`);
     logger.error('Failed to initialize blockchain components:', err);
   }
 });

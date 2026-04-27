@@ -202,9 +202,17 @@ export function isValidBech32Address(addrRaw: string): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
-  // get client to check right network
-  const client = getCardanoClient();
-  const network = client.network;
+  // get client to check right network. If the app context isn't ready yet
+  // (e.g., a backend init failure left it null), don't throw a raw error —
+  // return false so the handler responds with a clean 400 "Invalid bech32
+  // address format" instead of leaking "Application not initialized" to the
+  // client. The actual init failure is surfaced via stderr in server.ts.
+  let network: ReturnType<typeof getCardanoClient>['network'];
+  try {
+    network = getCardanoClient().network;
+  } catch {
+    return false;
+  }
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].addr.test(addr)) return false;
@@ -228,9 +236,13 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
   const stake = safeTrimString(stakeRaw);
   if (!stake) return false;
 
-  // get client to check right network
-  const client = getCardanoClient();
-  const network = client.network;
+  // Defensive against unset app context — same rationale as isValidBech32Address.
+  let network: ReturnType<typeof getCardanoClient>['network'];
+  try {
+    network = getCardanoClient().network;
+  } catch {
+    return false;
+  }
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].stake.test(stake)) return false;

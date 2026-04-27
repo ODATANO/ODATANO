@@ -14,6 +14,17 @@ if (!process.env.KOIOS_API_URL) {
   process.env.KOIOS_API_URL = 'https://preview.koios.rest/api/v1';
 }
 
+// Koios's /pool_info endpoint on the free preview tier sometimes takes >30s.
+// The default primaryTimeoutMs is 30s; bump to 60s so cold-indexing pool reads
+// don't fail with "All backends failed: timeout of 30000ms exceeded". Only set
+// when the user hasn't explicitly configured it.
+if (!process.env.PRIMARY_TIMEOUT_MS) {
+  process.env.PRIMARY_TIMEOUT_MS = '60000';
+}
+if (!process.env.FALLBACK_TIMEOUT_MS) {
+  process.env.FALLBACK_TIMEOUT_MS = '60000';
+}
+
 // Import and run the shared test suite
 import { createBackendTestSuite } from './core-test-suite';
 import { createErrorBackendSuite } from './error-handling.backend';
