@@ -128,8 +128,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const txDetails = this._extractTxDetails(unsignedTx);
       const { hashHex: scriptHash } = this._computeScriptHash(req.mintingPolicyScript);
 
+      const { forced: forcedUsed } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
       logger.info(`Built unsigned minting transaction successfully. Fee: ${txDetails.feeLovelace}`);
-      return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: (req.forceInputs ?? []).length });
+      return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: forcedUsed.length });
     } catch (error: any) {
       logger.error(`BuildUnsignedMintTransaction error: ${error?.message || error}`);
       mapBuilderError(error);
@@ -313,8 +314,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         : undefined;
 
       const scriptUtxoRef = req.plutusScriptExecution!.scriptUtxo;
-      const forcedUsed = (req.forceInputs ?? []).filter(
-        r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
+      const { forced } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const forcedUsed = forced.filter(
+        u => !(u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex)
       ).length;
       logger.info(`Built unsigned Plutus spending transaction. Fee: ${txDetails.feeLovelace}`);
       return this._buildResult(req, ctx, txDetails, { scriptHash, mintScriptHash, forcedInputsUsed: forcedUsed });

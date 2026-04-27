@@ -1,4 +1,3 @@
-import cds from '@sap/cds';
 import { env } from 'process';
 import {
   loadConfigFromEnv,

@@ -5,6 +5,35 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.5] - 27-04-2026 - CBOR Tx Parsing + Script Address Utilities + Validity Bounds
+
+### Added
+
+- **`ParseTransactionCbor` action** on `CardanoODataService`: decodes a hex-encoded transaction CBOR (signed or unsigned) into a structured representation (inputs/outputs/fee/witnesses/auxiliary data). Implementation lives in pure utilities at `srv/cbor/parse.ts` and is re-exported from `src/index.ts` for direct programmatic use.
+- **CBOR hex validation** for `ParseTransactionCbor`: explicit length cap and hex-shape checks reject oversized payloads upfront (memory-exhaustion guard) and surface dedicated error codes from `srv/utils/error-codes.ts`.
+- **`lockOnScript` flag** on `BuildPlutusSpendTransaction`: when `true`, change is sent back to the script address instead of the sender — required for stateful validators that must keep their UTxO under the script.
+- **`DeriveScriptAddress` action**: derives the bech32 script address (network-aware) from a Plutus V3 validator hex, optionally applying script parameters first. Useful for clients that need the address before locking funds.
+- **`ExtractPaymentKeyHash` action**: bech32-decodes a payment address and returns the 28-byte payment credential hash — convenience for building required-signers / datum fields client-side.
+- **Validity-window bounds** (`validityStartMs` / `validityEndMs`): both Build endpoints accept Posix-ms validity bounds. Buildooor converts via `posixToSlot()` using `GENESIS_INFOS_BY_NETWORK` (const.ts); CSL still ignores them pending the PPViewHashesDontMatch fix.
+
+### Changed
+
+- **Buildooor validity-window passthrough**: when no explicit bounds are provided, Buildooor falls back to `DEFAULT_VALIDITY_START_OFFSET_MS` (-2 min) / `DEFAULT_VALIDITY_END_OFFSET_MS` (+1 h) to absorb clock skew while staying generous for human sign+submit latency.
+- **`getTxHashFromCbor` parameter rename**: `signedTxCbor` → `txCbor`. The function accepts both signed and unsigned CBOR (hash is body-only). JSDoc and validation error messages updated accordingly.
+- **`BlockfrostBackend` constructor**: network is now passed explicitly into `BlockFrostAPI` to fix preprod initialization, which previously fell back to mainnet under certain `cardanoNetwork` resolution paths.
+- **Validity-bounds validation** added to `validateTransactionInputs()`: rejects non-numeric values, negative timestamps, more than `MAX_POSIX_MS_DIGITS` (13) digits, and `validityStartMs > validityEndMs`.
+
+### Fixed
+
+- **Forced/reference input UTxO synthesis**: `_resolveForceInputs` and `_resolveReferenceInputs` now copy `dataHash` and `referenceScriptHash` from `Transaction.outputs[]` into the synthesized `UTxO`'s `datumHash` / `scriptRef` fields. Previously dropped, which prevented Buildooor input-side ref-script preservation from seeing them on resolved (non-sender) UTxOs.
+- **`forcedInputsUsed` accuracy** (CSL): mint and Plutus-spend paths now derive the count from the actual `_partitionForcedInputs` result instead of `req.forceInputs.length`. Eliminates over-count from request-side duplicates and refs not present in `ctx.utxos`. The Plutus-spend path additionally subtracts the script-UTxO ref so it never counts toward forced inputs.
+- **`MAX_POSIX_MS_DIGITS` doc**: corrected the comment ("year 9999" → "Unix ms timestamps through ~Nov 2286"). The 13-digit cap itself is unchanged.
+
+### Internal
+
+- New `srv/cbor/` module: `parse.ts` (decoder) + `index.ts` (barrel). Pure utilities — no CSL or Buildooor dependency.
+- Version bumped `1.6.1` → `1.7.5`. Intermediate `1.7.0`–`1.7.3` were not released externally.
+
 ## [v1.6.1] - 18-04-2026 - CIP-33 Reference Scripts + Buildooor 0.2.6 Upgrade
 
 ### Added

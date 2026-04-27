@@ -32,25 +32,26 @@ export function assertAdaOnly(u: OdatanoUtxo): void {
 }
 
 /**
- * Extract transaction hash from signed CBOR without submitting
- * @param signedTxCbor signed transaction in CBOR hex format
+ * Extract transaction hash from a transaction CBOR (signed or unsigned).
+ * Hash is computed over the body, so witness presence does not affect it.
+ * @param txCbor transaction in CBOR hex format
  * @returns {string} transaction hash (64 character hex string)
  * @throws {Error} if CBOR is invalid or transaction hash cannot be extracted
  */
-export function getTxHashFromCbor(signedTxCbor: string): string {
-  if (!signedTxCbor || typeof signedTxCbor !== 'string') {
-    throw new Error('Invalid input: signedTxCbor must be a non-empty string');
+export function getTxHashFromCbor(txCbor: string): string {
+  if (!txCbor || typeof txCbor !== 'string') {
+    throw new Error('Invalid input: txCbor must be a non-empty string');
   }
 
   // Validate hex format
-  if (!/^[a-fA-F0-9]+$/.test(signedTxCbor)) {
-    throw new Error('Invalid input: signedTxCbor must be a valid hex string');
+  if (!/^[a-fA-F0-9]+$/.test(txCbor)) {
+    throw new Error('Invalid input: txCbor must be a valid hex string');
   }
 
   // Use CSL.FixedTransaction: preserves original CBOR bytes (deterministic hash)
   // and avoids the harmoniclabs AuxiliaryData.fromCbor bug on metadata-only aux_data.
   try {
-    const txBytes = Buffer.from(signedTxCbor, 'hex');
+    const txBytes = Buffer.from(txCbor, 'hex');
     const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
     return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
   } catch {

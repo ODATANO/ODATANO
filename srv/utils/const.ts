@@ -130,7 +130,7 @@ export const DEFAULT_VALIDITY_START_OFFSET_MS = 120_000;
 /** Default validity-window end offset: `now + 1 h` — generous enough for human-latency sign+submit flows. */
 export const DEFAULT_VALIDITY_END_OFFSET_MS = 60 * 60 * 1000;
 
-/** Max accepted digits in a Posix-ms string (13 digits covers up to ~year 9999). */
+/** Max accepted digits in a Posix-ms string (13 digits covers Unix ms timestamps through ~Nov 2286). */
 export const MAX_POSIX_MS_DIGITS = 13;
 
 /**

@@ -89,27 +89,27 @@ describe('tx-build-helper utilities', () => {
     const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
 
     it('should throw for empty string input', () => {
-      expect(() => getTxHashFromCbor('')).toThrow('Invalid input: signedTxCbor must be a non-empty string');
+      expect(() => getTxHashFromCbor('')).toThrow('Invalid input: txCbor must be a non-empty string');
     });
 
     it('should throw for null input', () => {
-      expect(() => getTxHashFromCbor(null as any)).toThrow('Invalid input: signedTxCbor must be a non-empty string');
+      expect(() => getTxHashFromCbor(null as any)).toThrow('Invalid input: txCbor must be a non-empty string');
     });
 
     it('should throw for undefined input', () => {
-      expect(() => getTxHashFromCbor(undefined as any)).toThrow('Invalid input: signedTxCbor must be a non-empty string');
+      expect(() => getTxHashFromCbor(undefined as any)).toThrow('Invalid input: txCbor must be a non-empty string');
     });
 
     it('should throw for non-string input', () => {
-      expect(() => getTxHashFromCbor(12345 as any)).toThrow('Invalid input: signedTxCbor must be a non-empty string');
+      expect(() => getTxHashFromCbor(12345 as any)).toThrow('Invalid input: txCbor must be a non-empty string');
     });
 
     it('should throw for non-hex string', () => {
-      expect(() => getTxHashFromCbor('not-a-hex-string!')).toThrow('Invalid input: signedTxCbor must be a valid hex string');
+      expect(() => getTxHashFromCbor('not-a-hex-string!')).toThrow('Invalid input: txCbor must be a valid hex string');
     });
 
     it('should throw for string with non-hex characters', () => {
-      expect(() => getTxHashFromCbor('abcdefgh12345678')).toThrow('Invalid input: signedTxCbor must be a valid hex string');
+      expect(() => getTxHashFromCbor('abcdefgh12345678')).toThrow('Invalid input: txCbor must be a valid hex string');
     });
 
     it('should throw for malformed CBOR (valid hex but invalid structure)', () => {

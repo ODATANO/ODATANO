@@ -331,6 +331,8 @@ export class CardanoTransactionBuilder {
                 address: output.address,
                 amount: output.amount,
                 inlineDatum: output.inlineDatum,
+                datumHash: output.dataHash ?? undefined,
+                scriptRef: output.referenceScriptHash ?? undefined,
             });
         }
         return resolved;
@@ -381,6 +383,8 @@ export class CardanoTransactionBuilder {
                 address: output.address,
                 amount: output.amount,
                 inlineDatum: output.inlineDatum,
+                datumHash: output.dataHash ?? undefined,
+                scriptRef: output.referenceScriptHash ?? undefined,
             });
         }
         return resolved;

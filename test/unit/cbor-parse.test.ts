@@ -36,7 +36,6 @@ import { MAX_TX_CBOR_HEX_LENGTH } from '../../srv/utils/const';
 // Test fixtures and helpers
 // ---------------------------------------------------------------------------
 
-const TEST_ADDRESS_MAINNET = 'addr1qxy8m0rvv0k8zhqa6z2qe0umpgljaa0tdc7kjcu8pwt6wm8z8j8rmz0zmeqy2xn2r68n37wyghpzv70gt5yn4ht3vhgq2tu5p6';
 const TEST_ADDRESS_TESTNET = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
 const TX_HASH_A = 'a'.repeat(64);
 const TX_HASH_B = 'b'.repeat(64);
