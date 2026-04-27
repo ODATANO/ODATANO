@@ -1,6 +1,6 @@
 import { bech32 } from "bech32";
 import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
-  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
 import { getCardanoClient } from "../server";
@@ -262,6 +262,18 @@ export function isValidCbor(cborRaw: unknown): cborRaw is string {
   if (!cbor) return false;
   // basic validation: must be even-length hex string
   return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
+}
+
+/**
+ * Validate a transaction CBOR hex string for the ParseTransactionCbor action.
+ * Combines `isValidCbor` with a hard length limit to block memory-exhaustion
+ * attacks on the server-side CBOR parser.
+ * @param cborRaw - The raw value to validate
+ * @returns { boolean } true if valid hex AND within MAX_TX_CBOR_HEX_LENGTH
+ */
+export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
+  if (!isValidCbor(cborRaw)) return false;
+  return (cborRaw as string).trim().length <= MAX_TX_CBOR_HEX_LENGTH;
 }
 
 /**

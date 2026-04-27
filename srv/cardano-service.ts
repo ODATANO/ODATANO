@@ -1,8 +1,9 @@
 import cds, { Request } from '@sap/cds';
 import { getCardanoIndexer } from './server';
-import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber } from './utils/validators';
+import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber, isValidTxCborHex } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
+import { parseTransaction } from './cbor';
 
 const { SELECT } = cds.ql;
 
@@ -268,6 +269,19 @@ module.exports = (srv: cds.Service) => {
 
   srv.on('GetLedgerProtocolParameters', async (req: Request) => {
     return handleRequest(req, (db) => indexer().indexProtocolParameters(db));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Transaction CBOR parsing (pure utility — no backend / DB touch)
+  // ---------------------------------------------------------------------------
+
+  srv.on('ParseTransactionCbor', async (req: Request) => {
+    const { cbor } = req.data as { cbor?: string };
+    if (cbor == null || cbor === '') rejectMissing(req, 'ParseTransactionCbor', 'cbor');
+    if (!isValidTxCborHex(cbor)) {
+      rejectInvalid(req, 'ParseTransactionCbor', 'Invalid CBOR hex or exceeds size limit', 'cbor');
+    }
+    return handleRequest(req, async () => parseTransaction(cbor as string));
   });
 
   // ---------------------------------------------------------------------------

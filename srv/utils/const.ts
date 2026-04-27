@@ -41,21 +41,17 @@ export const EXECUTION_UNIT_BUFFER = 1.1;
 /**
  * Absolute ExUnits floor added on top of the relative multiplier.
  *
- * Rationale: tiny validators (e.g. small mint policies with a couple of ref inputs)
- * routinely show a ~10k–30k CPU / ~50–100 mem gap between the evaluator's
- * ScriptContext simulation and the ledger's real evaluation — especially when
- * auxiliary_data / metadata affects the tx body hash. A pure 10% multiplier on
- * a 200_000_000-CPU budget gives plenty of headroom, but on a 50k-CPU budget
- * it's only 5k — below the observed drift. A fixed absolute floor bounds the
- * worst case regardless of validator size.
- *
- * Cardano's protocol `max_tx_ex_units` caps the total, so adding this cushion
- * cannot push a tx past network limits — an over-large budget simply fails
- * at build time with a clear error instead of at submit time with an opaque
- * PlutusFailure/overspend.
+ * Rationale: validators that iterate reference inputs and decode inline CBOR
+ * datums (e.g. oracle-consuming mint policies) show a larger ScriptContext →
+ * ledger drift than the documented ~10k–30k CPU / ~50–100 mem band — real-world
+ * cases overshot a 50k/1k floor by ~27k CPU / ~56 mem, burning the submit fee.
+ * The floor is sized to cover reference-input + CBOR-decoding drift on top of
+ * the 10% relative multiplier; `max_tx_ex_units` still caps build-time totals,
+ * so oversizing here cannot push a tx past network limits — it only trades a
+ * few extra lovelace of fee for avoiding an opaque PlutusFailure on submit.
  */
-export const ABS_CPU_BUFFER = 50_000;
-export const ABS_MEM_BUFFER = 1_000;
+export const ABS_CPU_BUFFER = 200_000;
+export const ABS_MEM_BUFFER = 5_000;
 
 /**
  * Transaction building constants
@@ -92,6 +88,13 @@ export const MAX_ARRAY_LENGTH = 1000;
 export const MAX_STRING_LENGTH = 65536;
 /** Maximum ech32 string length to prevent DoS */
 export const BECH32_MAX_LENGTH = 2000;
+/**
+ * Maximum hex length of transaction CBOR accepted by ParseTransactionCbor.
+ * Mainnet `maxTxSize` is currently 16 KiB; 64 KiB raw (= 128 KiB hex) leaves
+ * generous headroom for future protocol bumps and reference-script outputs
+ * while keeping the parser from being a memory-exhaustion vector.
+ */
+export const MAX_TX_CBOR_HEX_LENGTH = 65536 * 2;
 /** Maximum reasonable epoch number */
 export const MAX_EPOCH = 100_000;
 /** Standard pool ID payload length */

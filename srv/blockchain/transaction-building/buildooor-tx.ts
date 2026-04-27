@@ -725,7 +725,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const hasStart = req.validityStartMs !== undefined && req.validityStartMs !== null && req.validityStartMs !== '';
     const hasEnd = req.validityEndMs !== undefined && req.validityEndMs !== null && req.validityEndMs !== '';
 
-    if (mode === 'passthrough' && !hasStart && !hasEnd) return {};
+    if (mode === 'passthrough') {
+      const result: { invalidBefore?: bigint; invalidAfter?: bigint } = {};
+      if (hasStart) result.invalidBefore = BigInt(this.txBuilder.posixToSlot(Number(req.validityStartMs)));
+      if (hasEnd) result.invalidAfter = BigInt(this.txBuilder.posixToSlot(Number(req.validityEndMs)));
+      return result;
+    }
 
     const nowMs = Date.now();
     const startMs = hasStart ? Number(req.validityStartMs) : nowMs - DEFAULT_VALIDITY_START_OFFSET_MS;

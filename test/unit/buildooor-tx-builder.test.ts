@@ -758,6 +758,23 @@ describe('BuildooorTxBuilder', () => {
       expect(invalidBefore).toBeDefined();
       expect(invalidAfter).toBeDefined();
     });
+
+    // Regression: passthrough must not default the unspecified bound, otherwise
+    // `validityStartMs` alone could produce invalidBefore > invalidAfter and the
+    // ledger would reject on submit.
+    it('emits only invalidBefore when passthrough supplies just validityStartMs', () => {
+      const startMs = 1700000000000;
+      const result = resolve({ validityStartMs: String(startMs) }, 'passthrough');
+      expect(result.invalidBefore).toBe(BigInt(fakePosixToSlot(startMs)));
+      expect(result.invalidAfter).toBeUndefined();
+    });
+
+    it('emits only invalidAfter when passthrough supplies just validityEndMs', () => {
+      const endMs = 1700003600000;
+      const result = resolve({ validityEndMs: String(endMs) }, 'passthrough');
+      expect(result.invalidAfter).toBe(BigInt(fakePosixToSlot(endMs)));
+      expect(result.invalidBefore).toBeUndefined();
+    });
   });
 
   // =========================================================================

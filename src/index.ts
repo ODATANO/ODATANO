@@ -23,6 +23,16 @@ export {
 export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
 export type { HsmConfig, HsmSignResult } from '../srv/utils/types';
 
+// Re-export pure CBOR utilities (no CAP round-trip needed)
+export { parseTransaction } from '../srv/cbor';
+export type {
+  ParsedTransaction,
+  ParsedInput,
+  ParsedOutput,
+  ParsedAsset,
+  ParsedWitnesses,
+} from '../srv/cbor';
+
 /**
  * Initialize the ODATANO plugin.
  * Loads configuration from cds.env.requires["odatano-core"] OR environment variables,
