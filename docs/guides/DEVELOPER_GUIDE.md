@@ -127,7 +127,7 @@ srv/
 
 db/schema.cds                   # 29 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
-test/                           # 31 test files (21 unit + 10 integration)
+test/                           # 35 test files (25 unit + 10 integration)
 ```
 ---
 

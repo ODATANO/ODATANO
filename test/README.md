@@ -6,10 +6,12 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 1285
-- **Total Test Suites**: 31 (21 unit + 10 integration)
-- **Statement Coverage**: 99%
-- **Branch Coverage**: 81%+
+- **Total Tests**: 1549 (1545 passed, 4 skipped)
+- **Total Test Suites**: 35 (25 unit + 10 integration)
+- **Statement Coverage**: 96.58%
+- **Branch Coverage**: 88.31%
+- **Function Coverage**: 97.68%
+- **Line Coverage**: 97.26%
 - **Networks**: Cardano Preview testnet
 - **Backends**: Blockfrost, Koios, Ogmios
 - **TX Builders**: CSL (Cardano Serialization Lib), Buildooor
