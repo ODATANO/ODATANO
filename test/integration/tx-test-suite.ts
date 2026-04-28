@@ -48,12 +48,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
     afterEach(() => {
       nock.cleanAll();
-      nock.restore();
     });
 
     afterAll(async () => {
       nock.cleanAll();
-      nock.restore();
       nock.enableNetConnect();
       await shutdownAppContext();
     });
