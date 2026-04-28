@@ -27,10 +27,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
   // Create app context once before all tests
   beforeAll(async () => {
-    // Setup nock first for initialization
     nock.cleanAll();
-    nock.restore();
-    nock.activate();
     nock.disableNetConnect();
     nock.enableNetConnect(/localhost/);
     setupKoiosMocks();
@@ -41,29 +38,17 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
   beforeEach(async () => {
     await test.data.reset();
-
-    // Reactivate nock and setup mocks for each test
     nock.cleanAll();
-    nock.restore();
-    nock.activate();
-    nock.disableNetConnect();
-    nock.enableNetConnect(/localhost/);
     setupKoiosMocks();
   });
 
   afterEach(() => {
-    // Cleanup after each test
     nock.cleanAll();
-    nock.restore();
   });
 
   afterAll(async () => {
-    // final cleanup
     nock.cleanAll();
-    nock.restore();
-    nock.enableNetConnect(); // Re-enable normal network calls
-
-    // Shutdown app context to close backend connections
+    nock.enableNetConnect();
     await shutdownAppContext();
   });
 
