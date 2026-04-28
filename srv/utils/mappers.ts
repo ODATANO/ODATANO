@@ -655,6 +655,9 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
     hasOutputs: hasOutputs, // indicates if build has outputs
     wasSubmitted: false, // indicates if this build was submitted
     scriptHash: txbuildResult.scriptHash ?? null,
+    mintScriptHash: txbuildResult.mintScriptHash ?? null,
+    forcedInputsUsed: txbuildResult.forcedInputsUsed ?? 0,
+    referenceInputsUsed: txbuildResult.referenceInputsUsed ?? 0,
   }
 }
 

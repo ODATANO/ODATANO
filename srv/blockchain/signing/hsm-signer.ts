@@ -207,7 +207,7 @@ export class HsmSigner {
       // Re-encode preserving encoding metadata
       const signedTxCbor = toHex(Cbor.encode(
         new CborArray(txObj.array, { indefinite: txObj.indefinite })
-      ).toBuffer());
+      ));
 
       logger.info({
         txBodyHash,

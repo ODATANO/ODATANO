@@ -331,6 +331,49 @@ export type TxBuildRequest = {
   mintRedeemer?: JSONValue;
   /** When true, route output to enterprise script address derived from applied script hash */
   lockOnScript?: boolean;
+  /**
+   * Optional UTxOs that MUST be consumed as inputs. Resolved and added to the TxBuilder
+   * BEFORE coin selection runs. Coin selection then only covers the remaining shortfall.
+   * Deduplicated against plutusScriptExecution.scriptUtxo in spend transactions.
+   * Primary use case: one-shot minting seeds (policy parameterized with a specific TxOutRef).
+   */
+  forceInputs?: Array<{ txHash: string; outputIndex: number }>;
+  /**
+   * Optional CIP-31 reference inputs (read-only, not consumed). Resolved to full UTxOs
+   * and passed as readonlyRefInputs to Buildooor. The validator can read these UTxOs'
+   * datums/values without consuming them (e.g., oracle feeds, shared config).
+   */
+  referenceInputs?: Array<{ txHash: string; outputIndex: number }>;
+  /**
+   * Optional additional outputs appended after the primary recipient output, before change.
+   * Each extra output is independently min-ADA checked. Used for multi-output state-machine
+   * transitions (e.g. counter update + batch NFT outputs in a single transaction).
+   */
+  extraOutputs?: Array<{
+    address: string;
+    lovelaceAmount: string;
+    assets?: Array<{ unit: string; quantity: string }>;
+    inlineDatum?: JSONValue;
+    referenceScript?: string;
+  }>;
+  /**
+   * Optional Plutus V3 validator CBOR hex to attach as a referenceScript on the primary
+   * recipient output (CIP-33). Adding a ref script significantly increases the output's
+   * min-ADA — consumers must provide enough lovelaceAmount to cover it.
+   */
+  referenceScript?: string;
+  /**
+   * Optional validity-interval start in Posix milliseconds. Sets `invalidBefore`
+   * on the built transaction so that Plutus validators checking
+   * `expect Finite(lower) = tx.validity_range.lower_bound.bound_type` see a finite bound.
+   * Defaults inside the builder to `Date.now() - 120_000` (script builds only).
+   */
+  validityStartMs?: string;
+  /**
+   * Optional validity-interval end in Posix milliseconds. Sets `invalidAfter` (ledger TTL).
+   * Defaults inside the builder to `Date.now() + 3_600_000` (script builds only).
+   */
+  validityEndMs?: string;
 };
 
 /**
@@ -377,6 +420,8 @@ export type TxBuildContext = {
   protocolParameters: LedgerProtocolParameter;
   /** Optional evaluator for dynamic script execution unit calculation (requires Ogmios) */
   evaluateTransaction?: TxEvaluator;
+  /** CIP-31 reference input UTxOs (read-only, not consumed). Resolved from referenceInputs refs. */
+  referenceInputUtxos?: UTxO[];
 };
 
 /**
@@ -397,8 +442,14 @@ export type TxBuildResult = {
   warnings: string[];
   /** Blake2b-224 hash of the script (= policy ID for minting), if a script was provided */
   scriptHash?: string;
+  /** Blake2b-224 hash of the minting policy script (= policy ID), set in combined spend+mint transactions. */
+  mintScriptHash?: string;
   /** Enterprise script address derived from applied script hash (bech32). Set when lockOnScript=true. */
   scriptAddress?: string;
+  /** Number of forced inputs actually included in the built transaction (0 if forceInputs was not used). */
+  forcedInputsUsed?: number;
+  /** Number of CIP-31 reference inputs included in the built transaction (0 if referenceInputs was not used). */
+  referenceInputsUsed?: number;
 };
 
 /**

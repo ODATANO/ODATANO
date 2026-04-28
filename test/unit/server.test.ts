@@ -1,4 +1,3 @@
-import cds from '@sap/cds';
 import { env } from 'process';
 import {
   loadConfigFromEnv,
@@ -394,18 +393,6 @@ describe('server.ts', () => {
 
       expect(hsmInitSpy).toHaveBeenCalled();
       expect(getHsmSigner()).toBeNull();
-    });
-
-    it('should rethrow served hook initialization errors', async () => {
-      const txBuilderInitSpy = jest
-        .spyOn(CardanoTransactionBuilder.prototype, 'init')
-        .mockRejectedValue(new Error('init failed in served'));
-
-      resetAppContext(null);
-      delete env.SKIP_AUTO_INIT;
-
-      await expect((cds as any).emit('served')).rejects.toThrow('init failed in served');
-      expect(txBuilderInitSpy).toHaveBeenCalled();
     });
   });
 

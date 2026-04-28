@@ -5,7 +5,7 @@
 
 import cds from '@sap/cds';
 import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
-import { TEST_FIXTURES, plutusSpendRequestBody, mockScriptTxInfo } from './test-fixtures';
+import { TEST_FIXTURES, plutusSpendRequestBody, mockScriptTxInfo, mockUtxosWithAssets } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupTxResponseMock, teardownKoiosMocks, nock } from './mock-helpers';
 
 const { INSERT } = cds.ql;
@@ -88,6 +88,50 @@ describe('CardanoTransactionService Handler Validations', () => {
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect(status).toBe(200);
+    });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: '"not-an-array"',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: JSON.stringify([{ txHash: 'too-short', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -1 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
     });
   });
 
@@ -203,6 +247,58 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(400);
     });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: '{"txHash":"a","outputIndex":0}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: JSON.stringify([{ txHash: 'too-short', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -1 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
   });
 
   // ==========================================================================
@@ -234,6 +330,66 @@ describe('CardanoTransactionService Handler Validations', () => {
         scriptTxHash: 'a'.repeat(64),
         // scriptOutputIndex intentionally missing
         redeemerJson: '{"int": 0}',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not valid JSON', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputsJson that is not an array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: '42',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with invalid txHash', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: JSON.stringify([{ txHash: 'NOT_HEX_!!', outputIndex: 0 }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject forceInputs entry with negative outputIndex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        forceInputsJson: JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: -5 }]),
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect(status).toBe(400);
@@ -918,6 +1074,521 @@ describe('CardanoTransactionService Handler Validations', () => {
         address: TEST_FIXTURES.addressWithAssets,
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // FR-2: BuildPlutusSpendTransaction — extraOutputsJson validations
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction extraOutputsJson validations (FR-2)', () => {
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (extraOutputsJson: string) =>
+      test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, extraOutputsJson,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+    it('rejects extraOutputsJson that is not valid JSON', async () => {
+      const { status } = await post('not-valid-json{{{');
+      expect(status).toBe(400);
+    });
+
+    it('rejects extraOutputsJson that is not a JSON array', async () => {
+      const { status } = await post('{"not": "array"}');
+      expect(status).toBe(400);
+    });
+
+    it('rejects when extraOutputs length exceeds MAX_EXTRA_OUTPUTS (33 entries)', async () => {
+      const arr = Array.from({ length: 33 }, () => ({
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+      }));
+      const { status } = await post(JSON.stringify(arr));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with invalid Bech32 address', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: 'not-a-bech32-address', lovelaceAmount: '2000000' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with lovelaceAmount = "0"', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '0' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with negative lovelaceAmount string', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '-1000' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with non-numeric lovelaceAmount', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: 'abc' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with assets that is not an array', async () => {
+      const { status } = await post(JSON.stringify([
+        { address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000', assets: 'not-an-array' },
+      ]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with unit="lovelace"', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: 'lovelace', quantity: '5' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with non-hex unit', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: 'NOT_HEX_!!', quantity: '5' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects asset entry with quantity "0"', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        assets: [{ unit: TEST_FIXTURES.assetUnit, quantity: '0' }],
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with inlineDatumJson that is not a string', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        inlineDatumJson: { not: 'a-string' } as any,
+      }]));
+      expect(status).toBe(400);
+    });
+
+    it('rejects extra output with inlineDatumJson that is not valid JSON', async () => {
+      const { status } = await post(JSON.stringify([{
+        address: TEST_FIXTURES.emptyAddress, lovelaceAmount: '2000000',
+        inlineDatumJson: 'broken{json',
+      }]));
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // FR-1: BuildPlutusSpendTransaction — combined mint validations
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction combined mint validations (FR-1)', () => {
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (overrides: Record<string, any>) =>
+      test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, ...overrides,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+    it('rejects mintActionsJson without mintingPolicyScript', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintingPolicyScript without mintActionsJson', async () => {
+      const { status } = await post({ mintingPolicyScript: TEST_FIXTURES.validPlutusScript });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintRedeemerJson without mintActionsJson', async () => {
+      const { status } = await post({ mintRedeemerJson: '{"int": 0}' });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintActionsJson that is not valid JSON', async () => {
+      const { status } = await post({
+        mintActionsJson: 'broken{json',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintActionsJson that is not an array', async () => {
+      const { status } = await post({
+        mintActionsJson: '{"not": "array"}',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mint action with non-integer quantity string', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '3.5' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mint action that is not an object', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify(['not-an-object']),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      });
+      expect(status).toBe(400);
+    });
+
+    it('rejects mintRedeemerJson that is not valid JSON', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintRedeemerJson: 'broken{json',
+      });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // FR-3: BuildPlutusSpendTransaction — CSL builder rejects __INPUT_IDX__
+  // (this test file runs with TX_BUILDERS=csl, so the guard fires here)
+  // ==========================================================================
+
+  describe('BuildPlutusSpendTransaction __INPUT_IDX__ rejection (FR-3, CSL)', () => {
+    const PLACEHOLDER = `__INPUT_IDX:${'aa'.repeat(32)}#0__`;
+    const baseRequest = {
+      senderAddress: TEST_FIXTURES.addressWithAssets,
+      recipientAddress: TEST_FIXTURES.addressWithAssets,
+      lovelaceAmount: '2000000',
+      validatorScript: TEST_FIXTURES.validSpendingScript,
+      scriptTxHash: 'a'.repeat(64),
+      scriptOutputIndex: 0,
+      redeemerJson: '{"int": 0}',
+    };
+
+    const post = (overrides: Record<string, any>) => {
+      // tx_info mock for the script UTxO so we get past the indexer lookup and into the builder.
+      setupTxInfoMock([{
+        ...mockScriptTxInfo[0],
+        tx_hash: 'a'.repeat(64),
+        outputs: [{ ...mockScriptTxInfo[0].outputs[0] }],
+      }]);
+      return test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...baseRequest, ...overrides,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+    };
+
+    it('rejects placeholder in redeemerJson under CSL builder with a builder hint', async () => {
+      const { status, data } = await post({
+        redeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+      // The TransactionValidationError surfaces — message mentions Buildooor
+      if (data?.error?.message) {
+        expect(data.error.message).toMatch(/Buildooor/i);
+      }
+    });
+
+    it('rejects placeholder in datumJson under CSL builder', async () => {
+      const { status } = await post({
+        datumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in inlineDatumJson under CSL builder', async () => {
+      const { status } = await post({
+        inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in mintRedeemerJson under CSL builder (combined spend+mint)', async () => {
+      const { status } = await post({
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintRedeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+      });
+      expect([400, 500]).toContain(status);
+    });
+
+    it('rejects placeholder in extraOutputs[i].inlineDatumJson under CSL builder', async () => {
+      const { status } = await post({
+        extraOutputsJson: JSON.stringify([{
+          address: TEST_FIXTURES.emptyAddress,
+          lovelaceAmount: '2000000',
+          inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
+        }]),
+      });
+      expect([400, 500]).toContain(status);
+    });
+  });
+
+  // ==========================================================================
+  // BuildSimpleAdaTransaction — lockOnScript Validations (FR-A)
+  // ==========================================================================
+
+  describe('BuildSimpleAdaTransaction lockOnScript validations', () => {
+    const baseBody = {
+      senderAddress: TEST_FIXTURES.addressWithFunds,
+      recipientAddress: TEST_FIXTURES.emptyAddress,
+      lovelaceAmount: '2000000',
+      changeAddress: TEST_FIXTURES.addressWithFunds,
+    };
+
+    it('rejects lockOnScript=true without validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        lockOnScript: true,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects scriptParamsJson that is not a JSON array', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        lockOnScript: true,
+        scriptParamsJson: JSON.stringify({ x: 1 }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects malformed validatorScript hex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        ...baseBody,
+        validatorScript: 'zzz',
+        lockOnScript: true,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // DeriveScriptAddress Validations (FR-B)
+  // ==========================================================================
+
+  describe('DeriveScriptAddress validations', () => {
+    it('rejects missing validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {})
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects non-hex validatorScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: 'not_hex',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects odd-length hex', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: 'abc',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects unknown network', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        network: 'testnet',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects non-array scriptParamsJson', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+        scriptParamsJson: JSON.stringify({ x: 1 }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('accepts valid input and returns scriptAddress/scriptHash', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/DeriveScriptAddress', {
+        validatorScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+      expect(data.scriptHash).toMatch(/^[0-9a-f]{56}$/);
+      expect(typeof data.scriptAddress).toBe('string');
+    });
+  });
+
+  // ==========================================================================
+  // ExtractPaymentKeyHash Validations (FR-C)
+  // ==========================================================================
+
+  describe('ExtractPaymentKeyHash validations', () => {
+    it('rejects missing address', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {})
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects invalid bech32', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: 'not-an-address',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects stake address (validator rejects non-payment bech32)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: TEST_FIXTURES.validStakeAddress,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('accepts a valid payment address and returns 56-char hex', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: TEST_FIXTURES.addressWithFunds,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+      expect(data.paymentKeyHash).toMatch(/^[0-9a-f]{56}$/);
+    });
+  });
+
+  // ==========================================================================
+  // Validity bounds — cross-action validator smoke tests
+  //
+  // Verifies that validityStartMs / validityEndMs survive the CDS → handler →
+  // validators pipeline on all four Build actions. We only assert validator
+  // behavior (200/400), not on-chain correctness — that is covered by the
+  // builder unit tests and manual preview-network verification.
+  // ==========================================================================
+
+  describe('Validity bounds validation', () => {
+    const now = Date.now();
+    const validStart = String(now - 60_000);
+    const validEnd = String(now + 1_800_000);
+
+    it('BuildSimpleAdaTransaction accepts explicit validity window', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: validStart,
+        validityEndMs: validEnd,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('rejects non-numeric validityStartMs on BuildSimpleAdaTransaction', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: 'abc',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects validityStartMs >= validityEndMs', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validityStartMs: validEnd,
+        validityEndMs: validStart,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('BuildMultiAssetTransaction accepts explicit validity window', async () => {
+      setupUtxoMock(mockUtxosWithAssets);
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        assetsJson: JSON.stringify([{ unit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+        validityStartMs: validStart,
+        validityEndMs: validEnd,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('BuildMintTransaction rejects malformed validityEndMs', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: 'aa'.repeat(28) + '4d', quantity: '1' }]),
+        mintingPolicyScript: '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009',
+        validityEndMs: '-1',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
+  // BuildMintTransaction — metadataJson plumbing
+  //
+  // Validates that CIP-20 / label-674 style metadata survives the handler →
+  // builder pipeline and lands in the unsigned tx's auxiliary_data.
+  // ==========================================================================
+
+  describe('BuildMintTransaction metadataJson', () => {
+    const baseMintPayload = () => ({
+      senderAddress: TEST_FIXTURES.addressWithFunds,
+      recipientAddress: TEST_FIXTURES.emptyAddress,
+      lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
+      changeAddress: TEST_FIXTURES.addressWithFunds,
+      mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+      mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+    });
+
+    it('accepts metadataJson and persists a non-empty unsigned tx', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: JSON.stringify({ '674': { msg: ['hello mint'] } }),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+      expect(status).toBe(200);
+      expect(typeof data.unsignedTxCbor).toBe('string');
+      expect(data.unsignedTxCbor.length).toBeGreaterThan(0);
+    });
+
+    it('still builds successfully when metadataJson is omitted', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', baseMintPayload())
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(200);
+    });
+
+    it('rejects malformed metadataJson (invalid JSON)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: '{not valid json',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects metadataJson that is not an object (array)', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        metadataJson: JSON.stringify([1, 2, 3]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
       expect(status).toBe(400);
     });
   });

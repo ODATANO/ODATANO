@@ -60,12 +60,10 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
 
     afterEach(() => {
       nock.cleanAll();
-      nock.restore();
     });
 
     afterAll(async () => {
       nock.cleanAll();
-      nock.restore();
       nock.enableNetConnect();
       await shutdownAppContext();
     });

@@ -14,6 +14,15 @@ if (!process.env.KOIOS_API_URL) {
   process.env.KOIOS_API_URL = 'https://preview.koios.rest/api/v1';
 }
 
+// Koios's /pool_info endpoint on the free preview tier reliably takes longer
+// than tighter timeout budgets allow. Force the backend timeout to 60s for
+// this file regardless of what the env / CI workflow sets globally — the CI
+// workflow's 15s default is fine for Blockfrost but consistently fails Koios
+// pool reads with "All backends failed: Backend timeout (timeout after 15000ms)".
+// This only affects the Koios suite; other test files are untouched.
+process.env.PRIMARY_TIMEOUT_MS = '60000';
+process.env.FALLBACK_TIMEOUT_MS = '60000';
+
 // Import and run the shared test suite
 import { createBackendTestSuite } from './core-test-suite';
 import { createErrorBackendSuite } from './error-handling.backend';

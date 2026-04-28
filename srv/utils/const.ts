@@ -33,9 +33,25 @@ export const HIGH_EXECUTION_UNITS = {
 };
 
 /**
- * Execution unit buffer multiplier (10% safety margin)
+ * Execution unit buffer — relative multiplier applied to evaluator output.
+ * Combined with ABS_* floors below so small validators also get a meaningful cushion.
  */
 export const EXECUTION_UNIT_BUFFER = 1.1;
+
+/**
+ * Absolute ExUnits floor added on top of the relative multiplier.
+ *
+ * Rationale: validators that iterate reference inputs and decode inline CBOR
+ * datums (e.g. oracle-consuming mint policies) show a larger ScriptContext →
+ * ledger drift than the documented ~10k–30k CPU / ~50–100 mem band — real-world
+ * cases overshot a 50k/1k floor by ~27k CPU / ~56 mem, burning the submit fee.
+ * The floor is sized to cover reference-input + CBOR-decoding drift on top of
+ * the 10% relative multiplier; `max_tx_ex_units` still caps build-time totals,
+ * so oversizing here cannot push a tx past network limits — it only trades a
+ * few extra lovelace of fee for avoiding an opaque PlutusFailure on submit.
+ */
+export const ABS_CPU_BUFFER = 200_000;
+export const ABS_MEM_BUFFER = 5_000;
 
 /**
  * Transaction building constants
@@ -72,6 +88,13 @@ export const MAX_ARRAY_LENGTH = 1000;
 export const MAX_STRING_LENGTH = 65536;
 /** Maximum ech32 string length to prevent DoS */
 export const BECH32_MAX_LENGTH = 2000;
+/**
+ * Maximum hex length of transaction CBOR accepted by ParseTransactionCbor.
+ * Mainnet `maxTxSize` is currently 16 KiB; 64 KiB raw (= 128 KiB hex) leaves
+ * generous headroom for future protocol bumps and reference-script outputs
+ * while keeping the parser from being a memory-exhaustion vector.
+ */
+export const MAX_TX_CBOR_HEX_LENGTH = 65536 * 2;
 /** Maximum reasonable epoch number */
 export const MAX_EPOCH = 100_000;
 /** Standard pool ID payload length */
@@ -89,6 +112,26 @@ export const ED25519_KEY_HASH_HEX_LENGTH = 56;
 export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
 /** Minimum lovelace for a change output carrying native assets (2 ADA) */
 export const MIN_CHANGE_LOVELACE = 2_000_000;
+
+/**
+ * Shelley-era genesis parameters per network, used to construct Buildooor's
+ * GenesisInfos so `TxBuilder.posixToSlot()` can convert validity-window
+ * Posix ms into ledger slots. `slotLengthMs` is 1000 ms on all current networks.
+ */
+export const GENESIS_INFOS_BY_NETWORK = {
+  mainnet: { systemStartPosixMs: 1596491091000, slotLengthMs: 1000, startSlotNo: 4492800 },
+  preprod: { systemStartPosixMs: 1655683200000, slotLengthMs: 1000, startSlotNo: 0 },
+  preview: { systemStartPosixMs: 1666656000000, slotLengthMs: 1000, startSlotNo: 0 },
+} as const;
+
+/** Default validity-window start offset: `now - 2 min` to absorb clock skew. */
+export const DEFAULT_VALIDITY_START_OFFSET_MS = 120_000;
+
+/** Default validity-window end offset: `now + 1 h` — generous enough for human-latency sign+submit flows. */
+export const DEFAULT_VALIDITY_END_OFFSET_MS = 60 * 60 * 1000;
+
+/** Max accepted digits in a Posix-ms string (13 digits covers Unix ms timestamps through ~Nov 2286). */
+export const MAX_POSIX_MS_DIGITS = 13;
 
 /**
  * Generic 64-character hex string (used for block hashes and other 32-byte hex identifiers)

@@ -1,15 +1,162 @@
 import cds, { Request } from '@sap/cds';
+import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit, isValidCbor } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
-import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX } from './utils/const';
+import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX, BECH32_MAX_LENGTH } from './utils/const';
+import type { JSONValue } from './utils/types';
+
+const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
+type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
 const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
+
+/**
+ * Parse and validate forceInputsJson. Returns { parsed } on success (possibly undefined
+ * for empty array → treated as no-op) or { error } on validation failure.
+ */
+function parseForceInputs(
+  forceInputsJson: string | undefined
+): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
+  if (!forceInputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(forceInputsJson, 'forceInputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'forceInputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  const refs: Array<{ txHash: string; outputIndex: number }> = [];
+  for (const entry of jsonResult.parsed) {
+    if (!entry || typeof entry !== 'object') {
+      return { error: 'Each forceInputs entry must be an object with txHash and outputIndex' };
+    }
+    if (!isTxHash((entry as any).txHash)) {
+      return { error: 'Each forceInputs entry must have a valid 64-hex txHash' };
+    }
+    const idx = (entry as any).outputIndex;
+    if (!Number.isInteger(idx) || idx < 0) {
+      return { error: 'Each forceInputs entry must have a non-negative integer outputIndex' };
+    }
+    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+  }
+  return { parsed: refs };
+}
+
+/**
+ * Parse and validate referenceInputsJson (CIP-31 reference inputs).
+ * Same structure as forceInputsJson: JSON array of {txHash, outputIndex}.
+ */
+function parseReferenceInputs(
+  referenceInputsJson: string | undefined
+): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
+  if (!referenceInputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(referenceInputsJson, 'referenceInputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'referenceInputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  const refs: Array<{ txHash: string; outputIndex: number }> = [];
+  for (const entry of jsonResult.parsed) {
+    if (!entry || typeof entry !== 'object') {
+      return { error: 'Each referenceInputs entry must be an object with txHash and outputIndex' };
+    }
+    if (!isTxHash((entry as any).txHash)) {
+      return { error: 'Each referenceInputs entry must have a valid 64-hex txHash' };
+    }
+    const idx = (entry as any).outputIndex;
+    if (!Number.isInteger(idx) || idx < 0) {
+      return { error: 'Each referenceInputs entry must have a non-negative integer outputIndex' };
+    }
+    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+  }
+  return { parsed: refs };
+}
+
+/** Upper bound on extra outputs per transaction (defence against tx-size blow-up). */
+const MAX_EXTRA_OUTPUTS = 32;
+
+export interface ParsedExtraOutput {
+  address: string;
+  lovelaceAmount: string;
+  assets?: Array<{ unit: string; quantity: string }>;
+  inlineDatum?: JSONValue;
+  referenceScript?: string;
+}
+
+/**
+ * Parse and validate extraOutputsJson. Returns { parsed } on success (possibly undefined
+ * for empty array → no-op) or { error } on validation failure.
+ */
+function parseExtraOutputs(
+  extraOutputsJson: string | undefined
+): { parsed?: ParsedExtraOutput[]; error?: string } {
+  if (!extraOutputsJson) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(extraOutputsJson, 'extraOutputsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'extraOutputsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  if (jsonResult.parsed.length > MAX_EXTRA_OUTPUTS) {
+    return { error: `extraOutputsJson exceeds maximum of ${MAX_EXTRA_OUTPUTS} entries` };
+  }
+
+  const out: ParsedExtraOutput[] = [];
+  for (let i = 0; i < jsonResult.parsed.length; i++) {
+    const entry = jsonResult.parsed[i] as any;
+    if (!entry || typeof entry !== 'object') {
+      return { error: `extraOutputs[${i}] must be an object` };
+    }
+    if (typeof entry.address !== 'string' || !isValidBech32Address(entry.address)) {
+      return { error: `extraOutputs[${i}].address is not a valid Bech32 address` };
+    }
+    if (typeof entry.lovelaceAmount !== 'string' || !/^\d+$/.test(entry.lovelaceAmount) || entry.lovelaceAmount === '0') {
+      return { error: `extraOutputs[${i}].lovelaceAmount must be a positive integer string` };
+    }
+
+    let assets: Array<{ unit: string; quantity: string }> | undefined;
+    if (entry.assets !== undefined && entry.assets !== null) {
+      if (!Array.isArray(entry.assets)) {
+        return { error: `extraOutputs[${i}].assets must be an array` };
+      }
+      assets = [];
+      for (let j = 0; j < entry.assets.length; j++) {
+        const a = entry.assets[j];
+        if (!a || typeof a !== 'object') {
+          return { error: `extraOutputs[${i}].assets[${j}] must be an object` };
+        }
+        if (typeof a.unit !== 'string' || a.unit.toLowerCase() === 'lovelace' || !isAssetUnit(a.unit)) {
+          return { error: `extraOutputs[${i}].assets[${j}].unit must be a valid asset unit (policyId + assetName hex)` };
+        }
+        if (typeof a.quantity !== 'string' || !/^\d+$/.test(a.quantity) || a.quantity === '0') {
+          return { error: `extraOutputs[${i}].assets[${j}].quantity must be a positive integer string` };
+        }
+        assets.push({ unit: a.unit, quantity: a.quantity });
+      }
+    }
+
+    let inlineDatum: JSONValue | undefined;
+    if (entry.inlineDatumJson !== undefined && entry.inlineDatumJson !== null) {
+      if (typeof entry.inlineDatumJson !== 'string') {
+        return { error: `extraOutputs[${i}].inlineDatumJson must be a JSON string` };
+      }
+      const datumResult = validateJsonWithLimits(entry.inlineDatumJson, `extraOutputs[${i}].inlineDatumJson`);
+      if (!datumResult.valid) return { error: datumResult.error! };
+      inlineDatum = datumResult.parsed as JSONValue;
+    }
+
+    let referenceScript: string | undefined;
+    if (entry.referenceScriptHex !== undefined && entry.referenceScriptHex !== null) {
+      if (typeof entry.referenceScriptHex !== 'string' || !isValidCbor(entry.referenceScriptHex)) {
+        return { error: `extraOutputs[${i}].referenceScriptHex must be even-length hex` };
+      }
+      referenceScript = entry.referenceScriptHex;
+    }
+
+    out.push({ address: entry.address, lovelaceAmount: entry.lovelaceAmount, assets, inlineDatum, referenceScript });
+  }
+  return { parsed: out };
+}
 
 /**
  * Cardano Transaction Service Implementation
@@ -36,11 +183,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount },
+      { senderAddress, recipientAddress, lovelaceAmount, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount']
     );
     throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
@@ -50,6 +197,12 @@ module.exports = (srv: cds.Service) => {
 
     // parse optional output datum
     const cleanData = { ...req.data };
+
+    // parse optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', forceInputsResult.error, 'forceInputsJson');
+    cleanData.forceInputs = forceInputsResult.parsed;
+    delete cleanData.forceInputsJson;
     if (outputDatumJson) {
       const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
@@ -67,11 +220,66 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.assetsJson;
     }
 
+    // parse optional scriptParamsJson (for parameterized validators)
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'scriptParamsJson');
+      scriptParams = jsonResult.parsed as any[];
+      if (!Array.isArray(scriptParams)) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+    }
+
+    // lockOnScript requires a validatorScript to derive the target address from
+    if (lockOnScript && !validatorScript) {
+      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'lockOnScript requires validatorScript to derive the script address', 'validatorScript');
+    }
+
+    // Pre-compute script hash + address when lockOnScript is set; override recipient before build.
+    let derivedScriptHash: string | undefined;
+    let derivedScriptAddress: string | undefined;
+    if (lockOnScript && validatorScript) {
+      try {
+        const finalScript = scriptParams && scriptParams.length > 0
+          ? applyScriptParameters(validatorScript, scriptParams)
+          : validatorScript;
+        derivedScriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+        derivedScriptAddress = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
+      } catch (err: any) {
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', `Failed to derive script address: ${err.message}`, 'validatorScript');
+      }
+      cleanData.recipientAddress = derivedScriptAddress;
+    }
+
+    delete cleanData.validatorScript;
+    delete cleanData.scriptParamsJson;
+    delete cleanData.lockOnScript;
+
+    if (referenceScriptHex) {
+      cleanData.referenceScript = referenceScriptHex;
+    }
+    delete cleanData.referenceScriptHex;
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
-      logger.debug({ senderAddress, recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson }, 'Building simple ADA transaction');
+      logger.debug({ senderAddress, recipientAddress: cleanData.recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson, lockOnScript: !!lockOnScript }, 'Building simple ADA transaction');
 
-      return await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
+      const buildResult = await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
+
+      // Persist derived script address + hash on the build record when lockOnScript was applied
+      if (lockOnScript && derivedScriptHash && derivedScriptAddress && buildResult.id) {
+        buildResult.scriptHash = derivedScriptHash;
+        buildResult.scriptAddress = derivedScriptAddress;
+        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
+        await db.run(
+          UPDATE.entity(TransactionBuilds)
+            .set({ scriptHash: derivedScriptHash, scriptAddress: derivedScriptAddress })
+            .where({ id: buildResult.id })
+        );
+      }
+
+      return buildResult;
     });
   });
   /**
@@ -112,11 +320,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs (includes JSON parsing validation)
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, assetsJson },
+      { senderAddress, recipientAddress, lovelaceAmount, assetsJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
     );
     throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
@@ -148,6 +356,10 @@ module.exports = (srv: cds.Service) => {
         delete cleanData.outputDatumJson;
       }
 
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
+      delete cleanData.referenceScriptHex;
 
       const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
       logger.debug({ id: result.id, fee: result.fee, size: result.size }, 'Multi-asset transaction build result');
@@ -161,11 +373,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, metadataJson, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript },
+      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'mintActionsJson', 'mintingPolicyScript']
     );
     throwIfValidationErrors(req, 'BuildMintTransaction', errors);
@@ -243,10 +455,35 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
+    // Parse and validate optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
+    const forceInputs = forceInputsResult.parsed;
+
+    // Parse and validate optional referenceInputsJson (CIP-31)
+    const refInputsResult = parseReferenceInputs(referenceInputsJson);
+    if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
+    const referenceInputs = refInputsResult.parsed;
+
+    // Parse and validate optional metadataJson (auxiliary_data on the mint tx).
+    // validateTransactionInputs has already JSON-validated the string; re-parse here
+    // and enforce the label-object shape that the builder's metadata mapper expects.
+    let parsedMetadata: any | undefined;
+    if (metadataJson) {
+      try {
+        parsedMetadata = JSON.parse(metadataJson);
+      } catch (err: any) {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid metadataJson: ${err.message}`, 'metadataJson');
+      }
+      if (typeof parsedMetadata !== 'object' || parsedMetadata === null || Array.isArray(parsedMetadata)) {
+        return rejectInvalid(req, 'BuildMintTransaction', 'metadataJson must be an object with numeric label keys', 'metadataJson');
+      }
+    }
+
     // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions },
+        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0, hasMetadata: !!parsedMetadata },
         'Building minting transaction'
       );
 
@@ -258,6 +495,18 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.inlineDatumJson;
       delete cleanData.mintRedeemerJson;
       delete cleanData.lockOnScript;
+      delete cleanData.forceInputsJson;
+      delete cleanData.referenceInputsJson;
+      if (parsedMetadata) {
+        cleanData.metadataJson = parsedMetadata;
+      } else {
+        delete cleanData.metadataJson;
+      }
+
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
+      delete cleanData.referenceScriptHex;
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
@@ -287,7 +536,9 @@ module.exports = (srv: cds.Service) => {
         mintingPolicyScript: finalMintingPolicyScript,
         requiredSigners,
         inlineDatum,
-        mintRedeemer
+        mintRedeemer,
+        forceInputs,
+        referenceInputs
       });
 
       // Post-build: compute CIP-14 fingerprint and scriptAddress
@@ -325,11 +576,11 @@ module.exports = (srv: cds.Service) => {
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
     // Validate inputs
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson },
+      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
     );
     throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
@@ -388,6 +639,52 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
+    // Parse and validate optional forceInputsJson
+    const forceInputsResult = parseForceInputs(forceInputsJson);
+    if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
+    const forceInputs = forceInputsResult.parsed;
+
+    // Parse and validate optional referenceInputsJson (CIP-31)
+    const refInputsResult = parseReferenceInputs(referenceInputsJson);
+    if (refInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', refInputsResult.error, 'referenceInputsJson');
+    const referenceInputs = refInputsResult.parsed;
+
+    // Parse and validate optional extraOutputsJson
+    const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
+    if (extraOutputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', extraOutputsResult.error, 'extraOutputsJson');
+    const extraOutputs = extraOutputsResult.parsed;
+
+    // FR-1: Optional combined spend+mint parameters. mintActionsJson triggers the combined flow;
+    // mintingPolicyScript is required alongside it. mintRedeemerJson is optional.
+    let parsedMintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
+    let parsedMintRedeemer: any | undefined;
+    if (mintActionsJson) {
+      if (!mintingPolicyScript) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson requires mintingPolicyScript', 'mintingPolicyScript');
+      }
+      const mintJson = validateJsonWithLimits(mintActionsJson, 'mintActionsJson');
+      if (!mintJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mintJson.error!, 'mintActionsJson');
+      if (!Array.isArray(mintJson.parsed)) {
+        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
+      }
+      parsedMintActions = mintJson.parsed.map((action: any) => {
+        if (!action || typeof action !== 'object') {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
+        }
+        if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+        }
+        return { ...action, quantity: BigInt(action.quantity) };
+      });
+      if (mintRedeemerJson) {
+        const mrJson = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+        if (!mrJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mrJson.error!, 'mintRedeemerJson');
+        parsedMintRedeemer = mrJson.parsed;
+      }
+    } else if (mintingPolicyScript || mintRedeemerJson) {
+      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintingPolicyScript / mintRedeemerJson require mintActionsJson', 'mintActionsJson');
+    }
+
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
@@ -398,6 +695,24 @@ module.exports = (srv: cds.Service) => {
       let finalValidatorScript = validatorScript;
       if (scriptParams && scriptParams.length > 0) {
         finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
+      }
+
+      // FR-1: when the mint policy is byte-equal to the validator (multi-purpose script),
+      // re-use the script-params-applied validator hex. Otherwise pass the policy through unchanged.
+      let finalMintingPolicyScript: string | undefined;
+      if (parsedMintActions) {
+        finalMintingPolicyScript = (mintingPolicyScript === validatorScript)
+          ? finalValidatorScript
+          : mintingPolicyScript;
+
+        if (finalMintingPolicyScript && scriptParams && scriptParams.length > 0 && mintingPolicyScript === validatorScript) {
+          const appliedPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
+          for (const action of parsedMintActions) {
+            if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+              action.assetUnit = appliedPolicyId + action.assetUnit;
+            }
+          }
+        }
       }
 
       const cleanData: any = {
@@ -412,12 +727,27 @@ module.exports = (srv: cds.Service) => {
           datum: parsedDatum,
         },
         requiredSigners,
-        inlineDatum
+        inlineDatum,
+        forceInputs,
+        referenceInputs,
+        extraOutputs,
+        mintActions: parsedMintActions,
+        mintingPolicyScript: finalMintingPolicyScript,
+        mintRedeemer: parsedMintRedeemer
       };
+      if (referenceScriptHex) {
+        cleanData.referenceScript = referenceScriptHex;
+      }
       delete cleanData.requiredSignersJson;
       delete cleanData.scriptParamsJson;
       delete cleanData.inlineDatumJson;
       delete cleanData.lockOnScript;
+      delete cleanData.forceInputsJson;
+      delete cleanData.referenceInputsJson;
+      delete cleanData.extraOutputsJson;
+      delete cleanData.mintActionsJson;
+      delete cleanData.mintRedeemerJson;
+      delete cleanData.referenceScriptHex;
 
       // lockOnScript: route continuing output to enterprise script address
       if (lockOnScript && scriptParams && scriptParams.length > 0) {
@@ -671,6 +1001,76 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
     });
+  });
+
+  /**
+   * Derive the enterprise script address + script hash for a validator script,
+   * optionally after applying PlutusData parameters. No transaction is built.
+   */
+  srv.on('DeriveScriptAddress', async (req: Request) => {
+    const { validatorScript, scriptParamsJson, network } = req.data;
+
+    if (!validatorScript) return rejectMissing(req, 'DeriveScriptAddress', 'validatorScript');
+    if (typeof validatorScript !== 'string' || !/^[0-9a-fA-F]+$/.test(validatorScript) || validatorScript.length % 2 !== 0) {
+      return rejectInvalid(req, 'DeriveScriptAddress', 'validatorScript must be an even-length hex string', 'validatorScript');
+    }
+
+    let scriptParams: any[] | undefined;
+    if (scriptParamsJson) {
+      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      if (!jsonResult.valid) return rejectInvalid(req, 'DeriveScriptAddress', jsonResult.error!, 'scriptParamsJson');
+      if (!Array.isArray(jsonResult.parsed)) {
+        return rejectInvalid(req, 'DeriveScriptAddress', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
+      }
+      scriptParams = jsonResult.parsed as any[];
+    }
+
+    let targetNetwork: DeriveNetwork;
+    if (network) {
+      if (!VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
+        return rejectInvalid(req, 'DeriveScriptAddress', `Invalid network "${network}". Must be one of: ${VALID_DERIVE_NETWORKS.join(', ')}`, 'network');
+      }
+      targetNetwork = network as DeriveNetwork;
+    } else {
+      targetNetwork = getCardanoClient().network as DeriveNetwork;
+    }
+
+    try {
+      const finalScript = scriptParams && scriptParams.length > 0
+        ? applyScriptParameters(validatorScript, scriptParams)
+        : validatorScript;
+      const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+      const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
+      return { scriptAddress, scriptHash };
+    } catch (err: any) {
+      return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${err.message}`, 'validatorScript');
+    }
+  });
+
+  /**
+   * Extract the 28-byte payment credential (key hash or script hash) from a Bech32
+   * Cardano address. Pure local decoding — no blockchain call.
+   */
+  srv.on('ExtractPaymentKeyHash', async (req: Request) => {
+    const { address } = req.data;
+
+    if (!address) return rejectMissing(req, 'ExtractPaymentKeyHash', 'address');
+    if (!isValidBech32Address(address)) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Invalid bech32 address format', 'address');
+    }
+
+    try {
+      const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
+      const bytes = Buffer.from(bech32.fromWords(decoded.words));
+      // Cardano address: 1 header byte + 28-byte payment credential + (optional 28-byte stake credential)
+      if (bytes.length < 29) {
+        return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address is too short to contain a payment credential', 'address');
+      }
+      const paymentKeyHash = bytes.slice(1, 29).toString('hex');
+      return { paymentKeyHash };
+    } catch (err: any) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${err.message}`, 'address');
+    }
   });
 
 };

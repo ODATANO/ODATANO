@@ -1,6 +1,6 @@
 import { bech32 } from "bech32";
 import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
-  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
 import { getCardanoClient } from "../server";
@@ -202,9 +202,17 @@ export function isValidBech32Address(addrRaw: string): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
-  // get client to check right network
-  const client = getCardanoClient();
-  const network = client.network;
+  // get client to check right network. If the app context isn't ready yet
+  // (e.g., a backend init failure left it null), don't throw a raw error —
+  // return false so the handler responds with a clean 400 "Invalid bech32
+  // address format" instead of leaking "Application not initialized" to the
+  // client. The actual init failure is surfaced via stderr in server.ts.
+  let network: ReturnType<typeof getCardanoClient>['network'];
+  try {
+    network = getCardanoClient().network;
+  } catch {
+    return false;
+  }
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].addr.test(addr)) return false;
@@ -228,9 +236,13 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
   const stake = safeTrimString(stakeRaw);
   if (!stake) return false;
 
-  // get client to check right network
-  const client = getCardanoClient();
-  const network = client.network;
+  // Defensive against unset app context — same rationale as isValidBech32Address.
+  let network: ReturnType<typeof getCardanoClient>['network'];
+  try {
+    network = getCardanoClient().network;
+  } catch {
+    return false;
+  }
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].stake.test(stake)) return false;
@@ -262,6 +274,18 @@ export function isValidCbor(cborRaw: unknown): cborRaw is string {
   if (!cbor) return false;
   // basic validation: must be even-length hex string
   return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
+}
+
+/**
+ * Validate a transaction CBOR hex string for the ParseTransactionCbor action.
+ * Combines `isValidCbor` with a hard length limit to block memory-exhaustion
+ * attacks on the server-side CBOR parser.
+ * @param cborRaw - The raw value to validate
+ * @returns { boolean } true if valid hex AND within MAX_TX_CBOR_HEX_LENGTH
+ */
+export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
+  if (!isValidCbor(cborRaw)) return false;
+  return (cborRaw as string).trim().length <= MAX_TX_CBOR_HEX_LENGTH;
 }
 
 /**
@@ -316,6 +340,11 @@ export interface TransactionInputs {
   scriptOutputIndex?: number;
   redeemerJson?: string;
   datumJson?: string;
+  // CIP-33 reference script deploy
+  referenceScriptHex?: string;
+  // Validity interval (Posix ms, string-encoded to avoid JS number precision loss)
+  validityStartMs?: string;
+  validityEndMs?: string;
 }
 
 /**
@@ -413,6 +442,14 @@ export function validateTransactionInputs(
     });
   }
 
+  if (inputs.referenceScriptHex && !isValidCbor(inputs.referenceScriptHex)) {
+    errors.push({
+      type: 'invalid',
+      field: 'referenceScriptHex',
+      message: 'Invalid referenceScriptHex format (must be even-length hex)'
+    });
+  }
+
   if (inputs.scriptTxHash && !isTxHash(inputs.scriptTxHash)) {
     errors.push({
       type: 'invalid',
@@ -487,5 +524,35 @@ export function validateTransactionInputs(
     }
   }
 
+  const validityStartErr = validatePosixMsField(inputs.validityStartMs, 'validityStartMs');
+  if (validityStartErr) errors.push(validityStartErr);
+  const validityEndErr = validatePosixMsField(inputs.validityEndMs, 'validityEndMs');
+  if (validityEndErr) errors.push(validityEndErr);
+  if (!validityStartErr && !validityEndErr && inputs.validityStartMs && inputs.validityEndMs) {
+    if (BigInt(inputs.validityStartMs) >= BigInt(inputs.validityEndMs)) {
+      errors.push({
+        type: 'invalid',
+        field: 'validityEndMs',
+        message: 'validityEndMs must be greater than validityStartMs'
+      });
+    }
+  }
+
   return errors;
+}
+
+/**
+ * Validate a Posix-ms string field: must be a non-negative integer with at most
+ * MAX_POSIX_MS_DIGITS digits. Returns null if valid or absent.
+ */
+function validatePosixMsField(value: string | undefined, field: 'validityStartMs' | 'validityEndMs'): ValidationError | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d+$/.test(value) || value.length > MAX_POSIX_MS_DIGITS) {
+    return {
+      type: 'invalid',
+      field,
+      message: `${field} must be a non-negative integer string in milliseconds (max ${MAX_POSIX_MS_DIGITS} digits)`
+    };
+  }
+  return null;
 }

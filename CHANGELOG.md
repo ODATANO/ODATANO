@@ -5,6 +5,83 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.5] - 27-04-2026 - CBOR Tx Parsing + Script Address Utilities + Validity Bounds
+
+### Added
+
+- **`ParseTransactionCbor` action** on `CardanoODataService`: decodes a hex-encoded transaction CBOR (signed or unsigned) into a structured representation (inputs/outputs/fee/witnesses/auxiliary data). Implementation lives in pure utilities at `srv/cbor/parse.ts` and is re-exported from `src/index.ts` for direct programmatic use.
+- **CBOR hex validation** for `ParseTransactionCbor`: explicit length cap and hex-shape checks reject oversized payloads upfront (memory-exhaustion guard) and surface dedicated error codes from `srv/utils/error-codes.ts`.
+- **`lockOnScript` flag** on `BuildPlutusSpendTransaction`: when `true`, change is sent back to the script address instead of the sender — required for stateful validators that must keep their UTxO under the script.
+- **`DeriveScriptAddress` action**: derives the bech32 script address (network-aware) from a Plutus V3 validator hex, optionally applying script parameters first. Useful for clients that need the address before locking funds.
+- **`ExtractPaymentKeyHash` action**: bech32-decodes a payment address and returns the 28-byte payment credential hash — convenience for building required-signers / datum fields client-side.
+- **Validity-window bounds** (`validityStartMs` / `validityEndMs`): both Build endpoints accept Posix-ms validity bounds. Buildooor converts via `posixToSlot()` using `GENESIS_INFOS_BY_NETWORK` (const.ts); CSL still ignores them pending the PPViewHashesDontMatch fix.
+
+### Changed
+
+- **Buildooor validity-window passthrough**: when no explicit bounds are provided, Buildooor falls back to `DEFAULT_VALIDITY_START_OFFSET_MS` (-2 min) / `DEFAULT_VALIDITY_END_OFFSET_MS` (+1 h) to absorb clock skew while staying generous for human sign+submit latency.
+- **`getTxHashFromCbor` parameter rename**: `signedTxCbor` → `txCbor`. The function accepts both signed and unsigned CBOR (hash is body-only). JSDoc and validation error messages updated accordingly.
+- **`BlockfrostBackend` constructor**: network is now passed explicitly into `BlockFrostAPI` to fix preprod initialization, which previously fell back to mainnet under certain `cardanoNetwork` resolution paths.
+- **Validity-bounds validation** added to `validateTransactionInputs()`: rejects non-numeric values, negative timestamps, more than `MAX_POSIX_MS_DIGITS` (13) digits, and `validityStartMs > validityEndMs`.
+
+### Fixed
+
+- **Forced/reference input UTxO synthesis**: `_resolveForceInputs` and `_resolveReferenceInputs` now copy `dataHash` and `referenceScriptHash` from `Transaction.outputs[]` into the synthesized `UTxO`'s `datumHash` / `scriptRef` fields. Previously dropped, which prevented Buildooor input-side ref-script preservation from seeing them on resolved (non-sender) UTxOs.
+- **`forcedInputsUsed` accuracy** (CSL): mint and Plutus-spend paths now derive the count from the actual `_partitionForcedInputs` result instead of `req.forceInputs.length`. Eliminates over-count from request-side duplicates and refs not present in `ctx.utxos`. The Plutus-spend path additionally subtracts the script-UTxO ref so it never counts toward forced inputs.
+- **`MAX_POSIX_MS_DIGITS` doc**: corrected the comment ("year 9999" → "Unix ms timestamps through ~Nov 2286"). The 13-digit cap itself is unchanged.
+
+### Internal
+
+- New `srv/cbor/` module: `parse.ts` (decoder) + `index.ts` (barrel). Pure utilities — no CSL or Buildooor dependency.
+- Version bumped `1.6.1` → `1.7.5`. Intermediate `1.7.0`–`1.7.3` were not released externally.
+
+## [v1.6.1] - 18-04-2026 - CIP-33 Reference Scripts + Buildooor 0.2.6 Upgrade
+
+### Added
+
+- **CIP-33 reference script deploy** (`referenceScriptHex` parameter): attach a Plutus V3 validator as a referenceScript on the primary output so consumers can deploy ref-scripts through ODATANO instead of bypassing it.
+  - Available on `BuildSimpleAdaTransaction`, `BuildMultiAssetTransaction`, `BuildMintTransaction`, `BuildPlutusSpendTransaction`.
+  - Supported by both Buildooor and CSL builders. CSL uses `PlutusScript.new_v3()` (CBOR-wrapped) per the v15 hashing rule.
+  - Note: attaching a ref script inflates output min-ADA significantly (typically 15–30+ ADA depending on script size). Consumers must supply enough `lovelaceAmount` to cover it — a `TransactionValidationError` is thrown upfront with the required min-ADA if underfunded.
+- **Per-extraOutput `referenceScriptHex`**: each entry in `extraOutputsJson` may now carry its own `referenceScriptHex`, enabling "spend + deploy ref-script on a dedicated extra output" flows in a single atomic transaction.
+- **Input-side `refScript` preservation** (Buildooor only, Koios-sourced UTxOs): when a forced or reference input carries its ref-script bytes, the Buildooor UTxO mapper now passes them through for local Plutus evaluation. Blockfrost and Ogmios backends return hash-only `scriptRef` today — those UTxOs continue to resolve server-side at validation.
+
+### Changed
+
+- **Buildooor upgrade**: `@harmoniclabs/buildooor` bumped from `^0.1.28` to `^0.2.6`. Buildooor's public API is byte-identical between these versions; the migration is driven entirely by transitive deps.
+- **Cardano ledger types**: `@harmoniclabs/cardano-ledger-ts` bumped from `^0.4.6` to `^0.5.1`.
+- **Cost models**: `@harmoniclabs/cardano-costmodels-ts` bumped from `~1.3.0` to `~1.4.0`. The 1.4.0 API dropped `.toBuffer()` on `costModelsToLanguageViewCbor()` return values, now a raw `Uint8Array`.
+- **CBOR / UPLC encoding sites**: removed `.toBuffer()` on nine call sites in `buildooor-tx.ts`, `csl-tx.ts`, `signing-helper.ts`, `hsm-signer.ts`, `tx-build-helper.ts`, and two integration test sites. The `@harmoniclabs/cbor` 2.x and `@harmoniclabs/uplc` 2.x packages now return `Uint8Array` directly, matching `toHex()` consumption.
+- **`applyScriptParameters` (tx-build-helper.ts)**: rewritten for uplc 2.x — `compileUPLC()` now returns `Uint8Array` directly; output `toString()` replaced with `toHex()` (needed because `Uint8Array.toString()` returns a CSV of bytes, not hex).
+- **Blockfrost-js pin**: `@blockfrost/blockfrost-js` narrowed from `^6.0.0` to `~6.0.0` to keep nock-based test mocks aligned with the 6.0.x HTTP behaviour (6.1.x retries trigger `times()` mock exhaustion).
+
+### Fixed
+
+- **Buildooor transaction build crashes** with `costModelsToLanguageViewCbor(...).toBuffer is not a function` — root cause was the v1.5.x `cardano-costmodels-ts` pin leaking 1.4.0 through the `^` range. The Buildooor upgrade + removed `.toBuffer()` calls close this permanently.
+- **Test suite hygiene** (caused by transitive-dep drift, not production regressions):
+  - `cardano-client.test.ts`: `setupBlockfrostHealthMock` was mocking `/api/health`, but `BlockfrostBackend.init()` hits `/api/v0/blocks/latest`. Corrected, plus added `.times(5)` on 500-response mocks to absorb got's default 5xx retries during init.
+  - `koios-backend.test.ts`: `fetchWithRetryOnEmpty` performs 1 initial + 3 retries = 4 attempts. Two tests that mocked `.times(2)` were leaking unhandled async errors (via the 2000 ms retry `setTimeout`) into subsequent tests. Corrected to `.times(4)`.
+  - `error-paths.test.ts` circuit-breaker test: `nock.pendingMocks()` counting was unreliable because got's internal retries consume multiple HTTP requests per backend-level call. Replaced with `jest.spyOn(backend, 'getNetworkInformation')` to count backend invocations directly.
+  - `hsm-signer.test.ts`: `jest.mock('pkcs11js', ...)` now uses `{ virtual: true }` so the suite runs on machines without the optional `pkcs11js` native module installed.
+  - `server.test.ts`: removed the stale "should rethrow served hook initialization errors" test — contradicts the served hook's intentional error-swallow (plugin contract: host app must not crash on plugin init failure).
+
+### Internal
+
+- CDS `extraOutputsJson` `@description` expanded to document the new per-entry `referenceScriptHex` field.
+- Version bumped `1.5.2` → `1.6.1` (first 1.6.x release).
+
+### Known limitations
+
+- **Hash-only `scriptRef` resolution**: Blockfrost and Ogmios return `referenceScriptHash` only, not the script bytes. A future release may add a `/scripts/{hash}/cbor` resolver so hash-only UTxOs reach Koios parity for local Plutus evaluation.
+- **CSL still rejects `__INPUT_IDX__` placeholders**: input-index placeholder substitution remains Buildooor-only (CSL's coin selection is opaque to enumeration).
+
+### Follow-ups (deferred)
+
+- `/scripts/{hash}/cbor` resolver across all three backends.
+- Normalizing `UTxO.scriptRef` into separate `referenceScriptHash` and `referenceScript` fields (currently overloaded).
+- Upgrading Buildooor beyond 0.2.6.
+
+---
+
 ## [v1.0] - 12-03-2026 - Production Release
 
 ### Added

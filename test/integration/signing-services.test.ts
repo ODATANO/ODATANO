@@ -686,7 +686,7 @@ describe('Signing Services Integration Tests', () => {
             entries.push({ k: new CborUInt(0), v: new CborArray([vkeyWitness]) });
             txObj.array[1] = new CborMap(entries, { indefinite: origWs.indefinite });
           }
-          return toHex(Cbor.encode(new CborArray(txObj.array, { indefinite: txObj.indefinite })).toBuffer());
+          return toHex(Cbor.encode(new CborArray(txObj.array, { indefinite: txObj.indefinite })));
         },
         shutdown: jest.fn(),
       } as any;
@@ -974,7 +974,7 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
       return toHex(Cbor.encode(
         new CborArray(txObj.array, { indefinite: txObj.indefinite })
-      ).toBuffer());
+      ));
     },
     shutdown: jest.fn(),
   } as any;

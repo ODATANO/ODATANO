@@ -842,6 +842,10 @@ entity TransactionBuilds : temporal {
         @description: 'Blake2b-224 hash of the Plutus script used (= policy ID for minting transactions)'
         scriptHash     : String(56);
 
+        @title      : 'Mint Script Hash'
+        @description: 'Blake2b-224 hash of the minting policy script (= policy ID) for combined spend+mint transactions. Only set when BuildPlutusSpendTransaction included mintActionsJson.'
+        mintScriptHash : String(56);
+
         @title      : 'Asset Fingerprint'
         @description: 'CIP-14 fingerprint of the first minted asset (e.g. asset1...). Convenience field for single-asset mints.'
         fingerprint    : String(44);
@@ -849,6 +853,14 @@ entity TransactionBuilds : temporal {
         @title      : 'Script Address'
         @description: 'Enterprise script address derived from the applied script hash (bech32). Only set when lockOnScript=true.'
         scriptAddress  : String(120);
+
+        @title      : 'Forced Inputs Used'
+        @description: 'Number of forced inputs (from forceInputsJson) actually included in the built transaction. 0 when forceInputsJson was not provided.'
+        forcedInputsUsed : Integer;
+
+        @title      : 'Reference Inputs Used'
+        @description: 'Number of CIP-31 reference inputs (from referenceInputsJson) included in the built transaction. 0 when referenceInputsJson was not provided.'
+        referenceInputsUsed : Integer;
 
         @title      : 'Collateral Available'
         @description: 'Indicates if collateral UTxOs were already available (SetCollateral only). When true, no transaction build was needed.'

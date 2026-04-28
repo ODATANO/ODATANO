@@ -35,6 +35,13 @@ module.exports = {
 
   openHandlesTimeout: 0,
 
+  // Force single worker. Multiple parallel workers boot cds.test() concurrently
+  // and all hit Blockfrost's /blocks/latest at startup; the preview free-tier
+  // key rate-limits, init throws AllBackendsInitFailedError, and every test in
+  // those suites fails. The package.json scripts already pass --runInBand,
+  // but pinning here also covers `npx jest` invocations.
+  maxWorkers: 1,
+
   // Increase test timeout (default is 5000ms)
   testTimeout: 120000,
 

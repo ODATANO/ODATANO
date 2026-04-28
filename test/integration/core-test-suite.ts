@@ -5,10 +5,7 @@ import {
   configureBackendForTest,
   TEST_FIXTURES,
 } from './test-fixtures';
-import { shutdownAppContext } from '../../srv/server';
-
 const { SELECT, INSERT } = cds.ql;
-jest.setTimeout(200000);
 
 // Helper function to create test suite for a specific backend
 export function createBackendTestSuite(backendConfig: TestConfiguration) {
@@ -17,6 +14,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
   configureBackendForTest(backendConfig);
 
   describe(`Complete Service Tests Cardano Service [${backendConfig.backendName.toUpperCase()}]`, () => {
+    // 200s — covers slow live-network reads (Koios pool/account lookups can take 10-30s).
+    // Set inside the describe so the value is snapshotted when these tests are registered;
+    // the sibling error-handling suite reverts to a tighter 20s for its own tests.
+    jest.setTimeout(200000);
+
     // cds.test() starts server which triggers cds.on('served') → creates AppContext automatically
     const test = cds.test(__dirname + '/../../');
     const expect = test.expect;
@@ -26,10 +28,12 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       await test.data.reset();
     });
 
-    // Cleanup app context after all tests
-    afterAll(async () => {
-      await shutdownAppContext();
-    });
+    // Note: shutdownAppContext is NOT called here. core.{blockfrost,koios}.test.ts
+    // registers createErrorBackendSuite as a sibling suite right after this one in
+    // the same file. Calling shutdownAppContext here would null appContext while
+    // the same cds.test() server keeps running — every handler call in the next
+    // suite would then throw "Application not initialized". The error-handling
+    // suite owns the file-level teardown.
 
     describe('ODATANO Milestone 1 - CardanoService Tests', () => {
       // ============================================================================

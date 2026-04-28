@@ -433,6 +433,123 @@ export const mockScriptTxInfoWithAssets = [{
   }]
 }];
 
+// ---------------------------------------------------------------------------
+// FR-2 Fixtures — extraOutputsJson
+// ---------------------------------------------------------------------------
+
+/** Single ADA-only extra output, generously sized to clear min-ADA on any address. */
+export const validExtraOutputAdaOnly = {
+  address: TEST_FIXTURES.emptyAddress,
+  lovelaceAmount: '2000000',
+};
+
+/** Extra output carrying a native asset alongside ADA. */
+export const validExtraOutputWithAssets = {
+  address: TEST_FIXTURES.emptyAddress,
+  lovelaceAmount: '2500000',
+  assets: [{ unit: TEST_FIXTURES.assetUnit, quantity: '10' }],
+};
+
+/** Extra output with an inline PlutusData datum. */
+export const validExtraOutputWithDatum = {
+  address: TEST_FIXTURES.emptyAddress,
+  lovelaceAmount: '2000000',
+  inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: 7 }] }),
+};
+
+export const plutusSpendWithExtraOutputsRequestBody = {
+  ...plutusSpendRequestBody,
+  // Both ADA-only so coin selection against the ADA-only mock funding succeeds.
+  extraOutputsJson: JSON.stringify([
+    validExtraOutputAdaOnly,
+    { ...validExtraOutputAdaOnly, lovelaceAmount: '3000000' },
+  ]),
+};
+
+export const plutusSpendWithExtraOutputInlineDatumRequestBody = {
+  ...plutusSpendRequestBody,
+  extraOutputsJson: JSON.stringify([validExtraOutputWithDatum]),
+};
+
+/** 33 entries — exceeds the MAX_EXTRA_OUTPUTS=32 cap by one. */
+export const tooManyExtraOutputs = Array.from({ length: 33 }, () => ({ ...validExtraOutputAdaOnly }));
+
+/** Below the typical min-ADA — designed to trip the per-output guard. */
+export const extraOutputBelowMinAda = {
+  address: TEST_FIXTURES.emptyAddress,
+  lovelaceAmount: '100000',
+};
+
+// ---------------------------------------------------------------------------
+// Fixtures — lockOnScript / DeriveScriptAddress / ExtractPaymentKeyHash
+// ---------------------------------------------------------------------------
+
+/** PlutusData JSON array used as params for script parameter application. */
+export const validScriptParamsJson = JSON.stringify([{ int: 42 }]);
+
+/** A different param set — used to assert that different params ⇒ different address. */
+export const altScriptParamsJson = JSON.stringify([{ int: 99 }]);
+
+/** BuildSimpleAdaTransaction body extended with lockOnScript. */
+export const simpleLockOnScriptRequestBody = {
+  ...simpleRequestBody,
+  validatorScript: TEST_FIXTURES.validPlutusScript,
+  lockOnScript: true,
+};
+
+export const simpleLockOnScriptWithParamsRequestBody = {
+  ...simpleLockOnScriptRequestBody,
+  scriptParamsJson: validScriptParamsJson,
+};
+
+// ---------------------------------------------------------------------------
+// FR-1 Fixtures — combined spend+mint on BuildPlutusSpendTransaction
+// ---------------------------------------------------------------------------
+
+export const plutusSpendWithMintRequestBody = {
+  ...plutusSpendRequestBody,
+  mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+  mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+  mintRedeemerJson: JSON.stringify({ constructor: 0, fields: [] }),
+};
+
+/**
+ * Multi-purpose script: mintingPolicyScript === validatorScript byte-equal,
+ * exercises the script-params-applied-validator reuse on the mint side.
+ */
+export const plutusSpendMultiPurposeScriptRequestBody = {
+  ...plutusSpendRequestBody,
+  mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+  mintingPolicyScript: TEST_FIXTURES.validSpendingScript,
+};
+
+export const plutusSpendWithBurnRequestBody = {
+  ...plutusSpendRequestBody,
+  mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '-1' }]),
+  mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+};
+
+// ---------------------------------------------------------------------------
+// FR-3 Fixtures — __INPUT_IDX__ placeholder resolution
+// ---------------------------------------------------------------------------
+
+/** Redeemer pointing at the script UTxO via its post-sort index. */
+export const indexPlaceholderRedeemer = {
+  constructor: 0,
+  fields: [{ int: `__INPUT_IDX:${SCRIPT_UTXO_TX_HASH}#${SCRIPT_UTXO_OUTPUT_INDEX}__` }],
+};
+
+export const plutusSpendWithIndexPlaceholderRequestBody = {
+  ...plutusSpendRequestBody,
+  redeemerJson: JSON.stringify(indexPlaceholderRedeemer),
+};
+
+/** Placeholder hash that does NOT correspond to any input — expected to error. */
+export const bogusIndexPlaceholderRedeemer = {
+  constructor: 0,
+  fields: [{ int: `__INPUT_IDX:${'cc'.repeat(32)}#0__` }],
+};
+
 /**
  * Configure environment for a specific backend test
  * This ensures only the specified backend is used as primary

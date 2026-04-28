@@ -27,6 +27,22 @@ export const ERROR_CODES = {
   TX_VALIDATION_FAILED: 'ODATANO_TX_VALIDATION_FAILED',
 
   /**
+   * 400 – Transaction CBOR parse failed
+   * Indicates that the provided transaction CBOR could not be decoded
+   * (malformed bytes, truncated, not a Cardano Conway tx). Distinct from
+   * TX_VALIDATION_FAILED which applies to decoded-but-invalid transactions.
+   */
+  TX_PARSE_FAILED: 'ODATANO_TX_PARSE_FAILED',
+
+  /**
+   * 400 – Plutus script validation failed
+   * Indicates that the ledger cleanly rejected the transaction due to script
+   * evaluation — e.g. PlutusFailure, CekError, overspent budget, script hash
+   * mismatch. Distinct from provider outages (503) and generic tx validation.
+   */
+  SCRIPT_VALIDATION_FAILURE: 'ODATANO_SCRIPT_VALIDATION_FAILURE',
+
+  /**
    * 409 – Transaction already submitted
    * Indicates that the transaction has already been submitted (duplicate/replay)
    */

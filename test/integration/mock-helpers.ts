@@ -81,22 +81,18 @@ export function setupTxInfoMock(txInfoResponse: any[]) {
 
 export function setupNocks() {
   nock.cleanAll();
-  nock.restore();
-  nock.activate();
   nock.disableNetConnect();
   nock.enableNetConnect(/localhost/);
 }
 
 export function teardownKoiosMocks() {
   nock.cleanAll();
-  nock.restore();
   nock.enableNetConnect();
 }
 
 export function resetKoiosMocks() {
   nock.cleanAll();
-  nock.restore();
-  nock.enableNetConnect();  // Re-enable network to prevent circular reference errors from failed requests
+  nock.enableNetConnect();
 }
 
 // Re-export nock for direct use in tests

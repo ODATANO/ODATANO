@@ -62,6 +62,35 @@ export class TransactionValidationError extends BackendError {
   /** Constructor
    * @param message detailed validation failure message
    * @param originalError original error object
+   * @param code optional override (e.g. `TX_PARSE_FAILED` for CBOR decode failures);
+   *             defaults to `TX_VALIDATION_FAILED`.
+   */
+  constructor(
+    message: string,
+    originalError?: any,
+    code: ErrorCode = ERROR_CODES.TX_VALIDATION_FAILED
+  ) {
+    super(
+      message,
+      400,
+      code,
+      undefined,
+      originalError
+    );
+  }
+}
+
+/**
+ * ScriptValidationError - Plutus script validation failed on the ledger (400)
+ * Distinguishes a clean ledger rejection (PlutusFailure, CekError, overspent
+ * budget, script hash mismatch) from provider outages (503). The transaction
+ * was well-formed enough to reach phase-2 validation — retrying against a
+ * different provider will not help; the tx shape itself is the problem.
+ */
+export class ScriptValidationError extends BackendError {
+  /** Constructor
+   * @param message detailed script failure message (typically from ledger)
+   * @param originalError original error object
    */
   constructor(
     message: string,
@@ -70,7 +99,7 @@ export class TransactionValidationError extends BackendError {
     super(
       message,
       400,
-      ERROR_CODES.TX_VALIDATION_FAILED,
+      ERROR_CODES.SCRIPT_VALIDATION_FAILURE,
       undefined,
       originalError
     );
@@ -283,13 +312,14 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
  *
  * Priority (checked in order):
  * 1. TX Submission — Already submitted/duplicate → 409
- * 2. TX Submission — Validation/Signature errors → 400
- * 3. Message indicates "not found" → 404 (even if provider returns 5xx)
- * 4. Rate limiting (status 429 or message patterns) → 429
- * 5. Explicit 404 status → 404
- * 6. 5xx errors → 503 (Provider unavailable, retry-able)
- * 7. Other 4xx → 503
- * 8. Unknown/network errors → 503 (default fallback)
+ * 2. TX Submission — Plutus script validation failure → 400 (ScriptValidationError)
+ * 3. TX Submission — Validation/Signature errors → 400
+ * 4. Message indicates "not found" → 404 (even if provider returns 5xx)
+ * 5. Rate limiting (status 429 or message patterns) → 429
+ * 6. Explicit 404 status → 404
+ * 7. 5xx errors → 503 (Provider unavailable, retry-able)
+ * 8. Other 4xx → 503
+ * 9. Unknown/network errors → 503 (default fallback)
  */
 export function normalizeBackendError(
   err: any,
@@ -329,7 +359,30 @@ export function normalizeBackendError(
     return new TransactionAlreadySubmittedError(txHashMatch?.[1] || 'unknown', err);
   }
 
-  // Priority 2: TX Submission - Validation/Signature errors → 400
+  // Priority 2: TX Submission - Plutus script validation → 400 (ScriptValidationError)
+  // Must precede the generic validation block: these are ledger phase-2 rejections
+  // (tx was well-formed), not provider outages and not generic witness/CBOR issues.
+  const scriptValidationHints = [
+    'plutusfailure',
+    'plutus failure',
+    'cekerror',
+    'cek error',
+    'overspending the budget',
+    'overspent',
+    'script failure',
+    'script failed',
+    'script evaluation',
+    'ppviewhashesdontmatch',
+    'scriptsnotpaidforall',
+  ];
+  if (scriptValidationHints.some(h => messageLower.includes(h))) {
+    return new ScriptValidationError(
+      `Script validation failed: ${message}`,
+      err
+    );
+  }
+
+  // Priority 3: TX Submission - Validation/Signature errors → 400
   const validationErrorHints = [
     'signature',
     'witness',
@@ -338,7 +391,6 @@ export function normalizeBackendError(
     'malformed',
     'invalid cbor',
     'invalid transaction',
-    'script failure',
   ];
   if (validationErrorHints.some(h => messageLower.includes(h))) {
     return new TransactionValidationError(
@@ -347,7 +399,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 3: Message indicates "not found" or equivalent → always 404
+  // Priority 4: Message indicates "not found" or equivalent → always 404
   // This also handles providers returning wrong status codes for missing resources
   const notFoundHints = [
     'not found',
@@ -365,7 +417,7 @@ export function normalizeBackendError(
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 4: Rate limiting detection (status 429 or message patterns)
+  // Priority 5: Rate limiting detection (status 429 or message patterns)
   if (status === 429 ||
     messageLower.includes('rate limit') ||
     messageLower.includes('too many requests') ||
@@ -381,12 +433,12 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 5: Explicit 404 status
+  // Priority 6: Explicit 404 status
   if (status === 404) {
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 6: 5xx errors → Provider unavailable (retry-able)
+  // Priority 7: 5xx errors → Provider unavailable (retry-able)
   if (status >= 500) {
     return new ProviderUnavailableError(
       message || 'Provider returned server error',
@@ -396,7 +448,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 7: Other 4xx → differentiate by status code
+  // Priority 8: Other 4xx → differentiate by status code
   if (status === 400 || status === 422) {
     return new TransactionValidationError(
       message || `Provider returned ${status}: invalid request`, err);
@@ -415,7 +467,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 8: Unknown/network errors → treat as unavailable (default fallback)
+  // Priority 9: Unknown/network errors → treat as unavailable (default fallback)
   return new ProviderUnavailableError(
     message || 'Unknown backend error',
     backendName,

@@ -1,5 +1,5 @@
 using {odatano.cardano as db} from '../db/schema';
-using { Blake2b256, Bech32 } from '../db/types';
+using { Blake2b256, Bech32, ParsedTransaction } from '../db/types';
 
 /**
  * Cardano OData Service
@@ -207,4 +207,11 @@ service CardanoODataService @(impl: './cardano-service') {
     @title      : 'Get Ledger Protocol Parameters'
     @description: 'Retrieve the current ledger protocol parameters'
     action GetLedgerProtocolParameters()                     returns LedgerProtocolParameters;
+
+    @title      : 'Parse Transaction CBOR'
+    @description: 'Parse hex-encoded transaction CBOR (signed or unsigned) into structured fields. Pure function, no network call, no DB write.'
+    action ParseTransactionCbor(
+                                @title: 'Transaction CBOR'
+                                @description: 'Hex-encoded transaction CBOR; signed or unsigned. Capped at 128 KiB of hex.'
+                                cbor: LargeString)                    returns ParsedTransaction;
 }

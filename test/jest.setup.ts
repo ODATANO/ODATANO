@@ -2,6 +2,14 @@
 // Must be set before @cap-js/telemetry/cds-plugin.js is required
 process.env.NO_TELEMETRY = 'true';
 
+// Clear SKIP_AUTO_INIT before every test file's top-level code runs.
+// Jest workers reuse OS processes across multiple test files; integration suites
+// that need to skip auto-init (e.g. tx-test-suite, signing-services) set this at
+// module load and never clean it up, so it leaks into subsequent files in the
+// same worker. Files that genuinely need it will re-set it on their own
+// top-level line, AFTER this setup file runs.
+delete process.env.SKIP_AUTO_INIT;
+
 /**
  * Jest Setup File
  * - Set privileged default user so tests pass @requires: 'authenticated-user' without auth headers

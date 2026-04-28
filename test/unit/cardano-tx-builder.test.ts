@@ -406,4 +406,181 @@ describe('CardanoTransactionBuilder', () => {
         .rejects.toThrow('Insufficient funds');
     });
   });
+
+  // ============================================================================
+  // forceInputs — resolver + context merge
+  // ============================================================================
+  describe('forceInputs — resolver and context merge', () => {
+    // Helper: capture the ctx that the mock builder receives
+    function captureCtx<K extends 'buildUnsignedTransfer' | 'buildUnsignedTransactionWithMetadata' | 'buildUnsignedMintTransaction' | 'buildUnsignedPlutusSpendTransaction'>(method: K): () => TxBuildContext | undefined {
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder[method] as any) = jest.fn().mockImplementation(
+        async (_req: TxBuildRequest, ctx: TxBuildContext) => {
+          captured = ctx;
+          return {
+            unsignedTxCbor: 'mock', txBodyHash: 'mock', feeLovelace: '0',
+            inputs: [], outputs: [], warnings: [],
+          };
+        }
+      );
+      return () => captured;
+    }
+
+    it('should use sender UTxO directly when forceInput ref matches (no getTransaction call)', async () => {
+      const getCtx = captureCtx('buildUnsignedTransfer');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash: 'abc123', outputIndex: 0 }], // matches mockUtxos[0]
+      };
+
+      await builder.buildSimpleAdaTransaction(req, mockProtocolParameters);
+
+      expect(mockCardanoClient.getTransaction).not.toHaveBeenCalled();
+      const ctx = getCtx();
+      expect(ctx).toBeDefined();
+      expect(ctx!.utxos).toHaveLength(1); // single sender UTxO, no merge needed
+      expect(ctx!.utxos[0].txHash).toBe('abc123');
+    });
+
+    it('should fetch via getTransaction when forceInput ref is not in sender UTxOs', async () => {
+      const foreignTxHash = 'f'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: foreignTxHash,
+        outputs: [
+          { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
+        ],
+        inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
+        fee: '0', deposit: '0', size: 0, blockTime: 0,
+      });
+      const getCtx = captureCtx('buildUnsignedTransfer');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash: foreignTxHash, outputIndex: 0 }],
+      };
+
+      await builder.buildSimpleAdaTransaction(req, mockProtocolParameters);
+
+      expect(mockCardanoClient.getTransaction).toHaveBeenCalledWith(foreignTxHash);
+      const ctx = getCtx();
+      expect(ctx!.utxos).toHaveLength(2); // sender UTxO + forced foreign UTxO
+      expect(ctx!.utxos.find(u => u.txHash === foreignTxHash)).toBeDefined();
+    });
+
+    it('should deduplicate identical forceInput refs (call getTransaction only once)', async () => {
+      const foreignTxHash = 'd'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: foreignTxHash,
+        outputs: [
+          { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
+        ],
+        inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
+        fee: '0', deposit: '0', size: 0, blockTime: 0,
+      });
+      const getCtx = captureCtx('buildUnsignedTransfer');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [
+          { txHash: foreignTxHash, outputIndex: 0 },
+          { txHash: foreignTxHash, outputIndex: 0 }, // duplicate
+        ],
+      };
+
+      await builder.buildSimpleAdaTransaction(req, mockProtocolParameters);
+
+      expect(mockCardanoClient.getTransaction).toHaveBeenCalledTimes(1);
+      const ctx = getCtx();
+      const matches = ctx!.utxos.filter(u => u.txHash === foreignTxHash && u.outputIndex === 0);
+      expect(matches).toHaveLength(1);
+    });
+
+    it('should throw TransactionValidationError when forceInput UTxO is not found on-chain', async () => {
+      const missingTxHash = '9'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockRejectedValue(new Error('Transaction not found'));
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash: missingTxHash, outputIndex: 0 }],
+      };
+
+      await expect(builder.buildSimpleAdaTransaction(req, mockProtocolParameters))
+        .rejects.toThrow(`forceInput ${missingTxHash}#0 not found on-chain`);
+    });
+
+    it('should throw TransactionValidationError when forceInput outputIndex does not exist in tx', async () => {
+      const txHash = '7'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: txHash,
+        outputs: [
+          { address: 'addr', amount: [{ unit: 'lovelace', quantity: '1000000' }], outputIndex: 0, txHash, dataHash: null, inlineDatum: null, isCollateral: false },
+        ],
+        inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
+        fee: '0', deposit: '0', size: 0, blockTime: 0,
+      });
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash, outputIndex: 99 }], // index 99 doesn't exist
+      };
+
+      await expect(builder.buildSimpleAdaTransaction(req, mockProtocolParameters))
+        .rejects.toThrow(`forceInput ${txHash}#99 not found on-chain`);
+    });
+
+    it('should be a no-op when forceInputs is undefined (ctx == sender UTxOs)', async () => {
+      const getCtx = captureCtx('buildUnsignedTransfer');
+
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+
+      expect(mockCardanoClient.getTransaction).not.toHaveBeenCalled();
+      const ctx = getCtx();
+      expect(ctx!.utxos).toHaveLength(1);
+      expect(ctx!.utxos[0].txHash).toBe('abc123');
+    });
+
+    it('should merge forced UTxO into ctx for metadata build', async () => {
+      const getCtx = captureCtx('buildUnsignedTransactionWithMetadata');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        metadataJson: { 674: { msg: ['test'] } },
+        forceInputs: [{ txHash: 'abc123', outputIndex: 0 }],
+      };
+
+      await builder.buildTransactionWithMetadata(req, mockProtocolParameters);
+
+      const ctx = getCtx();
+      expect(ctx!.utxos.find(u => u.txHash === 'abc123')).toBeDefined();
+    });
+
+    it('should merge forced UTxO into ctx for mint build', async () => {
+      const getCtx = captureCtx('buildUnsignedMintTransaction');
+      const req: TxBuildRequest = {
+        ...mockMintTxRequest,
+        forceInputs: [{ txHash: 'abc123', outputIndex: 0 }],
+      };
+
+      await builder.buildMintTransaction(req, mockProtocolParameters);
+
+      const ctx = getCtx();
+      expect(ctx!.utxos.find(u => u.txHash === 'abc123')).toBeDefined();
+    });
+
+    it('should merge forced UTxO into ctx for plutus spend build (alongside script UTxO)', async () => {
+      const scriptTxHash = 'a'.repeat(64);
+      const getCtx = captureCtx('buildUnsignedPlutusSpendTransaction');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        plutusScriptExecution: {
+          validatorScript: 'abcdef',
+          redeemer: { int: 0 },
+          scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
+        },
+        forceInputs: [{ txHash: 'abc123', outputIndex: 0 }],
+      };
+
+      await builder.buildPlutusSpendTransaction(req, mockProtocolParameters);
+
+      const ctx = getCtx();
+      // ctx contains sender UTxO (abc123) + script UTxO (via getTransaction)
+      expect(ctx!.utxos.find(u => u.txHash === 'abc123')).toBeDefined();
+      expect(ctx!.utxos.find(u => u.txHash === scriptTxHash)).toBeDefined();
+    });
+  });
 });
