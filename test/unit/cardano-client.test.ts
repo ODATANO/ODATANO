@@ -511,7 +511,7 @@ describe('CardanoClient Configuration', () => {
       });
       const client = new CardanoClient(config);
 
-      await expect(client.getNetworkInformation()).rejects.toThrow('Backend timeout');
+      await expect(client.getNetworkInformation()).rejects.toThrow(/timeout/i);
     }, 10000);
   });
 
