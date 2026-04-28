@@ -31,7 +31,8 @@ npm install @odatano/core @cap-js/sqlite
       "odatano-core": {
         "network": "preview",
         "backends": ["blockfrost"],
-        "blockfrostApiKey": "preview_YOUR_KEY"
+        "blockfrostApiKey": "preview_your_api_key_here",
+        "txBuilders": ["buildooor"]
       }
     }
   }
@@ -39,7 +40,8 @@ npm install @odatano/core @cap-js/sqlite
 ```
 
 ```bash
-cds watch
+cds deploy --to sqlite 
+cds serve
 ```
 
 ### Standalone
@@ -51,7 +53,7 @@ git clone https://github.com/ODATANO/ODATANO && cd ODATANO
 npm ci
 cp .env.example .env   # set BLOCKFROST_API_KEY, NETWORK, BACKENDS
 cds deploy --to sqlite
-npm run cds:watch
+cds serve
 ```
 
 Or with Docker:
