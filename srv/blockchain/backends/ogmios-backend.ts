@@ -19,6 +19,7 @@ import {
   PoolData,
   AccountData,
   DrepData,
+  AssetInfo,
   LedgerProtocolParameters
 } from '../../utils/types';
 
@@ -190,7 +191,7 @@ export class OgmiosBackend implements EvaluatingBackend {
     }, this.name);
   }
 
-  /** 
+  /**
    * Get specific Drep Data (not supported for Ogmios)
    * @param _drepId drep id
    * @returns {Promise<DrepData>} drep data
@@ -198,6 +199,17 @@ export class OgmiosBackend implements EvaluatingBackend {
   async getDrep(_drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
       throw new Error('DRep queries not supported');
+    }, this.name);
+  }
+
+  /**
+   * Get Asset Info (not supported for Ogmios — no aggregate-supply query in the protocol)
+   * @param _unit asset unit (policyId + assetNameHex)
+   * @returns {Promise<AssetInfo>} asset info
+   */
+  async getAssetInfo(_unit: string): Promise<AssetInfo> {
+    return handleBackendRequest(async () => {
+      throw new Error('Asset info queries not supported');
     }, this.name);
   }
 

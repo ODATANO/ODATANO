@@ -395,13 +395,323 @@ describe('KoiosBackend', () => {
       expect(result.has(txHash2)).toBe(false);
     });
 
-    it('should sanitize inline datum variants', () => {
-      const sanitize = (backend as any)._sanitizeInlineDatum.bind(backend);
+  });
 
-      expect(sanitize(null)).toBeNull();
-      expect(sanitize('inline-cbor')).toBe('inline-cbor');
-      expect(sanitize({ bytes: null, value: null })).toBeNull();
-      expect(sanitize({ constructor: 0, fields: [] })).toEqual({ constructor: 0, fields: [] });
+  describe('getAddressUtxos', () => {
+    it('extracts hex CBOR from Koios _extended inline_datum wrapper', async () => {
+      const txHash = 'a'.repeat(64);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos')
+        .reply(200, [
+          {
+            tx_hash: txHash,
+            tx_index: 0,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: { bytes: '19a6aa', value: { int: 42 } },
+            reference_script: null,
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getAddressUtxos(TEST_ADDR);
+      expect(result).toHaveLength(1);
+      expect(result[0].inlineDatum).toBe('19a6aa');
+    });
+
+    it('returns null inlineDatum for empty Koios wrapper', async () => {
+      const txHash = 'a'.repeat(64);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos')
+        .reply(200, [
+          {
+            tx_hash: txHash,
+            tx_index: 0,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: { bytes: null, value: null },
+            reference_script: null,
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getAddressUtxos(TEST_ADDR);
+      expect(result).toHaveLength(1);
+      expect(result[0].inlineDatum).toBeNull();
+    });
+
+    it('returns null inlineDatum when field is null', async () => {
+      const txHash = 'a'.repeat(64);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos')
+        .reply(200, [
+          {
+            tx_hash: txHash,
+            tx_index: 0,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: null,
+            reference_script: null,
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getAddressUtxos(TEST_ADDR);
+      expect(result).toHaveLength(1);
+      expect(result[0].inlineDatum).toBeNull();
+    });
+  });
+
+  describe('getCredentialUtxos', () => {
+    const CRED_HASH = 'a'.repeat(56);
+    const ADDR_WITH_STAKE = 'addr1z' + 'q'.repeat(98);
+    const ADDR_NO_STAKE = 'addr1w' + 'q'.repeat(56);
+
+    it('returns UTxOs across multiple bech32 forms with one POST', async () => {
+      let capturedBody: any = null;
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/credential_utxos', (body) => {
+          capturedBody = body;
+          return true;
+        })
+        .reply(200, [
+          {
+            tx_hash: 'a'.repeat(64),
+            tx_index: 0,
+            address: ADDR_WITH_STAKE,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: { bytes: 'd87980', value: { constructor: 0, fields: [] } },
+            reference_script: null,
+            asset_list: [],
+          },
+          {
+            tx_hash: 'b'.repeat(64),
+            tx_index: 1,
+            address: ADDR_NO_STAKE,
+            block_hash: 'c'.repeat(64),
+            value: '5000000',
+            datum_hash: null,
+            inline_datum: null,
+            reference_script: null,
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getCredentialUtxos(CRED_HASH);
+
+      expect(capturedBody).toMatchObject({
+        _payment_credentials: [CRED_HASH],
+        _extended: true,
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0].address).toBe(ADDR_WITH_STAKE);
+      expect(result[1].address).toBe(ADDR_NO_STAKE);
+      expect(result[0].inlineDatum).toBe('d87980');
+      expect(result[1].inlineDatum).toBeNull();
+    });
+
+    it('returns empty array when credential has no UTxOs', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/credential_utxos')
+        .reply(200, []);
+
+      const result = await backend.getCredentialUtxos(CRED_HASH);
+      expect(result).toEqual([]);
+    });
+
+    it('throws on Koios 5xx error', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/credential_utxos')
+        .reply(500, { error: 'Internal server error' });
+
+      await expect(backend.getCredentialUtxos(CRED_HASH)).rejects.toThrow();
+    });
+
+    it('hydrates native assets per UTxO', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/credential_utxos')
+        .reply(200, [
+          {
+            tx_hash: 'a'.repeat(64),
+            tx_index: 0,
+            address: ADDR_WITH_STAKE,
+            block_hash: 'c'.repeat(64),
+            value: '2000000',
+            datum_hash: null,
+            inline_datum: null,
+            reference_script: null,
+            asset_list: [
+              { policy_id: 'a'.repeat(56), asset_name: '484f534b59', quantity: '100' },
+            ],
+          },
+        ]);
+
+      const result = await backend.getCredentialUtxos(CRED_HASH);
+      expect(result[0].amount).toEqual([
+        { unit: 'lovelace', quantity: '2000000' },
+        { unit: 'a'.repeat(56) + '484f534b59', quantity: '100' },
+      ]);
+    });
+  });
+
+  describe('getAssetInfo', () => {
+    const POLICY = 'a'.repeat(56);
+    const ASSET_NAME_HEX = '484f534b59';
+    const UNIT = POLICY + ASSET_NAME_HEX;
+
+    it('combines mint_cnt + burn_cnt and extracts CIP-25 label 721', async () => {
+      let captured: any = null;
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_info', (body) => { captured = body; return true; })
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          asset_name_ascii: 'HOSKY',
+          fingerprint: 'asset1xyz',
+          minting_tx_hash: 'b'.repeat(64),
+          total_supply: '1000000000',
+          mint_cnt: 5,
+          burn_cnt: 2,
+          creation_time: 1700000000,
+          minting_tx_metadata: {
+            '721': { [POLICY]: { HOSKY: { name: 'Hosky' } } },
+          },
+          token_registry_metadata: {
+            name: 'Hosky Token',
+            ticker: 'HOSKY',
+            decimals: 0,
+            description: 'Wow such token',
+            url: 'https://hosky.io',
+            logo: 'data:image/png;base64,...',
+          },
+        }]);
+
+      const result = await backend.getAssetInfo(UNIT);
+
+      expect(captured).toMatchObject({
+        _asset_list: [[POLICY, ASSET_NAME_HEX]],
+      });
+      expect(result.unit).toBe(UNIT);
+      expect(result.policyId).toBe(POLICY);
+      expect(result.assetNameHex).toBe(ASSET_NAME_HEX);
+      expect(result.assetName).toBe('HOSKY');
+      expect(result.totalSupply).toBe('1000000000');
+      expect(result.mintOrBurnCount).toBe(7);
+      expect(result.initialMintTxHash).toBe('b'.repeat(64));
+      expect(result.initialMintTime).toBe(1700000000);
+      expect(result.onchainMetadata).toEqual({ [POLICY]: { HOSKY: { name: 'Hosky' } } });
+      expect(result.registryName).toBe('Hosky Token');
+      expect(result.registryTicker).toBe('HOSKY');
+      expect(result.registryDecimals).toBe(0);
+    });
+
+    it('returns null for missing metadata fields', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_info')
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          fingerprint: 'asset1xyz',
+          total_supply: '1',
+          mint_cnt: 1,
+          burn_cnt: 0,
+        }]);
+
+      const result = await backend.getAssetInfo(UNIT);
+
+      expect(result.onchainMetadata).toBeNull();
+      expect(result.registryName).toBeNull();
+      expect(result.initialMintTime).toBeNull();
+      expect(result.mintOrBurnCount).toBe(1);
+    });
+
+    it('throws NotFoundError for empty result', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_info')
+        .reply(200, []);
+
+      await expect(backend.getAssetInfo(UNIT)).rejects.toThrow(/not found/i);
+    });
+
+    it('throws NotFoundError for malformed unit', async () => {
+      await expect(backend.getAssetInfo('not-hex-unit')).rejects.toThrow(/not found/i);
+    });
+  });
+
+  describe('getAssetHistory', () => {
+    const POLICY = 'a'.repeat(56);
+    const ASSET_NAME_HEX = '484f534b59';
+    const UNIT = POLICY + ASSET_NAME_HEX;
+
+    it('derives action from sign and stores absolute quantity', async () => {
+      let captured: any = null;
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_history', (body) => { captured = body; return true; })
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          minting_txs: [
+            { tx_hash: 'a'.repeat(64), block_time: 1700000200, block_height: 200, quantity: '1000' },
+            { tx_hash: 'b'.repeat(64), block_time: 1700000100, block_height: 199, quantity: '-50' },
+          ],
+        }]);
+
+      const result = await backend.getAssetHistory(UNIT);
+
+      expect(captured).toMatchObject({
+        _asset_list: [[POLICY, ASSET_NAME_HEX]],
+      });
+      expect(result).toEqual([
+        { unit: UNIT, txHash: 'a'.repeat(64), action: 'mint', quantity: '1000', blockTime: 1700000200, blockHeight: 200 },
+        { unit: UNIT, txHash: 'b'.repeat(64), action: 'burn', quantity: '50',   blockTime: 1700000100, blockHeight: 199 },
+      ]);
+    });
+
+    it('sorts by block_time descending and applies limit', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_history')
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          minting_txs: [
+            // intentionally out of order
+            { tx_hash: 'a'.repeat(64), block_time: 100, quantity: '1' },
+            { tx_hash: 'b'.repeat(64), block_time: 300, quantity: '1' },
+            { tx_hash: 'c'.repeat(64), block_time: 200, quantity: '1' },
+          ],
+        }]);
+
+      const result = await backend.getAssetHistory(UNIT, 2);
+      expect(result).toHaveLength(2);
+      expect(result[0].txHash).toBe('b'.repeat(64));
+      expect(result[1].txHash).toBe('c'.repeat(64));
+    });
+
+    it('returns empty array when asset has no minting_txs', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_history')
+        .reply(200, [{ policy_id: POLICY, asset_name: ASSET_NAME_HEX, minting_txs: [] }]);
+
+      const result = await backend.getAssetHistory(UNIT);
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array when response is empty', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_history')
+        .reply(200, []);
+
+      const result = await backend.getAssetHistory(UNIT);
+      expect(result).toEqual([]);
+    });
+
+    it('throws NotFoundError for malformed unit', async () => {
+      await expect(backend.getAssetHistory('garbage')).rejects.toThrow(/not found/i);
     });
   });
 });

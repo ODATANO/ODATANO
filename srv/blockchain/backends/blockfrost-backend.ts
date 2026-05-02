@@ -3,6 +3,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
+import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
   Transaction,
   BlockData,
@@ -15,6 +16,8 @@ import {
   PoolData,
   AccountData,
   DrepData,
+  AssetInfo,
+  AssetHistoryEntry,
   LedgerProtocolParameters
 } from '../../utils/types';
 import { Network } from '../cardano-client';
@@ -158,7 +161,7 @@ export class BlockfrostBackend implements CardanoBackend {
             outputIndex: input.output_index,
             amount: input.amount,
             dataHash: input.data_hash,
-            inlineDatum: input.inline_datum,
+            inlineDatum: inlineDatumToHex(input.inline_datum),
             referenceScriptHash: input.reference_script_hash,
             collateral: input.collateral,
             reference: input.reference,
@@ -169,7 +172,7 @@ export class BlockfrostBackend implements CardanoBackend {
             txHash: tx.hash,
             outputIndex: output.output_index,
             dataHash: output.data_hash,
-            inlineDatum: output.inline_datum,
+            inlineDatum: inlineDatumToHex(output.inline_datum),
             isCollateral: output.collateral,
             referenceScriptHash: output.reference_script_hash,
           })),
@@ -229,6 +232,7 @@ export class BlockfrostBackend implements CardanoBackend {
             blockHash: utxo.block,
             datumHash: utxo.data_hash,
             scriptRef: utxo.reference_script_hash,
+            inlineDatum: inlineDatumToHex(utxo.inline_datum),
           })),
         };
       },
@@ -279,6 +283,7 @@ export class BlockfrostBackend implements CardanoBackend {
           blockHash: utxo.block,
           datumHash: utxo.data_hash,
           scriptRef: utxo.reference_script_hash,
+          inlineDatum: inlineDatumToHex(utxo.inline_datum),
         }));
       },
       this.name
@@ -310,6 +315,99 @@ export class BlockfrostBackend implements CardanoBackend {
           fixedCost: poolData.fixed_cost || '0',
           rewardAccount: poolData.reward_account,
         }
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata).
+   * Blockfrost does NOT expose initial-mint timestamp in this endpoint —
+   * `initialMintTime` is left null. Filling it would cost an extra tx fetch.
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @return {Promise<AssetInfo>} canonical asset info
+   */
+  async getAssetInfo(unit: string): Promise<AssetInfo> {
+    return handleBackendRequest(
+      async () => {
+        const a = await this.api.assetsById(unit);
+        const reg: any = (a as any).metadata ?? null;
+        const decodeUtf8 = (hex: string | null | undefined): string | null => {
+          if (!hex) return null;
+          try { return Buffer.from(hex, 'hex').toString('utf8'); } catch { return null; }
+        };
+
+        return {
+          unit: a.asset,
+          policyId: a.policy_id,
+          assetNameHex: a.asset_name ?? '',
+          assetName: decodeUtf8(a.asset_name),
+          fingerprint: a.fingerprint,
+          totalSupply: a.quantity,
+          mintOrBurnCount: a.mint_or_burn_count ?? 0,
+          initialMintTxHash: a.initial_mint_tx_hash ?? null,
+          initialMintTime: null,
+          onchainMetadata: (a.onchain_metadata as JSONValue | null) ?? null,
+          registryName: reg?.name ?? null,
+          registryTicker: reg?.ticker ?? null,
+          registryDecimals: typeof reg?.decimals === 'number' ? reg.decimals : null,
+          registryDescription: reg?.description ?? null,
+          registryUrl: reg?.url ?? null,
+          registryLogo: reg?.logo ?? null,
+        };
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get latest mint/burn events for an asset, with backfilled block metadata.
+   * Blockfrost's `assetsHistory` returns tx_hash + action + amount only; we
+   * backfill `blockTime` and `blockHeight` via concurrent `api.txs(...)` calls.
+   * Cost: 1 extra API call per history entry. Failed tx fetches leave the
+   * timestamp fields null instead of failing the whole call (best-effort).
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @param limit max number of events (default 100, max 100 per Blockfrost page)
+   * @return {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   */
+  async getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
+    return handleBackendRequest(
+      async () => {
+        const count = Math.min(Math.max(1, limit), 100);
+        const data = await this.api.assetsHistory(unit, { order: 'desc', count });
+
+        // Backfill block metadata via concurrent tx fetches
+        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
+        const blockMetaByTx = new Map<string, { blockTime: number | null; blockHeight: number | null }>();
+        for (let i = 0; i < data.length; i += concurrent) {
+          const chunk = data.slice(i, i + concurrent);
+          const chunkResults = await Promise.allSettled(
+            chunk.map(entry => this.api.txs(entry.tx_hash))
+          );
+          chunk.forEach((entry, idx) => {
+            const r = chunkResults[idx];
+            if (r.status === 'fulfilled') {
+              blockMetaByTx.set(entry.tx_hash, {
+                blockTime: typeof r.value.block_time === 'number' ? r.value.block_time : null,
+                blockHeight: typeof r.value.block_height === 'number' ? r.value.block_height : null,
+              });
+            } else {
+              blockMetaByTx.set(entry.tx_hash, { blockTime: null, blockHeight: null });
+            }
+          });
+        }
+
+        return data.map(entry => {
+          const meta = blockMetaByTx.get(entry.tx_hash) ?? { blockTime: null, blockHeight: null };
+          return {
+            unit,
+            txHash: entry.tx_hash,
+            action: entry.action === 'burned' ? 'burn' : 'mint',
+            quantity: entry.amount,
+            blockTime: meta.blockTime,
+            blockHeight: meta.blockHeight,
+          } as AssetHistoryEntry;
+        });
       },
       this.name
     );

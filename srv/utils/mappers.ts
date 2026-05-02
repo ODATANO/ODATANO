@@ -18,6 +18,8 @@ import {
   PoolData as PoolProviderData,
   DrepData as DrepProviderData,
   AccountData as AccountProviderData,
+  AssetInfo as AssetInfoProviderData,
+  AssetHistoryEntry as AssetHistoryEntryProviderData,
   TxBuildResult as TransactionBuildResult,
   LedgerProtocolParameters as ProtocolParameters,
 } from './types';
@@ -38,6 +40,8 @@ import {
   Epoch as EpochRow,
   Pool as PoolRow,
   Drep as DrepRow,
+  Asset as AssetRow,
+  AssetHistory as AssetHistoryRow,
   Account as AccountRow,
   LedgerProtocolParameter as ProtocolParameterRow,
   AddressTransaction as AddressTransactionRow
@@ -226,7 +230,8 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
     ? (addressData.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0')
     : '0';
 
-  const hasUtxos = Array.isArray(addressData.utxos) && addressData.utxos.length > 0;
+  const utxoCount = Array.isArray(addressData.utxos) ? addressData.utxos.length : 0;
+  const hasUtxos = utxoCount > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.some((a) => a.unit !== 'lovelace');
   // Transactions are indexed separately in indexAddress() — updated to true after indexing
   const hasTransactions = false;
@@ -237,6 +242,7 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
     type: addressData.type ?? 'base',
     isScript: addressData.isScript ?? false,
     totalLovelace: totalLovelace,
+    utxoCount: utxoCount,
     validFrom: nowIso,
     validTo: validToIso,
     hasAssets: hasAssets,
@@ -557,7 +563,61 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
   };
 }
 
-/** 
+/**
+ * Map Asset Info Data
+ * Converts provider asset info into AssetRow format. Provider data is already
+ * normalized by the backend mapper into the canonical AssetInfo shape, so this
+ * function just stamps temporal validity and JSON-stringifies the on-chain metadata.
+ * @param providerAssetInfo canonical asset info from backend
+ * @param max_age TTL window in ms for the temporal validity
+ * @returns {AssetRow} mapped asset row
+ */
+export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: number): AssetRow {
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
+
+  return {
+    unit: providerAssetInfo.unit,
+    policyId: providerAssetInfo.policyId,
+    assetNameHex: providerAssetInfo.assetNameHex,
+    assetName: providerAssetInfo.assetName,
+    fingerprint: providerAssetInfo.fingerprint,
+    totalSupply: providerAssetInfo.totalSupply,
+    mintOrBurnCount: providerAssetInfo.mintOrBurnCount,
+    initialMintTxHash: providerAssetInfo.initialMintTxHash,
+    initialMintTime: providerAssetInfo.initialMintTime,
+    onchainMetadata: providerAssetInfo.onchainMetadata
+      ? JSON.stringify(providerAssetInfo.onchainMetadata)
+      : null,
+    registryName: providerAssetInfo.registryName,
+    registryTicker: providerAssetInfo.registryTicker,
+    registryDecimals: providerAssetInfo.registryDecimals,
+    registryDescription: providerAssetInfo.registryDescription,
+    registryUrl: providerAssetInfo.registryUrl,
+    registryLogo: providerAssetInfo.registryLogo,
+    validFrom,
+    validTo,
+  };
+}
+
+/**
+ * Map Asset History entries to row format. No temporal stamping — mint/burn
+ * events are immutable; UPSERT keyed on (unit, txHash) is idempotent.
+ * @param entries asset history events from backend (already canonical)
+ * @returns {AssetHistoryRow[]} mapped rows
+ */
+export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): AssetHistoryRow[] {
+  return entries.map((e) => ({
+    unit: e.unit,
+    txHash: e.txHash,
+    action: e.action,
+    quantity: e.quantity,
+    blockTime: e.blockTime,
+    blockHeight: e.blockHeight,
+  }));
+}
+
+/**
  * Map Drep Data
  * Converts provider drep data into DrepRow format
  * @param providerDrepData drep data from provider

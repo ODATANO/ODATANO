@@ -207,8 +207,8 @@ export interface PoolData {
   rewardAccount: string;
 }
 
-/** 
- * Drep Data Structure Type - Drep information 
+/**
+ * Drep Data Structure Type - Drep information
  */
 export interface DrepData {
   drepId: string;
@@ -218,6 +218,43 @@ export interface DrepData {
   lastActiveEpoch: number;
   retired: boolean;
   expired: boolean;
+}
+
+/**
+ * Asset Info Data Structure Type - Normalized native-asset metadata + supply.
+ * Backends provide overlapping but non-identical fields; the mapper produces
+ * this canonical shape. Fields that one backend doesn't expose are null.
+ */
+export interface AssetInfo {
+  unit: string;
+  policyId: string;
+  assetNameHex: string;
+  assetName: string | null;          // UTF-8 representation when decodable
+  fingerprint: string;
+  totalSupply: string;                // BigInt-safe decimal string
+  mintOrBurnCount: number;
+  initialMintTxHash: string | null;
+  initialMintTime: number | null;     // Unix seconds; null on Blockfrost (would require extra tx fetch)
+  onchainMetadata: JSONValue | null;  // CIP-25 on-chain metadata (any shape)
+  registryName: string | null;
+  registryTicker: string | null;
+  registryDecimals: number | null;
+  registryDescription: string | null;
+  registryUrl: string | null;
+  registryLogo: string | null;
+}
+
+/**
+ * Asset History Entry - single mint or burn event.
+ * `quantity` is always the ABSOLUTE amount; sign info lives in `action`.
+ */
+export interface AssetHistoryEntry {
+  unit: string;
+  txHash: string;
+  action: 'mint' | 'burn';
+  quantity: string;                   // BigInt-safe decimal string; always positive
+  blockTime: number | null;           // Unix seconds; null on Blockfrost
+  blockHeight: number | null;
 }
 
 /** 

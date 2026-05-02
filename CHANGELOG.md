@@ -5,6 +5,37 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.6] - 02-05-2026: Inline Datums, Credential Queries, Asset Info, Mint/Burn History
+
+Driven by CHAINFEED's Sprint-1 oracle-adapter integration feedback. Goal: every direct Koios/Blockfrost call CHAINFEED currently bypasses the bridge with should be routable through ODATANO instead.
+
+### Added
+
+- **Inline-datum hydration on `AddressUTxOs`**: `utxodata.inlineDatum` is now populated for every UTxO returned by `GetUTxOsByAddress` / `Addresses.utxos` / cached child rows. Previously the field existed in the schema but was discarded by the Blockfrost mapper, which forced consumers (e.g. Indigo CDP / Liqwid / Minswap V2 readers) to issue ~500 extra `GetTransactionByHash` calls per protocol-state read. New helper `inlineDatumToHex(datum)` in `srv/utils/tx-build-helper.ts` normalizes Blockfrost's CBOR-hex strings, Koios's `_extended` `{bytes, value}` wrapper, and raw `PlutusData` JSON forms to a single canonical lowercase hex CBOR — consistent regardless of which backend served the row.
+- **`GetUTxOsByCredential` action** on `CardanoODataService`: returns UTxOs across **all** bech32 forms sharing a 28-byte payment credential (key hash or script hash). Solves the Indigo-style "two bech32 variants of the same script" problem (`addr1z…` with stake-cred vs `addr1w…` without) with a single round-trip. Always-fresh fetch (no cache check) — credential queries serve dApp state-read use cases that need current data. New backend method `getCredentialUtxos(credHash)`, new indexer method `indexCredentialUtxos`, new validator `isValidCredential(s)` (56-char lowercase hex) backed by `HEX_56_REGEX` in `srv/utils/const.ts`. **Koios-only** — `CardanoClient.getCredentialUtxos` throws `ProviderUnavailableError` on Blockfrost-/Ogmios-only deployments rather than silently returning incomplete results from a one-bech32 fallback. Concurrent calls for the same credential are deduplicated through a new `credCoalescer` (analogous to the existing `txCoalescer` / `addrCoalescer`).
+- **`Assets` entity + `GetAssetInfo` action**: native-asset metadata lookup (total supply, mint/burn count, initial mint tx, CIP-25 on-chain metadata, CIP-26 off-chain Cardano-Foundation registry fields). Closes the gap that previously forced consumers to call Blockfrost / Minswap directly for supply telemetry. Multi-backend (Blockfrost via `assetsById`, Koios via `POST /asset_info`); Ogmios throws "not supported". Backend divergence is documented in the action description: Blockfrost lacks `initialMintTime` (would need an extra tx fetch), Koios provides it from `creation_time`. New `mapAsset(providerData, max_age)` mapper, new `indexAsset(tx, unit)` indexer method.
+- **`AssetHistory` entity + `GetAssetHistory(unit, limit)` action**: paged mint/burn-event lookup for "supply growth rate" telemetry (CHAINFEED Sprint-2 use case for DJED / iUSD adapters). Free-standing (not a Composition) and `@readonly` because mint events are immutable on-chain — UPSERT keyed on `(unit, txHash)` is idempotent. **Koios-preferred routing** in `CardanoClient.getAssetHistory` (provides block timestamps via `block_time`); Blockfrost is the fallback and now backfills `blockTime` / `blockHeight` via concurrent `api.txs(...)` calls (cost: 1 extra API call per history entry, capped at `MAX_CONCURRENT = 10`; failed fetches leave the timestamp fields null rather than aborting the whole call). Both backends derive `action: 'mint' | 'burn'` and absolute `quantity`: Blockfrost from the `action: 'minted'/'burned'` enum, Koios from the sign of `quantity`.
+- **`Addresses.utxoCount`**: pre-aggregated UTxO count on the `Addresses` entity. Removes the need for dashboard / health-check consumers to fetch and `.length` the full UTxO array client-side. Populated from the existing `getAddress` response — no extra API call.
+
+### Changed
+
+- **Inline-datum format harmonized across backends**. Previously `AddressUTxOs.utxodata.inlineDatum` and `TransactionInputs/Outputs.utxoData.inlineDatum` could carry hex CBOR (Blockfrost), JSON-stringified PlutusData (Koios `getAddressUtxos`), or a raw object wrapper (Koios `getTransaction`). All three paths now route through `inlineDatumToHex(...)` and produce hex CBOR or `null`. Cached rows from before this release have stale formats until their TTL expires.
+- **`Buildooor _parseInlineDatum` removed** from `srv/blockchain/transaction-building/buildooor-tx.ts` — the JSON-string and raw-object branches became defensive dead code after the inline-datum normalization. The remaining call site at `_mapMultiAssetUtxoToLedgerUtxo` now invokes `dataFromCbor(utxo.inlineDatum)` directly. Corresponding branch-coverage tests removed from `test/unit/buildooor-tx-builder.test.ts`.
+- **CDS using-clauses**: `db/schema.cds` now imports `Blake2b224` and `HexBytes` (used by the new `Assets` entity); `srv/cardano-service.cds` now imports `AssetUnit` (used as parameter type on the two new asset actions).
+
+### Internal
+
+- **CardanoClient routing matrix expanded** — `getAssetInfo` (preferLive: false, both Blockfrost + Koios), `getAssetHistory` (Koios-preferred, Blockfrost-fallback), `getCredentialUtxos` (Koios-required, throws otherwise). The Koios-/Blockfrost-/Ogmios-feature matrix is now documented in `.claude/CLAUDE.md` under "Backend-Specific Features (no fallback)".
+- **Test additions**: `test/unit/tx-build-helper.test.ts` (12 cases for `inlineDatumToHex`), `test/unit/validators.test.ts` (5 cases for `isValidCredential`), `test/unit/blockfrost-backend.test.ts` (+8 cases: address-utxos hydration + asset-info + asset-history), `test/unit/koios-backend.test.ts` (+12 cases: credential-utxos + asset-info + asset-history), `test/unit/cardano-client.test.ts` (4 cases for credential-routing hard-fail), `test/unit/cardano-indexer.test.ts` (+8 cases for `indexCredentialUtxos` / `indexAsset` / `indexAssetHistory`), `test/unit/mappers.test.ts` (+5 cases for `mapAsset`, `mapAssetHistory`, `Address.utxoCount`).
+- Version bumped `1.7.5` → `1.7.6`.
+
+### Known limitations
+
+- **Asset entity field availability differs per backend**: `initialMintTime` is null on Blockfrost (would require 1 extra tx fetch per asset); CIP-25 `onchainMetadata` shape varies per minter and is stored as a JSON-stringified `LargeString` (consumers parse it). The action `@description` calls this out.
+- **`AddressUTxOs` rows from before this release**: `utxoCount` and the new normalized `inlineDatum` only appear after the parent address's TTL (`indexTtlMs`, default 1 h) lapses and `indexAddress` re-runs.
+- **`AssetHistory` Blockfrost cost**: backfilling block metadata costs 1 extra `api.txs(...)` call per entry (see `Added`). For `limit=100`, that's ≤101 Blockfrost calls; consumers paying per-call should size `limit` appropriately. Concurrency capped at `MAX_CONCURRENT = 10`.
+
+
 ## [v1.7.5] - 27-04-2026 - CBOR Tx Parsing + Script Address Utilities + Validity Bounds
 
 ### Added

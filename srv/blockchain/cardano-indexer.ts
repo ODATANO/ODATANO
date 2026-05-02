@@ -21,9 +21,12 @@ import {
   Accounts,
   Pools,
   Dreps,
+  Assets,
+  AssetHistory,
   Account,
   Drep,
   Pool,
+  Asset,
   Address,
   LedgerProtocolParameter,
   AddressTransactions,
@@ -58,6 +61,8 @@ import {
   mapBlock,
   mapEpoch,
   mapAccount,
+  mapAsset,
+  mapAssetHistory,
   mapDrep,
   mapPool,
   mapTransactionMetadata,
@@ -72,7 +77,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo } from '../utils/types';
 
 const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
@@ -241,6 +246,64 @@ export class CardanoIndexer {
     }
 
     return AddrEntity;
+  }
+
+  /**
+   * Index UTxOs by 28-byte payment credential. Always-fresh fetch from Koios
+   * (bypasses cache) — credential queries serve dApp-state use cases that require
+   * current data. Underlying AddressUTxOs/UTxOAssets rows are UPSERTed and stay
+   * available for follow-up address-keyed queries within the TTL.
+   *
+   * Does NOT upsert parent Addresses rows; child rows reference bech32 addresses
+   * that may not yet have a parent stub. Same pattern as TransactionInputs.
+   *
+   * @param tx       CAP transaction
+   * @param credHash 28-byte payment credential as 56-char lowercase hex
+   * @return UTxO entity rows across all bech32 addresses sharing the credential
+   */
+  async indexCredentialUtxos(tx: CapTransaction, credHash: string): Promise<AddressUTxOs[]> {
+    const utxos = await this.client.getCredentialUtxos(credHash);
+
+    logger.debug(`indexCredentialUtxos: provider returned ${utxos.length} utxos for credential ${credHash}`);
+
+    if (utxos.length === 0) return [];
+
+    // Group by bech32 address — Koios returns UTxOs across all bech32 forms
+    // sharing the credential; mapAddressUtxos keys rows by address parameter.
+    const byAddress = new Map<string, OdatanoUtxo[]>();
+    for (const u of utxos) {
+      const list = byAddress.get(u.address) ?? [];
+      list.push(u);
+      byAddress.set(u.address, list);
+    }
+
+    const validFrom = new Date().toISOString();
+    const validTo = new Date(Date.now() + this.client.max_age_ms).toISOString();
+    const allRows: AddressUTxOs[] = [];
+
+    for (const [addr, group] of byAddress) {
+      const utxoEntities = mapAddressUtxos(addr, validFrom, validTo, group);
+      if (utxoEntities.length) {
+        await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
+      }
+
+      const utxoAssetEntities = mapAddressUtxoAssets(group, validFrom, validTo);
+      if (utxoAssetEntities.length) {
+        const seen = new Set<string>();
+        const uniqueAssets = utxoAssetEntities.filter(asset => {
+          const key = `${asset.utxo_address_address}|${asset.utxo_hash}|${asset.utxo_index}|${asset.unit}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
+      }
+
+      allRows.push(...(utxoEntities as AddressUTxOs[]));
+    }
+
+    logger.debug(`indexCredentialUtxos: indexed ${allRows.length} utxos across ${byAddress.size} addresses`);
+    return allRows;
   }
 
   /**
@@ -439,7 +502,7 @@ export class CardanoIndexer {
     return drepEntity;
   }
 
-  /** 
+  /**
    * Index & return the pool information data
    * @param tx CAP transaction object
    * @param poolId pool id (hex)
@@ -452,6 +515,40 @@ export class CardanoIndexer {
     await tx.run(UPSERT.into(Pools).entries(poolEntity))
 
     return poolEntity;
+  }
+
+  /**
+   * Index & return the asset information data
+   * @param tx CAP transaction object
+   * @param unit asset unit (policyId + assetNameHex)
+   * @returns {Promise<Asset>} asset entity data
+   */
+  async indexAsset(tx: CapTransaction, unit: string): Promise<Asset> {
+    const assetInfo = await this.client.getAssetInfo(unit);
+    const assetEntity = mapAsset(assetInfo, this.client.max_age_ms);
+
+    await tx.run(UPSERT.into(Assets).entries(assetEntity));
+
+    return assetEntity;
+  }
+
+  /**
+   * Index & return mint/burn history for an asset. Always-fresh from the
+   * preferred backend (Koios for block timestamps, Blockfrost as fallback).
+   * UPSERTs entries by (unit, txHash) — events are immutable, so re-fetching
+   * just refreshes the cap of recent entries; older cached entries persist.
+   * @param tx CAP transaction object
+   * @param unit asset unit (policyId + assetNameHex)
+   * @param limit max number of recent events to fetch (default 100)
+   * @returns {Promise<AssetHistory[]>} list of mint/burn event entity rows
+   */
+  async indexAssetHistory(tx: CapTransaction, unit: string, limit: number = 100): Promise<AssetHistory[]> {
+    const events = await this.client.getAssetHistory(unit, limit);
+    if (events.length === 0) return [];
+
+    const rows = mapAssetHistory(events);
+    await tx.run(UPSERT.into(AssetHistory).entries(rows));
+    return rows as AssetHistory[];
   }
 
   /**

@@ -8,6 +8,9 @@ jest.mock('@blockfrost/blockfrost-js', () => {
     poolsById: jest.fn(),
     blocksLatest: jest.fn(),
     addressesUtxos: jest.fn(),
+    assetsById: jest.fn(),
+    assetsHistory: jest.fn(),
+    txs: jest.fn(),
     epochsLatestParameters: jest.fn(),
     options: { requestTimeout: 0 },
   }));
@@ -224,6 +227,79 @@ describe('BlockfrostBackend getAddressUtxos', () => {
 
     await expect(backend.getAddressUtxos('addr_test1empty')).rejects.toThrow(NotFoundError);
   });
+
+  it('should hydrate inlineDatum and reference_script_hash when present', async () => {
+    const ADDR = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae';
+    const mockUtxos = [
+      {
+        tx_hash: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        output_index: 0,
+        address: ADDR,
+        amount: [{ unit: 'lovelace', quantity: '10000000' }],
+        block: 'block123',
+        data_hash: null,
+        inline_datum: '19a6aa',
+        reference_script_hash: '13a3efd825703a352a8f71f4e2758d08c28c564e8dfcce9f77776ad1',
+      },
+      {
+        tx_hash: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+        output_index: 1,
+        address: ADDR,
+        amount: [{ unit: 'lovelace', quantity: '5000000' }],
+        block: 'block456',
+        data_hash: null,
+        inline_datum: null,
+        reference_script_hash: null,
+      },
+    ];
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAddressUtxos(ADDR);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].inlineDatum).toBe('19a6aa');
+    expect(result[0].scriptRef).toBe('13a3efd825703a352a8f71f4e2758d08c28c564e8dfcce9f77776ad1');
+    expect(result[1].inlineDatum).toBeNull();
+    expect(result[1].scriptRef).toBeNull();
+  });
+
+  it('should return null inlineDatum for plain UTxOs (regression)', async () => {
+    const ADDR = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae';
+    const mockUtxos = [
+      {
+        tx_hash: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        output_index: 0,
+        address: ADDR,
+        amount: [{ unit: 'lovelace', quantity: '10000000' }],
+        block: 'block123',
+        data_hash: null,
+      },
+    ];
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAddressUtxos(ADDR);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].inlineDatum).toBeNull();
+  });
 });
 
 describe('BlockfrostBackend getAddressTransactions', () => {
@@ -395,5 +471,223 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     await backend.init();
 
     await expect(backend.getProtocolParameters()).rejects.toThrow();
+  });
+});
+
+describe('BlockfrostBackend getAssetInfo', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const POLICY = 'a'.repeat(56);
+  const ASSET_NAME_HEX = '484f534b59'; // "HOSKY"
+  const UNIT = POLICY + ASSET_NAME_HEX;
+
+  it('maps full Blockfrost response to canonical AssetInfo', async () => {
+    const mockResponse = {
+      asset: UNIT,
+      policy_id: POLICY,
+      asset_name: ASSET_NAME_HEX,
+      fingerprint: 'asset1pkpwyknlvul7az0xx8czhl60pyel45rpje4z8w',
+      quantity: '1000000000',
+      initial_mint_tx_hash: 'b'.repeat(64),
+      mint_or_burn_count: 7,
+      onchain_metadata: { name: 'Hosky', image: 'ipfs://...' },
+      onchain_metadata_standard: 'CIP25v2',
+      metadata: {
+        name: 'Hosky Token',
+        ticker: 'HOSKY',
+        decimals: 0,
+        description: 'Wow such token',
+        url: 'https://hosky.io',
+        logo: 'iVBORw0KGgo...',
+      },
+    };
+
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsById: jest.fn().mockResolvedValue(mockResponse),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAssetInfo(UNIT);
+
+    expect(result).toEqual({
+      unit: UNIT,
+      policyId: POLICY,
+      assetNameHex: ASSET_NAME_HEX,
+      assetName: 'HOSKY',
+      fingerprint: 'asset1pkpwyknlvul7az0xx8czhl60pyel45rpje4z8w',
+      totalSupply: '1000000000',
+      mintOrBurnCount: 7,
+      initialMintTxHash: 'b'.repeat(64),
+      initialMintTime: null, // Blockfrost does not expose
+      onchainMetadata: { name: 'Hosky', image: 'ipfs://...' },
+      registryName: 'Hosky Token',
+      registryTicker: 'HOSKY',
+      registryDecimals: 0,
+      registryDescription: 'Wow such token',
+      registryUrl: 'https://hosky.io',
+      registryLogo: 'iVBORw0KGgo...',
+    });
+  });
+
+  it('handles asset without registry metadata (null fields)', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsById: jest.fn().mockResolvedValue({
+        asset: UNIT,
+        policy_id: POLICY,
+        asset_name: ASSET_NAME_HEX,
+        fingerprint: 'asset1xyz',
+        quantity: '1',
+        initial_mint_tx_hash: 'c'.repeat(64),
+        mint_or_burn_count: 1,
+        onchain_metadata: null,
+        metadata: null,
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+    const result = await backend.getAssetInfo(UNIT);
+
+    expect(result.registryName).toBeNull();
+    expect(result.onchainMetadata).toBeNull();
+    expect(result.totalSupply).toBe('1');
+  });
+
+  it('throws NotFoundError when asset does not exist', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsById: jest.fn().mockRejectedValue({
+        status_code: 404,
+        message: 'The requested component has not been found.',
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await expect(backend.getAssetInfo(UNIT)).rejects.toThrow(NotFoundError);
+  });
+});
+
+describe('BlockfrostBackend getAssetHistory', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const POLICY = 'a'.repeat(56);
+  const UNIT = POLICY + '484f534b59';
+
+  it('maps actions and backfills blockTime/blockHeight via api.txs', async () => {
+    const TX1 = 'b'.repeat(64);
+    const TX2 = 'c'.repeat(64);
+    const mockHistory = [
+      { tx_hash: TX1, action: 'minted', amount: '1000' },
+      { tx_hash: TX2, action: 'burned', amount: '50' },
+    ];
+
+    let captured: any = null;
+    const txsMock = jest.fn((hash: string) => {
+      if (hash === TX1) return Promise.resolve({ block_time: 1700000200, block_height: 200 });
+      if (hash === TX2) return Promise.resolve({ block_time: 1700000100, block_height: 199 });
+      return Promise.reject(new Error('unknown tx'));
+    });
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsHistory: jest.fn((asset: string, opts: any) => {
+        captured = { asset, opts };
+        return Promise.resolve(mockHistory);
+      }),
+      txs: txsMock,
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAssetHistory(UNIT);
+
+    expect(captured.asset).toBe(UNIT);
+    expect(captured.opts).toMatchObject({ order: 'desc', count: 100 });
+    expect(txsMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { unit: UNIT, txHash: TX1, action: 'mint', quantity: '1000', blockTime: 1700000200, blockHeight: 200 },
+      { unit: UNIT, txHash: TX2, action: 'burn', quantity: '50',   blockTime: 1700000100, blockHeight: 199 },
+    ]);
+  });
+
+  it('leaves blockTime/blockHeight null when tx-fetch fails (best-effort)', async () => {
+    const TX1 = 'b'.repeat(64);
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsHistory: jest.fn().mockResolvedValue([
+        { tx_hash: TX1, action: 'minted', amount: '1' },
+      ]),
+      txs: jest.fn().mockRejectedValue({ status_code: 500, message: 'temporary' }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAssetHistory(UNIT);
+    expect(result).toHaveLength(1);
+    expect(result[0].blockTime).toBeNull();
+    expect(result[0].blockHeight).toBeNull();
+    // Action and quantity still mapped correctly
+    expect(result[0].action).toBe('mint');
+    expect(result[0].quantity).toBe('1');
+  });
+
+  it('clamps limit to [1, 100]', async () => {
+    let captured: any = null;
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsHistory: jest.fn((asset: string, opts: any) => {
+        captured = opts;
+        return Promise.resolve([]);
+      }),
+      txs: jest.fn(),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await backend.getAssetHistory(UNIT, 500);
+    expect(captured.count).toBe(100);
+
+    await backend.getAssetHistory(UNIT, 0);
+    expect(captured.count).toBe(1);
+  });
+
+  it('returns empty array when no history exists', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      assetsHistory: jest.fn().mockResolvedValue([]),
+      txs: jest.fn(),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const result = await backend.getAssetHistory(UNIT);
+    expect(result).toEqual([]);
   });
 });

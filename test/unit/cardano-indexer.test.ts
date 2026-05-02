@@ -67,9 +67,12 @@ jest.mock('#cds-models/CardanoODataService', () => ({
   Accounts: 'Accounts',
   Pools: 'Pools',
   Dreps: 'Dreps',
+  Assets: 'Assets',
+  AssetHistory: 'AssetHistory',
   Account: 'Account',
   Drep: 'Drep',
   Pool: 'Pool',
+  Asset: 'Asset',
   Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter',
   AddressTransactions: 'AddressTransactions',
@@ -116,6 +119,8 @@ jest.mock('../../srv/utils/mappers', () => ({
     stakeaddress: info.stakeaddress,
     hasAddresses: info.addresses?.length > 0,
   })),
+  mapAsset: jest.fn((info: any) => ({ unit: info.unit, totalSupply: info.totalSupply })),
+  mapAssetHistory: jest.fn((entries: any[]) => entries.map((e: any) => ({ unit: e.unit, txHash: e.txHash }))),
   mapDrep: jest.fn(() => ({})),
   mapPool: jest.fn(() => ({})),
   mapTransactionMetadata: jest.fn(() => []),
@@ -149,6 +154,9 @@ function createMockClient(overrides: Record<string, any> = {}) {
     getTransactionMetadata: jest.fn(),
     getAddressTransactionHashes: jest.fn(),
     getTransactionsBatch: jest.fn(),
+    getCredentialUtxos: jest.fn(),
+    getAssetInfo: jest.fn(),
+    getAssetHistory: jest.fn(),
     ...overrides,
   } as any;
 }
@@ -488,6 +496,171 @@ describe('CardanoIndexer', () => {
       await indexer.indexProtocolParameters(mockTx as any);
 
       expect(mockClient.getProtocolParameters).toHaveBeenCalled();
+    });
+  });
+
+  describe('indexCredentialUtxos', () => {
+    const CRED = 'a'.repeat(56);
+    const ADDR_WITH_STAKE = 'addr1z' + 'q'.repeat(98);
+    const ADDR_NO_STAKE = 'addr1w' + 'q'.repeat(56);
+
+    it('returns empty array and skips UPSERTs when client returns no UTxOs', async () => {
+      mockClient.getCredentialUtxos.mockResolvedValue([]);
+
+      const result = await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      expect(result).toEqual([]);
+      expect(mockClient.getCredentialUtxos).toHaveBeenCalledWith(CRED);
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it('groups UTxOs by bech32 and UPSERTs each group separately', async () => {
+      mockClient.getCredentialUtxos.mockResolvedValue([
+        { txHash: 'a'.repeat(64), outputIndex: 0, address: ADDR_WITH_STAKE, amount: [{ unit: 'lovelace', quantity: '1' }] },
+        { txHash: 'b'.repeat(64), outputIndex: 0, address: ADDR_NO_STAKE,    amount: [{ unit: 'lovelace', quantity: '2' }] },
+        { txHash: 'c'.repeat(64), outputIndex: 1, address: ADDR_WITH_STAKE, amount: [{ unit: 'lovelace', quantity: '3' }] },
+      ]);
+
+      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      // Return one row per input UTxO so we can count grouping
+      mapAddressUtxos.mockImplementation((addr: string, _vf: string, _vt: string, group: any[]) =>
+        group.map((u: any) => ({ address_address: addr, hash: u.txHash, index: u.outputIndex, lovelace: u.amount[0].quantity }))
+      );
+
+      const result = await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      // Two UPSERT calls expected (one per unique address group); UTxOAssets skipped (no native assets)
+      expect(mapAddressUtxos).toHaveBeenCalledTimes(2);
+      expect(mapAddressUtxos).toHaveBeenCalledWith(ADDR_WITH_STAKE, expect.any(String), expect.any(String), expect.arrayContaining([
+        expect.objectContaining({ address: ADDR_WITH_STAKE })
+      ]));
+      expect(mapAddressUtxos).toHaveBeenCalledWith(ADDR_NO_STAKE, expect.any(String), expect.any(String), expect.arrayContaining([
+        expect.objectContaining({ address: ADDR_NO_STAKE })
+      ]));
+      expect(result).toHaveLength(3);
+    });
+
+    it('writes UTxOAssets for groups with native assets and dedupes', async () => {
+      const ASSET = 'a'.repeat(56) + '484f534b59';
+      mockClient.getCredentialUtxos.mockResolvedValue([
+        {
+          txHash: 'a'.repeat(64),
+          outputIndex: 0,
+          address: ADDR_WITH_STAKE,
+          amount: [
+            { unit: 'lovelace', quantity: '1' },
+            { unit: ASSET, quantity: '100' },
+          ],
+        },
+      ]);
+
+      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      mapAddressUtxos.mockReturnValue([{ address_address: ADDR_WITH_STAKE, hash: 'a'.repeat(64), index: 0 }]);
+
+      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      // Simulate a duplicate row to verify dedup logic runs
+      mapAddressUtxoAssets.mockReturnValue([
+        { utxo_address_address: ADDR_WITH_STAKE, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: ASSET },
+        { utxo_address_address: ADDR_WITH_STAKE, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: ASSET },
+      ]);
+
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      // Find the UTxOAssets UPSERT call's payload
+      const upsertCalls = mockRun.mock.calls;
+      // At least 2 mockRun calls: AddressUTxOs + UTxOAssets
+      expect(upsertCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('does NOT upsert parent Addresses rows', async () => {
+      mockClient.getCredentialUtxos.mockResolvedValue([
+        { txHash: 'a'.repeat(64), outputIndex: 0, address: ADDR_WITH_STAKE, amount: [{ unit: 'lovelace', quantity: '1' }] },
+      ]);
+      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      mapAddressUtxos.mockReturnValue([{ address_address: ADDR_WITH_STAKE, hash: 'a'.repeat(64), index: 0 }]);
+
+      // Verify parent Addresses entity is NEVER UPSERTed during credential indexing
+      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      upsertInto.mockClear();
+
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      const upsertedEntities = upsertInto.mock.calls.map((c: any[]) => c[0]);
+      expect(upsertedEntities).not.toContain('Addresses');
+    });
+  });
+
+  describe('indexAsset', () => {
+    const POLICY = 'a'.repeat(56);
+    const UNIT = POLICY + '484f534b59';
+
+    it('fetches asset info, maps it, and UPSERTs into Assets', async () => {
+      const mockInfo = {
+        unit: UNIT,
+        policyId: POLICY,
+        assetNameHex: '484f534b59',
+        assetName: 'HOSKY',
+        fingerprint: 'asset1xyz',
+        totalSupply: '1000',
+        mintOrBurnCount: 1,
+        initialMintTxHash: 'b'.repeat(64),
+        initialMintTime: 1700000000,
+        onchainMetadata: null,
+        registryName: null,
+        registryTicker: null,
+        registryDecimals: null,
+        registryDescription: null,
+        registryUrl: null,
+        registryLogo: null,
+      };
+      mockClient.getAssetInfo.mockResolvedValue(mockInfo);
+
+      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      upsertInto.mockClear();
+
+      const result = await indexer.indexAsset(mockTx as any, UNIT);
+
+      expect(mockClient.getAssetInfo).toHaveBeenCalledWith(UNIT);
+      expect(upsertInto).toHaveBeenCalledWith('Assets');
+      expect(result.unit).toBe(UNIT);
+    });
+
+    it('propagates backend errors (no swallowing)', async () => {
+      mockClient.getAssetInfo.mockRejectedValue(new Error('Asset not found'));
+      await expect(indexer.indexAsset(mockTx as any, UNIT)).rejects.toThrow('Asset not found');
+    });
+  });
+
+  describe('indexAssetHistory', () => {
+    const POLICY = 'a'.repeat(56);
+    const UNIT = POLICY + '484f534b59';
+
+    it('returns empty array and skips UPSERT when client returns no events', async () => {
+      mockClient.getAssetHistory.mockResolvedValue([]);
+
+      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      upsertInto.mockClear();
+
+      const result = await indexer.indexAssetHistory(mockTx as any, UNIT);
+
+      expect(result).toEqual([]);
+      expect(mockClient.getAssetHistory).toHaveBeenCalledWith(UNIT, 100);
+      expect(upsertInto).not.toHaveBeenCalled();
+    });
+
+    it('UPSERTs into AssetHistory and forwards limit', async () => {
+      mockClient.getAssetHistory.mockResolvedValue([
+        { unit: UNIT, txHash: 'b'.repeat(64), action: 'mint', quantity: '1', blockTime: 1, blockHeight: 1 },
+      ]);
+
+      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      upsertInto.mockClear();
+
+      const result = await indexer.indexAssetHistory(mockTx as any, UNIT, 25);
+
+      expect(mockClient.getAssetHistory).toHaveBeenCalledWith(UNIT, 25);
+      expect(upsertInto).toHaveBeenCalledWith('AssetHistory');
+      expect(result).toHaveLength(1);
     });
   });
 });

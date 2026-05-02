@@ -9,6 +9,8 @@ import {
   PoolData,
   DrepData,
   AccountData,
+  AssetInfo,
+  AssetHistoryEntry,
   LedgerProtocolParameters
 } from '../../utils/types';
 
@@ -118,6 +120,23 @@ export interface CardanoBackend {
   getAccount(accountId: string): Promise<AccountData>;
 
   /**
+   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata)
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @returns {Promise<AssetInfo>} canonical asset info
+   */
+  getAssetInfo(unit: string): Promise<AssetInfo>;
+
+  /**
+   * Get latest mint/burn events for an asset (most recent first).
+   * Optional — Ogmios doesn't expose this. Blockfrost lacks block timestamps;
+   * Koios includes block_time per entry.
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @param limit max number of events (default 100)
+   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events
+   */
+  getAssetHistory?(unit: string, limit?: number): Promise<AssetHistoryEntry[]>;
+
+  /**
    * Get Protocol Parameters
    * @returns {Promise<LedgerProtocolParameters>} protocol parameters
    */
@@ -148,6 +167,15 @@ export interface CardanoBackend {
    * @returns {Promise<Map<string, Transaction>>} map of txHash -> Transaction
    */
   getTransactionsBatch?(txHashes: string[]): Promise<Map<string, Transaction>>;
+
+  /**
+   * Get UTxOs across all bech32 addresses sharing a 28-byte payment credential
+   * (key hash or script hash). Returns UTxOs with their owning bech32 address.
+   * Optional — only Koios implements this natively (`POST /credential_utxos`).
+   * @param credHash 28-byte payment credential as 56-char lowercase hex
+   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms
+   */
+  getCredentialUtxos?(credHash: string): Promise<UTxO[]>;
 }
 
 /**

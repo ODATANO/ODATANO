@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import { getCardanoIndexer } from './server';
-import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber, isValidTxCborHex } from './utils/validators';
+import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber, isValidTxCborHex, isValidCredential, isAssetUnit } from './utils/validators';
 import { rejectInvalid, rejectMissing } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
 import { parseTransaction } from './cbor';
@@ -97,6 +97,8 @@ module.exports = (srv: cds.Service) => {
     Pools,
     Accounts,
     Dreps,
+    Assets,
+    AssetHistory,
     LedgerProtocolParameters,
     AddressTransactions
   } = require('#cds-models/CardanoODataService');
@@ -166,6 +168,39 @@ module.exports = (srv: cds.Service) => {
   srv.on('GetDrepById', indexOnMissAction('GetDrepById', Dreps, 'drepId', isValidDrepId, (db, d) => indexer().indexDrep(db, d)));
 
   // ---------------------------------------------------------------------------
+  // Assets
+  // ---------------------------------------------------------------------------
+
+  srv.on('READ', Assets, indexOnMissRead(Assets, 'unit', isAssetUnit, (db, u) => indexer().indexAsset(db, u), { errorMessage: 'Invalid asset unit format' }));
+  srv.on('GetAssetInfo', indexOnMissAction('GetAssetInfo', Assets, 'unit', isAssetUnit, (db, u) => indexer().indexAsset(db, u), { errorMessage: 'Invalid asset unit format' }));
+
+  // ---------------------------------------------------------------------------
+  // Asset History — read-through (always-fresh)
+  // ---------------------------------------------------------------------------
+  // Generic READ on AssetHistory is served from DB (no auto-index); consumers
+  // must call GetAssetHistory(unit) first to seed entries for a given asset,
+  // then page via $top/$skip on the AssetHistory entity.
+  srv.on('READ', AssetHistory, async (req: Request) => {
+    return await req.query;
+  });
+
+  /**
+   * Action: GetAssetHistory - Always-fresh fetch of recent mint/burn events.
+   * Multi-backend: Koios preferred (block timestamps), Blockfrost fallback.
+   */
+  srv.on('GetAssetHistory', async (req: Request) => {
+    const { unit, limit } = req.data as { unit?: string; limit?: number };
+    if (!unit) return rejectMissing(req, 'GetAssetHistory', 'unit');
+    if (!isAssetUnit(unit)) {
+      return rejectInvalid(req, 'GetAssetHistory', 'Invalid asset unit format', 'unit');
+    }
+    const effectiveLimit = typeof limit === 'number' && limit > 0 ? limit : 100;
+    return handleRequest(req, async (db) => {
+      return await indexer().indexAssetHistory(db, unit, effectiveLimit);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Addresses
   // ---------------------------------------------------------------------------
 
@@ -222,6 +257,24 @@ module.exports = (srv: cds.Service) => {
         }
       }
       return Array.from(seen.values());
+    });
+  });
+
+  /**
+   * Action: GetUTxOsByCredential - Koios-only credential-keyed UTxO query.
+   * Always-fresh (no cache check) — credential queries serve dApp state-read use
+   * cases (Indigo CDPs, Liqwid positions) that need current blockchain state.
+   * Throws ProviderUnavailableError if Koios backend is not configured.
+   */
+  srv.on('GetUTxOsByCredential', async (req: Request) => {
+    const { credential } = req.data as { credential?: string };
+    if (!credential) return rejectMissing(req, 'GetUTxOsByCredential', 'credential');
+    if (!isValidCredential(credential)) {
+      return rejectInvalid(req, 'GetUTxOsByCredential', 'Invalid payment credential — expected 56-char lowercase hex (28 bytes)', 'credential');
+    }
+
+    return handleRequest(req, async (db) => {
+      return await indexer().indexCredentialUtxos(db, credential);
     });
   });
 

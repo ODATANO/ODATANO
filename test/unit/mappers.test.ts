@@ -11,6 +11,8 @@ import {
   mapAddressTransactions,
   mapAddressAssets,
   mapAddressUtxos,
+  mapAsset,
+  mapAssetHistory,
   mapBuildResult,
   normalizeCostModels,
   scriptHashToEnterpriseAddress,
@@ -261,6 +263,7 @@ describe('mappers', () => {
       expect(result.type).toBe('shelley');
       expect(result.isScript).toBe(true);
       expect(result.totalLovelace).toBe('10000000');
+      expect(result.utxoCount).toBe(1);
       expect(result.hasAssets).toBe(false); // lovelace-only — no native assets
       expect(result.hasUTxOs).toBe(true);
     });
@@ -275,8 +278,29 @@ describe('mappers', () => {
       expect(result.type).toBe('base');
       expect(result.isScript).toBe(false);
       expect(result.totalLovelace).toBe('0');
+      expect(result.utxoCount).toBe(0);
       expect(result.hasAssets).toBe(false);
       expect(result.hasUTxOs).toBe(false);
+    });
+
+    it('should count multiple UTxOs accurately', () => {
+      const utxos = Array.from({ length: 7 }, (_, i) => ({
+        txHash: 'a'.repeat(64),
+        outputIndex: i,
+        address: 'addr_test1abc',
+        amount: [{ unit: 'lovelace', quantity: '1000000' }],
+        blockHash: '',
+        datumHash: null,
+        scriptRef: null,
+      }));
+      const result = mapAddress('addr_test1abc', {
+        address: 'addr_test1abc',
+        amount: [{ unit: 'lovelace', quantity: '7000000' }],
+        utxos,
+      } as any, 3600000);
+
+      expect(result.utxoCount).toBe(7);
+      expect(result.hasUTxOs).toBe(true);
     });
   });
 
@@ -372,6 +396,97 @@ describe('mappers', () => {
       expect(result.fee).toBe('200000');
       expect(result.hasInputs).toBe(true);
       expect(result.hasOutputs).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // mapAsset
+  // ==========================================================================
+  describe('mapAsset', () => {
+    const POLICY = 'a'.repeat(56);
+    const UNIT = POLICY + '484f534b59';
+
+    it('passes through canonical fields and stamps temporal validity', () => {
+      const before = Date.now();
+      const result = mapAsset({
+        unit: UNIT,
+        policyId: POLICY,
+        assetNameHex: '484f534b59',
+        assetName: 'HOSKY',
+        fingerprint: 'asset1xyz',
+        totalSupply: '1000000',
+        mintOrBurnCount: 3,
+        initialMintTxHash: 'b'.repeat(64),
+        initialMintTime: 1700000000,
+        onchainMetadata: { name: 'Hosky' },
+        registryName: 'Hosky Token',
+        registryTicker: 'HOSKY',
+        registryDecimals: 0,
+        registryDescription: 'desc',
+        registryUrl: 'https://hosky.io',
+        registryLogo: 'data:...',
+      }, 3600000);
+
+      expect(result.unit).toBe(UNIT);
+      expect(result.policyId).toBe(POLICY);
+      expect(result.assetName).toBe('HOSKY');
+      expect(result.totalSupply).toBe('1000000');
+      expect(result.mintOrBurnCount).toBe(3);
+      expect(result.initialMintTime).toBe(1700000000);
+      expect(result.registryDecimals).toBe(0);
+      // onchainMetadata is JSON-stringified for LargeString storage
+      expect(result.onchainMetadata).toBe(JSON.stringify({ name: 'Hosky' }));
+      // validFrom and validTo are ISO strings; validTo ~ now + max_age
+      expect(typeof result.validFrom).toBe('string');
+      expect(new Date(result.validTo!).getTime()).toBeGreaterThanOrEqual(before + 3600000 - 100);
+    });
+
+    it('serializes onchainMetadata=null to null (not "null")', () => {
+      const result = mapAsset({
+        unit: UNIT,
+        policyId: POLICY,
+        assetNameHex: '484f534b59',
+        assetName: null,
+        fingerprint: 'asset1xyz',
+        totalSupply: '1',
+        mintOrBurnCount: 1,
+        initialMintTxHash: null,
+        initialMintTime: null,
+        onchainMetadata: null,
+        registryName: null,
+        registryTicker: null,
+        registryDecimals: null,
+        registryDescription: null,
+        registryUrl: null,
+        registryLogo: null,
+      }, 3600000);
+
+      expect(result.onchainMetadata).toBeNull();
+      expect(result.assetName).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // mapAssetHistory
+  // ==========================================================================
+  describe('mapAssetHistory', () => {
+    const POLICY = 'a'.repeat(56);
+    const UNIT = POLICY + '484f534b59';
+
+    it('passes through canonical entries 1:1', () => {
+      const entries = [
+        { unit: UNIT, txHash: 'b'.repeat(64), action: 'mint' as const, quantity: '1000', blockTime: 1700000000, blockHeight: 100 },
+        { unit: UNIT, txHash: 'c'.repeat(64), action: 'burn' as const, quantity: '50',   blockTime: null,        blockHeight: null },
+      ];
+      const rows = mapAssetHistory(entries);
+      expect(rows).toEqual([
+        { unit: UNIT, txHash: 'b'.repeat(64), action: 'mint', quantity: '1000', blockTime: 1700000000, blockHeight: 100 },
+        { unit: UNIT, txHash: 'c'.repeat(64), action: 'burn', quantity: '50',   blockTime: null,        blockHeight: null },
+      ]);
+    });
+
+    it('returns empty array for empty input', () => {
+      expect(mapAssetHistory([])).toEqual([]);
     });
   });
 });

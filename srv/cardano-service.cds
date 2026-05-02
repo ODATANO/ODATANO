@@ -1,5 +1,5 @@
 using {odatano.cardano as db} from '../db/schema';
-using { Blake2b256, Bech32, ParsedTransaction } from '../db/types';
+using { Blake2b256, Bech32, AssetUnit, ParsedTransaction } from '../db/types';
 
 /**
  * Cardano OData Service
@@ -56,6 +56,14 @@ service CardanoODataService @(impl: './cardano-service') {
     @title      : 'Dreps'
     @description: 'Projection for Dreps'
     entity Dreps                    as projection on db.Dreps;
+
+    @title      : 'Assets'
+    @description: 'Projection for Native-Asset Information'
+    entity Assets                   as projection on db.Assets;
+
+    @title      : 'Asset History'
+    @description: 'Projection for Native-Asset Mint/Burn History'
+    entity AssetHistory             as projection on db.AssetHistory;
 
     @title      : 'Transactions'
     @description: 'Projection for Transactions'
@@ -144,6 +152,23 @@ service CardanoODataService @(impl: './cardano-service') {
                        @description: 'The unique identifier of the drep'
                        drepId: String)                       returns Dreps;
 
+    @title      : 'Get Asset Info'
+    @description: 'Retrieve native-asset information (supply, mint history, CIP-25 + CIP-26 metadata) by unit. Multi-backend (Blockfrost, Koios). Field availability differs slightly per backend — see entity description.'
+    action GetAssetInfo(
+                        @title: 'Asset Unit'
+                        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+                        unit: AssetUnit)                     returns Assets;
+
+    @title      : 'Get Asset Mint/Burn History'
+    @description: 'Retrieve recent mint/burn events for a native asset (most recent first). Koios is preferred (provides block timestamps); Blockfrost is the fallback (timestamps null). Always-fresh fetch — UPSERTs entries by (unit, txHash). For full pagination, query the AssetHistory entity directly with $top/$skip after seeding.'
+    action GetAssetHistory(
+                           @title: 'Asset Unit'
+                           @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+                           unit: AssetUnit,
+                           @title: 'Limit'
+                           @description: 'Maximum number of recent events to fetch (default 100)'
+                           limit: Integer)                   returns many AssetHistory;
+
     @title      : 'Get Accounts by Stake Address'
     @description: 'Retrieve account information using the Bech32 Stake Address'
     action GetAccountByStakeAddress(
@@ -178,6 +203,13 @@ service CardanoODataService @(impl: './cardano-service') {
                              @title: 'Bech32 Address'
                              @description: 'The Bech32 encoded address'
                              address: Bech32)             returns many AddressUTxOs;
+
+    @title      : 'Get UTxOs by Payment Credential'
+    @description: 'Retrieve UTxOs across all bech32 addresses sharing the given 28-byte payment credential (key hash or script hash). Useful for protocols that write to multiple bech32 forms of the same script (e.g. Indigo CDPs, Liqwid positions). Koios-only — throws ProviderUnavailableError on deployments without Koios. Always fresh, no cache check.'
+    action GetUTxOsByCredential(
+                                @title: 'Payment Credential'
+                                @description: '28-byte payment credential hash as 56-char lowercase hex string'
+                                credential: String)       returns many AddressUTxOs;
 
     @title      : 'Get Assets by Bech32 Address'
     @description: 'Retrieve asset information using the Bech32 Address'

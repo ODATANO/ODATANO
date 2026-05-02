@@ -1,5 +1,5 @@
 import { bech32 } from "bech32";
-import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,ASSET_UNIT_REGEX,
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,HEX_56_REGEX,ASSET_UNIT_REGEX,
   POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
@@ -157,6 +157,16 @@ export function isAssetUnit(s: unknown): s is string {
  */
 export function isBlockHash(s: unknown): s is string {
   return typeof s === "string" && HEX_64_REGEX.test(s);
+}
+
+/**
+ * Payment credential: 28-byte hash (key hash or script hash) as 56-char lowercase hex.
+ * Used for credential-based UTxO queries (Indigo CDPs, Liqwid positions, etc.).
+ * @param s - The raw value to validate against credential format
+ * @returns { boolean } true if s is a valid 56-char lowercase hex string
+ */
+export function isValidCredential(s: unknown): s is string {
+  return typeof s === "string" && HEX_56_REGEX.test(s);
 }
 
 /**

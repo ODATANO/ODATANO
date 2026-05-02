@@ -7,6 +7,7 @@ import {
   isTxHash,
   isAssetUnit,
   isBlockHash,
+  isValidCredential,
   isValidPoolId,
   isValidDrepId,
   isValidBech32Address,
@@ -143,6 +144,38 @@ describe('Validator Helper Methods and Type Guards', () => {
     it('should return false for non-string input', () => {
       expect(isBlockHash(12345)).toBe(false);
       expect(isBlockHash(null)).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // isValidCredential
+  // ==========================================================================
+  describe('isValidCredential', () => {
+    it('returns true for 56-char lowercase hex (28-byte hash)', () => {
+      expect(isValidCredential('a'.repeat(56))).toBe(true);
+      expect(isValidCredential('0123456789abcdef0123456789abcdef0123456789abcdef01234567')).toBe(true);
+    });
+
+    it('returns false for uppercase hex', () => {
+      expect(isValidCredential('A'.repeat(56))).toBe(false);
+    });
+
+    it('returns false for wrong length', () => {
+      expect(isValidCredential('a'.repeat(55))).toBe(false);
+      expect(isValidCredential('a'.repeat(57))).toBe(false);
+      expect(isValidCredential('a'.repeat(64))).toBe(false);
+    });
+
+    it('returns false for non-hex characters', () => {
+      expect(isValidCredential('z'.repeat(56))).toBe(false);
+      expect(isValidCredential('g'.repeat(56))).toBe(false);
+    });
+
+    it('returns false for non-string input', () => {
+      expect(isValidCredential(12345)).toBe(false);
+      expect(isValidCredential(null)).toBe(false);
+      expect(isValidCredential(undefined)).toBe(false);
+      expect(isValidCredential({})).toBe(false);
     });
   });
 

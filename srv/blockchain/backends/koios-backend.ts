@@ -5,6 +5,7 @@ import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
+import { inlineDatumToHex } from '../../utils/tx-build-helper';
 
 const logger = cds.log('KoiosBackend');
 
@@ -20,6 +21,8 @@ import {
   PoolData,
   DrepData,
   AccountData,
+  AssetInfo,
+  AssetHistoryEntry,
   Amount,
   LedgerProtocolParameters
 } from '../../utils/types';
@@ -320,7 +323,7 @@ export class KoiosBackend implements CardanoBackend {
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
             scriptRef: utxo.reference_script || null,
-            inlineDatum: utxo.inline_datum ? JSON.stringify(utxo.inline_datum) : null,
+            inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
       },
@@ -328,7 +331,51 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  /** 
+  /**
+   * Get UTxOs by payment credential. Returns UTxOs across all bech32 addresses
+   * sharing the given 28-byte payment credential (key hash or script hash).
+   * Native Koios endpoint — single round-trip with inline-datum hydration.
+   * @param credHash 28-byte payment credential as 56-char lowercase hex
+   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms
+   */
+  async getCredentialUtxos(credHash: string): Promise<UTxO[]> {
+    return handleBackendRequest(
+      async () => {
+        const { data } = await this.api.post('/credential_utxos', {
+          _payment_credentials: [credHash],
+          _extended: true,
+        });
+        return data.map((utxo: any) => {
+          const amount: Amount[] = [
+            { unit: 'lovelace', quantity: utxo.value }
+          ];
+
+          if (utxo.asset_list && Array.isArray(utxo.asset_list)) {
+            for (const asset of utxo.asset_list) {
+              amount.push({
+                unit: `${asset.policy_id}${asset.asset_name}`,
+                quantity: asset.quantity
+              });
+            }
+          }
+
+          return {
+            txHash: utxo.tx_hash,
+            outputIndex: utxo.tx_index,
+            address: utxo.address,
+            amount: amount,
+            blockHash: utxo.block_hash,
+            datumHash: utxo.datum_hash || null,
+            scriptRef: utxo.reference_script || null,
+            inlineDatum: inlineDatumToHex(utxo.inline_datum),
+          };
+        });
+      },
+      this.name
+    );
+  }
+
+  /**
    * Get Network Information
    * @returns {Promise<Network>} network information
    */
@@ -460,7 +507,117 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
-  /** 
+  /**
+   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata).
+   * Koios's `asset_info` returns total_supply, mint/burn counts split,
+   * minting tx + creation_time, and both on-chain and registry metadata.
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @returns {Promise<AssetInfo>} canonical asset info
+   */
+  async getAssetInfo(unit: string): Promise<AssetInfo> {
+    return handleBackendRequest(
+      async () => {
+        if (unit.length < 56 || !/^[a-f0-9]+$/i.test(unit)) {
+          throw new NotFoundError('Asset', this.name);
+        }
+        const policyId = unit.slice(0, 56);
+        const assetNameHex = unit.slice(56);
+
+        const { data } = await this.api.post('/asset_info', {
+          _asset_list: [[policyId, assetNameHex]],
+        });
+
+        if (!Array.isArray(data) || data.length === 0) {
+          throw new NotFoundError('Asset', this.name);
+        }
+
+        const a = data[0];
+        const reg: any = a.token_registry_metadata ?? null;
+        // Koios returns minting_tx_metadata as { "<label>": <CIP-25 payload> }; pick label 721 (CIP-25 default)
+        const mintMeta: any = a.minting_tx_metadata ?? null;
+        const onchainMetadata: JSONValue | null = mintMeta && typeof mintMeta === 'object'
+          ? (mintMeta['721'] ?? mintMeta) as JSONValue
+          : null;
+
+        const decodeUtf8 = (hex: string | null | undefined): string | null => {
+          if (!hex) return null;
+          try { return Buffer.from(hex, 'hex').toString('utf8'); } catch { return null; }
+        };
+
+        const mintCnt = typeof a.mint_cnt === 'number' ? a.mint_cnt : 0;
+        const burnCnt = typeof a.burn_cnt === 'number' ? a.burn_cnt : 0;
+
+        return {
+          unit,
+          policyId,
+          assetNameHex,
+          assetName: a.asset_name_ascii ?? decodeUtf8(assetNameHex),
+          fingerprint: a.fingerprint,
+          totalSupply: a.total_supply ?? '0',
+          mintOrBurnCount: mintCnt + burnCnt,
+          initialMintTxHash: a.minting_tx_hash ?? null,
+          initialMintTime: typeof a.creation_time === 'number' ? a.creation_time : null,
+          onchainMetadata,
+          registryName: reg?.name ?? null,
+          registryTicker: reg?.ticker ?? null,
+          registryDecimals: typeof reg?.decimals === 'number' ? reg.decimals : null,
+          registryDescription: reg?.description ?? null,
+          registryUrl: reg?.url ?? null,
+          registryLogo: reg?.logo ?? null,
+        };
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get latest mint/burn events for an asset.
+   * Koios's `asset_history` returns minting_txs[{ tx_hash, block_time, quantity }]
+   * with `quantity` SIGNED (negative = burn). Action is derived from sign;
+   * the canonical `quantity` field stores absolute value.
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @param limit max number of events (default 100). Note: Koios returns ALL events;
+   *              limit is applied client-side after sort-by-block_time desc.
+   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   */
+  async getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
+    return handleBackendRequest(
+      async () => {
+        if (unit.length < 56 || !/^[a-f0-9]+$/i.test(unit)) {
+          throw new NotFoundError('Asset', this.name);
+        }
+        const policyId = unit.slice(0, 56);
+        const assetNameHex = unit.slice(56);
+
+        const { data } = await this.api.post('/asset_history', {
+          _asset_list: [[policyId, assetNameHex]],
+        });
+
+        if (!Array.isArray(data) || data.length === 0) return [];
+
+        const minting_txs = Array.isArray(data[0]?.minting_txs) ? data[0].minting_txs : [];
+        const events: AssetHistoryEntry[] = minting_txs.map((entry: any) => {
+          const rawQty = String(entry.quantity ?? '0');
+          const isNegative = rawQty.startsWith('-');
+          return {
+            unit,
+            txHash: entry.tx_hash,
+            action: isNegative ? 'burn' : 'mint',
+            quantity: isNegative ? rawQty.slice(1) : rawQty,
+            blockTime: typeof entry.block_time === 'number' ? entry.block_time : null,
+            blockHeight: typeof entry.block_height === 'number' ? entry.block_height : null,
+          } as AssetHistoryEntry;
+        });
+
+        // Sort newest-first and cap at limit (defensive — Koios may return ascending)
+        events.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+        return events.slice(0, Math.max(1, limit));
+      },
+      this.name
+    );
+  }
+
+  /**
    * Get Drep Data for specified drep id
    * @param drepId drep id
    * @returns {Promise<DrepData>} drep data
@@ -781,7 +938,7 @@ export class KoiosBackend implements CardanoBackend {
           outputIndex: input.tx_index,
           amount: amount,
           dataHash: input.datum_hash || null,
-          inlineDatum: this._sanitizeInlineDatum(input.inline_datum),
+          inlineDatum: inlineDatumToHex(input.inline_datum),
           referenceScriptHash: input.reference_script || null,
         };
       }),
@@ -803,20 +960,12 @@ export class KoiosBackend implements CardanoBackend {
           txHash: tx.tx_hash,
           outputIndex: output.tx_index,
           dataHash: output.datum_hash || null,
-          inlineDatum: this._sanitizeInlineDatum(output.inline_datum),
+          inlineDatum: inlineDatumToHex(output.inline_datum),
           isCollateral: false,
           referenceScriptHash: output.reference_script || null,
         };
       }),
       metadata: labels
     };
-  }
-
-  /** Sanitize inline datum from Koios: filter out hollow objects like {"bytes": null, "value": null} */
-  private _sanitizeInlineDatum(datum: any): any {
-    if (!datum || typeof datum !== 'object') return datum || null;
-    const values = Object.values(datum);
-    if (values.length > 0 && values.every(v => v === null)) return null;
-    return datum;
   }
 }

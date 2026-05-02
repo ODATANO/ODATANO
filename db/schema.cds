@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b256, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -198,6 +198,105 @@ entity Pools {
         rewardAccount  : String;
 }
 
+@title      : 'Asset Entity'
+@description: 'Native-asset information entity (supply, mint history, CIP-25 + CIP-26 metadata)'
+entity Assets : temporal {
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+    key unit              : AssetUnit;
+
+        @title      : 'Policy ID'
+        @description: 'Blake2b-224 hash of the minting policy script (56-char hex)'
+        policyId          : Blake2b224;
+
+        @title      : 'Asset Name Hex'
+        @description: 'Asset name as hex string (0-32 bytes / 0-64 hex chars)'
+        assetNameHex      : HexBytes;
+
+        @title      : 'Asset Name'
+        @description: 'Asset name as UTF-8 string when decodable'
+        assetName         : String(128);
+
+        @title      : 'Asset Fingerprint'
+        @description: 'CIP-14 asset fingerprint (asset1...)'
+        fingerprint       : String(44);
+
+        @title      : 'Total Supply'
+        @description: 'Current total supply (BigInt-safe decimal string)'
+        totalSupply       : String(40);
+
+        @title      : 'Mint or Burn Count'
+        @description: 'Total number of mint/burn transactions for this asset'
+        mintOrBurnCount   : Integer;
+
+        @title      : 'Initial Mint Tx Hash'
+        @description: 'Hash of the transaction that first minted this asset'
+        initialMintTxHash : Blake2b256;
+
+        @title      : 'Initial Mint Time'
+        @description: 'Unix timestamp of the initial mint (null when unavailable from backend, e.g. Blockfrost)'
+        initialMintTime   : Integer64;
+
+        @title      : 'On-Chain Metadata'
+        @description: 'CIP-25 on-chain metadata as JSON string (varies per minter)'
+        onchainMetadata   : LargeString;
+
+        @title      : 'Registry Name'
+        @description: 'CIP-26 off-chain registry: human-readable name'
+        registryName      : String(128);
+
+        @title      : 'Registry Ticker'
+        @description: 'CIP-26 off-chain registry: ticker symbol'
+        registryTicker    : String(16);
+
+        @title      : 'Registry Decimals'
+        @description: 'CIP-26 off-chain registry: decimal precision'
+        registryDecimals  : Integer;
+
+        @title      : 'Registry Description'
+        @description: 'CIP-26 off-chain registry: human-readable description'
+        registryDescription : LargeString;
+
+        @title      : 'Registry URL'
+        @description: 'CIP-26 off-chain registry: project URL'
+        registryUrl       : String(256);
+
+        @title      : 'Registry Logo'
+        @description: 'CIP-26 off-chain registry: base64-encoded logo or URL'
+        registryLogo      : LargeString;
+}
+
+@title      : 'Asset History Entry'
+@description: 'Mint or burn event for a native asset. Immutable on-chain — entries are never updated, only inserted. Free-standing (not a Composition) so history can be queried before/without the parent Assets row.'
+@readonly
+entity AssetHistory {
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'policyId + assetNameHex (concatenated hex)'
+    key unit        : AssetUnit;
+
+        @title      : 'Transaction Hash (Key)'
+        @description: 'Hash of the transaction that performed the mint or burn'
+    key txHash      : Blake2b256;
+
+        @title      : 'Action'
+        @description: 'mint or burn'
+        action      : String(10);
+
+        @title      : 'Quantity'
+        @description: 'Absolute mint/burn amount (BigInt-safe decimal string; always positive — sign info is in `action`)'
+        quantity    : String(40);
+
+        @title      : 'Block Time'
+        @description: 'Unix timestamp of the containing block (null when backend does not provide, e.g. Blockfrost without extra tx fetch)'
+        blockTime   : Integer64;
+
+        @title      : 'Block Height'
+        @description: 'Block height of the containing block (null when backend does not provide)'
+        blockHeight : Integer;
+}
+
 @title      : 'Drep Entity'
 @description: 'Drep information entity definition'
 entity Dreps {
@@ -254,6 +353,10 @@ entity Addresses : temporal {
         @title      : 'Total Lovelace'
         @description: 'Total lovelace on this address'
         totalLovelace : Lovelace;
+
+        @title      : 'UTxO Count'
+        @description: 'Number of UTxOs at this address (pre-aggregated, no UTxO scan needed for status checks)'
+        utxoCount     : Integer;
 
         @title : 'Address Transactions'
         @description : 'Composition of all transactions involving this address'

@@ -2,7 +2,7 @@ import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { toHex } from '@harmoniclabs/uint8array-utils';
 import { MixedAssetsError, InsufficientFundsError } from './errors';
-import { dataFromJson, type Data } from '@harmoniclabs/plutus-data';
+import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
 
@@ -199,6 +199,54 @@ export function jsonToPlutusData(json: JSONValue): Data {
     return dataFromJson(normalized);
   }
   throw new Error(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);
+}
+
+/**
+ * Normalize a backend-provided inline datum to canonical CBOR hex.
+ *
+ * Backends report inline datums in different shapes:
+ * - Blockfrost: hex CBOR string (e.g. "19a6aa")
+ * - Koios (_extended): wrapper { bytes: "<hex>", value: { ...PlutusData JSON... } }
+ * - Koios (sometimes empty): { bytes: null, value: null }
+ * - Some endpoints: raw PlutusData JSON ({ "int": 42 } / { "constructor": 0, "fields": [] })
+ *
+ * Returns hex CBOR (lowercase) or null. Defensive: returns null on unknown
+ * shapes rather than throwing — backend mappers must not crash on malformed data.
+ */
+export function inlineDatumToHex(datum: unknown): string | null {
+  if (datum === null || datum === undefined) return null;
+
+  // Already hex CBOR (Blockfrost path, or pre-normalized)
+  if (typeof datum === 'string') {
+    const s = datum.trim();
+    if (!s) return null;
+    return /^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0 ? s.toLowerCase() : null;
+  }
+
+  if (typeof datum !== 'object' || Array.isArray(datum)) return null;
+
+  const obj = datum as Record<string, unknown>;
+
+  // Koios wrapper: { bytes: "<hex>", value: <PlutusData JSON> }.
+  // Distinguished from raw PlutusData {bytes:"deadbeef"} by the presence of `value`.
+  if ('value' in obj && typeof obj.bytes === 'string' && obj.bytes.length > 0) {
+    const hex = obj.bytes.trim();
+    return /^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0 ? hex.toLowerCase() : null;
+  }
+
+  // Koios empty wrapper: all top-level values null
+  if ('value' in obj || ('bytes' in obj && obj.bytes === null)) {
+    const vals = Object.values(obj);
+    if (vals.length > 0 && vals.every(v => v === null)) return null;
+  }
+
+  // Raw PlutusData JSON (DetailedSchema or Buildooor "constr" form)
+  try {
+    const data = jsonToPlutusData(datum as JSONValue);
+    return Buffer.from(dataToCbor(data) as unknown as Uint8Array).toString('hex');
+  } catch {
+    return null;
+  }
 }
 
 /**

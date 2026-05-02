@@ -139,6 +139,11 @@ export const MAX_POSIX_MS_DIGITS = 13;
 export const HEX_64_REGEX = /^[a-f0-9]{64}$/;
 
 /**
+ * Generic 56-character hex string — 28-byte hashes (Blake2b-224 / payment credential / script hash / pool key hash).
+ */
+export const HEX_56_REGEX = /^[a-f0-9]{56}$/;
+
+/**
  * Transaction hash Regex - 64-character hexadecimal string
  */
 export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;

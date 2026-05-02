@@ -1,6 +1,6 @@
 import { CardanoClient, CardanoClientConfig, Network } from '../../srv/blockchain/cardano-client';
 import { isEvaluatingBackend } from '../../srv/blockchain/backends/cardano-backend';
-import { ConfigError, AllBackendsInitFailedError, AllBackendsFailedError } from '../../srv/utils/errors';
+import { ConfigError, AllBackendsInitFailedError, AllBackendsFailedError, ProviderUnavailableError } from '../../srv/utils/errors';
 import nock from 'nock';
 
 const NETWORK: Network = 'preview';
@@ -728,6 +728,108 @@ describe('CardanoClient Configuration', () => {
         evaluateTransaction: async () => [],
       };
       expect(isEvaluatingBackend(evaluating as any)).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // getCredentialUtxos - Koios-only routing
+  // ============================================================================
+  describe('getCredentialUtxos', () => {
+    const CRED = 'a'.repeat(56);
+
+    it('routes to Koios when configured (live or historical)', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const fakeUtxos = [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr1...', amount: [] }];
+      const koiosBackend = {
+        name: 'koios',
+        getCredentialUtxos: jest.fn().mockResolvedValue(fakeUtxos),
+      };
+      (client as any).historicalBackends = [koiosBackend];
+
+      const result = await client.getCredentialUtxos(CRED);
+      expect(koiosBackend.getCredentialUtxos).toHaveBeenCalledWith(CRED);
+      expect(result).toEqual(fakeUtxos);
+    });
+
+    it('throws ProviderUnavailableError when only Blockfrost is configured', async () => {
+      const config = createTestConfig({ backends: ['blockfrost'] });
+      const client = new CardanoClient(config);
+
+      const blockfrostBackend = { name: 'blockfrost' /* no getCredentialUtxos */ };
+      (client as any).historicalBackends = [blockfrostBackend];
+
+      expect(() => client.getCredentialUtxos(CRED)).toThrow(ProviderUnavailableError);
+      expect(() => client.getCredentialUtxos(CRED)).toThrow(/requires Koios backend/);
+    });
+
+    it('throws ProviderUnavailableError when only Ogmios is configured', async () => {
+      const config = createTestConfig({ backends: ['ogmios'] });
+      const client = new CardanoClient(config);
+
+      const ogmiosBackend = { name: 'ogmios' /* no getCredentialUtxos */ };
+      (client as any).liveBackend = ogmiosBackend;
+      (client as any).historicalBackends = [];
+
+      expect(() => client.getCredentialUtxos(CRED)).toThrow(ProviderUnavailableError);
+    });
+
+    it('throws ProviderUnavailableError when Koios is present but lacks the method (defensive)', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      // Stale backend object without the method — guard against partial implementations
+      const staleKoios = { name: 'koios' };
+      (client as any).historicalBackends = [staleKoios];
+
+      expect(() => client.getCredentialUtxos(CRED)).toThrow(ProviderUnavailableError);
+    });
+
+    it('coalesces concurrent requests for the same credential', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      let resolveBackend: (utxos: any[]) => void = () => {};
+      const backendCall = jest.fn(() => new Promise<any[]>(resolve => { resolveBackend = resolve; }));
+      (client as any).historicalBackends = [{
+        name: 'koios',
+        getCredentialUtxos: backendCall,
+      }];
+
+      // Fire three concurrent calls for the same credential
+      const p1 = client.getCredentialUtxos(CRED);
+      const p2 = client.getCredentialUtxos(CRED);
+      const p3 = client.getCredentialUtxos(CRED);
+
+      // Backend was called only once
+      expect(backendCall).toHaveBeenCalledTimes(1);
+
+      const fakeUtxos = [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr1', amount: [] }];
+      resolveBackend(fakeUtxos);
+
+      const results = await Promise.all([p1, p2, p3]);
+      expect(results[0]).toBe(results[1]);
+      expect(results[1]).toBe(results[2]);
+      expect(results[0]).toEqual(fakeUtxos);
+    });
+
+    it('does not coalesce different credentials', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const backendCall = jest.fn().mockResolvedValue([]);
+      (client as any).historicalBackends = [{
+        name: 'koios',
+        getCredentialUtxos: backendCall,
+      }];
+
+      await Promise.all([
+        client.getCredentialUtxos('a'.repeat(56)),
+        client.getCredentialUtxos('b'.repeat(56)),
+      ]);
+
+      expect(backendCall).toHaveBeenCalledTimes(2);
     });
   });
 });

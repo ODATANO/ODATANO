@@ -15,6 +15,8 @@ import {
   PoolData,
   DrepData,
   AccountData,
+  AssetInfo,
+  AssetHistoryEntry,
   LedgerProtocolParameters
 } from '../utils/types';
 import { OgmiosBackend } from './backends/ogmios-backend';
@@ -40,6 +42,7 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getPool: { preferLive: true },
   getDrep: { preferLive: false },
   getAccount: { preferLive: true },
+  getAssetInfo: { preferLive: false },
   getProtocolParameters: { preferLive: true },
   submitTransaction: { preferLive: true },
 };
@@ -85,6 +88,7 @@ export class CardanoClient {
   // Request coalescers — deduplicate concurrent fetches for the same resource
   private txCoalescer = new RequestCoalescer<Transaction>();
   private addrCoalescer = new RequestCoalescer<Address>();
+  private credCoalescer = new RequestCoalescer<UTxO[]>();
 
   /** 
    * Constructor for CardanoClient
@@ -312,6 +316,25 @@ export class CardanoClient {
   }
 
   /**
+   * Get UTxOs by 28-byte payment credential. Koios-only — bypasses generic
+   * failover because no other backend exposes a credential-keyed UTxO endpoint.
+   * Throws ProviderUnavailableError if Koios is not configured.
+   * @param credHash 28-byte payment credential as 56-char lowercase hex
+   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms sharing the credential
+   */
+  getCredentialUtxos(credHash: string): Promise<UTxO[]> {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    const koios = candidates.find(b => b?.name === 'koios' && typeof b.getCredentialUtxos === 'function');
+    if (!koios) {
+      throw new ProviderUnavailableError(
+        "getCredentialUtxos requires Koios backend. Configure 'koios' in cds.requires.odatano-core.backends.",
+        'koios'
+      );
+    }
+    return this.credCoalescer.get(credHash, () => koios.getCredentialUtxos!(credHash));
+  }
+
+  /**
    * Get address transactions with fallback between backends
    * @param address bech32 address
    * @returns {Promise<Transaction[]>} list of transactions for this address
@@ -373,13 +396,45 @@ export class CardanoClient {
     return this.route('getDrep', b => b.getDrep(drepId));
   }
 
-  /** 
+  /**
    * Get account data with fallback between backends
    * @param stakeAddress stake address
    * @returns {Promise<AccountData>} account data
    */
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
+  }
+
+  /**
+   * Get asset info (supply, mint history, CIP-25 + CIP-26 metadata) with fallback.
+   * Both Blockfrost and Koios implement; Ogmios throws "not supported".
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @returns {Promise<AssetInfo>} canonical asset info
+   */
+  getAssetInfo(unit: string): Promise<AssetInfo> {
+    return this.route('getAssetInfo', b => b.getAssetInfo(unit));
+  }
+
+  /**
+   * Get latest mint/burn events for an asset. Prefers Koios because it provides
+   * block timestamps; Blockfrost is the fallback (timestamps left null).
+   * Ogmios doesn't implement — fallback skips it via the optional method check.
+   * @param unit policyId + assetNameHex (concatenated hex)
+   * @param limit max number of events (default 100)
+   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   */
+  getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
+    const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
+    const koios = candidates.find(b => b?.name === 'koios' && typeof b.getAssetHistory === 'function');
+    if (koios) return koios.getAssetHistory!(unit, limit);
+    const anyImpl = candidates.find(b => typeof b?.getAssetHistory === 'function');
+    if (!anyImpl) {
+      throw new ProviderUnavailableError(
+        "getAssetHistory requires Blockfrost or Koios backend.",
+        'asset-history'
+      );
+    }
+    return anyImpl.getAssetHistory!(unit, limit);
   }
 
   //-----------------------------------------------------------------------------

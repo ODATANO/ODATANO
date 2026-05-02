@@ -783,7 +783,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   private _mapMultiAssetUtxoToLedgerUtxo(utxo: OdatanoUtxo): LedgerUTxO {
     const value = this._buildLedgerValue(getLovelace(utxo), utxo.amount);
-    const datumValue = utxo.inlineDatum ? this._parseInlineDatum(utxo.inlineDatum) : undefined;
+    const datumValue = utxo.inlineDatum ? dataFromCbor(utxo.inlineDatum) : undefined;
 
     return new LedgerUTxO({
       utxoRef: new TxOutRef({ id: utxo.txHash, index: utxo.outputIndex }),
@@ -794,30 +794,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         refScript: this._buildInputRefScript(utxo)
       })
     });
-  }
-
-  /**
-   * Parse inline datum from backend UTxO data.
-   * Backends return inline datums in different formats:
-   * - Koios UTxOs: JSON.stringify(datum) → JSON string
-   * - Koios tx_info / Blockfrost: raw JSON object
-   * - CBOR hex string (even-length hex)
-   */
-  private _parseInlineDatum(inlineDatum: string | object): ReturnType<typeof dataFromCbor> {
-    if (typeof inlineDatum === 'string') {
-      // Check if it's CBOR hex (even-length hex string)
-      if (/^[0-9a-fA-F]+$/.test(inlineDatum) && inlineDatum.length % 2 === 0) {
-        return dataFromCbor(inlineDatum);
-      }
-      // Otherwise it's a JSON string — parse and convert
-      return jsonToPlutusData(JSON.parse(inlineDatum));
-    }
-    // Raw JSON object from backend — guard against hollow objects (all null values)
-    const values = Object.values(inlineDatum);
-    if (values.length > 0 && values.every(v => v === null)) {
-      throw new Error('Inline datum object has only null values — UTxO likely uses datum hash, not inline datum');
-    }
-    return jsonToPlutusData(inlineDatum as JSONValue);
   }
 
   /**

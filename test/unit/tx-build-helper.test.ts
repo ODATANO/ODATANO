@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
@@ -390,6 +390,72 @@ describe('tx-build-helper utilities', () => {
 
     it('should throw for object JSON (not array)', () => {
       expect(() => parseOptionalJsonArray('{"a":1}', 'myField')).toThrow('myField must be a JSON array');
+    });
+  });
+
+  describe('inlineDatumToHex', () => {
+    it('returns null for null/undefined', () => {
+      expect(inlineDatumToHex(null)).toBeNull();
+      expect(inlineDatumToHex(undefined)).toBeNull();
+    });
+
+    it('returns null for empty string', () => {
+      expect(inlineDatumToHex('')).toBeNull();
+      expect(inlineDatumToHex('   ')).toBeNull();
+    });
+
+    it('passes through hex CBOR string lowercased', () => {
+      expect(inlineDatumToHex('19A6AA')).toBe('19a6aa');
+      expect(inlineDatumToHex('d8799fff')).toBe('d8799fff');
+    });
+
+    it('returns null for non-hex string (defensive)', () => {
+      expect(inlineDatumToHex('not-hex')).toBeNull();
+      // odd-length hex is not valid CBOR
+      expect(inlineDatumToHex('abc')).toBeNull();
+    });
+
+    it('extracts bytes from Koios _extended wrapper', () => {
+      const wrapper = { bytes: '19a6aa', value: { int: 42 } };
+      expect(inlineDatumToHex(wrapper)).toBe('19a6aa');
+    });
+
+    it('lowercases hex in Koios wrapper', () => {
+      const wrapper = { bytes: 'D8799FFF', value: null };
+      expect(inlineDatumToHex(wrapper)).toBe('d8799fff');
+    });
+
+    it('returns null for empty Koios wrapper {bytes:null,value:null}', () => {
+      expect(inlineDatumToHex({ bytes: null, value: null })).toBeNull();
+    });
+
+    it('encodes raw PlutusData JSON (DetailedSchema int) to CBOR hex', () => {
+      const result = inlineDatumToHex({ int: 42 });
+      expect(result).toMatch(/^[0-9a-f]+$/);
+      expect(result!.length % 2).toBe(0);
+      // Round-trip: re-encoding from hex (Blockfrost-shape) should yield the same hex
+      expect(inlineDatumToHex(result!)).toBe(result);
+    });
+
+    it('encodes raw PlutusData JSON (constructor form) to CBOR hex', () => {
+      const result = inlineDatumToHex({ constructor: 0, fields: [] });
+      expect(result).toMatch(/^[0-9a-f]+$/);
+      expect(result!.length % 2).toBe(0);
+    });
+
+    it('encodes Buildooor "constr" form to the same CBOR as "constructor"', () => {
+      const fromCli = inlineDatumToHex({ constructor: 0, fields: [] });
+      const fromBuildooor = inlineDatumToHex({ constr: 0, fields: [] });
+      expect(fromBuildooor).toBe(fromCli);
+    });
+
+    it('returns null for unparseable object (defensive, no throw)', () => {
+      expect(inlineDatumToHex({ random: 'garbage' })).toBeNull();
+      expect(inlineDatumToHex({})).toBeNull();
+    });
+
+    it('returns null for arrays (top-level not valid PlutusData JSON)', () => {
+      expect(inlineDatumToHex([1, 2, 3])).toBeNull();
     });
   });
 });

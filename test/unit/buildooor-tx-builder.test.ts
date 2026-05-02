@@ -101,28 +101,6 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _parseInlineDatum — branch coverage
-  // =========================================================================
-
-  describe('_parseInlineDatum — branch coverage', () => {
-    const parseInlineDatum = (value: any) => (builder as any)._parseInlineDatum(value);
-
-    it('should parse CBOR hex inline datum strings', () => {
-      const parsed = parseInlineDatum('d87980');
-      expect(parsed).toBeDefined();
-    });
-
-    it('should parse JSON string inline datum', () => {
-      const parsed = parseInlineDatum('{"int": 42}');
-      expect(parsed).toBeDefined();
-    });
-
-    it('should throw for hollow inline datum objects', () => {
-      expect(() => parseInlineDatum({ bytes: null, value: null })).toThrow('Inline datum object has only null values');
-    });
-  });
-
-  // =========================================================================
   // buildUnsignedMintTransaction — error/branch paths
   // =========================================================================
 
