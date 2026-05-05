@@ -806,33 +806,41 @@ module.exports = (srv: cds.Service) => {
       return req.reject(400, 'SetCollateral: Invalid or missing Bech32 address');
     }
 
-    // Fetch UTxOs and validate before entering handleRequest (req.reject inside handleRequest gets wrapped as 500)
-    const utxos = await getCardanoClient().getAddressUtxos(address);
-
-    if (utxos.length === 0) {
-      return req.reject(400, 'SetCollateral: No UTxOs found at address');
-    }
-
-    const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
-
-    if (qualifyingUtxos.length >= 2) {
-      return {
-        id: cds.utils.uuid(),
-        network: getCardanoClient().network,
-        senderAddress: address,
-        collateralAvailable: true,
-      };
-    }
-
-    const totalLovelace = utxos.reduce((sum, u) => sum + getLovelace(u), 0n);
-
-    if (totalLovelace < COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) {
-      return req.reject(400, `SetCollateral: Insufficient funds — need at least ${Number(COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) / 1_000_000} ADA, have ${Number(totalLovelace) / 1_000_000} ADA`);
-    }
-
-    // Build self-send transaction: address → address, 5 ADA
-    logger.debug({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
     return handleRequest(req, async (db) => {
+      // Inside handleRequest: getCardanoClient() throwing (e.g. uninitialized after
+      // a failed bootstrap → ProviderUnavailableError) and backend errors from
+      // getAddressUtxos both get caught and properly mapped via mapError.
+      // Use rejectInvalid (throws BackendError 400) instead of req.reject so
+      // mapError sees a typed BackendError and preserves the 400 status.
+      const utxos = await getCardanoClient().getAddressUtxos(address);
+
+      if (utxos.length === 0) {
+        return rejectInvalid(req, 'SetCollateral', 'No UTxOs found at address', 'address');
+      }
+
+      const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
+
+      if (qualifyingUtxos.length >= 2) {
+        return {
+          id: cds.utils.uuid(),
+          network: getCardanoClient().network,
+          senderAddress: address,
+          collateralAvailable: true,
+        };
+      }
+
+      const totalLovelace = utxos.reduce((sum, u) => sum + getLovelace(u), 0n);
+
+      if (totalLovelace < COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) {
+        return rejectInvalid(
+          req,
+          'SetCollateral',
+          `Insufficient funds — need at least ${Number(COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) / 1_000_000} ADA, have ${Number(totalLovelace) / 1_000_000} ADA`,
+          'address',
+        );
+      }
+
+      logger.debug({ address, existingQualifying: qualifyingUtxos.length }, 'Building collateral setup transaction');
       const result = await getCardanoIndexer().indexSimpleBuildResult(db, {
         network: getCardanoClient().network,
         senderAddress: address,
@@ -1025,26 +1033,29 @@ module.exports = (srv: cds.Service) => {
       scriptParams = jsonResult.parsed as any[];
     }
 
-    let targetNetwork: DeriveNetwork;
-    if (network) {
-      if (!VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
-        return rejectInvalid(req, 'DeriveScriptAddress', `Invalid network "${network}". Must be one of: ${VALID_DERIVE_NETWORKS.join(', ')}`, 'network');
-      }
-      targetNetwork = network as DeriveNetwork;
-    } else {
-      targetNetwork = getCardanoClient().network as DeriveNetwork;
+    if (network && !VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
+      return rejectInvalid(req, 'DeriveScriptAddress', `Invalid network "${network}". Must be one of: ${VALID_DERIVE_NETWORKS.join(', ')}`, 'network');
     }
 
-    try {
-      const finalScript = scriptParams && scriptParams.length > 0
-        ? applyScriptParameters(validatorScript, scriptParams)
-        : validatorScript;
-      const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
-      const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
-      return { scriptAddress, scriptHash };
-    } catch (err: any) {
-      return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${err.message}`, 'validatorScript');
-    }
+    return handleRequest(req, async () => {
+      // getCardanoClient() throws ProviderUnavailableError (503) when the app context
+      // is uninitialized. Resolving the network outside the inner CBOR try/catch
+      // keeps that 503 distinct from the 400 used for malformed validatorScript bytes.
+      const targetNetwork: DeriveNetwork = network
+        ? (network as DeriveNetwork)
+        : (getCardanoClient().network as DeriveNetwork);
+
+      try {
+        const finalScript = scriptParams && scriptParams.length > 0
+          ? applyScriptParameters(validatorScript, scriptParams)
+          : validatorScript;
+        const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+        const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
+        return { scriptAddress, scriptHash };
+      } catch (err: any) {
+        return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${err.message}`, 'validatorScript');
+      }
+    });
   });
 
   /**

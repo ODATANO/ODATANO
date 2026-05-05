@@ -64,6 +64,12 @@ docker-compose up -d
 
 Service available at `http://localhost:4004`. See [Quick Start Guide](docs/QUICK_START.md) for full details.
 
+## Dev Mode: Mocked Authentication
+
+> **Heads-up.** `cds serve` uses CAP's mocked auth: `@requires: 'authenticated-user'` accepts any Basic-Auth header against a mock user (`alice`, `bob`, …) — passwords are not checked. Anonymous requests get 401, but anyone reaching the port can authenticate.
+>
+> Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
+
 ## Documentation
 
 | Guide | Description |

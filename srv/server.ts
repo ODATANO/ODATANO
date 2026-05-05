@@ -4,7 +4,7 @@ import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
-import { ConfigError } from './utils/errors';
+import { ConfigError, ProviderUnavailableError } from './utils/errors';
 
 import { env } from 'process';
 
@@ -25,6 +25,7 @@ interface AppContext {
 }
 
 let appContext: AppContext | null = null;
+let bootstrapError: Error | null = null;
 
 /**
  * Initialize the application context with blockchain components
@@ -73,11 +74,17 @@ async function initializeAppContext(
 
 /**
  * Get the application context (must be called after bootstrap)
- * @throws {Error} if called before initialization
+ * @throws {ProviderUnavailableError} 503 when uninitialized — request handlers using
+ *   handleRequest/mapError translate this into a clean 503 response instead of a raw 500.
+ *   If bootstrap actively failed, the cause is appended to the message.
  */
 export function getAppContext(): AppContext {
   if (!appContext) {
-    throw new Error('Application not initialized. This should be called after cds.served event.');
+    const base = 'Application not initialized. This should be called after cds.served event.';
+    const msg = bootstrapError
+      ? `${base} Bootstrap failed: ${bootstrapError.message}`
+      : base;
+    throw new ProviderUnavailableError(msg, 'odatano-bootstrap', undefined, bootstrapError ?? undefined);
   }
   return appContext;
 }
@@ -135,6 +142,7 @@ export function resetAppContext(context: AppContext | null): void {
     throw new Error('resetAppContext() is not available in production');
   }
   appContext = context;
+  bootstrapError = null;
   logger.debug('Application context reset');
 }
 
@@ -332,9 +340,13 @@ cds.on('served', async () => {
 
   try {
     appContext = await initializeAppContext(config, undefined, hsmConfig);
+    bootstrapError = null;
     logger.info('CAP server bootstrap complete');
   } catch (err) {
     // Don't throw - initialization failure shouldn't crash the host app (plugin contract).
+    // Capture the cause so getAppContext() can surface a structured 503 with diagnostics
+    // instead of the raw "Application not initialized" Error landing as a generic 500.
+    bootstrapError = err instanceof Error ? err : new Error(String(err));
     // Write to stderr directly so the cause stays visible even when test runners
     // suppress console.error (jest.setup.ts in this repo silences it).
     const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err);
