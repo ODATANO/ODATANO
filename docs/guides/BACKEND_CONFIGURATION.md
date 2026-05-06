@@ -55,6 +55,26 @@ PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=8000
 ```
 
+### Self-Hosted Blockfrost-Compatible Backends
+
+Blockfrost is also exposed as a wire-compatible interface by several self-hosted
+projects. ODATANO supports redirecting the Blockfrost backend at one of these via
+`BLOCKFROST_CUSTOM_BACKEND` (env) or `blockfrostCustomBackend` (cds.requires):
+
+| Project | Typical URL | Notes |
+|---|---|---|
+| Dolos (MiniBF) | `http://localhost:3010/api/v0` | Lightweight Cardano data node from txpipe. Requires a non-empty `project_id` header — ODATANO sends `self-hosted` when no key is configured. |
+| Demeter Self-Hosted | `https://blockfrost-<project>.demeter.run/api/v0` | Use the per-project URL from the Demeter dashboard; `BLOCKFROST_API_KEY` may still be required by your tier. |
+
+When `BLOCKFROST_CUSTOM_BACKEND` is set, ODATANO points the underlying
+`@blockfrost/blockfrost-js` SDK at that URL; `BLOCKFROST_API_KEY` becomes optional.
+If both are set, the URL controls routing and the key is sent as the `project_id`
+header. Startup logs include `Blockfrost will use customBackend: <url>`.
+
+Do not include a trailing slash in the URL — the SDK concatenates paths and a
+trailing slash produces doubled slashes that some servers (Dolos in particular)
+reject as 404.
+
 ## Routing Logic
 
 The CardanoClient routes each operation to the appropriate backend type:

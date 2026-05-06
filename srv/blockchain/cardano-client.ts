@@ -55,6 +55,7 @@ export type CardanoClientConfig = {
   network: Network;
   backends: BackendName[];
   blockfrostApiKey: string;
+  blockfrostCustomBackend?: string;
   koiosApiKey: string;
   ogmiosUrl: string;
   transactionBuilders: TransactionBuilderName[];
@@ -105,7 +106,12 @@ export class CardanoClient {
     }
 
     if (backends.includes('blockfrost')) {
-      this.historicalBackends.push(new BlockfrostBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.blockfrostApiKey));
+      this.historicalBackends.push(new BlockfrostBackend(
+        clientConfig.network,
+        clientConfig.primaryTimeoutMs,
+        clientConfig.blockfrostApiKey,
+        clientConfig.blockfrostCustomBackend,
+      ));
     }
     if (backends.includes('koios')) {
       this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));

@@ -32,6 +32,7 @@ npm install @odatano/core @cap-js/sqlite
         "network": "preview",
         "backends": ["blockfrost"],
         "blockfrostApiKey": "preview_your_api_key_here",
+        "blockfrostCustomBackend": "",
         "txBuilders": ["buildooor"]
       }
     }
@@ -43,6 +44,10 @@ npm install @odatano/core @cap-js/sqlite
 cds deploy --to sqlite 
 cds serve
 ```
+
+> **Self-hosted Blockfrost-compatible node?** (Dolos MiniBF, Demeter Self-Hosted)
+> Set `blockfrostCustomBackend` to the node's base URL (e.g. `http://localhost:3010/api/v0`).
+> When set, `blockfrostApiKey` becomes optional. See the [Backend Configuration Guide](docs/guides/BACKEND_CONFIGURATION.md#self-hosted-blockfrost-compatible-backends).
 
 ### Standalone
 

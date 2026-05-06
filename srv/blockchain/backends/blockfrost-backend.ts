@@ -35,11 +35,23 @@ export class BlockfrostBackend implements CardanoBackend {
   /** 
    * Constructor
    */
-  constructor(network: Network, timeoutMs: number, projectId: string) {
-    if (!projectId) {
-      throw new BackendInitError('blockfrost', new Error('Blockfrost Api Key is not set'));
+  constructor(network: Network, timeoutMs: number, projectId: string, customBackend?: string) {
+    if (!projectId && !customBackend) {
+      throw new BackendInitError(
+        'blockfrost',
+        new Error('Either projectId (BLOCKFROST_API_KEY) or customBackend (BLOCKFROST_CUSTOM_BACKEND) is required'),
+      );
     }
-    this.api = new BlockFrostAPI({ projectId, network });
+    // Dolos and some other self-hosted Blockfrost-compatible nodes reject empty
+    // project_id headers even when they don't authenticate against them. The upstream
+    // SDK validator accepts customBackend OR projectId — this substitution is purely
+    // for the runtime HTTP header.
+    const effectiveProjectId = projectId || 'self-hosted';
+    this.api = new BlockFrostAPI({
+      projectId: effectiveProjectId,
+      network,
+      ...(customBackend ? { customBackend } : {}),
+    });
     this.network = network;
     this.timeoutMs = timeoutMs;
   }

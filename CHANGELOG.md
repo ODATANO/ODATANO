@@ -5,6 +5,25 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.7] - 06-05-2026: Self-Hosted Blockfrost-Compatible Backends
+
+### Added
+
+- **`blockfrostCustomBackend` config + `BLOCKFROST_CUSTOM_BACKEND` env var**: optional base URL that redirects ODATANO's Blockfrost backend at a Blockfrost-wire-compatible self-hosted node — Dolos MiniBF, Demeter Self-Hosted, or any compatible proxy. Forwarded straight through to `@blockfrost/blockfrost-js`'s upstream `customBackend` option; the entire Blockfrost surface (blocks, txs, utxos, assets, governance, mint history) works against the self-hosted node with zero ODATANO-side mapping changes.
+- **API key becomes optional** when `BLOCKFROST_CUSTOM_BACKEND` is set: the `BlockfrostBackend` constructor now accepts `(network, timeoutMs, projectId, customBackend?)` and requires only `projectId OR customBackend` (matching the upstream SDK validator at `@blockfrost/blockfrost-js/lib/utils/index.js`). When pointed at a customBackend without a key, ODATANO sends `self-hosted` as the `project_id` header — Dolos rejects empty header values even though it doesn't authenticate against them. Startup-log line `Blockfrost will use customBackend: <url>` makes the redirect visible to operators.
+- **`CardanoClientConfig.blockfrostCustomBackend?: string`** added to the public TypeScript surface (re-exported from `src/index.ts`). Additive — non-breaking.
+
+### Changed
+
+- **`loadConfigFromEnv` warning** at `srv/server.ts`: the `BLOCKFROST_API_KEY is not set` warning now fires only when both `BLOCKFROST_API_KEY` AND `BLOCKFROST_CUSTOM_BACKEND` are empty — previously a confusing warning would appear for self-hosted setups that only set the URL.
+
+### Internal
+
+- **Light URL validation**: `loadConfigFromEnv` rejects `BLOCKFROST_CUSTOM_BACKEND` values that do not begin with `http://` or `https://` upfront, with a clear error message — matches the existing throw style used for timeout validation.
+- **Test additions**: `test/unit/blockfrost-backend.test.ts` constructor describe block expanded to 6 cases (missing-both error path, projectId-only, customBackend-only, customBackend forwarded into SDK, dummy `'self-hosted'` substitution, customBackend omitted when absent). New `test/integration/blockfrost-custom-backend.test.ts` (4 cases) exercises the real SDK against `nock` — the only way to prove URL forwarding actually works end-to-end vs. just being stored on the options object.
+- Version bumped `1.7.6` → `1.7.7`.
+
+
 ## [v1.7.6] - 02-05-2026: Inline Datums, Credential Queries, Asset Info, Mint/Burn History
 
 Driven by CHAINFEED's Sprint-1 oracle-adapter integration feedback. Goal: every direct Koios/Blockfrost call CHAINFEED currently bypasses the bridge with should be routable through ODATANO instead.

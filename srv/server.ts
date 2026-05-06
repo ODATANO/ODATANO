@@ -168,6 +168,7 @@ export async function createTestContext(
       network: (env.NETWORK as Network) || 'preview',
       backends,
       blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+      blockfrostCustomBackend: env.BLOCKFROST_CUSTOM_BACKEND || undefined,
       koiosApiKey: env.KOIOS_API_KEY || '',
       ogmiosUrl: env.OGMIOS_URL || '',
       transactionBuilders: [txBuilderName],
@@ -257,12 +258,21 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   }
 
   const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';
+  const blockfrostCustomBackend = cdsConfig.blockfrostCustomBackend || env.BLOCKFROST_CUSTOM_BACKEND || '';
+  if (blockfrostCustomBackend && !/^https?:\/\//i.test(blockfrostCustomBackend)) {
+    throw new Error(
+      `Invalid BLOCKFROST_CUSTOM_BACKEND "${blockfrostCustomBackend}". Must be an http(s) URL ` +
+      `(e.g. http://localhost:3010/api/v0).`
+    );
+  }
   const koiosApiKey = cdsConfig.koiosApiKey || env.KOIOS_API_KEY || '';
   const ogmiosUrl = cdsConfig.ogmiosUrl || env.OGMIOS_URL || '';
 
   // Warn about missing API keys for selected backends
-  if (backends.includes('blockfrost') && !blockfrostApiKey) {
-    logger.warn('BLOCKFROST_API_KEY is not set but blockfrost is listed in BACKENDS');
+  if (backends.includes('blockfrost') && !blockfrostApiKey && !blockfrostCustomBackend) {
+    logger.warn('Neither BLOCKFROST_API_KEY nor BLOCKFROST_CUSTOM_BACKEND is set but blockfrost is listed in BACKENDS');
+  } else if (backends.includes('blockfrost') && blockfrostCustomBackend) {
+    logger.info(`Blockfrost will use customBackend: ${blockfrostCustomBackend}`);
   }
   if (backends.includes('ogmios') && !ogmiosUrl) {
     logger.warn('OGMIOS_URL is not set but ogmios is listed in BACKENDS');
@@ -272,6 +282,7 @@ export function loadConfigFromEnv(): CardanoClientConfig {
     network,
     backends,
     blockfrostApiKey,
+    blockfrostCustomBackend: blockfrostCustomBackend || undefined,
     koiosApiKey,
     ogmiosUrl,
     transactionBuilders: txBuilders,

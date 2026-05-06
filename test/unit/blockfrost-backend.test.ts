@@ -20,18 +20,58 @@ jest.mock('@blockfrost/blockfrost-js', () => {
 const NETWORK = 'preview' as const;
 const TIMEOUT_MS = 5000;
 
-describe('BlockfrostBackend constructor Error Test', () => {
-  it('throws BackendInitError when projectId is missing', () => {
+describe('BlockfrostBackend constructor', () => {
+  beforeEach(() => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockClear();
+  });
+
+  it('throws BackendInitError when both projectId AND customBackend are missing', () => {
     expect(() => new BlockfrostBackend(NETWORK, TIMEOUT_MS, '')).toThrow(BackendInitError);
     try {
       new BlockfrostBackend(NETWORK, TIMEOUT_MS, '');
     } catch (err: any) {
-      expect(err.originalError?.message).toMatch(/Blockfrost Api Key is not set/i);
+      expect(err.originalError?.message).toMatch(/Either projectId .* or customBackend .* is required/i);
     }
   });
 
   it('creates backend successfully with valid projectId', () => {
     expect(() => new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key')).not.toThrow();
+  });
+
+  it('creates backend successfully with customBackend only (no projectId)', () => {
+    expect(() => new BlockfrostBackend(NETWORK, TIMEOUT_MS, '', 'http://localhost:3010/api/v0')).not.toThrow();
+  });
+
+  it('forwards customBackend into the BlockFrostAPI constructor', () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key', 'http://demeter.example/v0');
+    expect(BlockFrostAPI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'test-key',
+        network: NETWORK,
+        customBackend: 'http://demeter.example/v0',
+      }),
+    );
+  });
+
+  it("substitutes 'self-hosted' projectId when customBackend is set without a key", () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    new BlockfrostBackend(NETWORK, TIMEOUT_MS, '', 'http://localhost:3010/api/v0');
+    expect(BlockFrostAPI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'self-hosted',
+        customBackend: 'http://localhost:3010/api/v0',
+      }),
+    );
+  });
+
+  it('omits customBackend from SDK options when not provided', () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    const callArgs = BlockFrostAPI.mock.calls[0][0];
+    expect(callArgs).not.toHaveProperty('customBackend');
+    expect(callArgs.projectId).toBe('test-key');
   });
 });
 
