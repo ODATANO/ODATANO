@@ -832,4 +832,71 @@ describe('CardanoClient Configuration', () => {
       expect(backendCall).toHaveBeenCalledTimes(2);
     });
   });
+
+  // ============================================================================
+  // getCurrentSlot / isUtxoUnspent routing
+  // ============================================================================
+  describe('getCurrentSlot routing', () => {
+    it('prefers the live backend when configured', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const liveSlot = jest.fn().mockResolvedValue(80_000_001);
+      const histSlot = jest.fn().mockResolvedValue(80_000_999);
+      (client as any).liveBackend = { name: 'ogmios', getCurrentSlot: liveSlot };
+      (client as any).historicalBackends = [{ name: 'koios', getCurrentSlot: histSlot }];
+      (client as any).initialized = true;
+
+      expect(await client.getCurrentSlot()).toBe(80_000_001);
+      expect(liveSlot).toHaveBeenCalledTimes(1);
+      expect(histSlot).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a historical backend when live backend fails', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const liveSlot = jest.fn().mockRejectedValue(new ProviderUnavailableError('down', 'ogmios'));
+      const histSlot = jest.fn().mockResolvedValue(80_000_999);
+      (client as any).liveBackend = { name: 'ogmios', getCurrentSlot: liveSlot };
+      (client as any).historicalBackends = [{ name: 'koios', getCurrentSlot: histSlot }];
+      (client as any).initialized = true;
+
+      expect(await client.getCurrentSlot()).toBe(80_000_999);
+      expect(histSlot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('isUtxoUnspent routing', () => {
+    const TX = 'a'.repeat(64);
+
+    it('prefers the live backend when configured', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const liveCheck = jest.fn().mockResolvedValue(true);
+      const histCheck = jest.fn().mockResolvedValue(false);
+      (client as any).liveBackend = { name: 'ogmios', isUtxoUnspent: liveCheck };
+      (client as any).historicalBackends = [{ name: 'koios', isUtxoUnspent: histCheck }];
+      (client as any).initialized = true;
+
+      expect(await client.isUtxoUnspent(TX, 0)).toBe(true);
+      expect(liveCheck).toHaveBeenCalledWith(TX, 0);
+      expect(histCheck).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a historical backend when the live one escalates', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const liveCheck = jest.fn().mockRejectedValue(new ProviderUnavailableError('field missing', 'blockfrost'));
+      const histCheck = jest.fn().mockResolvedValue(true);
+      (client as any).liveBackend = { name: 'ogmios', isUtxoUnspent: liveCheck };
+      (client as any).historicalBackends = [{ name: 'koios', isUtxoUnspent: histCheck }];
+      (client as any).initialized = true;
+
+      expect(await client.isUtxoUnspent(TX, 0)).toBe(true);
+      expect(histCheck).toHaveBeenCalledWith(TX, 0);
+    });
+  });
 });

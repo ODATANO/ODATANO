@@ -611,7 +611,7 @@ describe('Error Classes', () => {
 
       expect(result).toBeInstanceOf(BackendInitError);
       expect(result.backendName).toBe('koios');
-      expect((result as BackendInitError).originalError?.message).toContain('not initialized');
+      expect(((result as BackendInitError).originalError as Error | undefined)?.message).toContain('not initialized');
     });
 
     it('should convert TypeError "Cannot read properties of undefined" to BackendInitError', () => {

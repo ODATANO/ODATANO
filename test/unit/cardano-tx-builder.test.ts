@@ -295,7 +295,7 @@ describe('CardanoTransactionBuilder', () => {
     it('should pass evaluator when Ogmios is available', async () => {
       mockCardanoClient.hasOgmiosBackend.mockReturnValue(true);
       mockCardanoClient.evaluateTransaction.mockResolvedValue([
-        { validator: { index: 0 }, budget: { memory: 1000, cpu: 500 } }
+        { validator: { purpose: 'mint', index: 0 }, budget: { memory: 1000, cpu: 500 } }
       ]);
 
       // Create a spy to capture the context passed to buildUnsignedMintTransaction

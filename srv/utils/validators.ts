@@ -208,7 +208,7 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
  * @param addrRaw - The raw value to validate against bech32 address format
  * @returns { boolean } true if valid bech32 address false otherwise
  */
-export function isValidBech32Address(addrRaw: string): addrRaw is string {
+export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
@@ -304,7 +304,7 @@ export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
  * @returns validated string array
  * @throws Error if any signer is invalid
  */
-export function validateRequiredSigners(signers: any[]): string[] {
+export function validateRequiredSigners(signers: unknown): string[] {
   if (!Array.isArray(signers)) {
     throw new Error('requiredSignersJson must be a JSON array');
   }
@@ -313,7 +313,7 @@ export function validateRequiredSigners(signers: any[]): string[] {
       throw new Error('Invalid Ed25519 key hash: must be 56 hex chars');
     }
   }
-  return signers;
+  return signers as string[];
 }
 
 /**

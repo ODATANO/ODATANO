@@ -78,10 +78,11 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
     }, 'Combined transaction with witness set (harmoniclabs CBOR)');
 
     return signedTxCbor;
-  } catch (error: any) {
-    logger.error({ error: error.message }, 'Failed to combine transaction with witnesses');
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error({ error: msg }, 'Failed to combine transaction with witnesses');
     throw new TransactionValidationError(
-      `Failed to combine transaction with witnesses: ${error.message}`
+      `Failed to combine transaction with witnesses: ${msg}`
     );
   }
 }

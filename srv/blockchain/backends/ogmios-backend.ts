@@ -20,7 +20,8 @@ import {
   AccountData,
   DrepData,
   AssetInfo,
-  LedgerProtocolParameters
+  LedgerProtocolParameters,
+  ScriptEvaluationResult
 } from '../../utils/types';
 
 import { EvaluatingBackend } from './cardano-backend';
@@ -44,9 +45,9 @@ interface OgmiosStakePool {
 }
 
 interface OgmiosRewardAccountSummary {
-  controlledAmount?: any;
-  rewards?: any;
-  withdrawals?: any;
+  controlledAmount?: { ada?: { lovelace?: number | bigint } } | number | bigint;
+  rewards?: { ada?: { lovelace?: number | bigint } } | number | bigint;
+  withdrawals?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   delegate?: { id?: string };
   delegation?: { poolId?: string };
   vote?: { id?: string };
@@ -71,7 +72,7 @@ export class OgmiosBackend implements EvaluatingBackend {
   public readonly name = 'ogmios';
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
-  private context: any = null;
+  private context: Awaited<ReturnType<typeof createInteractionContext>> | null = null;
   private isShutdown = false;
   private network: Network;
   private timeoutMs: number;
@@ -249,8 +250,9 @@ export class OgmiosBackend implements EvaluatingBackend {
       
       // Query UTxOs from tip (no acquire needed - queries from tip by default)
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
+      type OgmiosUtxoEntry = typeof utxos[number];
 
-      const totalLovelace = utxos.reduce((sum: bigint, u: any) => {
+      const totalLovelace = utxos.reduce((sum: bigint, u: OgmiosUtxoEntry) => {
         const lovelace = u.value?.ada?.lovelace;
         return sum + BigInt(lovelace);
       }, 0n);
@@ -264,7 +266,7 @@ export class OgmiosBackend implements EvaluatingBackend {
           unit: 'lovelace',
           quantity: totalLovelace.toString()
         }],
-        utxos: utxos.map((u: any) => {
+        utxos: utxos.map((u: OgmiosUtxoEntry) => {
           const amount = this.convertOgmiosValue(u.value);
           return {
             txHash: u.transaction?.id || '',
@@ -273,7 +275,7 @@ export class OgmiosBackend implements EvaluatingBackend {
             amount: amount,
             blockHash: '',
             datumHash: u.datumHash,
-            scriptRef: u.script?.hash
+            scriptRef: (u.script as { hash?: string } | undefined)?.hash
           };
         }),
         transactions: []  // Historic transaction queries not supported
@@ -290,7 +292,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       this.ensureNotShutdown();
       
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
-      return utxos.map((u: any) => {
+      return utxos.map((u: typeof utxos[number]) => {
         // convert Ogmios value format to standard amount array
         const amount = this.convertOgmiosValue(u.value);
 
@@ -301,7 +303,7 @@ export class OgmiosBackend implements EvaluatingBackend {
           amount: amount,
           blockHash: '',
           datumHash: u.datumHash,
-          scriptRef: u.script?.hash
+          scriptRef: (u.script as { hash?: string } | undefined)?.hash
         };
       });
     }, this.name);
@@ -411,14 +413,14 @@ export class OgmiosBackend implements EvaluatingBackend {
   /**
    * Evaluate transaction script execution units
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns {Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>>} evaluation results
+   * @returns {Promise<ScriptEvaluationResult[]>} evaluation results
    */
-  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: any, budget: {memory: number, cpu: number}}>> {
+  async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
 
       const results = await this.txSubmissionClient!.evaluateTransaction(unsignedTxCbor);
-      return results;
+      return results as ScriptEvaluationResult[];
     }, this.name);
   }
 
@@ -565,6 +567,39 @@ export class OgmiosBackend implements EvaluatingBackend {
   }
 
   /**
+   * Get the latest chain tip slot.
+   * @returns {Promise<number>} current chain slot
+   */
+  async getCurrentSlot(): Promise<number> {
+    const block = await this.getLatestBlock();
+    if (block.slot == null) {
+      throw new ProviderUnavailableError(
+        `${this.name}: latest block has no slot`,
+        this.name,
+      );
+    }
+    return block.slot;
+  }
+
+  /**
+   * Check whether a UTxO is still unspent via Ogmios `queryLedgerState/utxo`
+   * with an outputReferences filter. Empty result means spent or nonexistent.
+   * @param txHash 64-char lowercase hex
+   * @param outputIndex non-negative integer
+   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
+   */
+  async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
+    if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
+    return handleBackendRequest(async () => {
+      this.ensureNotShutdown();
+      const result = await this.stateQueryClient!.utxo({
+        outputReferences: [{ transaction: { id: txHash }, index: outputIndex }],
+      });
+      return Array.isArray(result) && result.length > 0;
+    }, this.name);
+  }
+
+  /**
    * Shutdown the Ogmios Backend
    * Closes all connections and marks as shutdown
    */
@@ -574,7 +609,15 @@ export class OgmiosBackend implements EvaluatingBackend {
 
     // Terminate the WebSocket and wait for close confirmation
     if (this.context?.socket) {
-      const socket = this.context.socket;
+      // Ogmios's typed `socket` is browser WebSocket, but at runtime it's the
+      // node `ws` WebSocket which exposes `once`/`terminate` and readyState consts.
+      const socket = this.context.socket as unknown as {
+        readyState: number;
+        OPEN: number;
+        CONNECTING: number;
+        once: (event: string, cb: () => void) => void;
+        terminate: () => void;
+      };
       if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, 3000);
@@ -597,7 +640,8 @@ export class OgmiosBackend implements EvaluatingBackend {
     if (this.isShutdown || !this.context?.socket) {
       return false;
     }
-    return this.context.socket.readyState === this.context.socket.OPEN;
+    const socket = this.context.socket as unknown as { readyState: number; OPEN: number };
+    return socket.readyState === socket.OPEN;
   }
 
   // ---------------------------------------------------------------------------
@@ -618,7 +662,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
    * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
    */
-  private convertOgmiosValue(value: any): Array<{ unit: string; quantity: string }> {
+  private convertOgmiosValue(value: { ada?: { lovelace?: number | bigint } } & Record<string, unknown>): Array<{ unit: string; quantity: string }> {
     const amounts: Array<{ unit: string; quantity: string }> = [];
 
     // Handle ADA (lovelace)
@@ -633,7 +677,7 @@ export class OgmiosBackend implements EvaluatingBackend {
     for (const [policyId, assets] of Object.entries(value)) {
       if (policyId === 'ada') continue;
 
-      for (const [assetName, quantity] of Object.entries(assets as Record<string, any>)) {
+      for (const [assetName, quantity] of Object.entries(assets as Record<string, number | bigint | string>)) {
         amounts.push({
           unit: `${policyId}${assetName}`,
           quantity: quantity.toString()

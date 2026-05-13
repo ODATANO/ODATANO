@@ -52,9 +52,10 @@ logger.debug('Plugin registered');
  * In plugin mode cds.root is the consumer app — rewrite to package-qualified paths
  * so CAP resolves via Node module resolution (node_modules/@odatano/core/srv/...).
  */
-cds.on('loaded', (model: { definitions: Record<string, { '@impl'?: string }> }) => {
+cds.on('loaded', (model) => {
   if (path.resolve(cds.root) === pluginRoot) return;
-  for (const def of Object.values(model.definitions)) {
+  const defs = (model as { definitions?: Record<string, { '@impl'?: string }> }).definitions ?? {};
+  for (const def of Object.values(defs)) {
     if (def['@impl'] === 'srv/cardano-service') {
       def['@impl'] = '@odatano/core/srv/cardano-service';
     } else if (def['@impl'] === 'srv/cardano-tx-service') {

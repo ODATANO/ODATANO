@@ -84,3 +84,5 @@ dist/
 *.drawio.png
 *.drawio
 output
+
+upstream-bugs/

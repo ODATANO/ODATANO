@@ -69,8 +69,9 @@ export function getTxHashFromCbor(txCbor: string): string {
  * @throws {InsufficientFundsError} if error is related to insufficient funds
  * @throws {Error} original error if not mappable
  */
-export function mapBuilderError(err: any, assetUnit?: string): never {
-  const msg = (err?.message || err?.toString?.() || String(err)).toLowerCase();
+export function mapBuilderError(err: unknown, assetUnit?: string): never {
+  const errObj = err as { message?: string; toString?: () => string } | null;
+  const msg = (errObj?.message || errObj?.toString?.() || String(err)).toLowerCase();
 
   if (msg.includes('not enough') ||
       msg.includes('insufficient') ||
@@ -101,7 +102,7 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
  * Parse optional JSON string, returning undefined if not provided.
  * Throws with a descriptive message on parse failure.
  */
-export function parseOptionalJson(json: string | undefined, fieldName: string): any | undefined {
+export function parseOptionalJson(json: string | undefined, fieldName: string): unknown {
   if (!json) return undefined;
   try {
     return JSON.parse(json);
@@ -114,9 +115,9 @@ export function parseOptionalJson(json: string | undefined, fieldName: string): 
  * Parse optional JSON string that must be an array.
  * Returns undefined if not provided, throws on invalid JSON or non-array.
  */
-export function parseOptionalJsonArray(json: string | undefined, fieldName: string): any[] | undefined {
+export function parseOptionalJsonArray(json: string | undefined, fieldName: string): unknown[] | undefined {
   if (!json) return undefined;
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
@@ -134,8 +135,8 @@ const PLUTUS_DATA_ALLOWED_KEYS = new Set([
 ]);
 
 /** Strip keys not in the PlutusData whitelist */
-function sanitizePlutusKeys(obj: Record<string, any>): Record<string, any> {
-  const clean: Record<string, any> = {};
+function sanitizePlutusKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
   for (const key of Object.keys(obj)) {
     if (PLUTUS_DATA_ALLOWED_KEYS.has(key)) {
       clean[key] = obj[key];
@@ -149,31 +150,33 @@ function sanitizePlutusKeys(obj: Record<string, any>): Record<string, any> {
  * Buildooor format ("constr"), recursively through fields/list/map.
  * Also strips unrecognized keys for safety.
  */
-function normalizeConstructorKey(obj: Record<string, any>): Record<string, any> {
+function normalizeConstructorKey(obj: Record<string, unknown>): Record<string, unknown> {
   const safe = sanitizePlutusKeys(obj);
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
   if (Object.hasOwn(safe, 'constructor') && !Object.hasOwn(safe, 'constr')) {
-    const result: Record<string, any> = { constr: safe.constructor };
+    const result: Record<string, unknown> = { constr: safe.constructor };
     if (Array.isArray(safe.fields)) {
-      result.fields = safe.fields.map((f: any) =>
-        typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
+      result.fields = (safe.fields as unknown[]).map((f) =>
+        isObj(f) ? normalizeConstructorKey(f) : f
       );
     }
     return result;
   }
   if ('list' in safe && Array.isArray(safe.list)) {
-    return { list: safe.list.map((item: any) =>
-      typeof item === 'object' && item !== null && !Array.isArray(item) ? normalizeConstructorKey(item) : item
+    return { list: (safe.list as unknown[]).map((item) =>
+      isObj(item) ? normalizeConstructorKey(item) : item
     )};
   }
   if ('map' in safe && Array.isArray(safe.map)) {
-    return { map: safe.map.map((entry: any) => ({
-      k: typeof entry.k === 'object' && entry.k !== null ? normalizeConstructorKey(entry.k) : entry.k,
-      v: typeof entry.v === 'object' && entry.v !== null ? normalizeConstructorKey(entry.v) : entry.v,
+    return { map: (safe.map as Array<{ k: unknown; v: unknown }>).map((entry) => ({
+      k: isObj(entry.k) ? normalizeConstructorKey(entry.k) : entry.k,
+      v: isObj(entry.v) ? normalizeConstructorKey(entry.v) : entry.v,
     }))};
   }
   if ('constr' in safe && Array.isArray(safe.fields)) {
-    return { constr: safe.constr, fields: safe.fields.map((f: any) =>
-      typeof f === 'object' && f !== null && !Array.isArray(f) ? normalizeConstructorKey(f) : f
+    return { constr: safe.constr, fields: (safe.fields as unknown[]).map((f) =>
+      isObj(f) ? normalizeConstructorKey(f) : f
     )};
   }
   return safe;

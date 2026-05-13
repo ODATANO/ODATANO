@@ -714,4 +714,75 @@ describe('KoiosBackend', () => {
       await expect(backend.getAssetHistory('garbage')).rejects.toThrow(/not found/i);
     });
   });
+
+  describe('getCurrentSlot', () => {
+    it('returns the slot from getLatestBlock', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .reply(200, [{ hash: 'tiphash', epoch_no: 100 }]);
+
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/block_info', { _block_hashes: ['tiphash'] })
+        .reply(200, [{
+          hash: 'tiphash',
+          slot_no: 80_000_123,
+          epoch_no: 100,
+          epoch_slot_no: 123,
+          block_time: 1700000000,
+          block_height: 1_000_000,
+          vrf_key: 'vrf',
+          block_size: 1024,
+          tx_count: 1,
+          total_fees: '0',
+        }]);
+
+      expect(await backend.getCurrentSlot()).toBe(80_000_123);
+    });
+  });
+
+  describe('isUtxoUnspent', () => {
+    const TX = 'a'.repeat(64);
+
+    it('returns true when /utxo_info reports is_spent=false', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/utxo_info', { _utxo_refs: [`${TX}#0`], _extended: false })
+        .reply(200, [{ tx_hash: TX, tx_index: 0, is_spent: false }]);
+
+      expect(await backend.isUtxoUnspent(TX, 0)).toBe(true);
+    });
+
+    it('returns false when /utxo_info reports is_spent=true', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/utxo_info', { _utxo_refs: [`${TX}#0`], _extended: false })
+        .reply(200, [{ tx_hash: TX, tx_index: 0, is_spent: true }]);
+
+      expect(await backend.isUtxoUnspent(TX, 0)).toBe(false);
+    });
+
+    it('returns false when /utxo_info returns an empty array (nonexistent)', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/utxo_info', { _utxo_refs: [`${TX}#0`], _extended: false })
+        .reply(200, []);
+
+      expect(await backend.isUtxoUnspent(TX, 0)).toBe(false);
+    });
+
+    it('lowercases the txHash before building the utxo ref', async () => {
+      const MIXED = 'A'.repeat(64);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/utxo_info', { _utxo_refs: [`${'a'.repeat(64)}#3`], _extended: false })
+        .reply(200, [{ is_spent: false }]);
+
+      expect(await backend.isUtxoUnspent(MIXED, 3)).toBe(true);
+    });
+
+    it('returns false for negative outputIndex without hitting the network', async () => {
+      // No nock interceptor set up — if the implementation calls out, nock throws.
+      expect(await backend.isUtxoUnspent(TX, -1)).toBe(false);
+    });
+
+    it('returns false for non-integer outputIndex without hitting the network', async () => {
+      expect(await backend.isUtxoUnspent(TX, 1.5)).toBe(false);
+    });
+  });
 });

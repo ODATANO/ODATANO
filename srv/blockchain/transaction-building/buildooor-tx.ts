@@ -3,10 +3,11 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { TxBuilder, type ITxBuildArgs } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
-import { InsufficientFundsError, TransactionValidationError } from "../../utils/errors";
+import { ConfigError, InsufficientFundsError, TransactionValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
+import type { ProtocolParameters } from "@harmoniclabs/cardano-ledger-ts/dist/ledger/protocol/ProtocolParameters";
 import {
   defaultProtocolParameters,
   Address,
@@ -15,7 +16,8 @@ import {
   TxOut,
   TxOutRef,
   Script,
-  Hash28
+  Hash28,
+  Tx as LedgerTx
 } from "@harmoniclabs/cardano-ledger-ts";
 
 import { TxMetadata } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata";
@@ -51,7 +53,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const txbParameters = this._mapLedgerParametersToBuildooorParams(params);
     const genesisInfos = GENESIS_INFOS_BY_NETWORK[client.network];
     if (!genesisInfos) {
-      throw new Error(`BuildooorTxBuilder: no genesis presets for network "${client.network}"`);
+      throw new ConfigError(`BuildooorTxBuilder: no genesis presets for network "${client.network}"`);
     }
     this.txBuilder = new TxBuilder(txbParameters, genesisInfos);
     logger.debug(`Initialized with protocol parameters and ${client.network} genesis infos`);
@@ -94,7 +96,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       logger.debug(`Built unsigned transaction successfully.`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -124,7 +126,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       logger.debug(`Built unsigned transaction successfully.`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -242,7 +244,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length, referenceInputsUsed: readonlyRefInputs.length });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -402,7 +404,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
           });
           if (!evalTx) {
-            throw new Error('Buildooor txBuilder.build() returned null — check inputs, datum, and collateral configuration');
+            throw new TransactionValidationError('Buildooor txBuilder.build() returned null — check inputs, datum, and collateral configuration');
           }
           return toHex(evalTx.toCbor());
         },
@@ -427,7 +429,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         forcedInputsUsed: forcedInputs.length,
         referenceInputsUsed: readonlyRefInputs.length
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -437,7 +439,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   //---------------------------------------------------------------------------
 
   /** Extract CBOR, hash, fee, size, inputs and outputs from a built Buildooor Tx */
-  private _extractTxDetails(tx: any): {
+  private _extractTxDetails(tx: LedgerTx): {
     unsignedTxCbor: string; txBodyHash: string; sizeBytes: number;
     feeLovelace: string;
     inputRefs: Array<{ txHash: string; index: number }>;
@@ -449,11 +451,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       txBodyHash: tx.hash.toString(),
       sizeBytes: unsignedTxBytes.length,
       feeLovelace: tx.body.fee.toString(),
-      inputRefs: tx.body.inputs.map((inp: any) => ({
+      inputRefs: tx.body.inputs.map((inp) => ({
         txHash: inp.utxoRef.id.toString(),
         index: inp.utxoRef.index
       })),
-      outputs: tx.body.outputs.map((o: any) => ({
+      outputs: tx.body.outputs.map((o) => ({
         address: o.address?.toString?.() ?? "",
         lovelace: o.value?.lovelaces?.toString?.() ?? "0"
       })),
@@ -523,15 +525,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         logger.info(`Using evaluated execution units: mem=${result.mem}, cpu=${result.cpu}`);
         return result;
       }
-    } catch (evalError: any) {
-      logger.warn(`Evaluation failed, using default units: ${evalError.message}`);
+    } catch (evalError: unknown) {
+      const msg = evalError instanceof Error ? evalError.message : String(evalError);
+      logger.warn(`Evaluation failed, using default units: ${msg}`);
     }
 
     return DEFAULT_EXECUTION_UNITS;
   }
 
   /** Two-pass build: first build to calculate fee, then rebuild with witness buffer */
-  private async _buildWithWitnessBuffer(buildParams: ITxBuildArgs): Promise<any> {
+  private async _buildWithWitnessBuffer(buildParams: ITxBuildArgs): Promise<LedgerTx> {
     const txFirstPass = await this.txBuilder.build(buildParams);
     const calculatedFee = BigInt(txFirstPass.body.fee.toString());
     const adjustedMinFee = calculatedFee + BigInt(WITNESS_BUFFER_BYTES);
@@ -577,7 +580,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   } {
     const adaOnlyUtxo = utxos.find(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
     if (!adaOnlyUtxo) {
-      throw new Error('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      throw new TransactionValidationError('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
     }
     const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(adaOnlyUtxo)];
     const fundingUtxos = utxos.filter(
@@ -617,8 +620,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     if (!hex) return undefined;
     try {
       return Script.fromCbor(Buffer.from(hex, 'hex'));
-    } catch (err: any) {
-      throw new TransactionValidationError(`Invalid referenceScript CBOR: ${err?.message ?? err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new TransactionValidationError(`Invalid referenceScript CBOR: ${msg}`);
     }
   }
 
@@ -636,8 +640,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
     try {
       return Script.fromCbor(Buffer.from(utxo.scriptRef, 'hex'));
-    } catch (err: any) {
-      logger.warn(`Failed to parse input refScript for ${utxo.txHash}#${utxo.outputIndex}: ${err?.message ?? err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Failed to parse input refScript for ${utxo.txHash}#${utxo.outputIndex}: ${msg}`);
       return undefined;
     }
   }
@@ -662,7 +667,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /** Extract InputRef list from the Buildooor-shaped funding inputs returned by keepRelevant. */
-  private _extractFundingRefs(fundingInputs: Array<{ utxo: { utxoRef: { id: any; index: number } } }>): InputRef[] {
+  private _extractFundingRefs(fundingInputs: Array<{ utxo: { utxoRef: { id: { toString(): string }; index: number } } }>): InputRef[] {
     return fundingInputs.map(i => ({
       txHash: i.utxo.utxoRef.id.toString(),
       outputIndex: i.utxo.utxoRef.index
@@ -748,7 +753,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   /**
    * Map ODATANO LedgerProtocolParameter to Buildooor's ProtocolParameters shape
    */
-  private _mapLedgerParametersToBuildooorParams(protocolParameters: LedgerProtocolParameter): any {
+  private _mapLedgerParametersToBuildooorParams(protocolParameters: LedgerProtocolParameter): ProtocolParameters {
     return {
       ...defaultProtocolParameters,
       txFeePerByte: Number(protocolParameters.minFeeA),
@@ -758,7 +763,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       keyDeposit: Number(protocolParameters.keyDeposit),
       maxTxSize: Number(protocolParameters.maxTxSize),
       maxValueSize: Number(protocolParameters.maxValSize),
-    };
+    } as ProtocolParameters;
   }
 
   /**
@@ -846,6 +851,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       return new TxMetadatumMap(map);
     }
 
-    throw new Error(`Unsupported metadata value type: ${typeof value}`);
+    throw new TransactionValidationError(`Unsupported metadata value type: ${typeof value}`);
   }
 }

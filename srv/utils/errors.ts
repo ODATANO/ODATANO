@@ -22,7 +22,7 @@ export class BackendError extends Error {
     public readonly statusCode: number = 500,
     public readonly code: ErrorCode = ERROR_CODES.INTERNAL_ERROR,
     public readonly backendName?: string,
-    public readonly originalError?: any,
+    public readonly originalError?: unknown,
     public readonly target?: string
   ) {
     super(message);
@@ -42,7 +42,7 @@ export class NotFoundError extends BackendError {
    * @param backendName name of the backend where the error originated
    * @param originalError original error object
    */
-  constructor(resource: string, backendName?: string, originalError?: any) {
+  constructor(resource: string, backendName?: string, originalError?: unknown) {
     super(
       `${resource} not found`,
       404,
@@ -67,7 +67,7 @@ export class TransactionValidationError extends BackendError {
    */
   constructor(
     message: string,
-    originalError?: any,
+    originalError?: unknown,
     code: ErrorCode = ERROR_CODES.TX_VALIDATION_FAILED
   ) {
     super(
@@ -94,7 +94,7 @@ export class ScriptValidationError extends BackendError {
    */
   constructor(
     message: string,
-    originalError?: any
+    originalError?: unknown
   ) {
     super(
       message,
@@ -118,7 +118,7 @@ export class TransactionAlreadySubmittedError extends BackendError {
    */
   constructor(
     public readonly txHash: string,
-    originalError?: any
+    originalError?: unknown
   ) {
     super(
       `Transaction ${txHash} already exists in mempool or on chain`,
@@ -146,7 +146,7 @@ export class InsufficientFundsError extends BackendError {
     public readonly assetUnit: string,
     public readonly required: bigint,
     public readonly available: bigint,
-    originalError?: any
+    originalError?: unknown
   ) {
     super(
       `Insufficient ${assetUnit}: required ${required}, available ${available}`,
@@ -172,7 +172,7 @@ export class MixedAssetsError extends BackendError {
   constructor(
     public readonly utxoRef: string,
     public readonly assets: string[],
-    originalError?: any
+    originalError?: unknown
   ) {
     super(
       `UTxO ${utxoRef} contains non-ADA assets: ${assets.join(', ')}`,
@@ -197,7 +197,7 @@ export class ProviderUnavailableError extends BackendError {
    * @param timeoutMs optional timeout duration in milliseconds
    * @param originalError original error object
    */
-  constructor(message: string, backendName?: string, timeoutMs?: number, originalError?: any) {
+  constructor(message: string, backendName?: string, timeoutMs?: number, originalError?: unknown) {
     const msg = timeoutMs
       ? `${message} (timeout after ${timeoutMs}ms)`
       : message;
@@ -224,7 +224,7 @@ export class RateLimitError extends BackendError {
    * @param retryAfter optional retry-after duration in seconds
    * @param originalError original error object
    */
-  constructor(message: string, backendName?: string, retryAfter?: number, originalError?: any) {
+  constructor(message: string, backendName?: string, retryAfter?: number, originalError?: unknown) {
     const msg = retryAfter
       ? `${message} (retry after ${retryAfter}s)`
       : message;
@@ -248,7 +248,7 @@ export class AllBackendsFailedError extends BackendError {
    * @param errors array of backend errors
    * @param originalError original error object
    */
-  constructor(public readonly errors: BackendError[], originalError?: any) {
+  constructor(public readonly errors: BackendError[], originalError?: unknown) {
     const lastError = errors[errors.length - 1];
 
     super(
@@ -270,14 +270,14 @@ export interface HttpErrorLike {
   status?: number;
   response?: {
     status?: number;
-    headers?: Record<string, any>;
+    headers?: Record<string, unknown>;
     data?: {
       error?: string;
       message?: string;
-      [k: string]: any;
+      [k: string]: unknown;
     };
   };
-  [k: string]: any;
+  [k: string]: unknown;
 }
 
 /** 
@@ -322,7 +322,7 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
  * 9. Unknown/network errors → 503 (default fallback)
  */
 export function normalizeBackendError(
-  err: any,
+  err: unknown,
   backendName?: string,
 ): BackendError {
   // Already normalized
@@ -423,8 +423,9 @@ export function normalizeBackendError(
     messageLower.includes('too many requests') ||
     messageLower.includes('quota exceeded')) {
     // Try to extract retry-after header
-    const retryAfter = err.response?.headers?.["retry-after"] ||
-      err.response?.headers?.["x-ratelimit-reset"];
+    const headers = (err as HttpErrorLike).response?.headers;
+    const retryAfter = (headers?.["retry-after"] as string | undefined) ||
+      (headers?.["x-ratelimit-reset"] as string | undefined);
     return new RateLimitError(
       message || 'Rate limit exceeded',
       backendName,
@@ -485,7 +486,7 @@ export class HsmError extends BackendError {
     message: string,
     statusCode: number = 503,
     code: ErrorCode = ERROR_CODES.HSM_UNAVAILABLE,
-    originalError?: any
+    originalError?: unknown
   ) {
     super(message, statusCode, code, 'hsm', originalError);
     this.name = 'HsmError';

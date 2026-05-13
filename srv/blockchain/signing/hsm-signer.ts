@@ -26,10 +26,35 @@ const CKM_EDDSA = 0x00001057;
  *   3. sign() / signTransaction() — signing operations
  *   4. shutdown() — closes session
  */
+/** Minimal PKCS#11 module surface used here. Loaded dynamically; no static type
+ * package is depended on. We narrow to the actual handful of methods invoked. */
+interface PKCS11Instance {
+  load(path: string): void;
+  C_Initialize(): void;
+  C_Finalize(): void;
+  C_OpenSession(slot: Buffer, flags: number): Buffer;
+  C_CloseSession(session: Buffer): void;
+  C_Login(session: Buffer, userType: number, pin: string): void;
+  C_Logout(session: Buffer): void;
+  C_FindObjectsInit(session: Buffer, template: Pkcs11Attribute[]): void;
+  C_FindObjects(session: Buffer, count: number): Buffer[];
+  C_FindObjectsFinal(session: Buffer): void;
+  C_GetAttributeValue(session: Buffer, handle: Buffer, template: Pkcs11Attribute[]): Pkcs11Attribute[];
+  C_SignInit(session: Buffer, mechanism: { mechanism: number }, key: Buffer): void;
+  C_Sign(session: Buffer, data: Buffer, signature: Buffer): Buffer;
+  C_GetSlotList(tokenPresent: boolean): Buffer[];
+}
+interface Pkcs11Attribute { type: number; value?: Buffer | number | boolean | string }
+type Pkcs11JsModule = {
+  PKCS11: new () => PKCS11Instance;
+  // Object class enums (CKO_*) and attribute IDs (CKA_*) are uppercase ints.
+  [k: string]: unknown;
+};
+
 export class HsmSigner {
-  private pkcs11: any;
-  private session: any;
-  private privateKeyHandle: any;
+  private pkcs11!: PKCS11Instance;
+  private session!: Buffer;
+  private privateKeyHandle!: Buffer;
   private publicKeyBytes: Buffer = Buffer.alloc(0);
   private publicKeyHashHex: string = '';
   private cardanoAddress: string = '';
@@ -48,7 +73,7 @@ export class HsmSigner {
    */
   async init(network: 'mainnet' | 'preview' | 'preprod' | string): Promise<void> {
     // Dynamic import — pkcs11js is only loaded when HSM is configured
-    let pkcs11js: any;
+    let pkcs11js: Pkcs11JsModule;
     try {
       pkcs11js = require('pkcs11js');
     } catch {
@@ -75,18 +100,22 @@ export class HsmSigner {
       }
       this.session = this.pkcs11.C_OpenSession(
         slots[this.config.slot],
-        pkcs11js.CKF_SERIAL_SESSION | pkcs11js.CKF_RW_SESSION
+        (pkcs11js.CKF_SERIAL_SESSION as number) | (pkcs11js.CKF_RW_SESSION as number)
       );
       logger.debug({ slot: this.config.slot }, 'PKCS#11 session opened');
 
       // 3. Login with PIN
-      this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER, this.config.pin);
-      // Clear PIN from memory after successful login — PIN is no longer needed
-      this.config = { ...this.config, pin: '' };
+      try {
+        this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER as number, this.config.pin);
+      } finally {
+        // Clear PIN from memory regardless of login outcome — PIN is no longer needed
+        // even on failure (preventing in-memory PIN residue for crash-dump / heap-inspection scenarios)
+        this.config = { ...this.config, pin: '' };
+      }
       logger.debug('PKCS#11 login successful');
 
       // 4. Find private key by label or ID
-      this.privateKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PRIVATE_KEY);
+      this.privateKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PRIVATE_KEY as number);
 
       // 5. Export public key
       this.publicKeyBytes = this._exportPublicKey(pkcs11js);
@@ -116,11 +145,12 @@ export class HsmSigner {
         address: this.cardanoAddress,
       }, 'HSM signer initialized successfully');
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       this.connected = false;
       if (err instanceof HsmError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
       throw new HsmError(
-        `Failed to initialize HSM: ${err.message}`,
+        `Failed to initialize HSM: ${msg}`,
         503, ERROR_CODES.HSM_UNAVAILABLE, err
       );
     }
@@ -148,9 +178,10 @@ export class HsmSigner {
         publicKeyHex: this.publicKeyBytes.toString('hex'),
         publicKeyHash: this.publicKeyHashHex,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       throw new HsmError(
-        `HSM signing failed: ${err.message}`,
+        `HSM signing failed: ${msg}`,
         500, ERROR_CODES.HSM_SIGNING_FAILED, err
       );
     }
@@ -193,7 +224,7 @@ export class HsmSigner {
         // Replace VKey witnesses (key 0) with HSM witness only
         // Preserves all other entries (redeemers key 5, datums key 4, scripts keys 1-3, 6-7)
         const entries = origWs.map.filter(
-          (e: any) => !(e.k instanceof CborUInt && Number(e.k.num) === 0)
+          (e) => !(e.k instanceof CborUInt && Number(e.k.num) === 0)
         );
         entries.push({
           k: new CborUInt(0),
@@ -216,10 +247,11 @@ export class HsmSigner {
       }, 'Transaction signed with HSM');
 
       return signedTxCbor;
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof HsmError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
       throw new HsmError(
-        `Failed to build signed transaction: ${err.message}`,
+        `Failed to build signed transaction: ${msg}`,
         500, ERROR_CODES.HSM_SIGNING_FAILED, err
       );
     }
@@ -265,8 +297,9 @@ export class HsmSigner {
         this.pkcs11.C_CloseSession(this.session);
         this.pkcs11.C_Finalize();
         logger.info('HSM session closed');
-      } catch (err: any) {
-        logger.warn({ error: err.message }, 'HSM shutdown error (best effort)');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ error: msg }, 'HSM shutdown error (best effort)');
       }
       this.connected = false;
     }
@@ -279,21 +312,21 @@ export class HsmSigner {
   /**
    * Find a key object (private or public) in the HSM by label and/or ID
    */
-  private _findKey(pkcs11js: any, objectClass: any): any {
-    const template: any[] = [
-      { type: pkcs11js.CKA_CLASS, value: objectClass },
+  private _findKey(pkcs11js: Pkcs11JsModule, objectClass: number): Buffer {
+    const template: Pkcs11Attribute[] = [
+      { type: pkcs11js.CKA_CLASS as number, value: objectClass },
     ];
 
     // CKK_EC_EDWARDS (0x40) — PKCS#11 v3.0, may not be defined in older pkcs11js versions
-    const CKK_EC_EDWARDS = pkcs11js.CKK_EC_EDWARDS ?? 0x00000040;
-    template.push({ type: pkcs11js.CKA_KEY_TYPE, value: CKK_EC_EDWARDS });
+    const CKK_EC_EDWARDS = (pkcs11js.CKK_EC_EDWARDS as number | undefined) ?? 0x00000040;
+    template.push({ type: pkcs11js.CKA_KEY_TYPE as number, value: CKK_EC_EDWARDS });
 
     if (this.config.keyLabel) {
-      template.push({ type: pkcs11js.CKA_LABEL, value: this.config.keyLabel });
+      template.push({ type: pkcs11js.CKA_LABEL as number, value: this.config.keyLabel });
     }
     if (this.config.keyId) {
       const idHex = this.config.keyId.replace('0x', '');
-      template.push({ type: pkcs11js.CKA_ID, value: Buffer.from(idHex, 'hex') });
+      template.push({ type: pkcs11js.CKA_ID as number, value: Buffer.from(idHex, 'hex') });
     }
 
     this.pkcs11.C_FindObjectsInit(this.session, template);
@@ -314,17 +347,17 @@ export class HsmSigner {
    * Export the Ed25519 public key from the HSM.
    * Handles both DER-wrapped (04 20 <32 bytes>) and raw 32-byte formats.
    */
-  private _exportPublicKey(pkcs11js: any): Buffer {
-    const pubKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PUBLIC_KEY);
+  private _exportPublicKey(pkcs11js: Pkcs11JsModule): Buffer {
+    const pubKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PUBLIC_KEY as number);
 
     // Extract CKA_EC_POINT (DER-encoded public key)
     const attrs = this.pkcs11.C_GetAttributeValue(this.session, pubKeyHandle, [
-      { type: pkcs11js.CKA_EC_POINT },
+      { type: pkcs11js.CKA_EC_POINT as number },
     ]);
 
     // CKA_EC_POINT for Ed25519 is DER OCTET STRING wrapping 32-byte public key
     // Format: 04 20 <32 bytes>
-    const ecPoint = Buffer.from(attrs[0].value);
+    const ecPoint = Buffer.from(attrs[0].value as Buffer);
 
     if (ecPoint.length === 34 && ecPoint[0] === 0x04 && ecPoint[1] === 0x20) {
       return ecPoint.slice(2);

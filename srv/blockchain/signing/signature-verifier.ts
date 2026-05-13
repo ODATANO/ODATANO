@@ -127,8 +127,9 @@ export class SignatureVerifier {
       result.isValid = true;
       logger.info(`Signature verification successful. ${result.witnessCount} valid signature(s).`);
 
-    } catch (error: any) {
-      result.errorMessage = `Failed to verify signature: ${error.message}`;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      result.errorMessage = `Failed to verify signature: ${msg}`;
       logger.error(result.errorMessage);
     }
 
@@ -167,9 +168,10 @@ export class SignatureVerifier {
       const txBytes = Buffer.from(txCbor, 'hex');
       const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
       return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
       throw new BackendError(
-        `Failed to extract transaction body hash: ${error.message}`,
+        `Failed to extract transaction body hash: ${msg}`,
         400,
         ERROR_CODES.INVALID_INPUT
       );

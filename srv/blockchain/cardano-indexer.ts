@@ -77,7 +77,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult } from '../utils/types';
 
 const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
 
@@ -366,7 +366,7 @@ export class CardanoIndexer {
     }
 
     // Sort by blockTime descending for consistency with GetLatestTransactionsByAddress
-    transactionsEntities.sort((a: any, b: any) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+    transactionsEntities.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return transactionsEntities as AddressTransactions[];
   }
 
@@ -562,7 +562,7 @@ export class CardanoIndexer {
   private async _indexBuildResult(
     tx: CapTransaction,
     buildreq: TxBuildRequest,
-    buildFn: (req: TxBuildRequest, params: LedgerProtocolParameter) => Promise<any>
+    buildFn: (req: TxBuildRequest, params: LedgerProtocolParameter) => Promise<TxBuildResult>
   ): Promise<TransactionBuild> {
     const protocolParams = await this.indexProtocolParameters(tx);
     const txbuildResult = await buildFn(buildreq, protocolParams);
@@ -964,7 +964,7 @@ export class CardanoIndexer {
     const existingRows = await tx.run(
       SELECT.from(Transactions).columns('hash').where({ hash: { in: unique } })
     );
-    const existingSet = new Set((existingRows as any[]).map((r: any) => r.hash));
+    const existingSet = new Set((existingRows as Array<{ hash: string }>).map((r) => r.hash));
     const missing = unique.filter(h => !existingSet.has(h));
 
     logger.debug(`ensureTransactionsIndexed: ${unique.length} unique, ${existingSet.size} cached, ${missing.length} to fetch`);

@@ -1,7 +1,7 @@
 import { CardanoBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
@@ -343,7 +343,14 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const a = await this.api.assetsById(unit);
-        const reg: any = (a as any).metadata ?? null;
+        const reg = (a as { metadata?: {
+          name?: string | null;
+          ticker?: string | null;
+          decimals?: number | null;
+          description?: string | null;
+          url?: string | null;
+          logo?: string | null;
+        } | null }).metadata ?? null;
         const decodeUtf8 = (hex: string | null | undefined): string | null => {
           if (!hex) return null;
           try { return Buffer.from(hex, 'hex').toString('utf8'); } catch { return null; }
@@ -515,7 +522,7 @@ export class BlockfrostBackend implements CardanoBackend {
           minUtxo: protocolParams.min_utxo,
           nonce: protocolParams.nonce,
           costModels: JSON.stringify(normalizeCostModels(
-            (protocolParams as any).cost_models_raw || {}
+            (protocolParams as { cost_models_raw?: Record<string, unknown> }).cost_models_raw || {}
           )),
           minFeeA: protocolParams.min_fee_a,
           minFeeB: protocolParams.min_fee_b,
@@ -601,6 +608,55 @@ export class BlockfrostBackend implements CardanoBackend {
       },
       this.name
     );
+  }
+
+  /**
+   * Get the latest chain tip slot.
+   * @returns {Promise<number>} current chain slot
+   */
+  async getCurrentSlot(): Promise<number> {
+    const block = await this.getLatestBlock();
+    if (block.slot == null) {
+      throw new ProviderUnavailableError(
+        `${this.name}: latest block has no slot`,
+        this.name,
+      );
+    }
+    return block.slot;
+  }
+
+  /**
+   * Check whether a UTxO is still unspent via Blockfrost's `consumed_by_tx` field.
+   * @param txHash 64-char lowercase hex
+   * @param outputIndex non-negative integer
+   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
+   */
+  async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
+    if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
+    try {
+      return await handleBackendRequest(
+        async () => {
+          const utxos = await this.api.txsUtxos(txHash);
+          const out = utxos?.outputs?.find(o => o.output_index === outputIndex);
+          if (!out) return false;
+          // consumed_by_tx is optional on the openapi type (added in Blockfrost
+          // server v0.1.59). If absent we cannot prove unspent — escalate so the
+          // router falls through to another backend rather than silently lying.
+          const consumed = (out as { consumed_by_tx?: string | null }).consumed_by_tx;
+          if (consumed === undefined) {
+            throw new ProviderUnavailableError(
+              `${this.name}: server does not expose consumed_by_tx — cannot determine UTxO status`,
+              this.name,
+            );
+          }
+          return consumed === null;
+        },
+        this.name
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) return false;
+      throw err;
+    }
   }
 
   //-----------------------------------------------------------------------------

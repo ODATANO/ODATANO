@@ -1,5 +1,5 @@
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
-import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
 // Mock the BlockFrostAPI
 jest.mock('@blockfrost/blockfrost-js', () => {
@@ -729,5 +729,154 @@ describe('BlockfrostBackend getAssetHistory', () => {
 
     const result = await backend.getAssetHistory(UNIT);
     expect(result).toEqual([]);
+  });
+});
+
+describe('BlockfrostBackend getCurrentSlot', () => {
+  const TX = 'a'.repeat(64);
+
+  it('returns the slot from getLatestBlock', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h', slot: 80_000_000 }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    const slot = await backend.getCurrentSlot();
+    expect(slot).toBe(80_000_000);
+  });
+
+  it('throws ProviderUnavailableError when latest block has no slot', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h', slot: null }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await expect(backend.getCurrentSlot()).rejects.toThrow(ProviderUnavailableError);
+  });
+});
+
+describe('BlockfrostBackend isUtxoUnspent', () => {
+  const TX = 'a'.repeat(64);
+
+  it('returns true when consumed_by_tx is null', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockResolvedValue({
+        outputs: [{ output_index: 0, consumed_by_tx: null }],
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, 0)).toBe(true);
+  });
+
+  it('returns false when consumed_by_tx is a tx hash', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockResolvedValue({
+        outputs: [{ output_index: 0, consumed_by_tx: 'b'.repeat(64) }],
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, 0)).toBe(false);
+  });
+
+  it('matches by output_index regardless of array order', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockResolvedValue({
+        outputs: [
+          { output_index: 1, consumed_by_tx: 'b'.repeat(64) },
+          { output_index: 0, consumed_by_tx: null },
+        ],
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, 0)).toBe(true);
+    expect(await backend.isUtxoUnspent(TX, 1)).toBe(false);
+  });
+
+  it('returns false for out-of-range outputIndex', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockResolvedValue({
+        outputs: [{ output_index: 0, consumed_by_tx: null }],
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, 99)).toBe(false);
+  });
+
+  it('returns false for negative outputIndex without making a network call', async () => {
+    const txsUtxos = jest.fn();
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos,
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, -1)).toBe(false);
+    expect(txsUtxos).not.toHaveBeenCalled();
+  });
+
+  it('returns false when tx is 404 (never on chain)', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockRejectedValue({ status_code: 404, message: 'not found' }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect(await backend.isUtxoUnspent(TX, 0)).toBe(false);
+  });
+
+  it('throws ProviderUnavailableError when consumed_by_tx field is absent (older server)', async () => {
+    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
+    BlockFrostAPI.mockImplementation(() => ({
+      txsUtxos: jest.fn().mockResolvedValue({
+        outputs: [{ output_index: 0 }], // no consumed_by_tx key
+      }),
+      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }));
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    await expect(backend.isUtxoUnspent(TX, 0)).rejects.toThrow(ProviderUnavailableError);
   });
 });

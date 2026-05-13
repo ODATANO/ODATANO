@@ -5,6 +5,43 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.8] - 13-05-2026: getCurrentSlot() and isUtxoUnspent() with Multi-Backend Implementations`
+
+### Added
+
+- **`CardanoClient.getCurrentSlot(): Promise<number>`** — convenience wrapper over `getLatestBlock().slot` with a guaranteed non-null return. Throws `ProviderUnavailableError` when the backend's latest block reports a null slot (very early chain or backend lag). Centralizes the `null` → error translation that consumers were re-inventing per call site. Method routing: `preferLive: true`.
+- **`CardanoClient.isUtxoUnspent(txHash, outputIndex): Promise<boolean>`** — checks whether a UTxO is still spendable. Returns `false` for both spent UTxOs and txs that never existed on chain; throws on transport/provider failure. Replaces x402's prior 3-arg shim (`(txHash, outputIndex, holdingAddress)`) which required a separate `getTransactionByHash` to resolve the address first — saves one chain round-trip per nonce check on the facilitator happy path. Method routing: `preferLive: true`.
+- **Per-backend implementations** with edge-case parity across all three providers:
+  - **Blockfrost** — `/txs/{hash}/utxos` → `outputs[].consumed_by_tx` (null ⇒ unspent, string ⇒ spent). Output entries are matched by `output_index` (not array position) for defensive ordering. `consumed_by_tx` is an optional field on the Blockfrost openapi type (added in server v0.1.59, mid-2024) — if absent, ODATANO throws `ProviderUnavailableError` so the router falls through to the next backend rather than silently lying with "always true".
+  - **Koios** — `POST /utxo_info` with `_utxo_refs: ["<txHash>#<index>"]` and `_extended: false` → `is_spent === false`. Empty response array maps to `false` (nonexistent UTxO). `txHash` is lowercased before building the ref to match Koios's case-sensitive lookups.
+  - **Ogmios** — `queryLedgerState/utxo` with `{ outputReferences: [{ transaction: { id: txHash }, index }] }` (schema-typed param shape). Non-empty result ⇒ unspent; empty ⇒ spent OR nonexistent (Ogmios can't distinguish).
+- **Fast-path on invalid `outputIndex`** — negative or non-integer values short-circuit to `false` without a network round-trip on all three backends.
+
+### Changed
+
+- **Error semantics for unsupported / provider-down paths** (commit `af17b46`): generic `Error` throws upgraded to typed `ProviderUnavailableError` so callers can branch on the error class and the router's circuit breaker registers them as backend failures rather than uncategorized exceptions. Affected sites:
+  - `OgmiosBackend.getDrep`, `getAssetInfo`, `ensureNotShutdown` — capability mismatch + shutdown guard now carry the `ogmios` backend name on the typed error.
+  - `CardanoClient.evaluateTransaction` — missing evaluating backend now throws `ProviderUnavailableError` instead of bare `Error`.
+- **Transaction-validation errors in tx builders** (commit `af17b46`): missing-script-UTxO throws in `CardanoTransactionBuilder._resolveReferenceInputs` and `BuildooorTxBuilder` are now `TransactionValidationError` instead of generic `Error`. Surfaces as HTTP 400 with a structured code through `handleRequest()` rather than a generic 500.
+
+### Fixed
+
+- **Test typecheck cleanups** (pre-existing on `main`, unblocking `tsc --noEmit`):
+  - `test/unit/cardano-tx-builder.test.ts:298` — `ScriptValidator` requires `purpose`; mock validator object was missing it.
+  - `test/unit/errors.test.ts:614` — `BackendInitError.originalError` is typed `unknown`; access narrowed via `as Error | undefined`.
+  - `test/unit/ogmios-backend.test.ts:500` — `ScriptValidator` is `string | { purpose, index }`; structured branch narrowed via type assertion.
+  - `test/unit/plugin.test.ts` — `cds.listeners` / `cds.emit` / `cds.removeAllListeners` are runtime EventEmitter methods not on the public typed `cds` import; single typed alias `cdsBus = cds as unknown as EventEmitter` added.
+
+### Internal
+
+- **`CardanoBackend` interface** (`srv/blockchain/backends/cardano-backend.ts`): two new required method signatures inserted after `getLatestBlock()`. All three backends implement them — no `?:` optional escape hatch.
+- **`CardanoClient` routing**: two new `METHOD_ROUTING` entries (`getCurrentSlot`, `isUtxoUnspent`, both `preferLive: true`). No request-coalescing (consistent with other live-tip methods like `getLatestBlock`).
+- **Test additions** (mocked, no live preprod): `test/unit/blockfrost-backend.test.ts` (+9 cases — slot null, consumed states, out-of-range/negative index, 404, missing field), `test/unit/koios-backend.test.ts` (+7 cases — is_spent true/false/empty, lowercasing, negative + non-integer index), `test/unit/ogmios-backend.test.ts` (+5 cases — non-empty/empty result, outputReferences shape assertion, negative index), `test/unit/cardano-client.test.ts` (+4 cases — Ogmios-preferred routing + historical fallback for both methods).
+- Version bumped `1.7.7` → `1.7.8`.
+
+
+
+
 ## [v1.7.7] - 06-05-2026: Self-Hosted Blockfrost-Compatible Backends
 
 ### Added

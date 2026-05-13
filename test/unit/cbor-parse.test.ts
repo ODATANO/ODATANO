@@ -247,12 +247,12 @@ describe('parseTransaction — round-trip from built CBOR', () => {
   });
 
   // TODO: enable when @harmoniclabs/cardano-ledger-ts ships a fix for the
-  // duplicated TxMetadata / TxMetadatum class exports (eras/common vs tx/).
-  // Construction works around it via deep imports, but the AuxiliaryData CBOR
-  // round-trip still fails ("Invalid CBOR format for AuxiliaryData") because
-  // encoding and decoding disagree on which class to use. The handler itself
-  // (extractMetadataLabels) is correct — covered by integration tests against
-  // real on-chain CBOR.
+  // AuxiliaryData.fromCborObj bug: the Conway decode path at
+  // dist/tx/AuxiliaryData/AuxiliaryData.js:199-203 requires all four optional
+  // script-collection fields (native, plutusV1/V2/V3) to be present as CborArrays,
+  // and throws "Invalid CBOR format for AuxiliaryData" on metadata-only aux_data.
+  // The handler itself (extractMetadataLabels) is correct — covered by integration
+  // tests against real on-chain CBOR that bypass AuxiliaryData.fromCbor.
   it.skip('parses metadata labels from auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),

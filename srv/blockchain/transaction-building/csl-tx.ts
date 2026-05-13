@@ -10,6 +10,8 @@ import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import { CardanoClient } from '../cardano-client';
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, COLLATERAL_LOVELACE, MIN_CHANGE_LOVELACE } from '../../utils/const';
 import { toCostModelArrV3, costModelsToLanguageViewCbor } from '@harmoniclabs/cardano-costmodels-ts';
+import type { AnyV3CostModel } from '@harmoniclabs/cardano-costmodels-ts/dist/v3/AnyV3CostModel';
+import type { CostModels } from '@harmoniclabs/cardano-costmodels-ts/dist/CostModels';
 
 const logger = cds.log('CSLTxBuilder');
 
@@ -71,7 +73,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const txDetails = this._extractTxDetails(unsignedTx);
       logger.info(`Built unsigned transaction successfully (${forced.length} forced inputs).`);
       return this._buildResult(req, ctx, txDetails, { forcedInputsUsed: forced.length });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -106,7 +108,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const txDetails = this._extractTxDetails(unsignedTx);
       logger.info(`Built unsigned transaction with metadata successfully (${forced.length} forced inputs).`);
       return this._buildResult(req, ctx, txDetails, { forcedInputsUsed: forced.length });
-    } catch (err: any) {
+    } catch (err: unknown) {
       mapBuilderError(err);
     }
   }
@@ -131,8 +133,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       const { forced: forcedUsed } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
       logger.info(`Built unsigned minting transaction successfully. Fee: ${txDetails.feeLovelace}`);
       return this._buildResult(req, ctx, txDetails, { scriptHash, forcedInputsUsed: forcedUsed.length });
-    } catch (error: any) {
-      logger.error(`BuildUnsignedMintTransaction error: ${error?.message || error}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`BuildUnsignedMintTransaction error: ${msg}`);
       mapBuilderError(error);
     }
   }
@@ -320,8 +323,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       ).length;
       logger.info(`Built unsigned Plutus spending transaction. Fee: ${txDetails.feeLovelace}`);
       return this._buildResult(req, ctx, txDetails, { scriptHash, mintScriptHash, forcedInputsUsed: forcedUsed });
-    } catch (error: any) {
-      logger.error(`buildUnsignedPlutusSpendTransaction error: ${error?.message || error}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`buildUnsignedPlutusSpendTransaction error: ${msg}`);
       mapBuilderError(error);
     }
   }
@@ -363,7 +367,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       u => u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex
     );
     if (!scriptOdatanoUtxo) {
-      throw new Error(`Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
+      throw new TransactionValidationError(`Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
     }
 
     const scriptNonAdaAssets = scriptOdatanoUtxo.amount.filter(
@@ -495,11 +499,11 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     const costModelsObj: Record<string, number[]> = {};
     const v3 = costModelsJson['plutus:v3'] || costModelsJson['PlutusV3'];
     if (Array.isArray(v3) && v3.length > 0) {
-      costModelsObj.PlutusScriptV3 = Array.from(toCostModelArrV3(v3 as any)).map(Number);
+      costModelsObj.PlutusScriptV3 = Array.from(toCostModelArrV3(v3 as AnyV3CostModel)).map(Number);
     }
 
     const languageViews = Buffer.from(
-      costModelsToLanguageViewCbor(costModelsObj as any, { mustHaveV3: !!costModelsObj.PlutusScriptV3 })
+      costModelsToLanguageViewCbor(costModelsObj as unknown as CostModels, { mustHaveV3: !!costModelsObj.PlutusScriptV3 })
     );
 
     // blake2b256(redeemers || datums || languageViews)
@@ -653,8 +657,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
     try {
       const script = CSL.PlutusScript.new_v3(Buffer.from(referenceScriptHex, 'hex'));
       output.set_script_ref(CSL.ScriptRef.new_plutus_script(script));
-    } catch (err: any) {
-      throw new TransactionValidationError(`Invalid referenceScript CBOR: ${err?.message ?? err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new TransactionValidationError(`Invalid referenceScript CBOR: ${msg}`);
     }
   }
 
@@ -763,8 +768,9 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         logger.info(`Using evaluated execution units: mem=${result.mem}, cpu=${result.cpu}`);
         return result;
       }
-    } catch (evalError: any) {
-      logger.warn(`Evaluation failed, using default units: ${evalError.message}`);
+    } catch (evalError: unknown) {
+      const msg = evalError instanceof Error ? evalError.message : String(evalError);
+      logger.warn(`Evaluation failed, using default units: ${msg}`);
     }
 
     return defaultUnits;
@@ -940,7 +946,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
    */
   private _mapOdatanoMetadataToCSLMetadata(metadataJson: JSONValue | undefined): CSL.GeneralTransactionMetadata {
     if (typeof metadataJson !== 'object' || Array.isArray(metadataJson) || metadataJson === null) {
-      throw new Error(`Invalid metadata format. Expected object, got ${typeof metadataJson}`);
+      throw new TransactionValidationError(`Invalid metadata format. Expected object, got ${typeof metadataJson}`);
     }
 
     const metadata = CSL.GeneralTransactionMetadata.new();
@@ -996,7 +1002,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
         const v3CostsRaw = toArray(costModelsJson['plutus:v3'] || costModelsJson['PlutusV3']);
         if (v3CostsRaw) {
           // Pad to 297 parameters (Conway Chang 2) using defaults from cardano-costmodels-ts
-          const v3Costs: number[] = Array.from(toCostModelArrV3(v3CostsRaw as any)).map(Number);
+          const v3Costs: number[] = Array.from(toCostModelArrV3(v3CostsRaw as AnyV3CostModel)).map(Number);
           addCostModel(CSL.Language.new_plutus_v3(), v3Costs, 'PlutusV3');
         }
       }
@@ -1041,7 +1047,7 @@ export class CSLTxBuilder implements CardanoTxBuilder {
       return CSL.TransactionMetadatum.new_map(map);
     }
 
-    throw new Error(`Unsupported metadata value type: ${typeof value}`);
+    throw new TransactionValidationError(`Unsupported metadata value type: ${typeof value}`);
   }
 
   /**

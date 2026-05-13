@@ -2,6 +2,7 @@ import cds from '@sap/cds';
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
 import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
+import type { AnyV3CostModel } from '@harmoniclabs/cardano-costmodels-ts/dist/v3/AnyV3CostModel';
 
 const logger = cds.log('mappers');
 import {
@@ -875,7 +876,7 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
       if (isV3) {
         // V3 arrays (from cost_models_raw or Ogmios) are already in canonical Plutus V3 order.
         // toCostModelArrV3 pads to 297 (Chang 2) with defaults if the array is shorter.
-        result[key] = Array.from(toCostModelArrV3(value as any)).map(Number);
+        result[key] = Array.from(toCostModelArrV3(value as AnyV3CostModel)).map(Number);
       } else {
         // V1/V2: pass through (already in canonical order)
         result[key] = value;
@@ -883,7 +884,7 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
     } else if (value && typeof value === 'object') {
       const obj = value as Record<string, unknown>;
       if (isV3) {
-        result[key] = Array.from(toCostModelArrV3(obj as any)).map(Number);
+        result[key] = Array.from(toCostModelArrV3(obj as unknown as AnyV3CostModel)).map(Number);
       } else {
         // V1/V2: alphabetical sort IS correct for those versions
         result[key] = Object.keys(obj as Record<string, number>).sort()

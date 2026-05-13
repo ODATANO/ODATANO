@@ -313,7 +313,7 @@ export class CardanoTransactionBuilder {
             let tx;
             try {
                 tx = await this.client.getTransaction(ref.txHash);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 throw new TransactionValidationError(
                     `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
                     err
@@ -365,7 +365,7 @@ export class CardanoTransactionBuilder {
             let tx;
             try {
                 tx = await this.client.getTransaction(ref.txHash);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 throw new TransactionValidationError(
                     `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
                     err

@@ -8,7 +8,7 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, ED25519_KEY_HASH_REGEX, BECH32_MAX_LENGTH } from './utils/const';
-import type { JSONValue } from './utils/types';
+import type { JSONValue, TxBuildPlutusSpendRequest } from './utils/types';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -29,18 +29,19 @@ function parseForceInputs(
   if (!Array.isArray(jsonResult.parsed)) return { error: 'forceInputsJson must be a JSON array' };
   if (jsonResult.parsed.length === 0) return { parsed: undefined };
   const refs: Array<{ txHash: string; outputIndex: number }> = [];
-  for (const entry of jsonResult.parsed) {
-    if (!entry || typeof entry !== 'object') {
+  for (const rawEntry of jsonResult.parsed) {
+    if (!rawEntry || typeof rawEntry !== 'object') {
       return { error: 'Each forceInputs entry must be an object with txHash and outputIndex' };
     }
-    if (!isTxHash((entry as any).txHash)) {
+    const entry = rawEntry as Record<string, unknown>;
+    if (typeof entry.txHash !== 'string' || !isTxHash(entry.txHash)) {
       return { error: 'Each forceInputs entry must have a valid 64-hex txHash' };
     }
-    const idx = (entry as any).outputIndex;
-    if (!Number.isInteger(idx) || idx < 0) {
+    const idx = entry.outputIndex;
+    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
       return { error: 'Each forceInputs entry must have a non-negative integer outputIndex' };
     }
-    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+    refs.push({ txHash: entry.txHash, outputIndex: idx });
   }
   return { parsed: refs };
 }
@@ -58,18 +59,19 @@ function parseReferenceInputs(
   if (!Array.isArray(jsonResult.parsed)) return { error: 'referenceInputsJson must be a JSON array' };
   if (jsonResult.parsed.length === 0) return { parsed: undefined };
   const refs: Array<{ txHash: string; outputIndex: number }> = [];
-  for (const entry of jsonResult.parsed) {
-    if (!entry || typeof entry !== 'object') {
+  for (const rawEntry of jsonResult.parsed) {
+    if (!rawEntry || typeof rawEntry !== 'object') {
       return { error: 'Each referenceInputs entry must be an object with txHash and outputIndex' };
     }
-    if (!isTxHash((entry as any).txHash)) {
+    const entry = rawEntry as Record<string, unknown>;
+    if (typeof entry.txHash !== 'string' || !isTxHash(entry.txHash)) {
       return { error: 'Each referenceInputs entry must have a valid 64-hex txHash' };
     }
-    const idx = (entry as any).outputIndex;
-    if (!Number.isInteger(idx) || idx < 0) {
+    const idx = entry.outputIndex;
+    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
       return { error: 'Each referenceInputs entry must have a non-negative integer outputIndex' };
     }
-    refs.push({ txHash: (entry as any).txHash, outputIndex: idx });
+    refs.push({ txHash: entry.txHash, outputIndex: idx });
   }
   return { parsed: refs };
 }
@@ -103,7 +105,7 @@ function parseExtraOutputs(
 
   const out: ParsedExtraOutput[] = [];
   for (let i = 0; i < jsonResult.parsed.length; i++) {
-    const entry = jsonResult.parsed[i] as any;
+    const entry = jsonResult.parsed[i] as Record<string, unknown>;
     if (!entry || typeof entry !== 'object') {
       return { error: `extraOutputs[${i}] must be an object` };
     }
@@ -121,7 +123,7 @@ function parseExtraOutputs(
       }
       assets = [];
       for (let j = 0; j < entry.assets.length; j++) {
-        const a = entry.assets[j];
+        const a = entry.assets[j] as Record<string, unknown>;
         if (!a || typeof a !== 'object') {
           return { error: `extraOutputs[${i}].assets[${j}] must be an object` };
         }
@@ -221,11 +223,11 @@ module.exports = (srv: cds.Service) => {
     }
 
     // parse optional scriptParamsJson (for parameterized validators)
-    let scriptParams: any[] | undefined;
+    let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as any[];
+      scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
@@ -246,8 +248,9 @@ module.exports = (srv: cds.Service) => {
           : validatorScript;
         derivedScriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
         derivedScriptAddress = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
-      } catch (err: any) {
-        return rejectInvalid(req, 'BuildSimpleAdaTransaction', `Failed to derive script address: ${err.message}`, 'validatorScript');
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return rejectInvalid(req, 'BuildSimpleAdaTransaction', `Failed to derive script address: ${errMsg}`, 'validatorScript');
       }
       cleanData.recipientAddress = derivedScriptAddress;
     }
@@ -424,30 +427,30 @@ module.exports = (srv: cds.Service) => {
     }
 
     // Parse and validate optional scriptParamsJson
-    let scriptParams: any[] | undefined;
+    let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as any[];
+      scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
     }
 
     // Parse and validate optional inlineDatumJson
-    let inlineDatum: any | undefined;
+    let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
       const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'inlineDatumJson');
-      inlineDatum = jsonResult.parsed;
+      inlineDatum = jsonResult.parsed as JSONValue;
     }
 
     // Parse and validate optional mintRedeemerJson
-    let mintRedeemer: any | undefined;
+    let mintRedeemer: JSONValue | undefined;
     if (mintRedeemerJson) {
       const jsonResult = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'mintRedeemerJson');
-      mintRedeemer = jsonResult.parsed;
+      mintRedeemer = jsonResult.parsed as JSONValue;
     }
 
     // Validate lockOnScript requires scriptParamsJson
@@ -468,12 +471,13 @@ module.exports = (srv: cds.Service) => {
     // Parse and validate optional metadataJson (auxiliary_data on the mint tx).
     // validateTransactionInputs has already JSON-validated the string; re-parse here
     // and enforce the label-object shape that the builder's metadata mapper expects.
-    let parsedMetadata: any | undefined;
+    let parsedMetadata: JSONValue | undefined;
     if (metadataJson) {
       try {
-        parsedMetadata = JSON.parse(metadataJson);
-      } catch (err: any) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid metadataJson: ${err.message}`, 'metadataJson');
+        parsedMetadata = JSON.parse(metadataJson) as JSONValue;
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid metadataJson: ${errMsg}`, 'metadataJson');
       }
       if (typeof parsedMetadata !== 'object' || parsedMetadata === null || Array.isArray(parsedMetadata)) {
         return rejectInvalid(req, 'BuildMintTransaction', 'metadataJson must be an object with numeric label keys', 'metadataJson');
@@ -616,22 +620,22 @@ module.exports = (srv: cds.Service) => {
     }
 
     // Parse and validate optional scriptParamsJson
-    let scriptParams: any[] | undefined;
+    let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as any[];
+      scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
     }
 
     // Parse and validate optional inlineDatumJson
-    let inlineDatum: any | undefined;
+    let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
       const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'inlineDatumJson');
-      inlineDatum = jsonResult.parsed;
+      inlineDatum = jsonResult.parsed as JSONValue;
     }
 
     // Validate lockOnScript requires scriptParamsJson
@@ -657,7 +661,7 @@ module.exports = (srv: cds.Service) => {
     // FR-1: Optional combined spend+mint parameters. mintActionsJson triggers the combined flow;
     // mintingPolicyScript is required alongside it. mintRedeemerJson is optional.
     let parsedMintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
-    let parsedMintRedeemer: any | undefined;
+    let parsedMintRedeemer: JSONValue | undefined;
     if (mintActionsJson) {
       if (!mintingPolicyScript) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson requires mintingPolicyScript', 'mintingPolicyScript');
@@ -667,19 +671,23 @@ module.exports = (srv: cds.Service) => {
       if (!Array.isArray(mintJson.parsed)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
       }
-      parsedMintActions = mintJson.parsed.map((action: any) => {
-        if (!action || typeof action !== 'object') {
+      parsedMintActions = mintJson.parsed.map((rawAction: unknown) => {
+        if (!rawAction || typeof rawAction !== 'object') {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
         }
+        const action = rawAction as Record<string, unknown>;
         if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
         }
-        return { ...action, quantity: BigInt(action.quantity) };
+        if (typeof action.assetUnit !== 'string') {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must have assetUnit string', 'mintActionsJson');
+        }
+        return { assetUnit: action.assetUnit, quantity: BigInt(action.quantity) };
       });
       if (mintRedeemerJson) {
         const mrJson = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
         if (!mrJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mrJson.error!, 'mintRedeemerJson');
-        parsedMintRedeemer = mrJson.parsed;
+        parsedMintRedeemer = mrJson.parsed as JSONValue;
       }
     } else if (mintingPolicyScript || mintRedeemerJson) {
       return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintingPolicyScript / mintRedeemerJson require mintActionsJson', 'mintActionsJson');
@@ -715,7 +723,7 @@ module.exports = (srv: cds.Service) => {
         }
       }
 
-      const cleanData: any = {
+      const cleanData: Record<string, unknown> = {
         ...req.data,
         plutusScriptExecution: {
           validatorScript: finalValidatorScript,
@@ -758,7 +766,7 @@ module.exports = (srv: cds.Service) => {
         logger.debug({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
       }
 
-      const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData);
+      const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData as TxBuildPlutusSpendRequest);
 
       // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
       if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash && buildResult.id) {
@@ -899,9 +907,10 @@ module.exports = (srv: cds.Service) => {
           await db.run(DELETE_FROM.from(AddressAssets).where({ address_address: addrBuild.address_address }));
           logger.debug(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
         }
-      } catch (err: any) {
-        logger.error({ txHash, error: err.message }, 'Transaction submission failed');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', err.message);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ txHash, error: errMsg }, 'Transaction submission failed');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', errMsg);
         throw err;
       }
 
@@ -940,9 +949,10 @@ module.exports = (srv: cds.Service) => {
         logger.info({ txHash }, 'External transaction submitted');
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
-      } catch (err: any) {
-        logger.error({ txHash, error: err.message }, 'External transaction submission failed');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', err.message);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ txHash, error: errMsg }, 'External transaction submission failed');
+        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', errMsg);
         throw err;
       }
 
@@ -979,13 +989,14 @@ module.exports = (srv: cds.Service) => {
           submission.status = 'confirmed';
           logger.info({ submissionId, txHash: submission.txHash }, 'Transaction confirmed on chain');
         }
-      } catch (err: any) {
-        if (err instanceof NotFoundError || err?.statusCode === 404) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (err instanceof NotFoundError || (err as { statusCode?: number })?.statusCode === 404) {
           // Transaction genuinely not yet confirmed on chain
           logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
         } else {
           // Provider error — don't mask as "pending", let caller know
-          logger.warn({ submissionId, txHash: submission.txHash, error: err.message }, 'Failed to check transaction confirmation status');
+          logger.warn({ submissionId, txHash: submission.txHash, error: errMsg }, 'Failed to check transaction confirmation status');
           throw err;
         }
       }
@@ -1023,14 +1034,14 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'DeriveScriptAddress', 'validatorScript must be an even-length hex string', 'validatorScript');
     }
 
-    let scriptParams: any[] | undefined;
+    let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'DeriveScriptAddress', jsonResult.error!, 'scriptParamsJson');
       if (!Array.isArray(jsonResult.parsed)) {
         return rejectInvalid(req, 'DeriveScriptAddress', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
       }
-      scriptParams = jsonResult.parsed as any[];
+      scriptParams = jsonResult.parsed as JSONValue[];
     }
 
     if (network && !VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
@@ -1052,8 +1063,9 @@ module.exports = (srv: cds.Service) => {
         const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
         const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
         return { scriptAddress, scriptHash };
-      } catch (err: any) {
-        return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${err.message}`, 'validatorScript');
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return rejectInvalid(req, 'DeriveScriptAddress', `Failed to derive script address: ${errMsg}`, 'validatorScript');
       }
     });
   });
@@ -1079,8 +1091,9 @@ module.exports = (srv: cds.Service) => {
       }
       const paymentKeyHash = bytes.slice(1, 29).toString('hex');
       return { paymentKeyHash };
-    } catch (err: any) {
-      return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${err.message}`, 'address');
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${errMsg}`, 'address');
     }
   });
 

@@ -13,33 +13,33 @@ const logger = cds.log(`CardanoService`);
 // Handler Factories - Eliminate duplication in index-on-miss patterns
 // ---------------------------------------------------------------------------
 
-type IndexFn = (db: any, key: any) => Promise<any>;
-type ValidateFn = ((v: any) => boolean);
+type IndexFn<K = string> = (db: cds.Transaction, key: K) => Promise<unknown>;
+type ValidateFn = ((v: unknown) => boolean);
 
 /**
  * Factory: READ handler with index-on-miss behavior.
  * If a key is provided, checks cache first; indexes if missing.
  * If no key, passes through to generic req.query.
  */
-function indexOnMissRead(
-  entity: any,
+function indexOnMissRead<K = string>(
+  entity: unknown,
   reqKeyField: string,
   validate: ValidateFn | null,
-  indexFn: IndexFn,
+  indexFn: IndexFn<K>,
   options?: { entityKeyField?: string; errorMessage?: string }
 ) {
   const dbKey = options?.entityKeyField || reqKeyField;
   const errMsg = options?.errorMessage || `Invalid ${reqKeyField} format`;
   return async (req: Request) => {
-    const key = (req.data as any)?.[reqKeyField];
+    const key = (req.data as Record<string, unknown>)?.[reqKeyField];
     if (key && validate && !validate(key))
       rejectInvalid(req, dbKey, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
-      if (key) {
+      if (key !== undefined && key !== null) {
         // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
-        const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
-        if (!existing) return await indexFn(db, key);
+        const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
+        if (!existing) return await indexFn(db, key as K);
         return existing;
       }
       return db.run(req.query);
@@ -50,25 +50,25 @@ function indexOnMissRead(
 /**
  * Factory: Action handler with required key validation and index-on-miss.
  */
-function indexOnMissAction(
+function indexOnMissAction<K = string>(
   actionName: string,
-  entity: any,
+  entity: unknown,
   reqKeyField: string,
   validate: ValidateFn,
-  indexFn: IndexFn,
+  indexFn: IndexFn<K>,
   options?: { entityKeyField?: string; errorMessage?: string }
 ) {
   const dbKey = options?.entityKeyField || reqKeyField;
   const errMsg = options?.errorMessage || `Invalid ${reqKeyField} format`;
   return async (req: Request) => {
-    const key = (req.data as any)?.[reqKeyField];
+    const key = (req.data as Record<string, unknown>)?.[reqKeyField];
     if (key == null) rejectMissing(req, actionName, reqKeyField);
     if (!validate(key)) rejectInvalid(req, actionName, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
       // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
-      const existing = await db.run(SELECT.one.from(entity).where({ [dbKey]: key }));
-      if (!existing) return await indexFn(db, key);
+      const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
+      if (!existing) return await indexFn(db, key as K);
       return existing;
     });
   };
@@ -110,7 +110,7 @@ module.exports = (srv: cds.Service) => {
   // Network Information (singleton - no key field)
   // ---------------------------------------------------------------------------
 
-  async function fetchNetworkInformation(db: any) {
+  async function fetchNetworkInformation(db: cds.Transaction) {
     const existing = await db.run(SELECT.one.from(NetworkInformation));
     if (!existing) return await indexer().indexNetworkInformation(db);
     return existing;
@@ -139,8 +139,8 @@ module.exports = (srv: cds.Service) => {
   // Epochs
   // ---------------------------------------------------------------------------
 
-  srv.on('READ', Epochs, indexOnMissRead(Epochs, 'epoch', isEpochNumber, (db, e) => indexer().indexEpoch(db, e), { errorMessage: 'epochNumber has invalid format' }));
-  srv.on('GetEpochByNumber', indexOnMissAction('GetEpochByNumber', Epochs, 'epochNumber', isEpochNumber, (db, e) => indexer().indexEpoch(db, e), { entityKeyField: 'epoch', errorMessage: 'epochNumber has invalid format' }));
+  srv.on('READ', Epochs, indexOnMissRead<number>(Epochs, 'epoch', isEpochNumber, (db, e) => indexer().indexEpoch(db, e), { errorMessage: 'epochNumber has invalid format' }));
+  srv.on('GetEpochByNumber', indexOnMissAction<number>('GetEpochByNumber', Epochs, 'epochNumber', isEpochNumber, (db, e) => indexer().indexEpoch(db, e), { entityKeyField: 'epoch', errorMessage: 'epochNumber has invalid format' }));
 
   srv.on('GetLatestEpoch', async (req: Request) => {
     return handleRequest(req, (db) => indexer().indexLatestEpoch(db));

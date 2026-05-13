@@ -17,7 +17,8 @@ import {
   AccountData,
   AssetInfo,
   AssetHistoryEntry,
-  LedgerProtocolParameters
+  LedgerProtocolParameters,
+  ScriptEvaluationResult
 } from '../utils/types';
 import { OgmiosBackend } from './backends/ogmios-backend';
 import { BlockfrostBackend } from './backends/blockfrost-backend';
@@ -39,6 +40,8 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getEpoch: { preferLive: false },
   getLatestEpoch: { preferLive: true },
   getLatestBlock: { preferLive: true },
+  getCurrentSlot: { preferLive: true },
+  isUtxoUnspent: { preferLive: true },
   getPool: { preferLive: true },
   getDrep: { preferLive: false },
   getAccount: { preferLive: true },
@@ -150,7 +153,7 @@ export class CardanoClient {
         logger.debug(`Initializing live backend: ${this.liveBackend.name}`);
         await this.liveBackend.init();
         logger.debug(`Live backend initialized: ${this.liveBackend.name}`);
-      } catch (err: any) {
+      } catch (err: unknown) {
         initErrors.push(new BackendInitError(this.liveBackend.name, err));
         logger.error(`Failed to initialize live backend: ${this.liveBackend.name}`, err);
         this.liveBackend = undefined; // remove failed backend
@@ -165,7 +168,7 @@ export class CardanoClient {
         await backend.init();
         initializedHistorical.push(backend);
         logger.debug(`Historical backend initialized: ${backend.name}`);
-      } catch (err: any) {
+      } catch (err: unknown) {
         initErrors.push(new BackendInitError(backend.name, err));
         logger.error(`Failed to initialize historical backend: ${backend.name}`, err);
       }
@@ -257,7 +260,7 @@ export class CardanoClient {
         );
         this.circuitBreaker.recordSuccess(backend.name);
         return result;
-      } catch (err: any) {
+      } catch (err: unknown) {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
 
@@ -576,12 +579,30 @@ export class CardanoClient {
     return this.route('getLatestBlock', b => b.getLatestBlock());
   }
 
-  /** 
+  /**
    * Get latest epoch data with fallback between backends
    * @returns {Promise<EpochData>} latest epoch data
    */
   getLatestEpoch(): Promise<EpochData> {
     return this.route('getLatestEpoch', b => b.getLatestEpoch());
+  }
+
+  /**
+   * Get the current chain slot with fallback between backends.
+   * @returns {Promise<number>} current chain slot
+   */
+  getCurrentSlot(): Promise<number> {
+    return this.route('getCurrentSlot', b => b.getCurrentSlot());
+  }
+
+  /**
+   * Check whether a UTxO is still unspent with fallback between backends.
+   * @param txHash 64-char lowercase hex transaction hash
+   * @param outputIndex non-negative integer output index
+   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
+   */
+  isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
+    return this.route('isUtxoUnspent', b => b.isUtxoUnspent(txHash, outputIndex));
   }
 
   /**
@@ -604,9 +625,9 @@ export class CardanoClient {
   /**
    * Evaluate transaction script execution units (Ogmios only)
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns {Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>>} evaluation results
+   * @returns {Promise<ScriptEvaluationResult[]>} evaluation results
    */
-  async evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>> {
+  async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     await this.ensureInitialized();
 
     // Evaluation requires an EvaluatingBackend (typically Ogmios)

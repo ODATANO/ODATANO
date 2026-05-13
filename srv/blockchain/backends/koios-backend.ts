@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import axios, { AxiosInstance } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
@@ -33,6 +33,50 @@ const KOIOS_URLS: Record<Network, string> = {
   preview: 'https://preview.koios.rest/api/v1',
   preprod: 'https://preprod.koios.rest/api/v1',
 };
+
+/** Shape of a Koios tx-in/tx-out row from /tx_info */
+interface KoiosTxIO {
+  address?: string;
+  payment_addr?: { bech32?: string };
+  tx_hash: string;
+  tx_index: number;
+  value: string;
+  datum_hash?: string | null;
+  inline_datum?: unknown;
+  reference_script?: unknown;
+  asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }>;
+}
+
+/** Shape of a Koios /tx_info response row */
+interface KoiosTxInfo {
+  tx_hash: string;
+  block_hash: string;
+  block_height: number | string;
+  tx_timestamp?: number;
+  block_time?: number;
+  absolute_slot?: number;
+  slot_no?: number;
+  tx_index: number;
+  tx_fee?: string;
+  deposit?: string;
+  tx_size: number;
+  metadata?: Record<string, unknown> | null;
+  inputs: KoiosTxIO[];
+  outputs: KoiosTxIO[];
+}
+
+
+interface KoiosUtxoRow {
+  tx_hash: string;
+  tx_index: number;
+  address?: string;
+  value: string;
+  block_hash?: string;
+  datum_hash?: string | null;
+  reference_script?: unknown;
+  inline_datum?: unknown;
+  asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }>;
+}
 
 /**
  * KoiosBackend Implementation for CardanoBackend Interface
@@ -81,10 +125,14 @@ export class KoiosBackend implements CardanoBackend {
    * valid queries — a single retry is not always sufficient for historical
    * epoch lookups, so we retry with increasing delays (500 → 1000 → 2000 ms).
    */
+  // Generic helper. Kept as `any[]` to avoid forcing every Koios endpoint
+  // call site (block_info, epoch_info, account_info, ...) to declare a row
+  // shape just for the empty-array retry path. Row narrowing happens at use.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async fetchWithRetryOnEmpty(
     fn: () => Promise<{ data: any[] }>,
     label: string
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): Promise<any[]> {
     const maxRetries = 3;
     const baseDelayMs = 500;
@@ -300,7 +348,7 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.post('/address_utxos', { _addresses: [address], _extended: true });
-        return data.map((utxo: any) => {
+        return (data as KoiosUtxoRow[]).map((utxo) => {
           const amount: Amount[] = [
             { unit: 'lovelace', quantity: utxo.value }
           ];
@@ -322,7 +370,7 @@ export class KoiosBackend implements CardanoBackend {
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: utxo.reference_script || null,
+            scriptRef: (utxo.reference_script as string | null | undefined) || null,
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -345,7 +393,7 @@ export class KoiosBackend implements CardanoBackend {
           _payment_credentials: [credHash],
           _extended: true,
         });
-        return data.map((utxo: any) => {
+        return (data as KoiosUtxoRow[]).map((utxo) => {
           const amount: Amount[] = [
             { unit: 'lovelace', quantity: utxo.value }
           ];
@@ -362,11 +410,11 @@ export class KoiosBackend implements CardanoBackend {
           return {
             txHash: utxo.tx_hash,
             outputIndex: utxo.tx_index,
-            address: utxo.address,
+            address: utxo.address ?? '',
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: utxo.reference_script || null,
+            scriptRef: (utxo.reference_script as string | null | undefined) || null,
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -532,9 +580,27 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const a = data[0];
-        const reg: any = a.token_registry_metadata ?? null;
+        // Koios token_registry_metadata fields are typically strings, but the
+        // CIP-26 registry permits {value, signatures} envelopes — accept either.
+        const regRaw = (a.token_registry_metadata ?? null) as Record<string, unknown> | null;
+        const regStr = (key: string): string | null => {
+          const v = regRaw?.[key];
+          if (typeof v === 'string') return v;
+          if (v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string') {
+            return (v as { value: string }).value;
+          }
+          return null;
+        };
+        const regNum = (key: string): number | null => {
+          const v = regRaw?.[key];
+          if (typeof v === 'number') return v;
+          if (v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'number') {
+            return (v as { value: number }).value;
+          }
+          return null;
+        };
         // Koios returns minting_tx_metadata as { "<label>": <CIP-25 payload> }; pick label 721 (CIP-25 default)
-        const mintMeta: any = a.minting_tx_metadata ?? null;
+        const mintMeta = (a.minting_tx_metadata ?? null) as Record<string, unknown> | null;
         const onchainMetadata: JSONValue | null = mintMeta && typeof mintMeta === 'object'
           ? (mintMeta['721'] ?? mintMeta) as JSONValue
           : null;
@@ -558,12 +624,12 @@ export class KoiosBackend implements CardanoBackend {
           initialMintTxHash: a.minting_tx_hash ?? null,
           initialMintTime: typeof a.creation_time === 'number' ? a.creation_time : null,
           onchainMetadata,
-          registryName: reg?.name ?? null,
-          registryTicker: reg?.ticker ?? null,
-          registryDecimals: typeof reg?.decimals === 'number' ? reg.decimals : null,
-          registryDescription: reg?.description ?? null,
-          registryUrl: reg?.url ?? null,
-          registryLogo: reg?.logo ?? null,
+          registryName: regStr('name'),
+          registryTicker: regStr('ticker'),
+          registryDecimals: regNum('decimals'),
+          registryDescription: regStr('description'),
+          registryUrl: regStr('url'),
+          registryLogo: regStr('logo'),
         };
       },
       this.name
@@ -596,7 +662,7 @@ export class KoiosBackend implements CardanoBackend {
         if (!Array.isArray(data) || data.length === 0) return [];
 
         const minting_txs = Array.isArray(data[0]?.minting_txs) ? data[0].minting_txs : [];
-        const events: AssetHistoryEntry[] = minting_txs.map((entry: any) => {
+        const events: AssetHistoryEntry[] = minting_txs.map((entry: { quantity?: string | number; tx_hash?: string; block_time?: number; block_height?: number }) => {
           const rawQty = String(entry.quantity ?? '0');
           const isNegative = rawQty.startsWith('-');
           return {
@@ -671,7 +737,7 @@ export class KoiosBackend implements CardanoBackend {
         const addressDataResponse = await this.api.post('/account_addresses', body);
 
         // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-        const addressesFlat: string[] = addressDataResponse.data.flatMap((item: any) => item.addresses);
+        const addressesFlat: string[] = addressDataResponse.data.flatMap((item: { addresses: string[] }) => item.addresses);
         const addresses: Address[] = [];
         const concurrent = 10;
         for (let i = 0; i < addressesFlat.length; i += concurrent) {
@@ -827,6 +893,43 @@ export class KoiosBackend implements CardanoBackend {
     );
   }
 
+  /**
+   * Get the latest chain tip slot.
+   * @returns {Promise<number>} current chain slot
+   */
+  async getCurrentSlot(): Promise<number> {
+    const block = await this.getLatestBlock();
+    if (block.slot == null) {
+      throw new ProviderUnavailableError(
+        `${this.name}: latest block has no slot`,
+        this.name,
+      );
+    }
+    return block.slot;
+  }
+
+  /**
+   * Check whether a UTxO is still unspent via Koios `POST /utxo_info`.
+   * @param txHash 64-char lowercase hex
+   * @param outputIndex non-negative integer
+   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
+   */
+  async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
+    if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
+    return handleBackendRequest(
+      async () => {
+        const ref = `${txHash.toLowerCase()}#${outputIndex}`;
+        const { data } = await this.api.post('/utxo_info', {
+          _utxo_refs: [ref],
+          _extended: false,
+        });
+        if (!Array.isArray(data) || data.length === 0) return false;
+        return data[0].is_spent === false;
+      },
+      this.name
+    );
+  }
+
   //-----------------------------------------------------------------------------
   // Batch Methods (N+1 Optimization)
   //-----------------------------------------------------------------------------
@@ -898,7 +1001,7 @@ export class KoiosBackend implements CardanoBackend {
   /**
    * Map a Koios /tx_info response object to the normalized Transaction type.
    */
-  private _mapKoiosTx(tx: any): Transaction {
+  private _mapKoiosTx(tx: KoiosTxInfo): Transaction {
     let labels: MetadataLabelTx[] = [];
 
     if (tx.metadata) {
@@ -914,13 +1017,13 @@ export class KoiosBackend implements CardanoBackend {
       hash: tx.tx_hash,
       blockHash: tx.block_hash,
       blockHeight: Number(tx.block_height),
-      blockTime: tx.tx_timestamp ?? tx.block_time,
-      slot: tx.absolute_slot ?? tx.slot_no,
+      blockTime: tx.tx_timestamp ?? tx.block_time ?? 0,
+      slot: tx.absolute_slot ?? tx.slot_no ?? 0,
       index: tx.tx_index,
       fee: tx.tx_fee || '0',
       deposit: tx.deposit || '0',
       size: tx.tx_size,
-      inputs: tx.inputs.map((input: any) => {
+      inputs: tx.inputs.map((input: KoiosTxIO) => {
         const amount: Amount[] = [
           { unit: 'lovelace', quantity: input.value }
         ];
@@ -933,16 +1036,16 @@ export class KoiosBackend implements CardanoBackend {
           }
         }
         return {
-          address: input.payment_addr?.bech32 || input.address,
+          address: input.payment_addr?.bech32 || input.address || '',
           txHash: input.tx_hash,
           outputIndex: input.tx_index,
           amount: amount,
           dataHash: input.datum_hash || null,
           inlineDatum: inlineDatumToHex(input.inline_datum),
-          referenceScriptHash: input.reference_script || null,
+          referenceScriptHash: (input.reference_script as string | null | undefined) || null,
         };
       }),
-      outputs: tx.outputs.map((output: any) => {
+      outputs: tx.outputs.map((output: KoiosTxIO) => {
         const amount: Amount[] = [
           { unit: 'lovelace', quantity: output.value }
         ];
@@ -955,14 +1058,14 @@ export class KoiosBackend implements CardanoBackend {
           }
         }
         return {
-          address: output.payment_addr?.bech32 || output.address,
+          address: output.payment_addr?.bech32 || output.address || '',
           amount: amount,
           txHash: tx.tx_hash,
           outputIndex: output.tx_index,
           dataHash: output.datum_hash || null,
           inlineDatum: inlineDatumToHex(output.inline_datum),
           isCollateral: false,
-          referenceScriptHash: output.reference_script || null,
+          referenceScriptHash: (output.reference_script as string | null | undefined) || null,
         };
       }),
       metadata: labels

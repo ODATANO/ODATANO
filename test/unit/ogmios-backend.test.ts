@@ -497,7 +497,7 @@ describe('OgmiosBackend', () => {
 
       expect(result).toHaveLength(2);
       expect(result[0].budget.memory).toBe(500000);
-      expect(result[1].validator.purpose).toBe('mint');
+      expect((result[1].validator as { purpose: string; index: number }).purpose).toBe('mint');
     });
 
     it('should throw error when backend is shutdown', async () => {
@@ -948,6 +948,67 @@ describe('OgmiosBackend', () => {
       expect(result.epoch).toBe(100);
       expect(result.block_count).toBe(0);
       expect(result.tx_count).toBe(0);
+    });
+  });
+
+  describe('getCurrentSlot', () => {
+    it('returns the slot from ledger tip', async () => {
+      const mockStateQueryClient = {
+        ledgerTip: jest.fn().mockResolvedValue({ slot: 80_000_123, id: 'tiphash' }),
+        networkBlockHeight: jest.fn().mockResolvedValue(1_000_000),
+        epoch: jest.fn().mockResolvedValue(100),
+        eraStart: jest.fn().mockResolvedValue({ time: { seconds: 1654041600n }, slot: 0 }),
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      expect(await backend.getCurrentSlot()).toBe(80_000_123);
+    });
+  });
+
+  describe('isUtxoUnspent', () => {
+    const TX = 'a'.repeat(64);
+
+    it('returns true when utxo query returns a non-empty array', async () => {
+      const utxo = jest.fn().mockResolvedValue([{ transaction: { id: TX }, index: 0 }]);
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { utxo };
+      (backend as any).isShutdown = false;
+
+      expect(await backend.isUtxoUnspent(TX, 0)).toBe(true);
+    });
+
+    it('returns false when utxo query returns an empty array', async () => {
+      const utxo = jest.fn().mockResolvedValue([]);
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { utxo };
+      (backend as any).isShutdown = false;
+
+      expect(await backend.isUtxoUnspent(TX, 0)).toBe(false);
+    });
+
+    it('passes the correct outputReferences shape to the client', async () => {
+      const utxo = jest.fn().mockResolvedValue([]);
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { utxo };
+      (backend as any).isShutdown = false;
+
+      await backend.isUtxoUnspent(TX, 7);
+      expect(utxo).toHaveBeenCalledWith({
+        outputReferences: [{ transaction: { id: TX }, index: 7 }],
+      });
+    });
+
+    it('returns false for negative outputIndex without invoking the client', async () => {
+      const utxo = jest.fn();
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { utxo };
+      (backend as any).isShutdown = false;
+
+      expect(await backend.isUtxoUnspent(TX, -1)).toBe(false);
+      expect(utxo).not.toHaveBeenCalled();
     });
   });
 

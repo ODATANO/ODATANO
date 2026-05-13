@@ -21,28 +21,28 @@ export async function handleBackendRequest<T>(
 ): Promise<T> {
   try {
     return await fn();
-  } catch (err: any) {
+  } catch (err: unknown) {
     throw normalizeBackendError(err, backendName);
   }
 }
 
 /**
  * General request handler for CardanoService
- * @param req - The incoming request 
+ * @param req - The incoming request
  * @param handler - The async function containing business logic
- * @returns {Promise<any>} The result of the handler or a mapped error response
+ * @returns {Promise<unknown>} The result of the handler or a mapped error response
  */
 export async function handleRequest(
   req: Request,
-  handler: (db: any) => Promise<any>):
-  Promise<any> {
+  handler: (db: cds.Transaction) => Promise<unknown>):
+  Promise<unknown> {
   const context = req.target?.name || req.event;
   // cds.tx(req) returns the request's managed transaction — CAP auto-rolls back
   // on req.reject()/req.error() (called by mapError). No explicit rollback needed.
   const db = cds.tx(req);
   try {
     return await handler(db);
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error({ err: e }, `${context} error`);
     return mapError(req, e, context);
 

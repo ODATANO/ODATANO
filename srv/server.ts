@@ -222,14 +222,14 @@ export function loadConfigFromEnv(): CardanoClientConfig {
 
   const network = (cdsConfig.network || env.NETWORK || 'preview') as Network;
   if (!VALID_NETWORKS.includes(network)) {
-    throw new Error(`Invalid NETWORK "${cdsConfig.network || env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
+    throw new ConfigError(`Invalid NETWORK "${cdsConfig.network || env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
   }
 
   const backendStrings: string[] = cdsConfig.backends
     || (env.BACKENDS ? env.BACKENDS.split(',').map(b => b.trim()) : ['koios']);
   const invalidBackends = backendStrings.filter(b => !(VALID_BACKENDS as readonly string[]).includes(b));
   if (invalidBackends.length > 0) {
-    throw new Error(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
+    throw new ConfigError(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
   }
   const backends = backendStrings as BackendName[];
 
@@ -237,7 +237,7 @@ export function loadConfigFromEnv(): CardanoClientConfig {
     || (env.TX_BUILDERS ? env.TX_BUILDERS.split(',').map(b => b.trim()) : ['csl']);
   const invalidBuilders = txBuilderStrings.filter(b => !(VALID_TX_BUILDERS as readonly string[]).includes(b));
   if (invalidBuilders.length > 0) {
-    throw new Error(`Invalid TX_BUILDERS: "${invalidBuilders.join(', ')}". Must be one of: ${VALID_TX_BUILDERS.join(', ')}`);
+    throw new ConfigError(`Invalid TX_BUILDERS: "${invalidBuilders.join(', ')}". Must be one of: ${VALID_TX_BUILDERS.join(', ')}`);
   }
   const txBuilders = txBuilderStrings as TransactionBuilderName[];
 
@@ -245,22 +245,22 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;
 
   if (primaryTimeout && isNaN(Number(primaryTimeout))) {
-    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
+    throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
   }
   if (primaryTimeout && Number(primaryTimeout) <= 0) {
-    throw new Error(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
+    throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
   }
   if (fallbackTimeout && isNaN(Number(fallbackTimeout))) {
-    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
+    throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
   }
   if (fallbackTimeout && Number(fallbackTimeout) <= 0) {
-    throw new Error(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
+    throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
   }
 
   const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';
   const blockfrostCustomBackend = cdsConfig.blockfrostCustomBackend || env.BLOCKFROST_CUSTOM_BACKEND || '';
   if (blockfrostCustomBackend && !/^https?:\/\//i.test(blockfrostCustomBackend)) {
-    throw new Error(
+    throw new ConfigError(
       `Invalid BLOCKFROST_CUSTOM_BACKEND "${blockfrostCustomBackend}". Must be an http(s) URL ` +
       `(e.g. http://localhost:3010/api/v0).`
     );
@@ -310,12 +310,12 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
 
   const pkcs11Module = hsmCds.pkcs11Module || env.HSM_PKCS11_MODULE || '';
   if (!pkcs11Module) {
-    throw new Error('HSM_PKCS11_MODULE is required when HSM is enabled');
+    throw new ConfigError('HSM_PKCS11_MODULE is required when HSM is enabled');
   }
 
   const pin = hsmCds.pin || env.HSM_PIN || '';
   if (!pin) {
-    throw new Error('HSM_PIN is required when HSM is enabled');
+    throw new ConfigError('HSM_PIN is required when HSM is enabled');
   }
 
   const slot = Number(hsmCds.slot ?? env.HSM_SLOT ?? 0);

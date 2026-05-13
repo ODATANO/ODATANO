@@ -439,8 +439,16 @@ export type ExecutionBudget = {
 /**
  * Script evaluation result from Ogmios
  */
+/**
+ * Ogmios validator descriptor — `purpose:index` (e.g., "spend:0", "mint:1")
+ * or a structured object with purpose + index fields depending on Ogmios version.
+ */
+export type ScriptValidator =
+  | string
+  | { purpose: string; index: number };
+
 export type ScriptEvaluationResult = {
-  validator: any;
+  validator: ScriptValidator;
   budget: ExecutionBudget;
 };
 

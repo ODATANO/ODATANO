@@ -1,5 +1,6 @@
 import { Tx, Hash32, dataToCbor } from '@harmoniclabs/buildooor';
 import type { TxOut, TxWitnessSet, UTxO, Value } from '@harmoniclabs/buildooor';
+import type { Data } from '@harmoniclabs/plutus-data';
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
 
@@ -74,9 +75,10 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
   let tx: Tx;
   try {
     tx = Tx.fromCbor(Buffer.from(cborHex, 'hex'));
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
     throw new TransactionValidationError(
-      `failed to parse transaction CBOR: ${e?.message ?? 'unknown error'}`,
+      `failed to parse transaction CBOR: ${msg}`,
       e,
       ERROR_CODES.TX_PARSE_FAILED
     );
@@ -131,7 +133,7 @@ function mapOutput(out: TxOut): ParsedOutput {
       datumHash = out.datum.toString();
     } else {
       // anything not a Hash32 is an inline `Data` (PlutusData) payload
-      inlineDatumHex = Buffer.from(dataToCbor(out.datum as any)).toString('hex');
+      inlineDatumHex = Buffer.from(dataToCbor(out.datum as Data)).toString('hex');
     }
   }
 

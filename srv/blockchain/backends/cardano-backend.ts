@@ -11,7 +11,8 @@ import {
   AccountData,
   AssetInfo,
   AssetHistoryEntry,
-  LedgerProtocolParameters
+  LedgerProtocolParameters,
+  ScriptEvaluationResult
 } from '../../utils/types';
 
 /**
@@ -97,6 +98,22 @@ export interface CardanoBackend {
    * @returns {Promise<BlockData>} latest block data
    */
   getLatestBlock(): Promise<BlockData>;
+
+  /**
+   * Get the latest chain tip slot.
+   * Throws ProviderUnavailableError when the backend's latest block has no slot.
+   * @returns {Promise<number>} current chain slot
+   */
+  getCurrentSlot(): Promise<number>;
+
+  /**
+   * Check whether a UTxO is still unspent. Returns `false` for txs that don't
+   * exist on chain and for out-of-range output indices.
+   * @param txHash 64-char lowercase hex
+   * @param outputIndex non-negative integer
+   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
+   */
+  isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean>;
 
   /**
    * Get Pool Data
@@ -187,7 +204,7 @@ export interface EvaluatingBackend extends CardanoBackend {
    * @param unsignedTxCbor unsigned transaction in CBOR hex format
    * @returns evaluation results with validator and budget
    */
-  evaluateTransaction(unsignedTxCbor: string): Promise<Array<{validator: unknown, budget: {memory: number, cpu: number}}>>;
+  evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]>;
 }
 
 /**

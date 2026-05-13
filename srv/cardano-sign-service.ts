@@ -10,19 +10,27 @@ const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoSignService');
 
+interface TransactionBuildRecord {
+  id: string;
+  senderAddress: string;
+  unsignedTxCbor: string;
+  txBodyHash: string;
+  network: string;
+}
+
 /**
  * Verify that a build exists and, when an address is provided, that it matches
  * the build's senderAddress. Always fetches the build from DB.
  */
 async function verifyBuildOwnership(
-  req: Request, db: any, buildId: string, address: string | undefined, TransactionBuilds: any, actionName: string
-): Promise<any> {
-  const build = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
+  req: Request, db: cds.Transaction, buildId: string, address: string | undefined, TransactionBuilds: unknown, actionName: string
+): Promise<TransactionBuildRecord> {
+  const build = await db.run(SELECT.one.from(TransactionBuilds as never).where({ id: buildId })) as TransactionBuildRecord | undefined;
   if (!build) rejectInvalid(req, actionName, 'Build not found', 'buildId');
-  if (address && build.senderAddress !== address) {
+  if (address && build!.senderAddress !== address) {
     rejectInvalid(req, actionName, 'Address does not match build owner', 'address');
   }
-  return build;
+  return build!;
 }
 
 /**
@@ -30,14 +38,14 @@ async function verifyBuildOwnership(
  * @returns true if expired, false otherwise
  */
 async function checkAndExpireSigningRequest(
-  db: any, signingRequest: any, SigningRequests: any
+  db: cds.Transaction, signingRequest: { id: string; status: string }, SigningRequests: unknown
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const result = await db.run(
-    UPDATE.entity(SigningRequests)
+    UPDATE.entity(SigningRequests as never)
       .set({ status: 'expired' })
       .where({ id: signingRequest.id, expiresAt: { '<=': now } })
-  );
+  ) as number;
   if (result > 0) {
     signingRequest.status = 'expired';
     return true;
