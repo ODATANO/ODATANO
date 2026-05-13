@@ -267,7 +267,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         u => u.txHash === scriptUtxoRef.txHash && u.outputIndex === scriptUtxoRef.outputIndex
       );
       if (!scriptOdatanoUtxo) {
-        throw new Error(`Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
+        throw new TransactionValidationError(`Script UTxO ${scriptUtxoRef.txHash}#${scriptUtxoRef.outputIndex} not found in provided UTxOs`);
       }
 
       const scriptLedgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(scriptOdatanoUtxo);

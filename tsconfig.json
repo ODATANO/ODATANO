@@ -11,7 +11,7 @@
     "resolveJsonModule": true,
     "outDir": "./dist",
     "rootDir": ".",
-    "isolatedModules": false,
+    "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true,
     "allowJs": true,

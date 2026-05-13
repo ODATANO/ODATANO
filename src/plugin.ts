@@ -33,7 +33,7 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
 // CRITICAL: Also set model directly on the requires entry.
 // CAP's _link_required_services() merges kind→requires BEFORE cds-plugin.js runs,
 // so the model array on the kind is never merged. Set it directly.
-const req = (cds.env.requires as Record<string, any>)['odatano-core'];
+const req = (cds.env.requires as Record<string, { model?: string[] } | undefined>)['odatano-core'];
 if (req) {
   req.model = [
     '@odatano/core/db/schema',
@@ -52,9 +52,9 @@ logger.debug('Plugin registered');
  * In plugin mode cds.root is the consumer app — rewrite to package-qualified paths
  * so CAP resolves via Node module resolution (node_modules/@odatano/core/srv/...).
  */
-cds.on('loaded', (model: any) => {
+cds.on('loaded', (model: { definitions: Record<string, { '@impl'?: string }> }) => {
   if (path.resolve(cds.root) === pluginRoot) return;
-  for (const def of Object.values(model.definitions) as any[]) {
+  for (const def of Object.values(model.definitions)) {
     if (def['@impl'] === 'srv/cardano-service') {
       def['@impl'] = '@odatano/core/srv/cardano-service';
     } else if (def['@impl'] === 'srv/cardano-tx-service') {

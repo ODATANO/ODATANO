@@ -611,7 +611,7 @@ export class CardanoClient {
 
     // Evaluation requires an EvaluatingBackend (typically Ogmios)
     if (!this.liveBackend || !isEvaluatingBackend(this.liveBackend)) {
-      throw new Error('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
+      throw new ProviderUnavailableError('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
     }
 
     return this.liveBackend.evaluateTransaction(unsignedTxCbor);

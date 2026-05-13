@@ -6,7 +6,7 @@ import {
 } from '@cardano-ogmios/client';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import {
   Transaction,
@@ -198,7 +198,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getDrep(_drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
-      throw new Error('DRep queries not supported');
+      throw new ProviderUnavailableError('DRep queries not supported by Ogmios backend', this.name);
     }, this.name);
   }
 
@@ -209,7 +209,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getAssetInfo(_unit: string): Promise<AssetInfo> {
     return handleBackendRequest(async () => {
-      throw new Error('Asset info queries not supported');
+      throw new ProviderUnavailableError('Asset info queries not supported by Ogmios backend', this.name);
     }, this.name);
   }
 
@@ -609,7 +609,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   private ensureNotShutdown(): void {
     if (this.isShutdown) {
-      throw new Error('Ogmios client has been shutdown');
+      throw new ProviderUnavailableError('Ogmios client has been shutdown', this.name);
     }
   }
 

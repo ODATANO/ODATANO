@@ -236,7 +236,7 @@ export class CardanoTransactionBuilder {
             const tx = await cardanoClient.getTransaction(scriptRef.txHash);
             const scriptOutput = tx.outputs?.find(o => o.outputIndex === scriptRef.outputIndex);
             if (!scriptOutput) {
-                throw new Error(`[CardanoTransactionBuilder] Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
+                throw new TransactionValidationError(`Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
             }
             allUtxos.push({
                 txHash: scriptRef.txHash,
