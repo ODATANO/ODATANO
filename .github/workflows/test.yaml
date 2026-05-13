@@ -105,7 +105,7 @@ jobs:
           echo "Waiting for Ogmios to sync (max 15 minutes)..."
           MAX_WAIT=900
           ELAPSED=0
-          THRESHOLD=0.999
+          THRESHOLD=0.99
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             HEALTH=$(curl -s http://localhost:1337/health 2>/dev/null || echo "{}")
