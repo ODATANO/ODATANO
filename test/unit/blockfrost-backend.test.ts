@@ -733,8 +733,6 @@ describe('BlockfrostBackend getAssetHistory', () => {
 });
 
 describe('BlockfrostBackend getCurrentSlot', () => {
-  const TX = 'a'.repeat(64);
-
   it('returns the slot from getLatestBlock', async () => {
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({
