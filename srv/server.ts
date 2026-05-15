@@ -129,6 +129,14 @@ export function getHsmConfig(): HsmConfig | undefined {
  * @param protocolParams - Optional protocol parameters (for tests)
  */
 export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
+  // Idempotent: a previous call (plugin's cds.on('served'), server.ts's served hook,
+  // or an earlier programmatic initialize()) already built the context. Direct callers
+  // such as @odatano/x402's bridge must not produce a duplicate CardanoClient.
+  // Tests that need to reinitialize should use resetAppContext() / createTestContext().
+  if (appContext) {
+    logger.debug('initializeFromConfig: appContext already initialized, skipping');
+    return;
+  }
   hsmConfigInstance = hsmConfig;
   appContext = await initializeAppContext(config, protocolParams, hsmConfig);
 }

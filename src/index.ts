@@ -39,11 +39,20 @@ export type {
  * then initializes all blockchain components.
  */
 export async function initialize(): Promise<void> {
-  const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig } = await import('../srv/server');
+  const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig, getAppContext } = await import('../srv/server');
+  let alreadyInitialized = false;
+  try {
+    getAppContext();
+    alreadyInitialized = true;
+  } catch {
+    // not initialized yet — initializeFromConfig will create the context
+  }
   const config = loadConfigFromEnv();
   const hsmConfig = loadHsmConfigFromEnv();
   await initializeFromConfig(config, undefined, hsmConfig);
-  logger.info('ODATANO core initialized');
+  if (!alreadyInitialized) {
+    logger.info('ODATANO core initialized');
+  }
 }
 
 /**
