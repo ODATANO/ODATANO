@@ -716,27 +716,29 @@ describe('KoiosBackend', () => {
   });
 
   describe('getCurrentSlot', () => {
-    it('returns the slot from getLatestBlock', async () => {
+    it('returns abs_slot directly from /tip', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .reply(200, [{ hash: 'tiphash', epoch_no: 100, abs_slot: 80_000_123 }]);
+
+      expect(await backend.getCurrentSlot()).toBe(80_000_123);
+    });
+
+    it('throws NotFoundError when /tip returns empty array', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .times(4)
+        .reply(200, []);
+
+      await expect(backend.getCurrentSlot()).rejects.toThrow(/not found/i);
+    });
+
+    it('throws ProviderUnavailableError when /tip row has no abs_slot', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/tip')
         .reply(200, [{ hash: 'tiphash', epoch_no: 100 }]);
 
-      nock(KOIOS_BASE_URL)
-        .post('/api/v1/block_info', { _block_hashes: ['tiphash'] })
-        .reply(200, [{
-          hash: 'tiphash',
-          slot_no: 80_000_123,
-          epoch_no: 100,
-          epoch_slot_no: 123,
-          block_time: 1700000000,
-          block_height: 1_000_000,
-          vrf_key: 'vrf',
-          block_size: 1024,
-          tx_count: 1,
-          total_fees: '0',
-        }]);
-
-      expect(await backend.getCurrentSlot()).toBe(80_000_123);
+      await expect(backend.getCurrentSlot()).rejects.toThrow(/abs_slot/);
     });
   });
 

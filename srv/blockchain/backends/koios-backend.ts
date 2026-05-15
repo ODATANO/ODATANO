@@ -211,9 +211,9 @@ export class KoiosBackend implements CardanoBackend {
           time: data.block_time,
           height: data.block_height,
           hash: data.hash,
-          slot: data.slot_no,
+          slot: data.abs_slot,
           epoch: data.epoch_no,
-          epochSlot: data.epoch_slot_no,
+          epochSlot: data.epoch_slot,
           slotLeader: data.vrf_key,
           size: data.block_size,
           txCount: data.tx_count,
@@ -898,14 +898,28 @@ export class KoiosBackend implements CardanoBackend {
    * @returns {Promise<number>} current chain slot
    */
   async getCurrentSlot(): Promise<number> {
-    const block = await this.getLatestBlock();
-    if (block.slot == null) {
-      throw new ProviderUnavailableError(
-        `${this.name}: latest block has no slot`,
-        this.name,
-      );
-    }
-    return block.slot;
+    return handleBackendRequest(
+      async () => {
+        const tipData = await this.fetchWithRetryOnEmpty(
+          () => this.api.get('/tip'),
+          'getCurrentSlot'
+        );
+
+        if (!tipData || tipData.length === 0) {
+          throw new NotFoundError('Tip', this.name);
+        }
+
+        const slot = tipData[0].abs_slot;
+        if (slot == null) {
+          throw new ProviderUnavailableError(
+            `${this.name}: /tip has no abs_slot`,
+            this.name,
+          );
+        }
+        return slot;
+      },
+      this.name
+    );
   }
 
   /**

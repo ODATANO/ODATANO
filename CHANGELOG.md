@@ -5,7 +5,25 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.7.8] - 13-05-2026: getCurrentSlot() and isUtxoUnspent() with Multi-Backend Implementations`
+## [v1.7.9] - 15-05-2026: Koios getCurrentSlot — wire-shape fix + /tip simplification
+
+### Fixed
+
+- **Koios `/block_info` mapper read `slot_no` / `epoch_slot_no`** — fields that Koios has never returned. The real wire keys are `abs_slot` and `epoch_slot` (stable since Koios v1). Symptom: every call through `KoiosBackend.getLatestBlock()` produced a `BlockData` whose `.slot` and `.epochSlot` were `undefined`, which made the v1.7.8 `getCurrentSlot()` implementation throw `ProviderUnavailableError: koios: latest block has no slot` on every chain-tip query. Cascaded into anything ttl-bounded: x402 nonce checks, ttl-bounded tx builds, `getCurrentSlot`-routed paths on Koios-only deployments. One-line mapping correction at `srv/blockchain/backends/koios-backend.ts:214-216` (`epoch_no` was already correct). Direct `getBlock(hash)` callers also benefit — previously they received a `BlockData` with `undefined` slot fields silently.
+
+### Changed
+
+- **`KoiosBackend.getCurrentSlot()` rewritten to read `/tip` directly.** Previously it called `getLatestBlock()`, which fetched `/tip` and then `/block_info` for that tip's hash — two round-trips for a single integer. The new implementation reads `abs_slot` straight off `/tip`. Side benefits: avoids a real race where `/tip` returns a freshly-minted hash that `/block_info` then returns `[]` for several seconds while Koios's read replicas catch up (was surfacing as a spurious `NotFoundError` propagating out of `getCurrentSlot`), and removes the chain-tip-only path's dependency on `getLatestBlock`'s mapper. Negative-path behavior preserved: empty `/tip` → `NotFoundError`, `/tip` row missing `abs_slot` → `ProviderUnavailableError`.
+
+### Internal
+
+- **Test fixture corrected** in `test/unit/koios-backend.test.ts`: `getCurrentSlot` mock now uses the real Koios `/tip` shape (`abs_slot` / `epoch_slot`) instead of the never-real `slot_no` / `epoch_slot_no`, which is the reason the original mapper bug slipped through unit tests. Two new negative cases added (empty `/tip` returning `NotFoundError` after 3 retries; `/tip` row missing `abs_slot` returning `ProviderUnavailableError`).
+- Version bumped `1.7.8` → `1.7.9`.
+
+
+
+
+## [v1.7.8] - 13-05-2026: getCurrentSlot() and isUtxoUnspent() with Multi-Backend Implementations
 
 ### Added
 
