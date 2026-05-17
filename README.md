@@ -8,10 +8,9 @@ Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsor
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)]()
-[![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)]()
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/@odatano/core)](https://www.npmjs.com/package/@odatano/core)
+[![CAP](https://img.shields.io/badge/SAP%20CAP-9.x-blue)](https://cap.cloud.sap/docs/)
+[![npm version](https://img.shields.io/npm/v/@odatano/core?logo=npm)](https://www.npmjs.com/package/@odatano/core)
+[![npm downloads](https://img.shields.io/npm/dt/@odatano/core?logo=npm&label=downloads)](https://www.npmjs.com/package/@odatano/core)
 
 ## Quick Start
 
