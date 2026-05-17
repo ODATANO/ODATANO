@@ -10,6 +10,8 @@ Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsor
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
 [![npm version](https://img.shields.io/npm/v/@odatano/core?logo=npm)](https://www.npmjs.com/package/@odatano/core)
 [![npm downloads](https://img.shields.io/npm/dt/@odatano/core?logo=npm&label=downloads&color=blue)](https://www.npmjs.com/package/@odatano/core)
+[![License](https://img.shields.io/badge/license-Apache%202.0-yellow)](LICENSE)
+
 
 ## Quick Start
 
