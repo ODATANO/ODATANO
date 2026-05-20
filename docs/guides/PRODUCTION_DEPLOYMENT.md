@@ -187,7 +187,7 @@ resources:
 
 ```json
 {
-  "welcomeFile": "/odatanoviewwalletviewer/index.html",
+  "welcomeFile": "/odatanoviewwallet/index.html",
   "authenticationMethod": "route",
   "routes": [
     {
@@ -195,11 +195,11 @@ resources:
       "target": "/odata/$1",
       "destination": "srv-api",
       "authenticationType": "xsuaa",
-      "csrfProtection": false
+      "csrfProtection": true
     },
     {
-      "source": "^/odatanoviewwalletviewer/(.*)$",
-      "target": "/odatanoviewwalletviewer/$1",
+      "source": "^/odatanoviewwallet/(.*)$",
+      "target": "/odatanoviewwallet/$1",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa"
     },
@@ -207,21 +207,24 @@ resources:
       "source": "^/(.*)$",
       "target": "$1",
       "destination": "srv-api",
-      "authenticationType": "xsuaa"
+      "authenticationType": "xsuaa",
+      "csrfProtection": true
     }
   ]
 }
 ```
 
-> **HTML5 Repo naming:** The HTML5 Application Repository removes dots from app names. App ID `odatanoview.walletviewer` becomes `odatanoviewwalletviewer` in routes.
+> **HTML5 Repo naming:** The HTML5 Application Repository removes dots from app names. The wallet app's `sap.app.id` (`manifest.json`) is `odatanoview.wallet`, so it is served under `odatanoviewwallet` in routes and `welcomeFile`. The dotted name must NOT appear in `app/router/xs-app.json` — a mismatch makes the welcome redirect 503.
 
 ### Build & Deploy
 
 ```bash
-
-cd ~/ODATANO && npm ci && mbt build
-
+# Build from the repo root. On Windows, run mbt build in WSL — it does not
+# work on native Windows/MSYS. The repo lives on the C: drive, mounted at /mnt/c:
+cd /mnt/c/Users/<you>/ODATANO/ODATANO && npm ci && mbt build
 ```
+
+> The mtar version comes from `version:` in `mta.yaml` — keep it in sync with `package.json` on each release (`npm version` does NOT update `mta.yaml`).
 
 **Deploy:**
 
@@ -229,8 +232,8 @@ cd ~/ODATANO && npm ci && mbt build
 # Login
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
-# Deploy MTA
-cf deploy mta_archives/odatano_1.0.0.mtar
+# Deploy MTA (filename matches the version in mta.yaml)
+cf deploy mta_archives/odatano_1.7.10.mtar
 
 # Set blockchain env vars
 cf set-env odatano-srv NETWORK "mainnet"

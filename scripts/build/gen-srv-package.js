@@ -9,8 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const root = require('../package.json');
-const genSrvPkg = path.join(__dirname, '..', 'gen', 'srv', 'package.json');
+const projectRoot = path.join(__dirname, '..', '..');
+const root = require(path.join(projectRoot, 'package.json'));
+const genSrvPkg = path.join(projectRoot, 'gen', 'srv', 'package.json');
 
 if (!fs.existsSync(path.dirname(genSrvPkg))) {
   console.error('ERROR: gen/srv/ does not exist — run cds build first');
@@ -37,8 +38,8 @@ fs.writeFileSync(genSrvPkg, JSON.stringify(srvPkg, null, 2) + '\n');
 console.log('OK: gen/srv/package.json generated (%d dependencies)', Object.keys(srvPkg.dependencies).length);
 
 // Copy @cds-models/ to gen/srv/ for #cds-models/* imports
-const srcModels = path.join(__dirname, '..', '@cds-models');
-const destModels = path.join(__dirname, '..', 'gen', 'srv', '@cds-models');
+const srcModels = path.join(projectRoot, '@cds-models');
+const destModels = path.join(projectRoot, 'gen', 'srv', '@cds-models');
 if (fs.existsSync(srcModels)) {
   fs.cpSync(srcModels, destModels, { recursive: true });
   console.log('OK: @cds-models/ copied to gen/srv/');

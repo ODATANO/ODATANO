@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 0.3.24
+version: 1.7.10
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
