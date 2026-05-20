@@ -135,11 +135,3 @@ If anyone wants to poke at it, try it, or tear it apart, please do. I'm especial
 Thanks and best regards,
 
 Max
-
----
-
-## References
-
-- **Published blog post (SAP Community):** [Adding immutable blockchain proofs to SAP with CAP, Cardano, and OData V4](https://community.sap.com/t5/sap-cap-blog-posts/adding-immutable-blockchain-proofs-to-sap-with-cap-cardano-and-odata-v4/ba-p/14370241)
-- **Main repository:** [github.com/ODATANO/ODATANO](https://github.com/ODATANO/ODATANO)
-- **Homepage:** [https://odatano.dev/](https://odatano.dev/)

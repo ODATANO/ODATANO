@@ -2,7 +2,7 @@
 
 # Enterprise OData Services for the Cardano Blockchain
 
-Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk) — all four milestones completed and approved (April 2026).
+Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk) all four milestones completed and approved (April 2026).
 
 **ODATANO** is an SAP CAP–based service that exposes the Cardano blockchain via a standardized **OData V4** interface, enabling enterprise-grade read and write access with native transaction building.
 
@@ -93,4 +93,5 @@ Apache License 2.0 - see [LICENSE](LICENSE)
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
-- **Project Lead**: Max Weber (max@maxalexweber.de)
+- **Project Lead**: Max Weber
+- **Contact**: info@odatano.dev
