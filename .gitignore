@@ -24,6 +24,9 @@ target/
 *_mta_build_tmp
 *.mtar
 mta_archives/
+# MTA extension descriptors hold real secrets — ignore them, keep the .example
+*.mtaext
+!*.mtaext.example
 
 # Other
 .DS_Store

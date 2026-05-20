@@ -233,19 +233,38 @@ cd /mnt/c/Users/<you>/ODATANO/ODATANO && npm ci && mbt build
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
 # Deploy MTA (filename matches the version in mta.yaml)
-cf deploy mta_archives/odatano_1.7.10.mtar
+cf deploy mta_archives/odatano_1.7.10.mtar -e prod.mtaext
+```
 
-# Set blockchain env vars
-cf set-env odatano-srv NETWORK "mainnet"
-cf set-env odatano-srv BACKENDS "blockfrost,koios"
+### Environment Variables (`odatano-srv`)
+
+`mta.yaml` declares the blockchain env vars as module `properties:` (`NETWORK`,
+`BACKENDS`, `BLOCKFROST_API_KEY`, `TX_BUILDERS`, `HSM_ENABLED`). The committed
+`BLOCKFROST_API_KEY` is a **placeholder** — never put the real key in `mta.yaml`,
+since it would be committed to git. There are two ways to supply real values:
+
+**Recommended — MTA extension descriptor (`.mtaext`):** durable across redeploys
+and keeps secrets out of git.
+
+1. Copy the template and fill in real values:
+   ```bash
+   cp prod.mtaext.example prod.mtaext   # prod.mtaext is git-ignored
+   # edit prod.mtaext → set the real BLOCKFROST_API_KEY, NETWORK, etc.
+   ```
+2. Deploy with `-e` (see above). Values in `prod.mtaext` override the
+   placeholders in `mta.yaml` at deploy time.
+
+The extension descriptor's `extends:` must match the top-level `ID:` in
+`mta.yaml` (`odatano`), and the module name must match (`odatano-srv`).
+
+**Quick alternative — `cf set-env` (not durable):** good for a one-off patch, but
+⚠️ **overwritten on the next `cf deploy`** by the `mta.yaml` properties.
+
+```bash
 cf set-env odatano-srv BLOCKFROST_API_KEY "mainnetYourKeyHere"
-cf set-env odatano-srv TX_BUILDERS "buildooor"
-cf set-env odatano-srv PRIMARY_TIMEOUT_MS "8000"
-cf set-env odatano-srv FALLBACK_TIMEOUT_MS "10000"
-cf set-env odatano-srv INDEX_TTL_MS "600000"
-
-# Restage to apply
-cf restage odatano-srv
+cf set-env odatano-srv NETWORK "mainnet"
+# ...other vars...
+cf restage odatano-srv   # restage to apply
 ```
 
 ### Important BTP Files
@@ -253,6 +272,8 @@ cf restage odatano-srv
 | File | Purpose |
 |------|---------|
 | `mta.yaml` | Multi-Target Application descriptor |
+| `prod.mtaext.example` | Template for deploy-time env/secret overrides (copy to `prod.mtaext`) |
+| `prod.mtaext` | Real deploy-time overrides — **git-ignored**, holds the real API key |
 | `xs-security.json` | XSUAA security configuration |
 | `app/router/xs-app.json` | Approuter routing rules |
 | `app/wallet/xs-app.json` | HTML5 app routing (included in ZIP) |

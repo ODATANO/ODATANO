@@ -1,0 +1,27 @@
+# MTA extension descriptor — deploy-time overrides for `cf deploy`.
+#
+# Copy this file to `prod.mtaext` (which is git-ignored) and fill in real
+# values. Deploy with:
+#
+#     cf deploy mta_archives/odatano_<version>.mtar -e prod.mtaext
+#
+# Values here OVERRIDE the module `properties:` placeholders in mta.yaml,
+# so the real BLOCKFROST_API_KEY never has to be committed to the repo.
+#
+# - `extends:` must match the top-level `ID:` in mta.yaml (odatano)
+# - the module name must match the module in mta.yaml (odatano-srv)
+_schema-version: "3.3.0"
+ID: odatano.prod
+extends: odatano
+
+modules:
+  - name: odatano-srv
+    properties:
+      NETWORK: preview                       # mainnet | preview | preprod
+      BACKENDS: blockfrost,koios             # blockfrost | koios | ogmios
+      BLOCKFROST_API_KEY: preview_REPLACE_ME # key prefix must match NETWORK
+      TX_BUILDERS: buildooor                 # csl | buildooor
+      HSM_ENABLED: false
+      PRIMARY_TIMEOUT_MS: "8000"
+      FALLBACK_TIMEOUT_MS: "10000"
+      INDEX_TTL_MS: "600000"
