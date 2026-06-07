@@ -82,6 +82,9 @@ jobs:
         repository: IntersectMBO/ogmios
         ref: ${{ matrix.ogmios_version }}
         path: ogmios-src
+        # server/config is a git submodule (cardano-foundation/cardano-configurations);
+        # the Dockerfile COPYs server/config/network/<network>, so it must be fetched.
+        submodules: true
 
     - name: Fetch prebuilt Ogmios binary
       if: steps.check.outputs.combined == 'false' || steps.check.outputs.ogmios == 'false'
