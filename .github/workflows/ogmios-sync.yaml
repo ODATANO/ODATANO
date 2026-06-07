@@ -151,14 +151,28 @@ jobs:
         sync_deadline=$(( start + BUDGET ))
 
         # Wait until Ogmios is reachable (i.e. the node started & connected).
-        until curl -fsS --max-time 5 "$URL" >/dev/null 2>&1; do
+        # Fail fast (with logs) if either container dies, and tail the node log
+        # each iteration so startup progress / crashes are visible immediately.
+        until [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$URL" 2>/dev/null)" = "200" ]; do
+          for c in cardano-node ogmios; do
+            running="$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo missing)"
+            if [ "$running" != "true" ]; then
+              echo "::error::container '$c' is not running (state=$running)"
+              echo "----- cardano-node logs -----"; docker logs --tail 200 cardano-node || true
+              echo "----- ogmios logs -----";       docker logs --tail 120 ogmios || true
+              exit 1
+            fi
+          done
+
           if (( $(date +%s) >= warmup_deadline )); then
-            echo "::error::Ogmios/node not ready after ${WARMUP}s"
+            echo "::error::Ogmios not healthy after ${WARMUP}s"
             echo "----- cardano-node logs -----"; docker logs --tail 200 cardano-node || true
-            echo "----- ogmios logs -----";       docker logs --tail 80 ogmios || true
+            echo "----- ogmios logs -----";       docker logs --tail 120 ogmios || true
             exit 1
           fi
+
           echo "waiting for node/ogmios to come up..."
+          docker logs --tail 4 cardano-node 2>&1 | sed 's/^/  node| /' || true
           sleep 10
         done
         echo "Ogmios is up. Target synchronization: ${THRESHOLD}"
