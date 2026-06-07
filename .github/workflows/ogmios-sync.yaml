@@ -30,16 +30,12 @@ jobs:
     - uses: actions/checkout@v4
 
     # ---------------------------------------------------------------------------
-    # Build the combined cardano-node + ogmios image ourselves.
+    # Build & push the standalone Ogmios image (also consumed by test.yaml).
     #
-    # The published cardanosolutions/cardano-node-ogmios image lags behind: its
-    # newest tag bundles cardano-node 10.5.3, which no longer fully syncs preview.
-    # IntersectMBO does not publish a combined image. So we layer the prebuilt
-    # Ogmios binary (release artifact) on top of cardano-node 11.0.1 using the
-    # ogmios repo's own Dockerfile, and push the result to GHCR.
-    #
-    # Idempotent: if the tag already exists in GHCR the build steps are skipped,
-    # so the scheduled runs go straight to pull + sync.
+    # IntersectMBO does not publish a Docker image for the v6.14.0.x patch
+    # releases, so we layer the prebuilt Ogmios binary (release artifact) into
+    # the ogmios repo's own "ogmios" Docker stage and push it to GHCR.
+    # Idempotent: skipped once the tag exists.
     # ---------------------------------------------------------------------------
 
     - name: Log in to GHCR
@@ -49,26 +45,17 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Resolve image refs
+    - name: Resolve Ogmios image ref
       id: img
       shell: bash
       run: |
         owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-        repo="ghcr.io/${owner}/cardano-node-ogmios"
-        echo "repo=${repo}" >> "$GITHUB_OUTPUT"
-        echo "ref=${repo}:${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}-${{ matrix.network }}" >> "$GITHUB_OUTPUT"
-        # Standalone Ogmios image consumed by test.yaml (not network-specific).
         echo "ogmios_ref=ghcr.io/${owner}/ogmios:${{ matrix.ogmios_version }}" >> "$GITHUB_OUTPUT"
 
-    - name: Check whether images already exist
+    - name: Check whether Ogmios image exists
       id: check
       shell: bash
       run: |
-        if docker manifest inspect "${{ steps.img.outputs.ref }}" > /dev/null 2>&1; then
-          echo "combined=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "combined=false" >> "$GITHUB_OUTPUT"
-        fi
         if docker manifest inspect "${{ steps.img.outputs.ogmios_ref }}" > /dev/null 2>&1; then
           echo "ogmios=true" >> "$GITHUB_OUTPUT"
         else
@@ -76,18 +63,17 @@ jobs:
         fi
 
     - name: Checkout Ogmios source
-      if: steps.check.outputs.combined == 'false' || steps.check.outputs.ogmios == 'false'
+      if: steps.check.outputs.ogmios == 'false'
       uses: actions/checkout@v4
       with:
         repository: IntersectMBO/ogmios
         ref: ${{ matrix.ogmios_version }}
         path: ogmios-src
-        # server/config is a git submodule (cardano-foundation/cardano-configurations);
-        # the Dockerfile COPYs server/config/network/<network>, so it must be fetched.
+        # server/config is a git submodule (cardano-foundation/cardano-configurations).
         submodules: true
 
     - name: Fetch prebuilt Ogmios binary
-      if: steps.check.outputs.combined == 'false' || steps.check.outputs.ogmios == 'false'
+      if: steps.check.outputs.ogmios == 'false'
       shell: bash
       working-directory: ogmios-src
       run: |
@@ -99,63 +85,134 @@ jobs:
         tar -xzf ogmios.tar.gz -C server
         chmod +x server/bin/ogmios
 
-    - name: Build & push combined cardano-node + ogmios image
-      if: steps.check.outputs.combined == 'false'
-      shell: bash
-      working-directory: ogmios-src
-      run: |
-        docker build \
-          --build-arg CARDANO_NODE_IMAGE=ghcr.io/intersectmbo/cardano-node:${{ matrix.cardano_node_version }} \
-          --build-arg NETWORK=${{ matrix.network }} \
-          -t "${{ steps.img.outputs.ref }}" .
-        docker push "${{ steps.img.outputs.ref }}"
-
     - name: Build & push standalone Ogmios image
       if: steps.check.outputs.ogmios == 'false'
       shell: bash
       working-directory: ogmios-src
       run: |
-        # The Dockerfile's first stage ("ogmios") is the standalone bridge image;
-        # consumed by test.yaml to run Ogmios against the synced node.
+        # The Dockerfile's first stage ("ogmios") is the standalone bridge image.
         docker build --target ogmios -t "${{ steps.img.outputs.ogmios_ref }}" .
         docker push "${{ steps.img.outputs.ogmios_ref }}"
 
     # ---------------------------------------------------------------------------
-    # Sync the node DB using our freshly built image.
+    # Sync the node DB. We run cardano-node + ogmios exactly like test.yaml does,
+    # using the repo's node-11-compatible config (EnableP2P:false, legacy
+    # topology, no peer-snapshot). The combined cardanosolutions image is NOT
+    # used: its baked cardano-configurations predates node 11's peer-snapshot
+    # schema and fails to start.
     # ---------------------------------------------------------------------------
 
-    - uses: actions/cache/restore@v4
+    - name: Restore Cardano Node DB cache
+      uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/db-${{ matrix.network }}
         key: cardano-node-ogmios-${{ matrix.network }}
         restore-keys: |
           cardano-node-ogmios-${{ matrix.network }}
 
-    - uses: CardanoSolutions/gh-action-cardano-node-ogmios-docker-sync@5bbec3e542f6cbd775c22f74316f978003afcecf
-      id: sync
-      with:
-        repository: ${{ steps.img.outputs.repo }}
-        db-dir: ${{ runner.temp }}/db-${{ matrix.network }}
-        network: ${{ matrix.network }}
-        version: ${{ matrix.ogmios_version }}_${{ matrix.cardano_node_version }}
-        synchronization-level: ${{ inputs.synchronization-level || 0.985 }}
-        warm-up-timeout: 900
+    - name: Start Cardano Node + Ogmios
+      shell: bash
+      run: |
+        CONFDIR="${{ github.workspace }}/config/${{ matrix.network }}"
+        mkdir -p "${{ runner.temp }}/db-${{ matrix.network }}" "${{ runner.temp }}/ipc"
 
-    - name: prune node db
-      # Prune if sync is at or above 98% to keep cache size manageable
-      if: ${{ steps.sync.outputs.synchronization-level-initial >= 0.98 }}
+        docker run -d --name cardano-node \
+          -v ${{ runner.temp }}/db-${{ matrix.network }}:/db \
+          -v ${{ runner.temp }}/ipc:/ipc \
+          -v "$CONFDIR/cardano-node:/config" \
+          ghcr.io/intersectmbo/cardano-node:${{ matrix.cardano_node_version }} run \
+            --config /config/config.json \
+            --database-path /db \
+            --socket-path /ipc/node.socket \
+            --topology /config/topology.json
+
+        docker run -d --name ogmios \
+          -p 1337:1337 \
+          -v ${{ runner.temp }}/ipc:/ipc \
+          -v "$CONFDIR:/config" \
+          ${{ steps.img.outputs.ogmios_ref }} \
+            --host 0.0.0.0 \
+            --node-socket /ipc/node.socket \
+            --node-config /config/cardano-node/config.json
+
+        docker ps
+
+    - name: Synchronize
+      id: sync
+      shell: bash
+      env:
+        THRESHOLD: ${{ inputs.synchronization-level || '0.985' }}
+      run: |
+        URL="http://localhost:1337/health"
+        WARMUP=900       # node must answer /health within 15 min
+        BUDGET=19800     # sync for at most 5h30m, then save partial progress
+        start="$(date +%s)"
+        warmup_deadline=$(( start + WARMUP ))
+        sync_deadline=$(( start + BUDGET ))
+
+        # Wait until Ogmios is reachable (i.e. the node started & connected).
+        until curl -fsS --max-time 5 "$URL" >/dev/null 2>&1; do
+          if (( $(date +%s) >= warmup_deadline )); then
+            echo "::error::Ogmios/node not ready after ${WARMUP}s"
+            echo "----- cardano-node logs -----"; docker logs --tail 200 cardano-node || true
+            echo "----- ogmios logs -----";       docker logs --tail 80 ogmios || true
+            exit 1
+          fi
+          echo "waiting for node/ogmios to come up..."
+          sleep 10
+        done
+        echo "Ogmios is up. Target synchronization: ${THRESHOLD}"
+
+        level="0"
+        while true; do
+          health="$(curl -sS --max-time 10 "$URL" || echo '{}')"
+          level="$(sed -n 's/.*"networkSynchronization":\([0-9.]*\).*/\1/p' <<< "$health")"
+          era="$(sed -n 's/.*"currentEra":"\([^"]*\)".*/\1/p' <<< "$health")"
+          [ -z "$level" ] && level="0"
+
+          pct="$(awk "BEGIN{printf \"%.2f\", $level*100}")"
+          echo "[$(date -u +%H:%M:%S)] sync: ${pct}%  era: ${era:-?}"
+
+          if awk "BEGIN{exit !($level >= $THRESHOLD)}"; then
+            echo "Reached target synchronization (${pct}%)."
+            break
+          fi
+          if (( $(date +%s) >= sync_deadline )); then
+            echo "Time budget reached at ${pct}% — saving partial progress for the next run."
+            break
+          fi
+          sleep 30
+        done
+
+        echo "level=${level}" >> "$GITHUB_OUTPUT"
+
+    - name: Stop containers
+      if: always()
+      shell: bash
+      run: |
+        docker stop ogmios cardano-node || true
+        docker rm ogmios cardano-node || true
+
+    - name: Prune node db
+      # Only prune near tip, to keep the cache size manageable.
+      if: ${{ steps.sync.outputs.level >= 0.98 }}
+      continue-on-error: true
       shell: bash
       working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
       run: |
-        sudo chown -R $(whoami):$(whoami) immutable
+        sudo chown -R "$(whoami):$(whoami)" immutable
         ls immutable/*.chunk | sort | head -n -2500 | xargs -r rm -f --
 
+    # Save whatever progress we made (success() is implied -> only when the
+    # sync step didn't hard-fail), so subsequent runs resume from here.
     - name: Delete old cache
+      shell: bash
       run: gh cache delete "cardano-node-ogmios-${{ matrix.network }}" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - uses: actions/cache/save@v4
+    - name: Save Cardano Node DB cache
+      uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/db-${{ matrix.network }}
         key: cardano-node-ogmios-${{ matrix.network }}
