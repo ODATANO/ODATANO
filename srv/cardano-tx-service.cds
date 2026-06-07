@@ -18,26 +18,32 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     // Entity Projections - Transaction Building & Submission
     // ---------------------------------------------------------------------------
 
+    @readonly
     @title      : 'Transaction Builds'
     @description: 'Projection for Transaction Builds'
     entity TransactionBuilds            as projection on db.TransactionBuilds;
 
+    @readonly
     @title      : 'Transaction Build Inputs'
     @description: 'Projection for Transaction Build Inputs'
     entity TransactionBuildInputs       as projection on db.TransactionBuildInputs;
 
+    @readonly
     @title      : 'Transaction Build Outputs'
     @description: 'Projection for Transaction Build Outputs'
     entity TransactionBuildOutputs      as projection on db.TransactionBuildOutputs;
 
+    @readonly
     @title      : 'Transaction Build Input Assets'
     @description: 'Projection for Transaction Build Input Assets'
     entity TransactionBuildInputAssets  as projection on db.TransactionBuildInputAssets;
 
+    @readonly
     @title      : 'Transaction Build Output Assets'
     @description: 'Projection for Transaction Build Output Assets'
     entity TransactionBuildOutputAssets as projection on db.TransactionBuildOutputAssets;
 
+            @readonly
             @title      : 'Transaction Submissions'
             @description: 'Projection for Transaction Submissions'
     entity TransactionSubmissions       as projection on db.TransactionSubmissions
@@ -56,10 +62,12 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
         CheckSubmissionStatus                                      @from       : [ #submitted];
     };
 
+    @readonly
     @title      : 'Transaction Submission Errors'
     @description: 'Projection for Transaction Submission Errors'
     entity TransactionSubmissionErrors  as projection on db.TransactionSubmissionErrors;
 
+    @readonly
     @title      : 'Address Transaction Builds'
     @description: 'Projection for retrieving transaction builds by address'
     entity AddressTransactionBuilds     as projection on db.AddressTransactionBuilds;

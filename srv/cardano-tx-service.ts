@@ -380,8 +380,8 @@ module.exports = (srv: cds.Service) => {
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'mintActionsJson', 'mintingPolicyScript']
+      { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
+      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'mintActionsJson', 'mintingPolicyScript']
     );
     throwIfValidationErrors(req, 'BuildMintTransaction', errors);
     if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
@@ -396,6 +396,9 @@ module.exports = (srv: cds.Service) => {
     const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => {
       if (!action || typeof action !== 'object') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
+      }
+      if (typeof action.assetUnit !== 'string' || !isAssetUnit(action.assetUnit)) {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex`, 'mintActionsJson');
       }
       if (typeof action.quantity !== 'string') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
@@ -584,8 +587,8 @@ module.exports = (srv: cds.Service) => {
 
     // Validate inputs
     const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, referenceScriptHex, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'validatorScript', 'scriptTxHash', 'redeemerJson']
+      { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, referenceScriptHex, validityStartMs, validityEndMs },
+      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'validatorScript', 'scriptTxHash', 'redeemerJson']
     );
     throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
     if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
@@ -880,6 +883,12 @@ module.exports = (srv: cds.Service) => {
       // Validate build exists
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) return rejectInvalid(req, 'SubmitTransaction', 'Build not found', 'buildId');
+
+      // Verify the signed CBOR is for this build (audit-trail integrity)
+      const signedTxHash = getTxHashFromCbor(signedTxCbor);
+      if (signedTxHash !== existing.txBodyHash) {
+        return rejectInvalid(req, 'SubmitTransaction', `signedTxCbor hash '${signedTxHash}' does not match build txBodyHash '${existing.txBodyHash}'`, 'signedTxCbor');
+      }
 
       // Use txBodyHash from build
       const txHash = existing.txBodyHash;

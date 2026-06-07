@@ -85,13 +85,12 @@ module.exports = (srv: cds.Service) => {
   let lastExpiryCheck = 0;
   const EXPIRY_CHECK_INTERVAL_MS = 60_000;
 
-  srv.before('READ', SigningRequests, async () => {
+  srv.before('READ', SigningRequests, async (req: Request) => {
     const now = Date.now();
     if (now - lastExpiryCheck < EXPIRY_CHECK_INTERVAL_MS) return;
     lastExpiryCheck = now;
 
-    const db = await cds.connect.to('db');
-    await db.run(
+    await cds.tx(req).run(
       UPDATE.entity(SigningRequests)
         .set({ status: 'expired' })
         .where({ status: 'pending', expiresAt: { '<=': new Date().toISOString() } })

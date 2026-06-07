@@ -19,23 +19,28 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     // ---------------------------------------------------------------------------
     // Signing Workflow Projections
     // ---------------------------------------------------------------------------
+    @readonly
     @title      : 'Signature Verifications'
     @description: 'Projection for Signature Verifications - stores verification results'
     entity SignatureVerifications as projection on db.SignatureVerifications;
 
+    @readonly
     @title      : 'Address Signing Requests'
     @description: 'Projection for retrieving signing requests by address'
     entity AddressSigningRequests as projection on db.AddressSigningRequests;
 
+    @readonly
     @title      : 'Transaction Builds'
     @description: 'Projection for Transaction Builds - needed by CreateSigningRequest to look up build details'
     entity TransactionBuilds      as projection on db.TransactionBuilds;
 
 
+    @readonly
     @title      : 'Transaction Submissions'
     @description: 'Projection for Transaction Submissions - stores submission results'
     entity TransactionSubmissions as projection on db.TransactionSubmissions;
 
+            @readonly
             @title      : 'Signing Requests'
             @description: 'Projection for Signing Requests - tracks signing workflow'
     entity SigningRequests as projection on db.SigningRequests;

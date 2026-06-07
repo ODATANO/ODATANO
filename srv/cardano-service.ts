@@ -354,7 +354,7 @@ module.exports = (srv: cds.Service) => {
           .orderBy('blockTime desc')
           .limit(txLimit)
       );
-      if (!existing || existing.length === 0) {
+      if (!existing || existing.length < txLimit) {
         return indexer().indexAddressTransactions(db, address, txLimit);
       }
       return existing;

@@ -22,12 +22,16 @@
     "@harmoniclabs/cardano-ledger-ts": "^0.5.1",
     "@sap/cds": ">=9",
     "@sap/xssec": "^4",
-    "axios": "^1.13.2",
+    "axios": "^1.16.1",
     "bech32": "^2.0.0",
+    "better-sqlite3": "^12.10.0",
     "blake2b": "^2.1.4"
   },
   "optionalDependencies": {
     "pkcs11js": "^2.1.6"
+  },
+  "overrides": {
+    "axios": "^1.16.1"
   },
   "devDependencies": {
     "@cap-js/cds-test": "^0.4.1",

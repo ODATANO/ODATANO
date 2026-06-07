@@ -331,6 +331,13 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
     throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}" — must be a non-negative integer`);
   }
 
+  // Fail-closed: HSM controls a real signing key. Require an explicit role gate so
+  // that an authenticated user cannot drain the HSM-controlled wallet by default.
+  const requiresRole = hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || '';
+  if (!requiresRole) {
+    throw new ConfigError('HSM_REQUIRES_ROLE (or cds.requires.odatano-core.hsm.requiresRole) is required when HSM is enabled — set it to the XSUAA scope name allowed to invoke HSM signing actions');
+  }
+
   return {
     enabled: true,
     pkcs11Module,
@@ -338,7 +345,7 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
     pin,
     keyId: hsmCds.keyId || env.HSM_KEY_ID,
     keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,
-    requiresRole: hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || undefined,
+    requiresRole,
   };
 }
 
