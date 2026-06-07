@@ -6,7 +6,6 @@
   "ConsensusMode": "GenesisMode",
   "ConwayGenesisFile": "conway-genesis.json",
   "ConwayGenesisHash": "9cc5084f02e27210eacba47af0872e3dba8946ad9460b6072d793e1d2f3987ef",
-  "EnableP2P": false,
   "ExperimentalHardForksEnabled": false,
   "ExperimentalProtocolsEnabled": false,
   "LastKnownBlockVersion-Alt": 0,

@@ -150,10 +150,12 @@ jobs:
         warmup_deadline=$(( start + WARMUP ))
         sync_deadline=$(( start + BUDGET ))
 
-        # Wait until Ogmios is reachable (i.e. the node started & connected).
+        # Wait until Ogmios is connected to the node. Ogmios /health returns
+        # 202 (Accepted) while still syncing and 200 (OK) once near tip, so both
+        # codes mean "up & connected" -- only keep waiting on 5xx/connection errors.
         # Fail fast (with logs) if either container dies, and tail the node log
         # each iteration so startup progress / crashes are visible immediately.
-        until [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$URL" 2>/dev/null)" = "200" ]; do
+        until printf '%s' "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$URL" 2>/dev/null)" | grep -qE '^(200|202)$'; do
           for c in cardano-node ogmios; do
             running="$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null || echo missing)"
             if [ "$running" != "true" ]; then
@@ -171,8 +173,10 @@ jobs:
             exit 1
           fi
 
-          echo "waiting for node/ogmios to come up..."
-          docker logs --tail 4 cardano-node 2>&1 | sed 's/^/  node| /' || true
+          h="$(curl -sS --max-time 5 "$URL" 2>/dev/null || true)"
+          tip="$(sed -n 's/.*"lastKnownTip":{"slot":\([0-9]*\).*/\1/p' <<< "$h")"
+          ns="$(sed -n 's/.*"networkSynchronization":\([0-9.]*\).*/\1/p' <<< "$h")"
+          echo "waiting for ogmios... tip slot: ${tip:-?}  sync: ${ns:-0}"
           sleep 10
         done
         echo "Ogmios is up. Target synchronization: ${THRESHOLD}"
