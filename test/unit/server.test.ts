@@ -249,7 +249,7 @@ describe('server.ts', () => {
   // loadHsmConfigFromEnv
   // ============================================================================
   describe('loadHsmConfigFromEnv', () => {
-    const hsmKeys = ['HSM_ENABLED', 'HSM_PKCS11_MODULE', 'HSM_PIN', 'HSM_SLOT', 'HSM_KEY_ID', 'HSM_KEY_LABEL'];
+    const hsmKeys = ['HSM_ENABLED', 'HSM_PKCS11_MODULE', 'HSM_PIN', 'HSM_SLOT', 'HSM_KEY_ID', 'HSM_KEY_LABEL', 'HSM_REQUIRES_ROLE'];
     const originalEnv: Record<string, string | undefined> = {};
 
     beforeEach(() => {
@@ -280,6 +280,7 @@ describe('server.ts', () => {
       env.HSM_SLOT = '2';
       env.HSM_KEY_ID = '0x0001';
       env.HSM_KEY_LABEL = 'my-key';
+      env.HSM_REQUIRES_ROLE = 'HsmSigner';
 
       const config = loadHsmConfigFromEnv();
       expect(config).toBeDefined();
@@ -289,6 +290,7 @@ describe('server.ts', () => {
       expect(config!.slot).toBe(2);
       expect(config!.keyId).toBe('0x0001');
       expect(config!.keyLabel).toBe('my-key');
+      expect(config!.requiresRole).toBe('HsmSigner');
     });
 
     it('should throw when HSM_PKCS11_MODULE is missing', () => {
@@ -307,9 +309,17 @@ describe('server.ts', () => {
       env.HSM_ENABLED = 'true';
       env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
       env.HSM_PIN = '1234';
+      env.HSM_REQUIRES_ROLE = 'HsmSigner';
 
       const config = loadHsmConfigFromEnv();
       expect(config!.slot).toBe(0);
+    });
+
+    it('should throw when HSM_REQUIRES_ROLE is missing (fail-closed)', () => {
+      env.HSM_ENABLED = 'true';
+      env.HSM_PKCS11_MODULE = '/usr/lib/pkcs11/yubihsm.so';
+      env.HSM_PIN = '1234';
+      expect(() => loadHsmConfigFromEnv()).toThrow('HSM_REQUIRES_ROLE');
     });
 
     it('should throw on invalid negative HSM slot', () => {

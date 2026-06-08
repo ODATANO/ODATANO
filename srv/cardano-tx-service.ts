@@ -397,8 +397,18 @@ module.exports = (srv: cds.Service) => {
       if (!action || typeof action !== 'object') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
       }
-      if (typeof action.assetUnit !== 'string' || !isAssetUnit(action.assetUnit)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex`, 'mintActionsJson');
+      // assetUnit is normally a full policyId+assetName hex. Exception (BUG 7):
+      // when scriptParamsJson is provided, a bare assetName (shorter than a full
+      // unit) is accepted here and expanded to policyId+assetName once the policy
+      // script is parameterized below — mirrors the expansion's own < MIN_FULL_ASSET_UNIT_LENGTH guard.
+      const bareAssetNameForExpansion =
+        !!scriptParamsJson &&
+        typeof action.assetUnit === 'string' &&
+        action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
+        action.assetUnit.length % 2 === 0 &&
+        /^[0-9a-fA-F]*$/.test(action.assetUnit);
+      if (typeof action.assetUnit !== 'string' || (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion)) {
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson is set)`, 'mintActionsJson');
       }
       if (typeof action.quantity !== 'string') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');

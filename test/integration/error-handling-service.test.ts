@@ -665,6 +665,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 			it('BuildMintTransaction - missing senderAddress parameter', async () => {
 				const requestBody = {
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
@@ -677,6 +678,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			it('BuildMintTransaction - missing recipientAddress parameter', async () => {
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
 				};
@@ -689,6 +691,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
 				};
 				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
@@ -700,6 +703,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 				};
 				const response = await test.POST(`/odata/v4/cardano-transaction/BuildMintTransaction`, requestBody).catch(err => err.response);
@@ -711,6 +715,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.invalidAddress,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
 				};
@@ -723,6 +728,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.invalidAddress,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
 				};
@@ -735,6 +741,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.invalidMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
 				};
@@ -747,6 +754,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					mintActionsJson: TEST_FIXTURES.validMintActionsJson,
 					mintingPolicyScript: TEST_FIXTURES.invalidMintingPolicyScript,
 				};
@@ -763,6 +771,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			it('BuildPlutusSpendTransaction - missing senderAddress parameter', async () => {
 				const requestBody = {
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
@@ -776,6 +785,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			it('BuildPlutusSpendTransaction - missing recipientAddress parameter', async () => {
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
@@ -790,6 +800,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
 					redeemerJson: '{"constructor": 0, "fields": []}',
@@ -803,6 +814,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptOutputIndex: 0,
 					redeemerJson: '{"constructor": 0, "fields": []}',
@@ -816,6 +828,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
@@ -829,6 +842,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.invalidAddress,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
@@ -843,6 +857,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: 'not_hex!',
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
@@ -857,6 +872,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: 'invalidhash',
 					scriptOutputIndex: 0,
@@ -871,6 +887,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 				const requestBody = {
 					senderAddress: TEST_FIXTURES.validBech32Address,
 					recipientAddress: TEST_FIXTURES.validBech32Address,
+					lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
 					validatorScript: validScriptCbor,
 					scriptTxHash: validScriptTxHash,
 					scriptOutputIndex: 0,
