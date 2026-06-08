@@ -29,7 +29,7 @@ ODATANO follows a **Build → Sign → Submit** workflow with complete private k
 - Server **never** sees private keys
 - Signing is external (CLI, browser wallet, hardware wallet) or via HSM (key never leaves chip)
 - Full audit trail via TransactionBuilds, SigningRequests, TransactionSubmissions entities
-- Two builder engines: CSL (`TX_BUILDERS=csl`) and Buildooor (`TX_BUILDERS=buildooor`)
+- Transaction builder: Buildooor (the sole builder; CSL was removed)
 
 ---
 

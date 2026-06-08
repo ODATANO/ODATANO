@@ -1,10 +1,10 @@
 import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { toHex } from '@harmoniclabs/uint8array-utils';
+import { toHex, fromHex } from '@harmoniclabs/uint8array-utils';
+import { blake2b_256 } from '@harmoniclabs/crypto';
 import { MixedAssetsError, InsufficientFundsError } from './errors';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
-import { Cbor, CborBytes } from '@harmoniclabs/cbor';
+import { Cbor, CborArray, CborBytes } from '@harmoniclabs/cbor';
 
 /**
  * Extract lovelace amount from UTxO
@@ -48,12 +48,18 @@ export function getTxHashFromCbor(txCbor: string): string {
     throw new Error('Invalid input: txCbor must be a valid hex string');
   }
 
-  // Use CSL.FixedTransaction: preserves original CBOR bytes (deterministic hash)
-  // and avoids the harmoniclabs AuxiliaryData.fromCbor bug on metadata-only aux_data.
+  // Compute blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
+  // subCborRef.toBuffer() returns the exact bytes as received — no re-serialization, so
+  // the hash matches what was signed. Working at the raw-CBOR level also sidesteps the
+  // @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data
+  // (we never instantiate the high-level Tx type).
   try {
-    const txBytes = Buffer.from(txCbor, 'hex');
-    const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
-    return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
+    const tx = Cbor.parse(fromHex(txCbor));
+    if (!(tx instanceof CborArray) || tx.array.length < 1 || !tx.array[0].subCborRef) {
+      throw new Error('not a transaction');
+    }
+    const bodyBytes = tx.array[0].subCborRef.toBuffer();
+    return toHex(blake2b_256(bodyBytes));
   } catch {
     throw new Error('Failed to parse transaction CBOR');
   }
@@ -61,7 +67,7 @@ export function getTxHashFromCbor(txCbor: string): string {
 
 /**
  * Maps builder errors to typed BackendErrors
- * Shared between CSL and Buildooor transaction builders.
+ * Used by the Buildooor transaction builder.
  * When no assetUnit is provided, extracts it from the error message if possible
  * (e.g. "not enough <policyId.assetName>"), falling back to 'lovelace'.
  * @param err Error from builder
@@ -89,7 +95,7 @@ export function mapBuilderError(err: unknown, assetUnit?: string): never {
 /**
  * Parse asset unit string into policyId and assetName
  * Format: policyId (56 hex chars) + assetName (remaining hex)
- * Shared between CSL and Buildooor transaction builders
+ * Used by the Buildooor transaction builder
  */
 export function parseAssetUnit(assetUnit: string): { policyId: string; assetName: string } {
   return {

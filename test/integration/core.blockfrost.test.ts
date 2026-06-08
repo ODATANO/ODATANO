@@ -16,11 +16,11 @@ import { createErrorBackendSuite } from './error-handling.backend';
 if (process.env.BLOCKFROST_API_KEY) {
   createBackendTestSuite({
     backendName: 'blockfrost',
-    txBuilderName: 'csl',
+    txBuilderName: 'buildooor',
   });
   // Also include backend-focused error handling suite
   createErrorBackendSuite({
     backendName: 'blockfrost',
-    txBuilderName: 'csl',
+    txBuilderName: 'buildooor',
   });
 }

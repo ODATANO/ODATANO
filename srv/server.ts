@@ -12,7 +12,6 @@ const logger = cds.log('ODATANO');
 
 const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
 const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios'];
-const VALID_TX_BUILDERS: TransactionBuilderName[] = ['csl', 'buildooor'];
 
 /**
  * Application context holding initialized blockchain components
@@ -158,37 +157,29 @@ export function resetAppContext(context: AppContext | null): void {
  * Create a test context with specific backends and transaction builder
  * Used by integration tests to create isolated test instances
  * @param backends Array of backend names to use (e.g., ['koios'], ['blockfrost'])
- * @param txBuilderName Optional transaction builder name ('csl' or 'buildooor'), defaults to 'csl'
+ * @param _txBuilderName Deprecated/ignored — Buildooor is the sole transaction builder (kept for signature compatibility)
  * @param protocolParams Optional protocol parameters (to skip backend call during init)
  * @returns Promise<AppContext> The created application context
  */
 export async function createTestContext(
   backends: BackendName[],
-  txBuilderName: TransactionBuilderName = 'csl',
+  _txBuilderName: TransactionBuilderName = 'buildooor', // kept for signature compat; Buildooor is the only builder
   protocolParams?: LedgerProtocolParameters
 ): Promise<AppContext> {
-  // Set TX_BUILDERS env so TxBuilderRegistry.createDefault() uses the correct builder
-  const previousTxBuilders = env.TX_BUILDERS;
-  env.TX_BUILDERS = txBuilderName;
+  const config: CardanoClientConfig = {
+    network: (env.NETWORK as Network) || 'preview',
+    backends,
+    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
+    blockfrostCustomBackend: env.BLOCKFROST_CUSTOM_BACKEND || undefined,
+    koiosApiKey: env.KOIOS_API_KEY || '',
+    ogmiosUrl: env.OGMIOS_URL || '',
+    transactionBuilders: ['buildooor'],
+    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
+    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
+    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
+  };
 
-  try {
-    const config: CardanoClientConfig = {
-      network: (env.NETWORK as Network) || 'preview',
-      backends,
-      blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-      blockfrostCustomBackend: env.BLOCKFROST_CUSTOM_BACKEND || undefined,
-      koiosApiKey: env.KOIOS_API_KEY || '',
-      ogmiosUrl: env.OGMIOS_URL || '',
-      transactionBuilders: [txBuilderName],
-      primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
-      fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-      indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
-    };
-
-    return await initializeAppContext(config, protocolParams);
-  } finally {
-    env.TX_BUILDERS = previousTxBuilders;
-  }
+  return await initializeAppContext(config, protocolParams);
 }
 
 /**
@@ -241,13 +232,8 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   }
   const backends = backendStrings as BackendName[];
 
-  const txBuilderStrings: string[] = cdsConfig.txBuilders
-    || (env.TX_BUILDERS ? env.TX_BUILDERS.split(',').map(b => b.trim()) : ['csl']);
-  const invalidBuilders = txBuilderStrings.filter(b => !(VALID_TX_BUILDERS as readonly string[]).includes(b));
-  if (invalidBuilders.length > 0) {
-    throw new ConfigError(`Invalid TX_BUILDERS: "${invalidBuilders.join(', ')}". Must be one of: ${VALID_TX_BUILDERS.join(', ')}`);
-  }
-  const txBuilders = txBuilderStrings as TransactionBuilderName[];
+  // Buildooor is the sole transaction builder; any legacy txBuilders/TX_BUILDERS config is ignored.
+  const txBuilders: TransactionBuilderName[] = ['buildooor'];
 
   const primaryTimeout = cdsConfig.primaryTimeoutMs ?? env.PRIMARY_TIMEOUT_MS;
   const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;

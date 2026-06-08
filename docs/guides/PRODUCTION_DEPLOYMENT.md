@@ -21,7 +21,7 @@
 - [ ] `NETWORK` set to target network (`mainnet`, `preview`, `preprod`)
 - [ ] `BACKENDS` specifies at least one provider
 - [ ] `BLOCKFROST_API_KEY` set and matching the target network prefix (`mainnetXXX`, `previewXXX`, `preprodXXX`)
-- [ ] `TX_BUILDERS` configured (`csl`, `buildooor`, or both)
+- [ ] (No transaction-builder config needed — Buildooor is the only builder)
 - [ ] `NODE_ENV=production` set
 - [ ] Outbound HTTPS (port 443) to blockchain APIs is allowed
 - [ ] If using Ogmios: Cardano Node fully synced, WebSocket reachable
@@ -45,7 +45,7 @@
 | `NETWORK` | Yes | `preview` | `mainnet` | Target Cardano network |
 | `BACKENDS` | Yes | `koios` | `ogmios,koios` | Comma-separated backend providers (order = priority) |
 | `NODE_ENV` | Yes | `development` | `production` | Activates HANA + XSUAA profiles |
-| `TX_BUILDERS` | Yes | `buildooor` | `buildooor` | Transaction builder engines |
+| `TX_BUILDERS` | No | `buildooor` | — | Deprecated/ignored — Buildooor is the sole builder |
 | `PORT` | No | `4004` | `4004` | HTTP server port |
 | `LOG_LEVEL` | No | `info` | `info` | `error`, `warn`, `info`, `debug` |
 

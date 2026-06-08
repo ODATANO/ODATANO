@@ -45,10 +45,7 @@ OGMIOS_URL=ws://localhost:1337
 # Blockfrost Configuration (required if using Blockfrost)
 BLOCKFROST_API_KEY=your_blockfrost_key_here
 
-# Transaction Builders
-# Options: buildooor,csl or both (comma-separated)
-# Default: buildooor
-TX_BUILDERS=buildooor,csl
+# Transaction builder is Buildooor only — TX_BUILDERS is no longer needed (any value is ignored)
 
 # Timeouts
 PRIMARY_TIMEOUT_MS=8000

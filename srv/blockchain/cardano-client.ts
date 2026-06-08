@@ -52,7 +52,7 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
 export type BackendName = 'blockfrost' | 'koios' | 'ogmios';
-export type TransactionBuilderName = 'csl' | 'buildooor';
+export type TransactionBuilderName = 'buildooor';
 
 export type CardanoClientConfig = {
   network: Network;

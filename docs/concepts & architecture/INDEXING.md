@@ -52,7 +52,7 @@ See `db/schema.cds` for full entity definitions.
 | `INDEX_TTL_MS` | `600000`  | TTL for temporal entities in milliseconds (10 minutes)   |
 | `NETWORK`      | `preview` | Cardano network: `mainnet`, `preview`, or `preprod`      |
 | `BACKENDS`     | `blockfrost,koios,ogmios` | Enabled backends                         |
-| `TX_BUILDERS`  | `csl,buildooor` | Transaction builders                              |
+| `TX_BUILDERS`  | `buildooor`     | Ignored — Buildooor is the only builder           |
 
 `INDEX_TTL_MS` only affects temporal entities. Non-temporal entities remain permanently.
 
@@ -81,7 +81,7 @@ GET /Transactions('hash123...')
 
 ```
 POST /BuildSimpleAdaTransaction
-  → Validate inputs → select builder (CSL/Buildooor)
+  → Validate inputs → build (Buildooor)
   → Fetch protocol params + UTxOs from Ogmios/Blockfrost
   → Build unsigned tx with fee calculation
   → Persist TransactionBuilds with inputs/outputs/assets

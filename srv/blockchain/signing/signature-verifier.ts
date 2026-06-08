@@ -1,10 +1,45 @@
 import cds from '@sap/cds';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
+import { Cbor, CborArray, CborMap, CborTag, CborBytes, CborUInt } from '@harmoniclabs/cbor';
+import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
+import { blake2b_256, blake2b_224, verifyEd25519Signature_sync } from '@harmoniclabs/crypto';
 import { BackendError, TransactionValidationError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { SignatureVerificationResult, VerificationOptions } from '../../utils/types';
 
 const logger = cds.log('SignatureVerifier');
+
+/**
+ * blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
+ * subCborRef preserves the exact received bytes, so the hash matches what was signed
+ * and re-serialization can never drift it. Operating at the raw-CBOR level also avoids
+ * the @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data.
+ */
+function computeBodyHash(txBytes: Uint8Array): string {
+  const tx = Cbor.parse(txBytes);
+  if (!(tx instanceof CborArray) || tx.array.length < 1 || !tx.array[0].subCborRef) {
+    throw new Error('Invalid transaction CBOR: missing body');
+  }
+  return toHex(blake2b_256(tx.array[0].subCborRef.toBuffer()));
+}
+
+/**
+ * Extract vkey witnesses (raw public key + signature bytes) from a transaction's
+ * witness set (CBOR array index 1, map key 0). Conway wraps the witness array in CBOR
+ * tag 258 (set) — unwrapped here. Returns [] when the tx has no vkey witnesses.
+ */
+function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signature: Uint8Array }[] {
+  const tx = Cbor.parse(txBytes);
+  if (!(tx instanceof CborArray) || !(tx.array[1] instanceof CborMap)) return [];
+  const entry = tx.array[1].map.find(e => e.k instanceof CborUInt && Number((e.k as CborUInt).num) === 0);
+  if (!entry) return [];
+  let arr = entry.v;
+  if (arr instanceof CborTag) arr = arr.data;
+  if (!(arr instanceof CborArray)) return [];
+  return arr.array.map(pair => {
+    const [vk, sg] = (pair as CborArray).array;
+    return { pubKey: (vk as CborBytes).bytes, signature: (sg as CborBytes).bytes };
+  });
+}
 
 /**
  * SignatureVerifier - Verifies transaction signatures without accessing private keys
@@ -34,20 +69,15 @@ export class SignatureVerifier {
     };
 
     try {
-      // Compute the body hash via CSL.FixedTransaction, which preserves the
-      // original CBOR bytes and avoids re-serialization. This path is immune
-      // to the @harmoniclabs/cardano-ledger-ts@0.5.x AuxiliaryData.fromCbor bug
-      // that rejects metadata-only Conway aux_data (all four script-array fields
-      // are required non-optional even though the constructor handles undefined).
-      const txBytes = Buffer.from(signedTxCbor, 'hex');
-      const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
-      const computedHash = Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
+      // Compute the body hash over the original CBOR body bytes (no re-serialization),
+      // matching exactly what was signed. Raw-CBOR parsing is immune to the
+      // @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug that rejects
+      // metadata-only Conway aux_data.
+      const txBytes = fromHex(signedTxCbor);
+      const computedHash = computeBodyHash(txBytes);
       result.txBodyHash = computedHash;
 
-      logger.debug(`Computed transaction body hash (CSL FixedTransaction): ${computedHash}`);
-
-      // Parse with CSL.Transaction for witness extraction and Ed25519 verification.
-      const tx = CSL.Transaction.from_bytes(txBytes);
+      logger.debug(`Computed transaction body hash: ${computedHash}`);
 
       // verify transaction body hash matches expected
       if (options.expectedTxBodyHash) {
@@ -59,21 +89,15 @@ export class SignatureVerifier {
         logger.debug('Transaction body hash verified successfully');
       }
 
-      // Extract witness set
-      const witnessSet = tx.witness_set();
-      const vkeyWitnesses = witnessSet.vkeys();
+      // Extract vkey witnesses (raw pubkey + signature bytes)
+      const vkeyWitnesses = extractVkeyWitnesses(txBytes);
+      result.witnessCount = vkeyWitnesses.length;
 
-      if (vkeyWitnesses) {
-        result.witnessCount = vkeyWitnesses.len();
-
-        // extract signer public key hashes
-        for (let i = 0; i < vkeyWitnesses.len(); i++) {
-          const witness = vkeyWitnesses.get(i);
-          const vkey = witness.vkey();
-          const pubKeyHash = vkey.public_key().hash();
-          result.signerKeyHashes.push(Buffer.from(pubKeyHash.to_bytes()).toString('hex'));
+      if (vkeyWitnesses.length > 0) {
+        // signer key hash = blake2b-224 of the Ed25519 public key
+        for (const w of vkeyWitnesses) {
+          result.signerKeyHashes.push(toHex(blake2b_224(w.pubKey)));
         }
-
         logger.debug(`Found ${result.witnessCount} witness(es): ${result.signerKeyHashes.join(', ')}`);
       }
 
@@ -100,18 +124,13 @@ export class SignatureVerifier {
         }
       }
 
-      // verify each signature cryptographically
-      if (vkeyWitnesses && vkeyWitnesses.len() > 0) {
-        const bodyHash = CSL.TransactionHash.from_bytes(Buffer.from(computedHash, 'hex'));
+      // verify each signature cryptographically against the transaction body hash
+      if (vkeyWitnesses.length > 0) {
+        const bodyHashBytes = fromHex(computedHash);
 
-        for (let i = 0; i < vkeyWitnesses.len(); i++) {
-          const witness = vkeyWitnesses.get(i);
-          const vkey = witness.vkey();
-          const signature = witness.signature();
-          const publicKey = vkey.public_key();
-
-          // verify the signature against the transaction body hash
-          const isValidSig = publicKey.verify(bodyHash.to_bytes(), signature);
+        for (let i = 0; i < vkeyWitnesses.length; i++) {
+          const { pubKey, signature } = vkeyWitnesses[i];
+          const isValidSig = verifyEd25519Signature_sync(signature, bodyHashBytes, pubKey);
 
           if (!isValidSig) {
             result.errorMessage = `Invalid signature at witness index ${i}. The signature does not match the transaction body.`;
@@ -165,9 +184,7 @@ export class SignatureVerifier {
    */
   public extractTxBodyHash(txCbor: string): string {
     try {
-      const txBytes = Buffer.from(txCbor, 'hex');
-      const fixedTx = CSL.FixedTransaction.from_bytes(txBytes);
-      return Buffer.from(fixedTx.transaction_hash().to_bytes()).toString('hex');
+      return computeBodyHash(fromHex(txCbor));
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       throw new BackendError(
@@ -186,11 +203,7 @@ export class SignatureVerifier {
    */
   public isSigned(txCbor: string): boolean {
     try {
-      const txBytes = Buffer.from(txCbor, 'hex');
-      const tx = CSL.Transaction.from_bytes(txBytes);
-      const witnessSet = tx.witness_set();
-      const vkeyWitnesses = witnessSet.vkeys();
-      return vkeyWitnesses !== undefined && vkeyWitnesses.len() > 0;
+      return extractVkeyWitnesses(fromHex(txCbor)).length > 0;
     } catch {
       return false;
     }
@@ -204,11 +217,7 @@ export class SignatureVerifier {
    */
   public getWitnessCount(txCbor: string): number {
     try {
-      const txBytes = Buffer.from(txCbor, 'hex');
-      const tx = CSL.Transaction.from_bytes(txBytes);
-      const witnessSet = tx.witness_set();
-      const vkeyWitnesses = witnessSet.vkeys();
-      return vkeyWitnesses ? vkeyWitnesses.len() : 0;
+      return extractVkeyWitnesses(fromHex(txCbor)).length;
     } catch {
       return 0;
     }

@@ -82,10 +82,9 @@ describe('tx-build-helper utilities', () => {
   });
 
   describe('getTxHashFromCbor', () => {
-    // Valid signed tx CBOR (minimal Conway ADA transfer, 1 vkey witness, metadata-only aux_data).
-    // Parsed successfully by CSL.FixedTransaction — used as the happy-path + metadata-regression fixture.
-    // Also doubles as the regression fixture for the harmoniclabs AuxiliaryData.fromCbor bug that
-    // rejected metadata-only aux_data (see new_error.md).
+    // Valid tx CBOR (minimal Conway ADA transfer, metadata-only aux_data). The hash is computed
+    // from the raw CBOR body bytes (array index 0), so this also doubles as the regression fixture
+    // for the harmoniclabs AuxiliaryData.fromCbor bug that rejected metadata-only aux_data (see new_error.md).
     const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
 
     it('should throw for empty string input', () => {
