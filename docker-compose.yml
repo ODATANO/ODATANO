@@ -21,6 +21,9 @@ services:
   cardano-node:
     image: ghcr.io/intersectmbo/cardano-node:11.0.1
     container_name: cardano-node
+    # Bypass the image's "entrypoint" wrapper, which injects mainnet CARDANO_* env
+    # defaults and would duplicate --config/--topology. Call the binary directly.
+    entrypoint: ["cardano-node"]
     command:
       - run
       - --config=/config/config.json
