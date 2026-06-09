@@ -17,7 +17,7 @@ jest.setTimeout(30000);
 // Skip server auto-init - mock tests create their own context after setting up nock mocks
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'csl';
+process.env.TX_BUILDERS = 'buildooor';
 
 describe('Signing Services Integration Tests', () => {
   const test = cds.test(__dirname + '/../../');
@@ -52,7 +52,7 @@ describe('Signing Services Integration Tests', () => {
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',
-        builderType: 'csl',
+        builderType: 'buildooor',
         createdAt: now,
         validFrom: new Date(now).toISOString(),
         validTo: new Date(now + 300000).toISOString(), // 5 minutes in future
@@ -603,7 +603,7 @@ describe('Signing Services Integration Tests', () => {
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
-          builderType: 'csl',
+          builderType: 'buildooor',
           createdAt: Date.now(),
           validFrom: new Date().toISOString(),
           validTo: new Date(Date.now() + 300000).toISOString(),
@@ -632,7 +632,7 @@ describe('Signing Services Integration Tests', () => {
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
-          builderType: 'csl',
+          builderType: 'buildooor',
           createdAt: Date.now(),
           validFrom: new Date().toISOString(),
           validTo: new Date(Date.now() + 300000).toISOString(),
@@ -922,13 +922,13 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   const { Cbor, CborArray, CborBytes, CborMap, CborUInt } = require('@harmoniclabs/cbor');
   const { fromHex, toHex } = require('@harmoniclabs/uint8array-utils');
-  const CSL = require('@emurgo/cardano-serialization-lib-nodejs');
+  const { deriveEd25519PublicKey_sync, getEd25519Signature_sync, blake2b_224 } = require('@harmoniclabs/crypto');
+  const { randomBytes } = require('crypto');
 
   // Generate a real Ed25519 keypair so signatures pass verification
-  const privateKey = CSL.PrivateKey.generate_ed25519();
-  const publicKey = privateKey.to_public();
-  const realPublicKeyBytes = publicKey.as_bytes();
-  const realKeyHash = publicKey.hash().to_hex();
+  const privateKey = Uint8Array.from(randomBytes(32));
+  const realPublicKeyBytes = deriveEd25519PublicKey_sync(privateKey);
+  const realKeyHash = toHex(blake2b_224(realPublicKeyBytes));
 
   return {
     isConnected: () => connected,
@@ -943,10 +943,10 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
     }),
     sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;
-      const sig = privateKey.sign(txBodyHash);
+      const sigBytes = getEd25519Signature_sync(Uint8Array.from(txBodyHash), privateKey);
       return {
-        signatureHex: Buffer.from(sig.to_bytes()).toString('hex'),
-        publicKeyHex: Buffer.from(realPublicKeyBytes).toString('hex'),
+        signatureHex: toHex(sigBytes),
+        publicKeyHex: toHex(realPublicKeyBytes),
         publicKeyHash: realKeyHash,
       };
     },
@@ -954,8 +954,7 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
       if (signError) throw signError;
 
       // Sign the tx body hash with the real private key
-      const sig = privateKey.sign(Buffer.from(txBodyHash, 'hex'));
-      const sigBytes = sig.to_bytes();
+      const sigBytes = getEd25519Signature_sync(fromHex(txBodyHash), privateKey);
 
       const txObj = Cbor.parse(fromHex(unsignedTxCbor));
       const vkeyWitness = new CborArray([

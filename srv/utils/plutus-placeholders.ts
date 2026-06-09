@@ -23,7 +23,7 @@ const MAX_WALK_DEPTH = 64;
 
 /**
  * Replicates Buildooor's input sort: lexicographic on the txHash bytes, tie-break by outputIndex asc.
- * This mirrors the Cardano ledger CBOR-set ordering so both Buildooor and CSL converge on the same layout.
+ * This mirrors the Cardano ledger CBOR-set ordering used by Buildooor.
  * Verified against node_modules/@harmoniclabs/buildooor/dist/TxBuilder/TxBuilder.js:772.
  */
 export function sortInputsLikeBuildooor<T extends InputRef>(refs: T[]): T[] {
@@ -89,8 +89,7 @@ function walk(node: JSONValue, ctx: ResolveContext, depth: number): JSONValue {
 
 /**
  * Returns true if any string leaf in the JSON tree looks like an __INPUT_IDX__ placeholder.
- * Used by service handlers for early rejection when the active builder (e.g. CSL) cannot
- * resolve placeholders.
+ * Utility detector for __INPUT_IDX__ placeholders in a PlutusData JSON tree.
  */
 export function containsIndexPlaceholder(node: JSONValue): boolean {
   if (node === null || typeof node !== 'object') {

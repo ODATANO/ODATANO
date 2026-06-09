@@ -3,7 +3,8 @@ import { execSync } from 'child_process';
 import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
+import { Script } from '@harmoniclabs/cardano-ledger-ts';
+import { scriptHashToEnterpriseAddress } from '../../srv/utils/mappers';
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 
@@ -35,14 +36,14 @@ const NETWORK_ID = 0;
 
 /**
  * Derive the script address (enterprise, no staking) from a PlutusV3 script CBOR hex.
+ * Uses the same Buildooor/HarmonicLabs path as the server (Script.fromCbor →
+ * blake2b_224(0x03 || cbor) → enterprise bech32) so the address matches what the
+ * service derives.
  */
 function deriveScriptAddress(scriptCborHex: string, networkId: number): string {
-  const scriptBytes = Buffer.from(scriptCborHex, 'hex');
-  const plutusScript = CSL.PlutusScript.new_v3(scriptBytes);
-  const scriptHash = plutusScript.hash();
-  const credential = CSL.Credential.from_scripthash(scriptHash);
-  const enterpriseAddr = CSL.EnterpriseAddress.new(networkId, credential);
-  return enterpriseAddr.to_address().to_bech32();
+  const scriptHash = Script.fromCbor(Buffer.from(scriptCborHex, 'hex')).hash.toString();
+  const network = networkId === 1 ? 'mainnet' : 'preview';
+  return scriptHashToEnterpriseAddress(scriptHash, network);
 }
 
 const SCRIPT_ADDRESS = deriveScriptAddress(VALIDATOR_SCRIPT, NETWORK_ID);

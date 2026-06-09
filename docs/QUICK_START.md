@@ -46,7 +46,7 @@ All config options:
 | `blockfrostApiKey` | | Required if using blockfrost backend |
 | `koiosApiKey` | | Optional for Koios |
 | `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |
-| `txBuilders` | `["csl"]` | `csl` or `buildooor` (array) |
+| `txBuilders` | `["buildooor"]` | Buildooor only — not configurable (legacy values ignored) |
 | `primaryTimeoutMs` | `30000` | Timeout for primary backend |
 | `fallbackTimeoutMs` | `60000` | Timeout for fallback backends |
 | `indexTtlMs` | `3600000` | Cache TTL (1 hour) |
@@ -124,8 +124,7 @@ BACKENDS=koios
 # Ogmios WebSocket URL (optional, for live data)
 OGMIOS_URL=ws://localhost:1337
 
-# Transaction Builders (M2): csl, buildooor
-TX_BUILDERS=csl
+# Transaction builder is Buildooor only — TX_BUILDERS is no longer needed (any value is ignored)
 
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
 INDEX_TTL_MS=60000

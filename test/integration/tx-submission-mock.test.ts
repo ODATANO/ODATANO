@@ -32,7 +32,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     nock.enableNetConnect(/localhost/);
     setupKoiosMocks();
 
-    const testContext = await createTestContext(['koios'], 'csl');
+    const testContext = await createTestContext(['koios']);
     resetAppContext(testContext);
   });
 

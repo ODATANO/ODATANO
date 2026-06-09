@@ -14,7 +14,7 @@ jest.setTimeout(30000);
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'csl';
+process.env.TX_BUILDERS = 'buildooor';
 
 describe('CardanoTransactionService Handler Validations', () => {
   const test = cds.test(__dirname + '/../../');
@@ -607,7 +607,7 @@ describe('CardanoTransactionService Handler Validations', () => {
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
-          builderType: 'csl',
+          builderType: 'buildooor',
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -646,7 +646,7 @@ describe('CardanoTransactionService Handler Validations', () => {
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
-          builderType: 'csl',
+          builderType: 'buildooor',
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -797,7 +797,7 @@ describe('CardanoTransactionService Handler Validations', () => {
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
-          builderType: 'csl',
+          builderType: 'buildooor',
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -1268,81 +1268,6 @@ describe('CardanoTransactionService Handler Validations', () => {
         mintRedeemerJson: 'broken{json',
       });
       expect(status).toBe(400);
-    });
-  });
-
-  // ==========================================================================
-  // FR-3: BuildPlutusSpendTransaction — CSL builder rejects __INPUT_IDX__
-  // (this test file runs with TX_BUILDERS=csl, so the guard fires here)
-  // ==========================================================================
-
-  describe('BuildPlutusSpendTransaction __INPUT_IDX__ rejection (FR-3, CSL)', () => {
-    const PLACEHOLDER = `__INPUT_IDX:${'aa'.repeat(32)}#0__`;
-    const baseRequest = {
-      senderAddress: TEST_FIXTURES.addressWithAssets,
-      recipientAddress: TEST_FIXTURES.addressWithAssets,
-      lovelaceAmount: '2000000',
-      validatorScript: TEST_FIXTURES.validSpendingScript,
-      scriptTxHash: 'a'.repeat(64),
-      scriptOutputIndex: 0,
-      redeemerJson: '{"int": 0}',
-    };
-
-    const post = (overrides: Record<string, any>) => {
-      // tx_info mock for the script UTxO so we get past the indexer lookup and into the builder.
-      setupTxInfoMock([{
-        ...mockScriptTxInfo[0],
-        tx_hash: 'a'.repeat(64),
-        outputs: [{ ...mockScriptTxInfo[0].outputs[0] }],
-      }]);
-      return test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
-        ...baseRequest, ...overrides,
-      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
-    };
-
-    it('rejects placeholder in redeemerJson under CSL builder with a builder hint', async () => {
-      const { status, data } = await post({
-        redeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
-      });
-      expect([400, 500]).toContain(status);
-      // The TransactionValidationError surfaces — message mentions Buildooor
-      if (data?.error?.message) {
-        expect(data.error.message).toMatch(/Buildooor/i);
-      }
-    });
-
-    it('rejects placeholder in datumJson under CSL builder', async () => {
-      const { status } = await post({
-        datumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
-      });
-      expect([400, 500]).toContain(status);
-    });
-
-    it('rejects placeholder in inlineDatumJson under CSL builder', async () => {
-      const { status } = await post({
-        inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
-      });
-      expect([400, 500]).toContain(status);
-    });
-
-    it('rejects placeholder in mintRedeemerJson under CSL builder (combined spend+mint)', async () => {
-      const { status } = await post({
-        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
-        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
-        mintRedeemerJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
-      });
-      expect([400, 500]).toContain(status);
-    });
-
-    it('rejects placeholder in extraOutputs[i].inlineDatumJson under CSL builder', async () => {
-      const { status } = await post({
-        extraOutputsJson: JSON.stringify([{
-          address: TEST_FIXTURES.emptyAddress,
-          lovelaceAmount: '2000000',
-          inlineDatumJson: JSON.stringify({ constructor: 0, fields: [{ int: PLACEHOLDER }] }),
-        }]),
-      });
-      expect([400, 500]).toContain(status);
     });
   });
 

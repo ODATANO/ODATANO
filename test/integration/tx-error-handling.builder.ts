@@ -28,7 +28,7 @@ process.env.BACKENDS = 'koios';
  * Cardano Transaction Service Integration Tests
  *
  * Tests the transaction building and submission functionality
- * across different transaction builders (Buildooor, CSL)
+ * for the Buildooor transaction builder
  *
  * Uses nock to mock Koios API responses for deterministic testing.
  */

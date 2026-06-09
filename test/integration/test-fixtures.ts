@@ -5,7 +5,7 @@
  */
 
 export type BackendType = 'blockfrost' | 'koios' | 'ogmios';
-export type TxBuilderType = 'buildooor' | 'csl';
+export type TxBuilderType = 'buildooor';
 
 export interface TestConfiguration {
   backendName: BackendType;

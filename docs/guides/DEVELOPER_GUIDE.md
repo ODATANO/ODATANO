@@ -43,7 +43,7 @@ CardanoClient (Multi-Backend Orchestrator)
     ↓
 Backends: Ogmios (live) + Blockfrost → Koios Fallback
     ↓
-Transaction Builders: CSL / Buildooor
+Transaction Builder: Buildooor
     ↓
 External Signing Module: ExternalSignerModule + SignatureVerifier
     ↓
@@ -111,9 +111,8 @@ srv/
       koios-backend.ts          # Fallback provider
       ogmios-backend.ts         # Live WebSocket provider (M2)
     transaction-building/       # M2 Transaction Builders
-      csl-tx.ts                 # Cardano Serialization Lib builder
-      buildooor-tx.ts           # Buildooor builder
-      tx-builder-registry.ts    # Builder factory
+      cardano-tx.ts             # Builder interface (CardanoTxBuilder)
+      buildooor-tx.ts           # Buildooor builder (sole builder)
     signing/                    # M3 External Signing
       external-signer.ts        # Signing request creation & workflow
       signature-verifier.ts     # Cryptographic signature verification
@@ -218,7 +217,6 @@ Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
         "network": "preview",
         "backends": ["blockfrost", "koios"],
         "blockfrostApiKey": "preview_KEY",
-        "txBuilders": ["csl"],
         "primaryTimeoutMs": 30000,
         "fallbackTimeoutMs": 60000,
         "indexTtlMs": 3600000
@@ -234,7 +232,6 @@ Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
 NETWORK=preview
 BACKENDS=blockfrost,koios
 BLOCKFROST_API_KEY=preview_KEY
-TX_BUILDERS=csl
 ```
 
 ### Dual-Mode Initialization Guard
@@ -465,7 +462,7 @@ cds.on('served', async () => {
 ```typescript
 // In test setup
 beforeAll(async () => {
-  const testContext = await createTestContext(['koios'], 'csl');
+  const testContext = await createTestContext(['koios']);
   resetAppContext(testContext);
 });
 

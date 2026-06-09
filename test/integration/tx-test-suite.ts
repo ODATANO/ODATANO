@@ -14,7 +14,7 @@ process.env.BACKENDS = 'koios';
  * Cardano Transaction Service Integration Tests
  *
  * Tests the transaction building and submission functionality
- * across different transaction builders (Buildooor, CSL)
+ * for the Buildooor transaction builder
  *
  * Uses nock to mock Koios API responses for deterministic testing.
  */
@@ -932,13 +932,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-3: BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (Buildooor only)
-      // CSL coverage lives in tx-handler-validation.test.ts (5 reject tests).
-      // Entire describe block is conditional — skipped cleanly on CSL instead of listing 3 skipped `it`s.
+      // FR-3: BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (Buildooor)
       // ============================================================================
 
-      const runFr3 = testConfig.txBuilderName === 'buildooor' ? describe : describe.skip;
-      runFr3('BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (FR-3)', () => {
+      describe('BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (FR-3)', () => {
         it('POST /BuildPlutusSpendTransaction - resolves __INPUT_IDX__ in redeemer to final post-sort index', async () => {
           setupTxInfoMock(mockScriptTxInfo);
 

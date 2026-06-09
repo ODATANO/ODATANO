@@ -377,7 +377,7 @@ describe('mappers', () => {
   describe('mapBuildResult', () => {
     it('should map build result with all fields', () => {
       const result = mapBuildResult({
-        builderEngine: 'csl',
+        builderEngine: 'buildooor',
         network: 'preview',
         senderAddress: 'addr_test1sender',
         unsignedTxCbor: 'aabbccdd',
@@ -389,7 +389,7 @@ describe('mappers', () => {
       }, 3600000);
 
       expect(result.id).toBe('test-uuid-1234');
-      expect(result.builderEngine).toBe('csl');
+      expect(result.builderEngine).toBe('buildooor');
       expect(result.network).toBe('preview');
       expect(result.unsignedTxCbor).toBe('aabbccdd');
       expect(result.txBodyHash).toBe('hash123');

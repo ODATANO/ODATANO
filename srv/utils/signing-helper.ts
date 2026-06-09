@@ -1,5 +1,4 @@
 import cds from '@sap/cds';
-import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { Cbor, CborArray, CborMap, CborTag, CborUInt } from '@harmoniclabs/cbor';
 import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
 import { TransactionValidationError } from './errors';
@@ -98,20 +97,13 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
  */
 export function isWitnessSetCbor(cborHex: string): boolean {
   try {
-    const bytes = Buffer.from(cborHex, 'hex');
-    // Try to parse as transaction first
-    try {
-      const tx = CSL.Transaction.from_bytes(bytes);
-      // If successful and has a body, it's a full transaction
-      tx.body();
-      return false;
-    } catch {
-      // Not a transaction, try as witness set
-      CSL.TransactionWitnessSet.from_bytes(bytes);
-      return true;
-    }
+    const obj = Cbor.parse(fromHex(cborHex));
+    // A full transaction is a CBOR array ([body, witness_set, is_valid, aux_data]);
+    // a CIP-30 witness set is a CBOR map. The two shapes are unambiguous.
+    if (obj instanceof CborArray) return false;
+    return obj instanceof CborMap;
   } catch {
-    // Neither - could be invalid CBOR
+    // Invalid / unparseable CBOR
     return false;
   }
 }

@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import type { CardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
-import { TxBuilderRegistry } from './transaction-building/tx-builder-registry';
+import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
 import { InsufficientFundsError, TransactionValidationError } from '../utils/errors';
@@ -33,8 +33,8 @@ export class CardanoTransactionBuilder {
      */
     async init(protocolParams?: LedgerProtocolParameters): Promise<void> {
         if (this.initialized && this.txBuilder) return;
-        // create transaction builder from registry
-        this.txBuilder = TxBuilderRegistry.createDefault();
+        // Buildooor is the sole transaction builder.
+        this.txBuilder = new BuildooorTxBuilder();
         await this.txBuilder.init(this.client, protocolParams);
         this.initialized = true;
         logger.debug(`Initialized with builder: ${this.txBuilder.name}`);

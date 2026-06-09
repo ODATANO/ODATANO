@@ -18,7 +18,7 @@ function createTestConfig(overrides: Partial<CardanoClientConfig> = {}): Cardano
     blockfrostApiKey: 'test-blockfrost-key',
     koiosApiKey: 'test-koios-key',
     ogmiosUrl: 'ws://localhost:1337',
-    transactionBuilders: ['csl'],
+    transactionBuilders: ['buildooor'],
     primaryTimeoutMs: TIMEOUT_MS,
     fallbackTimeoutMs: TIMEOUT_MS * 2,
     indexTtlMs: 3600000,

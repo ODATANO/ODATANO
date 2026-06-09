@@ -1,6 +1,6 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters } from "../../utils/types";
-import { TxBuilder, type ITxBuildArgs } from "@harmoniclabs/buildooor";
+import { TxBuilder, type ITxBuildArgs, type ITxBuildOptions, type TxRedeemer } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError } from "../../utils/errors";
@@ -33,6 +33,29 @@ import { CardanoClient } from "../cardano-client";
 import { DEFAULT_EXECUTION_UNITS, HIGH_EXECUTION_UNITS, EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, WITNESS_BUFFER_BYTES, MIN_CHANGE_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
 
 const logger = cds.log('BuildooorTxBuilder');
+
+/**
+ * Build options for script-bearing transactions.
+ *
+ * Buildooor evaluates every Plutus script locally during `build()`. Without an
+ * `onScriptInvalid` handler, a script that fails that local evaluation makes `build()`
+ * throw and aborts the whole build. The build endpoints only ever produce an *unsigned*
+ * transaction — on-chain validation at submit time is authoritative — so a local
+ * evaluation failure should not block returning the CBOR + fee estimate. This restores
+ * the pre-Buildooor (CSL) contract, where the builder never executed scripts at all.
+ *
+ * Validators that pass local evaluation never trigger this callback, so real script
+ * failures surfaced by Ogmios (`ctx.evaluateTransaction`) are still reported upstream.
+ */
+const SCRIPT_BUILD_OPTS: ITxBuildOptions = {
+  onScriptInvalid: (rdmr: TxRedeemer, logs: string[]): void => {
+    logger.warn(
+      `Plutus script failed local evaluation (redeemer index ${rdmr.index.toString()}); ` +
+      `returning unsigned tx anyway — on-chain validation is authoritative. ` +
+      `Logs: [${logs.join(', ')}]`
+    );
+  }
+};
 
 /**
  * BuildooorTxBuilder - Implementation of CardanoTxBuilder using Buildooor library
@@ -226,7 +249,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             invalidBefore, invalidAfter,
             ...(mintMetadata && { metadata: mintMetadata }),
             ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
-          });
+          }, SCRIPT_BUILD_OPTS);
           return toHex(evalTx.toCbor());
         },
         ctx.evaluateTransaction
@@ -402,7 +425,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
             invalidBefore, invalidAfter,
             ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
-          });
+          }, SCRIPT_BUILD_OPTS);
           if (!evalTx) {
             throw new TransactionValidationError('Buildooor txBuilder.build() returned null — check inputs, datum, and collateral configuration');
           }
@@ -535,11 +558,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   /** Two-pass build: first build to calculate fee, then rebuild with witness buffer */
   private async _buildWithWitnessBuffer(buildParams: ITxBuildArgs): Promise<LedgerTx> {
-    const txFirstPass = await this.txBuilder.build(buildParams);
+    const txFirstPass = await this.txBuilder.build(buildParams, SCRIPT_BUILD_OPTS);
     const calculatedFee = BigInt(txFirstPass.body.fee.toString());
     const adjustedMinFee = calculatedFee + BigInt(WITNESS_BUFFER_BYTES);
     logger.debug(`First pass fee: ${calculatedFee}, rebuilding with witness buffer: ${adjustedMinFee}`);
-    return this.txBuilder.build({ ...buildParams, fee: adjustedMinFee });
+    return this.txBuilder.build({ ...buildParams, fee: adjustedMinFee }, SCRIPT_BUILD_OPTS);
   }
 
   /**

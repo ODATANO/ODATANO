@@ -31,11 +31,11 @@ import { createErrorBackendSuite } from './error-handling.backend';
 // Note: Some features like metadata label queries are not supported by Koios
 createBackendTestSuite({
   backendName: 'koios',
-  txBuilderName: 'csl',
+  txBuilderName: 'buildooor',
 });
 
 // Also include backend-focused error handling suite in the same file
 createErrorBackendSuite({
   backendName: 'koios',
-  txBuilderName: 'csl',
+  txBuilderName: 'buildooor',
 });

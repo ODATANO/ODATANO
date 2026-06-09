@@ -53,7 +53,7 @@ describe('server.ts', () => {
       const config = loadConfigFromEnv();
       expect(config.network).toBe('preview');
       expect(config.backends).toEqual(['koios']);
-      expect(config.transactionBuilders).toEqual(['csl']);
+      expect(config.transactionBuilders).toEqual(['buildooor']);
       expect(config.primaryTimeoutMs).toBe(30000);
       expect(config.fallbackTimeoutMs).toBe(60000);
       expect(config.indexTtlMs).toBe(3600000);
@@ -90,10 +90,12 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Must be one of: blockfrost, koios, ogmios');
     });
 
-    it('should throw on invalid TX_BUILDERS', () => {
+    it('should ignore legacy TX_BUILDERS and always use buildooor', () => {
+      // CSL was removed; TX_BUILDERS is no longer honored — Buildooor is the sole builder.
+      env.TX_BUILDERS = 'csl';
+      expect(loadConfigFromEnv().transactionBuilders).toEqual(['buildooor']);
       env.TX_BUILDERS = 'unknown';
-      expect(() => loadConfigFromEnv()).toThrow('Invalid TX_BUILDERS: "unknown"');
-      expect(() => loadConfigFromEnv()).toThrow('Must be one of: csl, buildooor');
+      expect(loadConfigFromEnv().transactionBuilders).toEqual(['buildooor']);
     });
 
     it('should throw on non-numeric PRIMARY_TIMEOUT_MS', () => {
@@ -342,7 +344,7 @@ describe('server.ts', () => {
       blockfrostApiKey: '',
       koiosApiKey: '',
       ogmiosUrl: '',
-      transactionBuilders: ['csl'],
+      transactionBuilders: ['buildooor'],
       primaryTimeoutMs: 30000,
       fallbackTimeoutMs: 60000,
       indexTtlMs: 3600000,

@@ -1,11 +1,11 @@
 import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
-import { TxBuilderRegistry } from '../../srv/blockchain/transaction-building/tx-builder-registry';
+import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
 import type { CardanoClient } from '../../srv/blockchain/cardano-client';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO } from '../../srv/utils/types';
 
-// Mock the TxBuilderRegistry
-jest.mock('../../srv/blockchain/transaction-building/tx-builder-registry');
+// Mock the Buildooor builder (the coordinator constructs it directly via `new BuildooorTxBuilder()`)
+jest.mock('../../srv/blockchain/transaction-building/buildooor-tx');
 
 // Mock CardanoTxBuilder for testing
 class MockTxBuilder implements CardanoTxBuilder {
@@ -138,9 +138,9 @@ describe('CardanoTransactionBuilder', () => {
     builder = new CardanoTransactionBuilder(mockCardanoClient);
     mockTxBuilder = new MockTxBuilder();
 
-    // Setup TxBuilderRegistry mock
-    (TxBuilderRegistry.createDefault as jest.Mock).mockReturnValue(mockTxBuilder);
-    (TxBuilderRegistry.create as jest.Mock).mockReturnValue(mockTxBuilder);
+    // The coordinator does `new BuildooorTxBuilder()`; return our mock instance.
+    (BuildooorTxBuilder as unknown as jest.Mock).mockClear();
+    (BuildooorTxBuilder as unknown as jest.Mock).mockImplementation(() => mockTxBuilder);
   });
 
   // ============================================================================
@@ -150,7 +150,7 @@ describe('CardanoTransactionBuilder', () => {
     it('should initialize the builder from registry', async () => {
       await builder.init();
 
-      expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
       expect(mockTxBuilder.initCalled).toBe(true);
     });
 
@@ -159,7 +159,7 @@ describe('CardanoTransactionBuilder', () => {
       await builder.init();
       await builder.init();
 
-      expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
     });
 
     it('should propagate errors from builder init', async () => {
@@ -177,7 +177,7 @@ describe('CardanoTransactionBuilder', () => {
       // Don't call init() explicitly
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
       expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
 
@@ -185,7 +185,7 @@ describe('CardanoTransactionBuilder', () => {
       await builder.init();
       await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -200,7 +200,7 @@ describe('CardanoTransactionBuilder', () => {
       // After reset, next operation should re-initialize
       await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect(TxBuilderRegistry.createDefault).toHaveBeenCalledTimes(2);
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(2);
     });
 
     it('should allow setting a custom builder', async () => {
@@ -212,7 +212,7 @@ describe('CardanoTransactionBuilder', () => {
       // Should use the custom builder without calling registry
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect(TxBuilderRegistry.createDefault).not.toHaveBeenCalled();
+      expect((BuildooorTxBuilder as unknown as jest.Mock)).not.toHaveBeenCalled();
       expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
   });

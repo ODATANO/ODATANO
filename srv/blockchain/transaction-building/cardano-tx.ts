@@ -2,7 +2,7 @@ import { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildC
 import { CardanoClient } from "../cardano-client";
 
 /** 
- * CardanoTxBuilder - Interface Definition for multiple Cardano transaction builders (Buildooor, CSL, etc.)
+ * CardanoTxBuilder - Interface Definition for the Cardano transaction builder (Buildooor)
  * Defines the standard methods that any Cardano transaction builder must implement to be used interchangeably.
  */
 export interface CardanoTxBuilder {
