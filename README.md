@@ -61,13 +61,20 @@ cds deploy --to sqlite
 cds serve
 ```
 
-Or with Docker:
+Or with Docker — this brings up a local **cardano-node + Ogmios + ODATANO** stack
+(Preview), with the service pre-wired to the local Ogmios backend:
 
 ```bash
-docker-compose up -d
+docker compose up -d                      # full stack
+docker compose up -d cardano-node ogmios  # just the chain backend (pre-sync)
+docker compose logs -f ogmios             # watch sync (/health: 202 syncing, 200 near tip)
 ```
 
-Service available at `http://localhost:4004`. See [Quick Start Guide](docs/QUICK_START.md) for full details.
+> First sync from genesis takes hours; the node DB persists in a Docker volume so
+> restarts resume. Until Ogmios catches up, historical queries fall back to
+> Blockfrost (set `BLOCKFROST_API_KEY`).
+
+Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/QUICK_START.md#local-ogmios--cardano-node-docker) for the local Ogmios stack and full details.
 
 ## Dev Mode: Mocked Authentication
 

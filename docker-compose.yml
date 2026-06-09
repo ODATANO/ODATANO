@@ -1,10 +1,72 @@
-version: '3.8'
+# Full local stack: cardano-node + Ogmios + the ODATANO service.
+#
+#   docker compose up -d                      # everything (node + ogmios + odatano)
+#   docker compose up -d cardano-node ogmios  # just the chain backend (no odatano build)
+#   docker compose logs -f ogmios             # watch sync; /health = 202 syncing, 200 near tip
+#   docker compose down                       # stop (keeps node-db volume)
+#   docker compose down -v                    # also wipe the synced DB (full re-sync!)
+#
+# Notes:
+# - node <-> ogmios IPC socket lives in the NAMED VOLUME `node-ipc`, not a host bind
+#   (Unix domain sockets don't work over a Windows host mount).
+# - Genesis hashes depend on exact bytes: config files must be LF (enforced by
+#   .gitattributes). CRLF -> "GenesisHashMismatch".
+# - First boot syncs Preview from genesis (hours); node-db persists so restarts resume.
+# - `ghcr.io/odatano/ogmios` must be public, or run `docker login ghcr.io` first.
 
 services:
+  # ---------------------------------------------------------------------------
+  # Cardano node (Preview) — uses the repo's node-11 config
+  # ---------------------------------------------------------------------------
+  cardano-node:
+    image: ghcr.io/intersectmbo/cardano-node:11.0.1
+    container_name: cardano-node
+    command:
+      - run
+      - --config=/config/config.json
+      - --database-path=/db
+      - --socket-path=/ipc/node.socket
+      - --topology=/config/topology.json
+    volumes:
+      - ./config/preview/cardano-node:/config:ro
+      - node-db:/db
+      - node-ipc:/ipc
+    restart: unless-stopped
+    networks:
+      - odatano-network
+
+  # ---------------------------------------------------------------------------
+  # Ogmios bridge — connects to the node socket, serves ws/http on :1337
+  # ---------------------------------------------------------------------------
+  ogmios:
+    image: ghcr.io/odatano/ogmios:v6.14.0.2
+    container_name: ogmios
+    command:
+      - --host=0.0.0.0
+      - --node-socket=/ipc/node.socket
+      - --node-config=/config/cardano-node/config.json
+    volumes:
+      - ./config/preview:/config:ro
+      - node-ipc:/ipc
+    ports:
+      - "1337:1337"
+    depends_on:
+      - cardano-node
+    restart: unless-stopped
+    healthcheck:
+      # 200 (near tip) or 202 (syncing) once connected to the node => healthy
+      test: ["CMD-SHELL", "wget -qO- http://localhost:1337/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - odatano-network
+
+  # ---------------------------------------------------------------------------
+  # ODATANO service — uses local Ogmios for live data, Blockfrost as fallback
+  # ---------------------------------------------------------------------------
   odatano:
-    # ===========================================
-    # For DEVELOPMENT: Uncomment to build from source
-    # ===========================================
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,60 +74,42 @@ services:
         VERSION: ${VERSION:-0.1.0}
         BUILD_DATE: ${BUILD_DATE}
         VCS_REF: ${VCS_REF}
-    
-    # ===========================================
-    # Image configuration
-    # ===========================================
-    # For DEVELOPMENT (after building): odatano:0.1.0
-    # For PRODUCTION: ghcr.io/odatano/odatano:0.1.0
     image: odatano:${VERSION:-0.1.0}
     container_name: odatano-service
     ports:
       - "4004:4004"
     environment:
-      # Cardano network configuration (mainnet, preview, preprod)
       - NETWORK=preview
-      
-      # Backend configuration (comma-separated: blockfrost,koios or single)
-      - BACKENDS=blockfrost,koios
-      
-      # Blockfrost API credentials
-      # Get your API key from https://blockfrost.io
+      # Ogmios first (live), Blockfrost/Koios as historical fallback
+      - BACKENDS=ogmios,blockfrost,koios
+      - OGMIOS_URL=ws://ogmios:1337
       - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY:-your-blockfrost-api-key-here}
-      
-      # Koios API credentials (optional)
       - KOIOS_API_KEY=${KOIOS_API_KEY:-}
-      
-      # Timeout configuration (in milliseconds)
       - PRIMARY_TIMEOUT_MS=15000
       - FALLBACK_TIMEOUT_MS=15000
       - INDEX_TTL_MS=600000
-      
-      # Logging
       - LOG_LEVEL=info
-      
-      # Application settings
       - NODE_ENV=development
       - PORT=4004
-      
-      # Disable XSUAA (not needed for this service)
       - CDS_REQUIRES_AUTH=mocked
-      
-    # No volumes needed - SQLite DB is ephemeral in container
-    # Data is fetched fresh from blockchain APIs on each query
-      
+    depends_on:
+      ogmios:
+        # waits until Ogmios answers /health (connected to node) — not full sync
+        condition: service_healthy
     restart: unless-stopped
-    
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/odata/v4/cardano-odata/$metadata"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/odata/v4/cardano-odata/$$metadata"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    
     networks:
       - odatano-network
 
 networks:
   odatano-network:
     driver: bridge
+
+volumes:
+  node-db:
+  node-ipc:

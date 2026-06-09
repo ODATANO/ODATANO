@@ -163,6 +163,52 @@ Server runs at: http://localhost:4004
 
 Base service path: http://localhost:4004/odata/v4/cardano-odata
 
+## Local Ogmios + cardano-node (Docker)
+
+For live-data / Ogmios-backend development you can run a local Cardano node and
+Ogmios bridge. The repo ships a `docker-compose.yml` that mirrors the CI sync
+setup (same images, config, and node-11 topology).
+
+**Prerequisites:** Docker Desktop. The `ghcr.io/odatano/ogmios` image must be
+public (it is) — otherwise run `docker login ghcr.io` first.
+
+```bash
+# Bring up everything (cardano-node + Ogmios + ODATANO service)
+docker compose up -d
+
+# …or just the chain backend (e.g. to pre-sync), without building ODATANO:
+docker compose up -d cardano-node ogmios
+
+# Watch sync progress — /health returns 202 while syncing, 200 near tip
+docker compose logs -f ogmios
+curl http://localhost:1337/health        # look at "networkSynchronization"
+```
+
+Stop / reset:
+
+```bash
+docker compose down        # stop; keeps the synced node DB (node-db volume)
+docker compose down -v     # also wipe the DB volume → full re-sync next time
+```
+
+**Notes**
+
+- **First sync takes hours** (Preview from genesis). The node DB persists in the
+  `node-db` volume, so restarts resume rather than re-syncing.
+- The `odatano` service is pre-wired to the local Ogmios
+  (`OGMIOS_URL=ws://ogmios:1337`, `BACKENDS=ogmios,blockfrost,koios`) and waits
+  until Ogmios answers `/health` (connected to the node) — **not** for a full
+  sync. Until Ogmios catches up, historical queries fall back to Blockfrost, so
+  set a `BLOCKFROST_API_KEY` (env or `.env`).
+- To point a **locally-run** (non-Docker) ODATANO at the stack, start only
+  `cardano-node ogmios` and set `OGMIOS_URL=ws://localhost:1337` +
+  `BACKENDS=ogmios,blockfrost` before `npm run cds:watch`.
+- The node ↔ Ogmios IPC socket uses a named Docker volume (`node-ipc`) — required
+  on Windows, where Unix domain sockets don't work over a host bind mount.
+- `GenesisHashMismatch`? Your checkout converted the genesis JSON to CRLF. Fix:
+  `git add --renormalize config/preview/cardano-node/` (a `.gitattributes` rule
+  enforces LF for these files).
+
 ## First Requests
 
 - Network information
