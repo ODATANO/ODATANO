@@ -43,8 +43,11 @@ export function getTxHashFromCbor(txCbor: string): string {
     throw new Error('Invalid input: txCbor must be a non-empty string');
   }
 
-  // Validate hex format
-  if (!/^[a-fA-F0-9]+$/.test(txCbor)) {
+  // Validate hex format. Require even length — a hex byte string encodes whole bytes,
+  // so an odd-length string is malformed and would otherwise surface as a confusing
+  // "Failed to parse transaction CBOR" from fromHex/Cbor.parse rather than a clear
+  // input-validation error.
+  if (!/^[a-fA-F0-9]+$/.test(txCbor) || txCbor.length % 2 !== 0) {
     throw new Error('Invalid input: txCbor must be a valid hex string');
   }
 

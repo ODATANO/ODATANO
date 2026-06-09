@@ -111,8 +111,8 @@ srv/
       koios-backend.ts          # Fallback provider
       ogmios-backend.ts         # Live WebSocket provider (M2)
     transaction-building/       # M2 Transaction Builders
+      cardano-tx.ts             # Builder interface (CardanoTxBuilder)
       buildooor-tx.ts           # Buildooor builder (sole builder)
-      tx-builder-registry.ts    # Builder factory
     signing/                    # M3 External Signing
       external-signer.ts        # Signing request creation & workflow
       signature-verifier.ts     # Cryptographic signature verification

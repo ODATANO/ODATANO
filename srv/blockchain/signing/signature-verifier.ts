@@ -35,10 +35,17 @@ function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signat
   let arr = entry.v;
   if (arr instanceof CborTag) arr = arr.data;
   if (!(arr instanceof CborArray)) return [];
-  return arr.array.map(pair => {
-    const [vk, sg] = (pair as CborArray).array;
-    return { pubKey: (vk as CborBytes).bytes, signature: (sg as CborBytes).bytes };
-  });
+  // Parse defensively: a malformed witness entry (wrong shape or non-bytes members)
+  // would otherwise throw a TypeError and surface as an opaque internal error. Skip
+  // any entry that isn't a [vkey, signature] pair of byte strings.
+  const witnesses: { pubKey: Uint8Array; signature: Uint8Array }[] = [];
+  for (const pair of arr.array) {
+    if (!(pair instanceof CborArray) || pair.array.length !== 2) continue;
+    const [vk, sg] = pair.array;
+    if (!(vk instanceof CborBytes) || !(sg instanceof CborBytes)) continue;
+    witnesses.push({ pubKey: vk.bytes, signature: sg.bytes });
+  }
+  return witnesses;
 }
 
 /**
