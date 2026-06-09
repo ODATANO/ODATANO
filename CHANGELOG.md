@@ -5,6 +5,40 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.0] - 09-06-2026: Drop CSL and make Buildooor the sole transaction builder
+
+Removes the `@emurgo/cardano-serialization-lib-nodejs` (CSL) dependency entirely. Buildooor (`@harmoniclabs/buildooor`) becomes the single transaction-building engine, and all hashing / signature-verification work moves onto the HarmonicLabs raw-CBOR stack. Net effect: **−2806 lines**, one fewer native WASM dependency, and the long-standing Plutus V3 `PPViewHashesDontMatch` bug is resolved by construction.
+
+### Changed
+
+- **Buildooor is now the only transaction builder.** `TxBuilderRegistry` and the builder-factory indirection are gone — `CardanoTransactionBuilder` constructs `BuildooorTxBuilder` directly. `TransactionBuilderName` is narrowed to the single literal `'buildooor'`; the `TX_BUILDERS` env var / `txBuilders` config key is still accepted for backward compatibility but is effectively a no-op (any value resolves to Buildooor). No public read/write OData action signatures changed.
+- **Transaction-body hash and Ed25519 signature verification ported off CSL** to `@harmoniclabs/cbor` + `@harmoniclabs/crypto` (`srv/blockchain/signing/signature-verifier.ts`, `srv/utils/tx-build-helper.ts`, `srv/utils/signing-helper.ts`). The body hash is now computed as `blake2b_256` over the **original** transaction-body bytes (`CborArray` index 0, via `subCborRef`) with no re-serialization — so the hash always matches what was signed, and operating at the raw-CBOR level also sidesteps the `@harmoniclabs/cardano-ledger-ts` `AuxiliaryData.fromCbor` bug on metadata-only `aux_data`.
+
+### Fixed
+
+- **CSL `PPViewHashesDontMatch` on Plutus V3 — resolved.** With CSL removed, Buildooor computes the correct `scriptDataHash` for both mint and spend builds (raw-CBOR, byte-preserving body hash), so Plutus V3 transactions no longer fail script-data-hash validation on submit.
+- **Buildooor no longer aborts unsigned-tx builds on local script evaluation failure** (`srv/blockchain/transaction-building/buildooor-tx.ts`, commit `8a77cbf`). Buildooor evaluates every Plutus script locally inside `build()`; unlike CSL it would throw if that evaluation errored, turning script-bearing builds (e.g. parameterized validators applied via `scriptParamsJson` + `lockOnScript`) into HTTP 500s. A shared `SCRIPT_BUILD_OPTS` with an `onScriptInvalid` handler now downgrades a local evaluation failure to a warning and still returns the unsigned CBOR + fee estimate — restoring the pre-Buildooor contract where on-chain validation at submit time is authoritative. Validators that pass local evaluation are unaffected, so genuine failures surfaced by Ogmios (`ctx.evaluateTransaction`) are still reported. Fixes the two `tx-handler-validation` cases (`scriptParams + lockOnScript + fingerprint`, `BuildPlutusSpendTransaction — lockOnScript`).
+- **`extractVkeyWitnesses` parses witness pairs defensively** (`signature-verifier.ts`): a malformed or unexpected witness structure previously threw a runtime `TypeError` via unchecked CBOR casts and surfaced as an opaque internal error. Entries that are not a `[vkey, signature]` pair of byte strings are now skipped via `instanceof` guards.
+- **`getTxHashFromCbor` hex validation rejects odd-length input** (`tx-build-helper.ts`): a hex byte string must be even-length, so `"abc"` now fails with the clear `Invalid input: txCbor must be a valid hex string` instead of a confusing downstream `Failed to parse transaction CBOR`.
+
+### Removed
+
+- **Dependency `@emurgo/cardano-serialization-lib-nodejs`** dropped from `package.json` (it remains only as a transitive, never-imported dependency of `@blockfrost/blockfrost-js`).
+- **Source**: `srv/blockchain/transaction-building/csl-tx.ts` (1064 lines) and `srv/blockchain/transaction-building/tx-builder-registry.ts` (69 lines).
+- **Tests**: `test/unit/csl-tx-builder.test.ts` (767 lines), `test/unit/tx-builder-registry.test.ts` (172 lines), `test/integration/tx.csl.test.ts`.
+
+### Added
+
+- **Dependencies** promoted to direct: `@harmoniclabs/cbor`, `@harmoniclabs/crypto`, `@harmoniclabs/uint8array-utils` (previously transitive via Buildooor; now imported directly for hashing + signature verification).
+
+### Internal
+
+- **`scripts/testing/lock-ada-at-script-preview.ts`** ported off CSL — `deriveScriptAddress` now uses the same server path (`Script.fromCbor(...).hash` → `scriptHashToEnterpriseAddress`) so a fresh install with CSL removed still resolves all imports and derives an identical enterprise script address.
+- **Docs** refreshed to reflect the single-builder architecture: `DEVELOPER_GUIDE.md` source tree (lists `cardano-tx.ts` interface + `buildooor-tx.ts`, registry line removed), plus `QUICK_START.md`, `BACKEND_CONFIGURATION.md`, `PRODUCTION_DEPLOYMENT.md`, `TRANSACTION_WORKFLOW.md`, `INDEXING.md`, and `README.md`.
+- **Test suite** migrated off the CSL/registry fixtures across `tx-handler-validation`, `signing-services`, `signing`, `cardano-tx-builder`, `server`, and the shared `tx-test-suite` harness; CI workflows (`test.yaml`, `ogmios-sync.yaml`) updated.
+- Version bumped `1.7.9` → `1.8.0`.
+
+
 ## [v1.7.9] - 15-05-2026: Koios getCurrentSlot — wire-shape fix + /tip simplification
 
 ### Fixed

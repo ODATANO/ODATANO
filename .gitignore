@@ -90,3 +90,6 @@ output
 
 upstream-bugs/
 review.md
+
+# Draft release notes (local only)
+RELEASE_NOTES_*.md
