@@ -141,7 +141,7 @@ jobs:
       id: sync
       shell: bash
       env:
-        THRESHOLD: ${{ inputs.synchronization-level || '0.985' }}
+        THRESHOLD: ${{ inputs.synchronization-level || '0.99' }}
       run: |
         URL="http://localhost:1337/health"
         WARMUP=900       # node must answer /health within 15 min

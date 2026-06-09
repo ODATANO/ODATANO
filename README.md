@@ -31,9 +31,7 @@ npm install @odatano/core @cap-js/sqlite
       "odatano-core": {
         "network": "preview",
         "backends": ["blockfrost"],
-        "blockfrostApiKey": "preview_your_api_key_here",
-        "blockfrostCustomBackend": "",
-        "txBuilders": ["buildooor"]
+        "blockfrostApiKey": "preview_your_api_key_here"
       }
     }
   }
