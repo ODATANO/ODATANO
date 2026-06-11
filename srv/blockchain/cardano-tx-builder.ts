@@ -238,12 +238,17 @@ export class CardanoTransactionBuilder {
             if (!scriptOutput) {
                 throw new TransactionValidationError(`Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
             }
+            // spending an already-consumed script UTxO is the most common replay mistake —
+            // catch it here with a clear 400 instead of a node-side rejection at submit
+            await this._assertUnspent(scriptRef, scriptOutput.address, 'scriptUtxo', new Map());
             allUtxos.push({
                 txHash: scriptRef.txHash,
                 outputIndex: scriptRef.outputIndex,
                 address: scriptOutput.address,
                 amount: scriptOutput.amount,
                 inlineDatum: scriptOutput.inlineDatum,
+                datumHash: scriptOutput.dataHash ?? undefined,
+                scriptRef: scriptOutput.referenceScriptHash ?? undefined,
             });
         }
 
@@ -278,6 +283,42 @@ export class CardanoTransactionBuilder {
     }
 
     /**
+     * Verify that a transaction output resolved via getTransaction is still unspent,
+     * by checking the live UTxO set of its address. getTransaction only proves the
+     * output EXISTED — a spent output would otherwise surface as a cryptic node-side
+     * rejection at submit instead of a clear 400 here.
+     *
+     * Lookup failures are logged and tolerated (the check is best-effort; refusing to
+     * build on a flaky backend would be a new failure mode).
+     */
+    private async _assertUnspent(
+        ref: { txHash: string; outputIndex: number },
+        address: string,
+        kind: string,
+        liveUtxoCache: Map<string, UTxO[]>
+    ): Promise<void> {
+        let live: UTxO[];
+        try {
+            const cached = liveUtxoCache.get(address);
+            if (cached) {
+                live = cached;
+            } else {
+                live = await this.client.getAddressUtxos(address);
+                liveUtxoCache.set(address, live);
+            }
+        } catch (err: unknown) {
+            logger.warn(`Could not verify ${kind} ${ref.txHash}#${ref.outputIndex} is unspent: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+        const isLive = live.some(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
+        if (!isLive) {
+            throw new TransactionValidationError(
+                `${kind} ${ref.txHash}#${ref.outputIndex} is already spent`
+            );
+        }
+    }
+
+    /**
      * Resolve a list of {txHash, outputIndex} refs to full UTxO records.
      * Prefers matching against already-fetched sender UTxOs to avoid extra backend calls.
      * Throws TransactionValidationError if any ref cannot be resolved (missing or spent).
@@ -300,6 +341,7 @@ export class CardanoTransactionBuilder {
             seen.add(key);
             return true;
         });
+        const liveUtxoCache = new Map<string, UTxO[]>();
         const resolved: UTxO[] = [];
         for (const ref of dedupedRefs) {
             // 1) Cheap path: already in sender UTxOs
@@ -309,7 +351,6 @@ export class CardanoTransactionBuilder {
                 continue;
             }
             // 2) Fallback: fetch the producing transaction and look up the output.
-            // If the output does not exist OR the UTxO has already been spent, treat as missing.
             let tx;
             try {
                 tx = await this.client.getTransaction(ref.txHash);
@@ -325,6 +366,8 @@ export class CardanoTransactionBuilder {
                     `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
                 );
             }
+            // getTransaction proves existence, not spendability
+            await this._assertUnspent(ref, output.address, 'forceInput', liveUtxoCache);
             resolved.push({
                 txHash: ref.txHash,
                 outputIndex: ref.outputIndex,
@@ -355,6 +398,7 @@ export class CardanoTransactionBuilder {
             seen.add(key);
             return true;
         });
+        const liveUtxoCache = new Map<string, UTxO[]>();
         const resolved: UTxO[] = [];
         for (const ref of dedupedRefs) {
             const local = knownUtxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
@@ -377,6 +421,8 @@ export class CardanoTransactionBuilder {
                     `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
                 );
             }
+            // reference inputs must also be in the live UTxO set
+            await this._assertUnspent(ref, output.address, 'referenceInput', liveUtxoCache);
             resolved.push({
                 txHash: ref.txHash,
                 outputIndex: ref.outputIndex,

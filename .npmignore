@@ -71,6 +71,9 @@ db.sqlite-wal
 # MTA / deployment
 mta*
 *.mtar
+*.mtaext
+prod.mtaext
+prod.mtaext.example
 
 # Generated type models (included for consumer type support)
 # @cds-models/ — DO NOT exclude, consumers need these
@@ -88,3 +91,12 @@ payment.addr
 payment.skey
 payment.vkey
 mtx/
+
+# Local working files that must never ship (were leaking into the 1.8.0 tarball)
+output/
+review.md
+RELEASE_NOTES_*.md
+REVIEW_PLAN.md
+BUILDOOOR_*.md
+LEDGERTS_*.md
+repro-*.js

@@ -93,3 +93,9 @@ review.md
 
 # Draft release notes (local only)
 RELEASE_NOTES_*.md
+
+# Local review/PR working files (upstream PR texts live in the fork PRs)
+REVIEW_PLAN.md
+BUILDOOOR_*.md
+LEDGERTS_*.md
+repro-*.js

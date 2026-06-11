@@ -57,10 +57,6 @@ export const ABS_MEM_BUFFER = 5_000;
  * Transaction building constants
  */
 
-  /** Buffer for witness set CBOR overhead when signing adds ~44 bytes */
-export const  WITNESS_BUFFER_BYTES =  50;
-
-
 /** Collateral amount in lovelace (5 ADA) */
 export const COLLATERAL_LOVELACE = 5_000_000n;
 /** Fee buffer in lovelace (1 ADA) */

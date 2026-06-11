@@ -354,6 +354,27 @@ describe('tx-build-helper utilities', () => {
       const originalError = new Error('network timeout');
       expect(() => mapBuilderError(originalError)).toThrow(originalError);
     });
+
+    it('should pass already-typed errors through unchanged (payload preserved)', () => {
+      const { InsufficientFundsError, TransactionValidationError } = require('../../srv/utils/errors');
+      // a typed InsufficientFundsError with REAL amounts — re-wrapping would zero them
+      const typedFunds = new InsufficientFundsError('lovelace', 5_000_000n, 2_000_000n);
+      try {
+        mapBuilderError(typedFunds);
+        fail('expected throw');
+      } catch (err) {
+        expect(err).toBe(typedFunds); // same instance, not a re-wrapped copy
+      }
+
+      // a validation error whose message merely CONTAINS a funds keyword
+      const typedValidation = new TransactionValidationError('script consumed full balance budget');
+      try {
+        mapBuilderError(typedValidation);
+        fail('expected throw');
+      } catch (err) {
+        expect(err).toBe(typedValidation);
+      }
+    });
   });
 
   describe('parseOptionalJson', () => {

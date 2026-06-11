@@ -1,7 +1,7 @@
 import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
 import { toHex, fromHex } from '@harmoniclabs/uint8array-utils';
 import { blake2b_256 } from '@harmoniclabs/crypto';
-import { MixedAssetsError, InsufficientFundsError } from './errors';
+import { MixedAssetsError, InsufficientFundsError, BackendError } from './errors';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
 import { Cbor, CborArray, CborBytes } from '@harmoniclabs/cbor';
@@ -79,6 +79,13 @@ export function getTxHashFromCbor(txCbor: string): string {
  * @throws {Error} original error if not mappable
  */
 export function mapBuilderError(err: unknown, assetUnit?: string): never {
+  // Already-typed errors carry their own status + payload (amounts, asset units,
+  // validation details) — re-wrapping them into a generic InsufficientFundsError
+  // because their MESSAGE happens to contain "balance"/"insufficient" destroys that.
+  if (err instanceof BackendError) {
+    throw err;
+  }
+
   const errObj = err as { message?: string; toString?: () => string } | null;
   const msg = (errObj?.message || errObj?.toString?.() || String(err)).toLowerCase();
 
