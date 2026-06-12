@@ -28,6 +28,15 @@ export interface CardanoBackend {
   name: string;
 
   /**
+   * Methods this backend declares as NOT supported. The orchestrator skips the
+   * backend for these without counting a circuit-breaker failure — previously
+   * Ogmios either fabricated placeholder data for them (which preferLive routing
+   * then preferred over correct historical data) or its thrown errors poisoned
+   * the breaker.
+   */
+  readonly unsupportedMethods?: ReadonlySet<string>;
+
+  /**
    * Initialize the backend
    */
   init(): Promise<boolean>;

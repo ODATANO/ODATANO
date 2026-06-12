@@ -83,6 +83,8 @@ export class CardanoClient {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private circuitBreaker: CircuitBreakerManager;
+  /** Backends whose init failed — kept in rotation and retried lazily per request */
+  private uninitializedBackends = new Set<CardanoBackend>();
   network: Network;
   max_age_ms: number = 60000; // default 1 minute for temporary caching
   private protocolParamsCache?: { data: LedgerProtocolParameters; fetchedAt: number };
@@ -130,18 +132,28 @@ export class CardanoClient {
   }
 
   /**
-   * Ensure backends are initialized
+   * Ensure backends are initialized.
+   * A REJECTED init promise is cleared so the next request retries — previously
+   * a transient startup failure (e.g. Ogmios briefly down) left the client
+   * permanently broken until process restart.
    * @returns {Promise<void>}
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
     // Use nullish coalescing assignment for atomic operation to prevent race conditions
-    this.initPromise ??= this.initBackends();
+    this.initPromise ??= this.initBackends().catch((err: unknown) => {
+      this.initPromise = null;
+      throw err;
+    });
     await this.initPromise;
   }
 
-  /** 
-   * Initialize all backends from configuration
+  /**
+   * Initialize all backends from configuration.
+   * Backends that fail to initialize are KEPT (previously removed permanently)
+   * and tracked in `uninitializedBackends` — the request loops retry their
+   * init lazily, so a backend that comes back online recovers without a
+   * process restart. The circuit breaker bounds the retry cost.
    * @returns {Promise<void>}
    */
   private async initBackends(): Promise<void> {
@@ -152,34 +164,56 @@ export class CardanoClient {
       try {
         logger.debug(`Initializing live backend: ${this.liveBackend.name}`);
         await this.liveBackend.init();
+        this.uninitializedBackends.delete(this.liveBackend);
         logger.debug(`Live backend initialized: ${this.liveBackend.name}`);
       } catch (err: unknown) {
         initErrors.push(new BackendInitError(this.liveBackend.name, err));
-        logger.error(`Failed to initialize live backend: ${this.liveBackend.name}`, err);
-        this.liveBackend = undefined; // remove failed backend
+        logger.error(`Failed to initialize live backend: ${this.liveBackend.name} — kept for lazy retry`, err);
+        this.uninitializedBackends.add(this.liveBackend);
       }
     }
 
     // Initialize historical backends
-    const initializedHistorical: CardanoBackend[] = [];
     for (const backend of this.historicalBackends) {
       try {
         logger.debug(`Initializing historical backend: ${backend.name}`);
         await backend.init();
-        initializedHistorical.push(backend);
+        this.uninitializedBackends.delete(backend);
         logger.debug(`Historical backend initialized: ${backend.name}`);
       } catch (err: unknown) {
         initErrors.push(new BackendInitError(backend.name, err));
-        logger.error(`Failed to initialize historical backend: ${backend.name}`, err);
+        logger.error(`Failed to initialize historical backend: ${backend.name} — kept for lazy retry`, err);
+        this.uninitializedBackends.add(backend);
       }
     }
-    this.historicalBackends = initializedHistorical;
 
-    if (!this.liveBackend && this.historicalBackends.length === 0) {
+    const totalBackends = (this.liveBackend ? 1 : 0) + this.historicalBackends.length;
+    if (initErrors.length >= totalBackends) {
       throw new AllBackendsInitFailedError(initErrors);
     }
-    
+
     this.initialized = true;
+  }
+
+  /**
+   * Lazily retry a backend's init when it failed at startup. Returns true when
+   * the backend is usable; false (after recording a breaker failure) when the
+   * retry failed.
+   */
+  private async ensureBackendInitialized(backend: CardanoBackend, errors?: BackendError[]): Promise<boolean> {
+    if (!this.uninitializedBackends.has(backend)) return true;
+    try {
+      await backend.init();
+      this.uninitializedBackends.delete(backend);
+      logger.info(`Backend ${backend.name} recovered (lazy init succeeded)`);
+      return true;
+    } catch (err: unknown) {
+      const initError = new BackendInitError(backend.name, err);
+      errors?.push(initError);
+      this.circuitBreaker.recordFailure(backend.name);
+      logger.debug(`Lazy init retry for ${backend.name} failed: ${initError.message}`);
+      return false;
+    }
   }
 
   /**
@@ -229,6 +263,10 @@ export class CardanoClient {
     if (!this.circuitBreaker.shouldAttempt(backend.name)) {
       throw new ProviderUnavailableError(`Circuit open for ${backend.name}`, backend.name);
     }
+    // fast-path sync check — keeps fn() synchronous for the request coalescers
+    if (this.uninitializedBackends.has(backend) && !(await this.ensureBackendInitialized(backend))) {
+      throw new ProviderUnavailableError(`Backend ${backend.name} is not initialized (lazy retry failed)`, backend.name);
+    }
     try {
       const result = await this.withTimeout(fn(), this.getTimeoutForBackend(backend), backend.name);
       this.circuitBreaker.recordSuccess(backend.name);
@@ -251,26 +289,36 @@ export class CardanoClient {
    */
   private async executeWithPriority<T>(
     fn: (backend: CardanoBackend) => Promise<T>,
-    preferLive: boolean
+    preferLive: boolean,
+    methodName?: string
   ): Promise<T> {
     await this.ensureInitialized();
     const errors: BackendError[] = [];
-    
+
     // Determine backend order based on preference
-    const primaryBackends = preferLive 
+    const primaryBackends = preferLive
       ? (this.liveBackend ? [this.liveBackend] : [])
       : this.historicalBackends;
-      
+
     const fallbackBackends = preferLive
       ? this.historicalBackends
       : (this.liveBackend ? [this.liveBackend] : []);
-    
+
     const allBackends = [...primaryBackends, ...fallbackBackends];
-    
+
     // Try each backend in order, respecting circuit breaker state
     for (const backend of allBackends) {
+      // capability routing: declared non-support is a skip, not a failure
+      if (methodName && backend.unsupportedMethods?.has(methodName)) {
+        logger.debug(`${backend.name} does not support ${methodName}, skipping`);
+        continue;
+      }
       if (!this.circuitBreaker.shouldAttempt(backend.name)) {
         logger.debug(`Circuit open for ${backend.name}, skipping`);
+        continue;
+      }
+      // fast-path sync check — only await the init retry in the rare failure case
+      if (this.uninitializedBackends.has(backend) && !(await this.ensureBackendInitialized(backend, errors))) {
         continue;
       }
 
@@ -319,7 +367,7 @@ export class CardanoClient {
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
     const config = METHOD_ROUTING[methodName] ?? { preferLive: false };
-    return this.executeWithPriority(fn, config.preferLive);
+    return this.executeWithPriority(fn, config.preferLive, methodName);
   }
 
   /** 
@@ -489,7 +537,7 @@ export class CardanoClient {
    */
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     // Try backends with getAddressTransactionHashes support
-    const allBackends = this.getOrderedBackends(false); // historical preferred
+    const allBackends = this.getOrderedBackends();
     for (const backend of allBackends) {
       if (backend.getAddressTransactionHashes) {
         try {
@@ -513,7 +561,7 @@ export class CardanoClient {
    */
   async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
     // Try backends with batch support
-    const allBackends = this.getOrderedBackends(false); // historical preferred
+    const allBackends = this.getOrderedBackends();
     for (const backend of allBackends) {
       if (backend.getTransactionsBatch) {
         try {
@@ -531,14 +579,13 @@ export class CardanoClient {
   }
 
   /**
-   * Get ordered backends based on preference (live vs historical).
-   * Used by batch methods to find batch-capable backends.
+   * Backends in historical-first order. Used by the batch methods — both
+   * always prefer historical data, so the former preferLive parameter was a
+   * dead branch.
    */
-  private getOrderedBackends(preferLive: boolean): CardanoBackend[] {
-    const backends: CardanoBackend[] = [];
-    if (preferLive && this.liveBackend) backends.push(this.liveBackend);
-    backends.push(...this.historicalBackends);
-    if (!preferLive && this.liveBackend) backends.push(this.liveBackend);
+  private getOrderedBackends(): CardanoBackend[] {
+    const backends: CardanoBackend[] = [...this.historicalBackends];
+    if (this.liveBackend) backends.push(this.liveBackend);
     return backends;
   }
 
@@ -642,6 +689,12 @@ export class CardanoClient {
    * Submit transaction with fallback between backends
    * @param signedTxCbor signed transaction in CBOR hex format
    * @returns {Promise<string>} transaction hash
+   *
+   * NOTE on failover semantics: when the preferred backend ACCEPTS the tx but
+   * its response is lost (timeout), the failover resubmits on the next backend,
+   * which may answer 409 "already submitted". Callers should treat a
+   * TransactionAlreadySubmittedError after a submit attempt as success — the
+   * transaction IS in the mempool.
    */
   submitTransaction(signedTxCbor: string): Promise<string> {
     return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));

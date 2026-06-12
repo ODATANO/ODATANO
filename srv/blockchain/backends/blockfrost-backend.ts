@@ -147,9 +147,12 @@ export class BlockfrostBackend implements CardanoBackend {
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
-        const tx = await this.api.txs(hash);
-        const txUtxos = await this.api.txsUtxos(hash);
-        const txMetadata = await this.api.txsMetadata(hash);
+        // independent endpoints — fetch in parallel instead of 3 sequential roundtrips
+        const [tx, txUtxos, txMetadata] = await Promise.all([
+          this.api.txs(hash),
+          this.api.txsUtxos(hash),
+          this.api.txsMetadata(hash),
+        ]);
 
         const metadata = txMetadata.length > 0 ? txMetadata.map(md => ({
           txHash: hash,
@@ -262,7 +265,9 @@ export class BlockfrostBackend implements CardanoBackend {
   async getAddressTransactions(address: string, limit?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
-        const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+        // Blockfrost rejects count > 100 with a 400 — clamp instead
+        const count = limit === undefined ? undefined : Math.min(Math.max(limit, 1), 100);
+        const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count });
         const txHashes = address_txs.map(tx => tx.tx_hash);
 
         // Batch fetch instead of N+1 individual calls
@@ -679,7 +684,9 @@ export class BlockfrostBackend implements CardanoBackend {
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     return handleBackendRequest(
       async () => {
-        const txs = await this.api.addressesTransactions(address, { order: 'desc', count: limit });
+        // Blockfrost rejects count > 100 with a 400 — clamp instead
+        const count = Math.min(Math.max(limit, 1), 100);
+        const txs = await this.api.addressesTransactions(address, { order: 'desc', count });
         return txs.map(tx => tx.tx_hash);
       },
       this.name

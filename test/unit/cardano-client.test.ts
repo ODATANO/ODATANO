@@ -466,8 +466,11 @@ describe('CardanoClient Configuration', () => {
       const result = await client.getNetworkInformation();
       expect(result).toBeDefined();
       expect(result.supply).toBeDefined();
-      // Live backend should be removed after failed init
-      expect((client as any).liveBackend).toBeUndefined();
+      // Live backend is KEPT for lazy retry (previously removed permanently) —
+      // the request retried its init once before falling through to koios
+      expect((client as any).liveBackend).toBe(failingLiveBackend);
+      expect((client as any).uninitializedBackends.has(failingLiveBackend)).toBe(true);
+      expect(failingLiveBackend.init.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
     it('should throw AllBackendsInitFailedError when both live and historical backends fail', async () => {
@@ -487,6 +490,29 @@ describe('CardanoClient Configuration', () => {
         .reply(500, { error: 'Server error' });
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+    });
+
+    it('retries initialization on the next request after a transient startup failure', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
+      const backend = {
+        name: 'koios',
+        init: jest.fn()
+          .mockRejectedValueOnce(new Error('transient outage'))
+          .mockResolvedValue(true),
+        getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo),
+      };
+      (client as any).historicalBackends = [backend];
+
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+
+      // previously the rejected initPromise stayed cached — the client was
+      // permanently broken until process restart
+      const result = await client.getNetworkInformation();
+      expect(result).toBe(mockNetworkInfo);
+      expect(backend.init).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -560,6 +586,29 @@ describe('CardanoClient Configuration', () => {
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
       expect(mockBackend.getNetworkInformation).not.toHaveBeenCalled();
+    });
+
+    it('skips backends that declare a method unsupported — without breaker recording', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
+      const live = {
+        name: 'ogmios',
+        unsupportedMethods: new Set(['getNetworkInformation']),
+        getNetworkInformation: jest.fn().mockResolvedValue({ fabricated: true }),
+      };
+      const historical = { name: 'koios', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      (client as any).liveBackend = live;
+      (client as any).historicalBackends = [historical];
+      (client as any).initialized = true;
+
+      // getNetworkInformation prefers live — the declared non-support must skip
+      // Ogmios entirely (no call, no failure) and serve the historical answer
+      const result = await client.getNetworkInformation();
+      expect(result).toBe(mockNetworkInfo);
+      expect(live.getNetworkInformation).not.toHaveBeenCalled();
+      expect((client as any).circuitBreaker.shouldAttempt('ogmios')).toBe(true);
     });
 
     it('keeps the circuit closed on 4xx client errors but opens it on 5xx', async () => {

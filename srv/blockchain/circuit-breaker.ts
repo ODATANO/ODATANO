@@ -24,6 +24,8 @@ interface CircuitEntry {
   failures: number;
   successes: number;
   lastFailureTime: number;
+  /** Probe slots handed out while half-open (released on success/failure) */
+  halfOpenProbes: number;
 }
 
 /**
@@ -58,13 +60,19 @@ export class CircuitBreakerManager {
       if (elapsed >= this.config.resetTimeoutMs) {
         entry.state = 'half-open';
         entry.successes = 0;
+        entry.halfOpenProbes = 1; // this caller takes the first probe slot
         logger.debug(`Circuit half-open for ${backendName} after ${elapsed}ms`);
         return true;
       }
       return false;
     }
 
-    // half-open: allow probe requests
+    // half-open: cap in-flight probes at successThreshold — previously a burst
+    // of concurrent requests all probed a barely-recovering backend at once
+    if (entry.halfOpenProbes >= this.config.successThreshold) {
+      return false;
+    }
+    entry.halfOpenProbes++;
     return true;
   }
 
@@ -74,11 +82,13 @@ export class CircuitBreakerManager {
     if (!entry) return;
 
     if (entry.state === 'half-open') {
+      entry.halfOpenProbes = Math.max(0, entry.halfOpenProbes - 1); // release probe slot
       entry.successes++;
       if (entry.successes >= this.config.successThreshold) {
         entry.state = 'closed';
         entry.failures = 0;
         entry.successes = 0;
+        entry.halfOpenProbes = 0;
         logger.info(`Circuit closed for ${backendName} (recovered)`);
       }
     } else if (entry.state === 'closed') {
@@ -91,7 +101,7 @@ export class CircuitBreakerManager {
   recordFailure(backendName: string): void {
     let entry = this.circuits.get(backendName);
     if (!entry) {
-      entry = { state: 'closed', failures: 0, successes: 0, lastFailureTime: 0 };
+      entry = { state: 'closed', failures: 0, successes: 0, lastFailureTime: 0, halfOpenProbes: 0 };
       this.circuits.set(backendName, entry);
     }
 
@@ -102,6 +112,7 @@ export class CircuitBreakerManager {
       // Any failure in half-open reopens the circuit
       entry.state = 'open';
       entry.successes = 0;
+      entry.halfOpenProbes = 0;
       logger.warn(`Circuit re-opened for ${backendName} (failed during probe)`);
     } else if (entry.state === 'closed' && entry.failures >= this.config.failureThreshold) {
       entry.state = 'open';

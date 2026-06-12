@@ -26,7 +26,7 @@ import {
 
 import { EvaluatingBackend } from './cardano-backend';
 
-import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
+import { EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
@@ -38,9 +38,10 @@ interface OgmiosStakePool {
   vrf?: string;
   vrfKeyHash?: string;
   stake?: { ada?: { lovelace?: number | bigint } };
-  pledge?: number | bigint | string;
-  margin?: number;
-  cost?: number | bigint | string;
+  // Ogmios v6 delivers pledge/cost as ValueAdaOnly ({ada:{lovelace}})
+  pledge?: { ada?: { lovelace?: number | bigint } } | number | bigint;
+  margin?: number | string;
+  cost?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   rewardAccount?: string;
 }
 
@@ -119,10 +120,31 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
  */
 export class OgmiosBackend implements EvaluatingBackend {
   public readonly name = 'ogmios';
+  /**
+   * Capability declaration — the orchestrator skips Ogmios for these without
+   * counting circuit failures. Historic queries are out of protocol scope;
+   * getAddress/getNetworkInformation previously FABRICATED placeholder data
+   * (type:'base'/isScript:false/stakeAddress:null resp. maxSupply as
+   * total/circulating) which preferLive routing then preferred over correct
+   * Blockfrost/Koios data.
+   */
+  public readonly unsupportedMethods: ReadonlySet<string> = new Set([
+    // getEpoch is NOT listed: Ogmios can serve the CURRENT epoch and only
+    // rejects historic ones — routing prefers historical backends anyway.
+    'getBlock',
+    'getTransaction',
+    'getTransactionMetadata',
+    'getAddressTransactions',
+    'getDrep',
+    'getAssetInfo',
+    'getAddress',
+    'getNetworkInformation',
+  ]);
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
   private context: Awaited<ReturnType<typeof createInteractionContext>> | null = null;
   private isShutdown = false;
+  private reconnectPromise: Promise<void> | null = null;
   private network: Network;
   private timeoutMs: number;
   private ogmiosUrl: string;
@@ -173,17 +195,54 @@ export class OgmiosBackend implements EvaluatingBackend {
       tls: url.protocol === 'wss:'
     };
 
-    
-    this.context = await createInteractionContext(
+    const context = await createInteractionContext(
       /* c8 ignore next */
       (err) => logger.error(`[OgmiosBackend] Interaction context error: ${err.message}`),
-      (err) => { logger.error(`[OgmiosBackend] Connection error: ${err}`); },
+      () => {
+        // Socket closed: clear the clients so the next request reconnects via
+        // ensureConnected — previously this handler only logged and the backend
+        // stayed dead until process restart.
+        if (this.isShutdown) return;
+        logger.warn('[OgmiosBackend] WebSocket closed — will reconnect on next request');
+        this.stateQueryClient = null;
+        this.txSubmissionClient = null;
+      },
       { connection }
     );
 
-    this.stateQueryClient = await createLedgerStateQueryClient(this.context);
-    this.txSubmissionClient = await createTransactionSubmissionClient(this.context);
+    try {
+      this.stateQueryClient = await createLedgerStateQueryClient(context);
+      this.txSubmissionClient = await createTransactionSubmissionClient(context);
+    } catch (err: unknown) {
+      // don't leak the WebSocket when client creation fails mid-init
+      // (runtime socket is node `ws`, which exposes terminate())
+      try { (context.socket as unknown as { terminate: () => void }).terminate(); } catch { /* best effort */ }
+      throw err;
+    }
+    this.context = context;
     return true;
+  }
+
+  /**
+   * Reconnect when the WebSocket has died since the last successful init.
+   * No-op when never initialized (test-injected clients) — startup-init
+   * recovery is the orchestrator's job (lazy init retry in CardanoClient).
+   * Concurrent callers share one reconnect attempt.
+   */
+  private async ensureConnected(): Promise<void> {
+    this.ensureNotShutdown();
+    if (!this.context) return;
+    const socket = this.context.socket as { readyState?: number; OPEN?: number } | undefined;
+    const socketOpen = !socket || socket.readyState === (socket.OPEN ?? 1);
+    if (this.stateQueryClient && socketOpen) return;
+
+    if (!this.reconnectPromise) {
+      logger.warn('[OgmiosBackend] WebSocket not connected — reconnecting');
+      this.reconnectPromise = this.init()
+        .then(() => undefined)
+        .finally(() => { this.reconnectPromise = null; });
+    }
+    await this.reconnectPromise;
   }
 
   /** 
@@ -204,7 +263,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       
       // Get current epoch directly via epoch() query
       const currentEpoch = await this.stateQueryClient!.epoch();
@@ -264,71 +323,26 @@ export class OgmiosBackend implements EvaluatingBackend {
   }
 
   /**
-   * Get specific Network Information
-   * @returns {Promise<Network>} network information
+   * Get specific Network Information (not supported — Ogmios state queries
+   * expose no supply/stake aggregates; the previous implementation fabricated
+   * maxSupply as total/circulating, which preferLive routing then preferred
+   * over correct Blockfrost/Koios data)
    */
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(async () => {
-      const maxSupply = CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
-
-      return {
-        supply: {
-          max: maxSupply.toString(),
-          total: maxSupply.toString(),
-          circulating: maxSupply.toString(),
-          locked: '0',
-          treasury: '0',
-          reserves: '0'
-        },
-        stake: {
-          active: '0',
-          live: '0',
-        }
-      };
+      throw new ProviderUnavailableError('Network information not supported by Ogmios backend — use Blockfrost/Koios', this.name);
     }, this.name);
   }
 
   /**
-   * Get current specific Address Data
-   * @param address bech32 address
-   * @returns {Promise<Address>} address data
+   * Get current specific Address Data (not supported — address type, script
+   * flag and stake address are not derivable from Ogmios state queries; the
+   * previous implementation fabricated type:'base'/isScript:false/
+   * stakeAddress:null. UTxOs remain available via getAddressUtxos.)
    */
-  async getAddress(address: string): Promise<Address> {
+  async getAddress(_address: string): Promise<Address> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
-      
-      // Query UTxOs from tip (no acquire needed - queries from tip by default)
-      const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
-      type OgmiosUtxoEntry = typeof utxos[number];
-
-      const totalLovelace = utxos.reduce((sum: bigint, u: OgmiosUtxoEntry) => {
-        const lovelace = u.value?.ada?.lovelace;
-        return sum + BigInt(lovelace);
-      }, 0n);
-
-      return {
-        address,
-        stakeAddress: null,
-        type: 'base',
-        isScript: false,
-        amount: [{
-          unit: 'lovelace',
-          quantity: totalLovelace.toString()
-        }],
-        utxos: utxos.map((u: OgmiosUtxoEntry) => {
-          const amount = this.convertOgmiosValue(u.value);
-          return {
-            txHash: u.transaction?.id || '',
-            outputIndex: u.index || 0,
-            address: u.address || address,
-            amount: amount,
-            blockHash: '',
-            datumHash: u.datumHash,
-            scriptRef: (u.script as { hash?: string } | undefined)?.hash
-          };
-        }),
-        transactions: []  // Historic transaction queries not supported
-      };
+      throw new ProviderUnavailableError('Address detail queries not supported by Ogmios backend — use Blockfrost/Koios', this.name);
     }, this.name);
   }
 
@@ -338,7 +352,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
       return utxos.map((u: typeof utxos[number]) => {
@@ -352,6 +366,9 @@ export class OgmiosBackend implements EvaluatingBackend {
           amount: amount,
           blockHash: '',
           datumHash: u.datumHash,
+          // Ogmios delivers the inline datum as CBOR hex in `datum` — it was
+          // dropped before, breaking inline-datum spends when Ogmios serves UTxOs
+          inlineDatum: typeof u.datum === 'string' ? u.datum : null,
           scriptRef: (u.script as { hash?: string } | undefined)?.hash
         };
       });
@@ -378,7 +395,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
             
       // Query from tip (no acquire needed) with stake included
       const pools = await this.stateQueryClient!.stakePools([{ id: poolId }], true) as Record<string, OgmiosStakePool>;
@@ -396,11 +413,15 @@ export class OgmiosBackend implements EvaluatingBackend {
         liveSize: 0,
         liveDelegators: 0,
         liveSaturation: 0,
-        activeStake: pool.pledge ? String(pool.pledge) : '0',
+        // activeStake is not available from Ogmios pool params — report 0 instead
+        // of fabricating it from the pledge
+        activeStake: '0',
         activeSize: 0,
-        pledge: pool.pledge ? String(pool.pledge) : '0',
-        margin: Number(pool.margin || 0),
-        fixedCost: pool.cost ? String(pool.cost) : '0',
+        // pledge/cost are ValueAdaOnly objects in Ogmios v6 — String() on those
+        // yielded "[object Object]"; margin is a Ratio string ("1/10")
+        pledge: ogmiosValueToLovelaceString(pool.pledge),
+        margin: parseOgmiosRatio(pool.margin),
+        fixedCost: ogmiosValueToLovelaceString(pool.cost),
         rewardAccount: pool.rewardAccount || ''
       };
     }, this.name);
@@ -413,7 +434,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
 
       const rawResult = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] });
       // Ogmios returns a record keyed by stake address; normalize to array
@@ -454,7 +475,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async submitTransaction(signedTxCbor: string): Promise<string> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
 
       const txHash = await this.txSubmissionClient!.submitTransaction(signedTxCbor);
       return txHash;
@@ -468,7 +489,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
 
       const results = await this.txSubmissionClient!.evaluateTransaction(unsignedTxCbor);
       return results as ScriptEvaluationResult[];
@@ -481,7 +502,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       
       // Query protocol parameters and epoch in parallel
       const [params, currentEpoch] = await Promise.all([
@@ -535,7 +556,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       
       const [currentEpoch, tip] = await Promise.all([
         this.stateQueryClient!.epoch(),
@@ -569,7 +590,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    */
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       
       // Fetch ledger tip, block height and epoch in parallel
       const [tip, blockHeight, epoch] = await Promise.all([
@@ -624,7 +645,7 @@ export class OgmiosBackend implements EvaluatingBackend {
   async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
     if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
     return handleBackendRequest(async () => {
-      this.ensureNotShutdown();
+      await this.ensureConnected();
       const result = await this.stateQueryClient!.utxo({
         outputReferences: [{ transaction: { id: txHash }, index: outputIndex }],
       });

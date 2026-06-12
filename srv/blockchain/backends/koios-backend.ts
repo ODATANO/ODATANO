@@ -56,8 +56,8 @@ interface KoiosTxInfo {
   block_time?: number;
   absolute_slot?: number;
   slot_no?: number;
-  tx_index: number;
-  tx_fee?: string;
+  tx_block_index?: number;
+  fee?: string;
   deposit?: string;
   tx_size: number;
   metadata?: Record<string, unknown> | null;
@@ -310,22 +310,13 @@ export class KoiosBackend implements CardanoBackend {
 
         const addressData = data[0];
         const addressUtxos = await this.getAddressUtxos(address);
+
+        // Sum balances from the already-mapped UTxOs instead of re-iterating
+        // address_info's utxo_set (whose asset_list can be null → crashed here).
         const totals = new Map<string, bigint>();
-
-        for (const u of addressData.utxo_set) {
-          // add lovelace
-          totals.set(
-            'lovelace',
-            (totals.get('lovelace') ?? 0n) + BigInt(u.value)
-          );
-
-          // add native assets
-          for (const a of u.asset_list) {
-            const unit = `${a.policy_id}${a.asset_name}`;
-            totals.set(
-              unit,
-              (totals.get(unit) ?? 0n) + BigInt(a.quantity)
-            );
+        for (const u of addressUtxos) {
+          for (const a of u.amount) {
+            totals.set(a.unit, (totals.get(a.unit) ?? 0n) + BigInt(a.quantity));
           }
         }
 
@@ -573,7 +564,10 @@ export class KoiosBackend implements CardanoBackend {
           poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
           vrfKeyHash: poolData.vrf_key_hash,
           blocksMinted: poolData.block_count,
-          blocksEpoch: poolData.epoch_no,
+          // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
+          // (the epoch NUMBER) was mapped here before, which is a different
+          // semantic than Blockfrost's blocks_epoch. 0 = not available.
+          blocksEpoch: 0,
           liveStake: poolData.live_stake || '0',
           liveSize: poolData.live_size || 0,
           liveDelegators: poolData.live_delegators || 0,
@@ -1070,8 +1064,11 @@ export class KoiosBackend implements CardanoBackend {
       blockHeight: Number(tx.block_height),
       blockTime: tx.tx_timestamp ?? tx.block_time ?? 0,
       slot: tx.absolute_slot ?? tx.slot_no ?? 0,
-      index: tx.tx_index,
-      fee: tx.tx_fee || '0',
+      // Koios /tx_info fields are `tx_block_index` and `fee` (verified against
+      // the live OpenAPI spec) — `tx_index`/`tx_fee` never existed, so the fee
+      // was always reported as '0'
+      index: tx.tx_block_index ?? 0,
+      fee: tx.fee || '0',
       deposit: tx.deposit || '0',
       size: tx.tx_size,
       inputs: tx.inputs.map((input: KoiosTxIO) => {
