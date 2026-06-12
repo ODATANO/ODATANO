@@ -208,7 +208,7 @@ export class CardanoClient {
     });
   }
 
-  /** 
+  /**
    * Get timeout for specific backend
    * @param backend CardanoBackend instance
    * @returns {number} timeout in milliseconds
@@ -216,6 +216,31 @@ export class CardanoClient {
   private getTimeoutForBackend(backend: CardanoBackend): number {
     if (backend.name === 'koios') return this.config.fallbackTimeoutMs;
     return this.config.primaryTimeoutMs;
+  }
+
+  /**
+   * Run a single-backend call with the same resilience contract as
+   * executeWithPriority: circuit-breaker gate, timeout, success/failure
+   * recording (4xx exempt). For the paths that cannot fail over (Koios-only,
+   * Ogmios-only, batch-capable loops) — these previously bypassed timeout AND
+   * breaker entirely, so a hanging socket blocked the caller indefinitely.
+   */
+  private async callWithResilience<T>(backend: CardanoBackend, fn: () => Promise<T>): Promise<T> {
+    if (!this.circuitBreaker.shouldAttempt(backend.name)) {
+      throw new ProviderUnavailableError(`Circuit open for ${backend.name}`, backend.name);
+    }
+    try {
+      const result = await this.withTimeout(fn(), this.getTimeoutForBackend(backend), backend.name);
+      this.circuitBreaker.recordSuccess(backend.name);
+      return result;
+    } catch (err: unknown) {
+      const backendError = normalizeBackendError(err, backend.name);
+      const isClientError = backendError.statusCode >= 400 && backendError.statusCode < 500;
+      if (!isClientError) {
+        this.circuitBreaker.recordFailure(backend.name);
+      }
+      throw backendError;
+    }
   }
 
   /** 
@@ -264,8 +289,12 @@ export class CardanoClient {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
 
-        // Don't count 404s as backend failures (resource not found is a valid response)
-        if (backendError.statusCode !== 404) {
+        // 4xx are definitive verdicts from a HEALTHY backend (bad input, not found,
+        // conflict, rate limit) — only 5xx/timeouts/transport errors indicate backend
+        // health and may open the circuit. Counting client errors opened the breaker
+        // on user mistakes and took working backends out of rotation.
+        const isClientError = backendError.statusCode >= 400 && backendError.statusCode < 500;
+        if (!isClientError) {
           this.circuitBreaker.recordFailure(backend.name);
         }
 
@@ -340,7 +369,7 @@ export class CardanoClient {
         'koios'
       );
     }
-    return this.credCoalescer.get(credHash, () => koios.getCredentialUtxos!(credHash));
+    return this.credCoalescer.get(credHash, () => this.callWithResilience(koios, () => koios.getCredentialUtxos!(credHash)));
   }
 
   /**
@@ -435,7 +464,7 @@ export class CardanoClient {
   getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
     const koios = candidates.find(b => b?.name === 'koios' && typeof b.getAssetHistory === 'function');
-    if (koios) return koios.getAssetHistory!(unit, limit);
+    if (koios) return this.callWithResilience(koios, () => koios.getAssetHistory!(unit, limit));
     const anyImpl = candidates.find(b => typeof b?.getAssetHistory === 'function');
     if (!anyImpl) {
       throw new ProviderUnavailableError(
@@ -443,7 +472,7 @@ export class CardanoClient {
         'asset-history'
       );
     }
-    return anyImpl.getAssetHistory!(unit, limit);
+    return this.callWithResilience(anyImpl, () => anyImpl.getAssetHistory!(unit, limit));
   }
 
   //-----------------------------------------------------------------------------
@@ -464,8 +493,10 @@ export class CardanoClient {
     for (const backend of allBackends) {
       if (backend.getAddressTransactionHashes) {
         try {
-          return await backend.getAddressTransactionHashes(address, limit);
-        } catch { /* fall through to next backend */ }
+          return await this.callWithResilience(backend, () => backend.getAddressTransactionHashes!(address, limit));
+        } catch (err: unknown) {
+          logger.debug(`getAddressTransactionHashes failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)} — trying next backend`);
+        }
       }
     }
     // Fallback: full fetch and extract hashes
@@ -486,8 +517,10 @@ export class CardanoClient {
     for (const backend of allBackends) {
       if (backend.getTransactionsBatch) {
         try {
-          return await backend.getTransactionsBatch(txHashes);
-        } catch { /* fall through to next backend */ }
+          return await this.callWithResilience(backend, () => backend.getTransactionsBatch!(txHashes));
+        } catch (err: unknown) {
+          logger.debug(`getTransactionsBatch failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)} — trying next backend`);
+        }
       }
     }
     // Fallback: individual coalesced calls
@@ -635,6 +668,8 @@ export class CardanoClient {
       throw new ProviderUnavailableError('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
     }
 
-    return this.liveBackend.evaluateTransaction(unsignedTxCbor);
+    // timeout + breaker — a hanging Ogmios socket previously blocked Plutus builds indefinitely
+    const backend = this.liveBackend;
+    return this.callWithResilience(backend, () => backend.evaluateTransaction(unsignedTxCbor));
   }
 }

@@ -7,7 +7,7 @@ jest.mock('@blockfrost/blockfrost-js', () => {
     txSubmit: jest.fn(),
     poolsById: jest.fn(),
     blocksLatest: jest.fn(),
-    addressesUtxos: jest.fn(),
+    addressesUtxosAll: jest.fn(),
     assetsById: jest.fn(),
     assetsHistory: jest.fn(),
     txs: jest.fn(),
@@ -235,7 +235,7 @@ describe('BlockfrostBackend getAddressUtxos', () => {
 
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
       blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }));
@@ -254,7 +254,7 @@ describe('BlockfrostBackend getAddressUtxos', () => {
   it('should throw NotFoundError when address has no UTxOs', async () => {
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxos: jest.fn().mockRejectedValue({
+      addressesUtxosAll: jest.fn().mockRejectedValue({
         status_code: 404,
         message: 'The requested component has not been found.'
       }),
@@ -295,7 +295,7 @@ describe('BlockfrostBackend getAddressUtxos', () => {
 
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
       blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }));
@@ -327,7 +327,7 @@ describe('BlockfrostBackend getAddressUtxos', () => {
 
     const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
       blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }));

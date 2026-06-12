@@ -264,6 +264,29 @@ describe('OgmiosBackend', () => {
       expect(result.controlledAmount).toBe('2000000');
       expect(result.rewardsSum).toBe('0');
     });
+
+    it('should extract lovelace from Ogmios v6 {ada:{lovelace}} value objects (no "[object Object]")', async () => {
+      const mockStateQueryClient = {
+        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+          // real Ogmios v6 shape — .toString() on these produced "[object Object]"
+          controlledAmount: { ada: { lovelace: 50_000_000_000n } },
+          rewards: { ada: { lovelace: 1_500_000n } },
+          withdrawals: { ada: { lovelace: 500_000n } },
+          delegate: { id: 'pool1abc123' },
+        }])
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+
+      const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
+
+      expect(result.controlledAmount).toBe('50000000000');
+      expect(result.rewardsSum).toBe('1500000');
+      expect(result.withdrawalsSum).toBe('500000');
+      expect(result.withdrawableAmount).toBe('1500000');
+      expect(result.poolId).toBe('pool1abc123');
+    });
   });
 
   describe('shutdown', () => {
@@ -796,6 +819,11 @@ describe('OgmiosBackend', () => {
       expect(result.hash).toBe('blockhash123');
       expect(result.slot).toBe(432123);
       expect(result.epoch).toBe(1);
+      // preview: 86 400 slots/epoch → epoch 1 starts at slot 86 400
+      // (the old `slot % 432000` yielded 123 here)
+      expect(result.epochSlot).toBe(432123 - 86400);
+      // Shelley-anchored: previewSystemStart (1666656000) + slot seconds
+      expect(result.time).toBe(1666656000 + 432123);
     });
   });
 
@@ -880,6 +908,31 @@ describe('OgmiosBackend', () => {
       expect(result.eMax).toBe(18);
       expect(result.nOpt).toBe(500);
     });
+
+    it('parses Ratio strings ("num/den") and maps rho/tau to the correct sources', async () => {
+      const mockStateQueryClient = {
+        protocolParameters: jest.fn().mockResolvedValue({
+          // Ogmios v6 delivers ratios as STRINGS — Number("3/1000") is NaN
+          scriptExecutionPrices: { memory: '577/10000', cpu: '721/10000000' },
+          stakePoolPledgeInfluence: '3/10',
+          monetaryExpansion: '3/1000', // ρ
+          treasuryExpansion: '1/5',    // τ
+        }),
+        epoch: jest.fn().mockResolvedValue(500)
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getProtocolParameters();
+      expect(result.priceMem).toBeCloseTo(0.0577, 10);
+      expect(result.priceStep).toBeCloseTo(0.0000721, 10);
+      expect(result.a0).toBeCloseTo(0.3, 10);
+      // ρ = monetaryExpansion, τ = treasuryCut — previously swapped (and NaN)
+      expect(result.rho).toBeCloseTo(0.003, 10);
+      expect(result.tau).toBeCloseTo(0.2, 10);
+    });
   });
 
   describe('shutdown - CONNECTING socket state', () => {
@@ -948,6 +1001,10 @@ describe('OgmiosBackend', () => {
       expect(result.epoch).toBe(100);
       expect(result.block_count).toBe(0);
       expect(result.tx_count).toBe(0);
+      // preview geometry: epoch 100 spans slots [8 640 000, 8 726 400)
+      expect(result.start_time).toBe(1666656000 + 100 * 86400);
+      expect(result.end_time).toBe(1666656000 + 101 * 86400);
+      expect(result.last_block_time).toBe(1666656000 + 43200100);
     });
   });
 

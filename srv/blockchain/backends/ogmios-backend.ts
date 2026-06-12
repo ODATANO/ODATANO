@@ -26,7 +26,7 @@ import {
 
 import { EvaluatingBackend } from './cardano-backend';
 
-import { CARDANO_DEFAULTS } from '../../utils/const';
+import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
@@ -52,6 +52,55 @@ interface OgmiosRewardAccountSummary {
   delegation?: { poolId?: string };
   vote?: { id?: string };
   drep?: { id?: string };
+}
+
+/**
+ * First absolute slot of the given epoch, from the network's Shelley anchor.
+ * Replaces the old `epoch * 432000` math, which was wrong on preview (86 400
+ * slots per epoch) and on mainnet/preprod (Byron offset).
+ */
+function epochStartSlot(network: Network, epoch: number): number {
+  const cfg = EPOCH_CONFIG_BY_NETWORK[network];
+  return cfg.shelleyStartSlot + (epoch - cfg.shelleyStartEpoch) * cfg.slotsPerEpoch;
+}
+
+/**
+ * Absolute POSIX seconds for a slot, via the same Shelley-anchored genesis infos
+ * the transaction builder uses for validity windows. The previous code treated
+ * Ogmios' `eraStart.time` (RelativeTime since SYSTEM start) as a Unix timestamp.
+ */
+function slotToPosixSeconds(network: Network, slot: number): number {
+  const genesis = GENESIS_INFOS_BY_NETWORK[network];
+  return Math.floor((genesis.systemStartPosixMs + (slot - genesis.startSlotNo) * genesis.slotLengthMs) / 1000);
+}
+
+/**
+ * Parse an Ogmios `Ratio` ("num/den" string, e.g. "3/1000") into a number.
+ * `Number("3/1000")` is NaN — previously every ratio-typed protocol parameter
+ * (priceMem, priceStep, a0, rho, tau) came out as NaN.
+ */
+function parseOgmiosRatio(ratio: string | number | undefined | null): number {
+  if (ratio === null || ratio === undefined) return 0;
+  if (typeof ratio === 'number') return ratio;
+  const m = /^(-?\d+)\s*\/\s*(\d+)$/.exec(ratio);
+  if (m) {
+    const den = Number(m[2]);
+    return den === 0 ? 0 : Number(m[1]) / den;
+  }
+  const n = Number(ratio);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Extract a lovelace amount from Ogmios' value shapes. Ogmios v6 returns
+ * `{ ada: { lovelace } }` objects — calling `.toString()` on those yields
+ * "[object Object]", which previously ended up in the AccountData fields.
+ */
+function ogmiosValueToLovelaceString(value: OgmiosRewardAccountSummary['rewards']): string {
+  if (value === null || value === undefined) return '0';
+  if (typeof value === 'bigint' || typeof value === 'number') return String(value);
+  const lovelace = value.ada?.lovelace;
+  return lovelace === undefined ? '0' : String(lovelace);
 }
 
 /** Resolve Ogmios ledger tip which may be 'origin' (genesis block) or a point */
@@ -381,14 +430,16 @@ export class OgmiosBackend implements EvaluatingBackend {
 
       return {
         stakeaddress: stakeAddress,
+        // Ogmios only returns reward-account summaries for REGISTERED stake keys —
+        // reaching this point (summary found) therefore implies the account is active.
         active: true,
         activeEpoch: 0,
-        controlledAmount: account.controlledAmount?.toString() || '0',
-        rewardsSum: account.rewards?.toString() || '0',
-        withdrawalsSum: account.withdrawals?.toString() || '0',
+        controlledAmount: ogmiosValueToLovelaceString(account.controlledAmount),
+        rewardsSum: ogmiosValueToLovelaceString(account.rewards),
+        withdrawalsSum: ogmiosValueToLovelaceString(account.withdrawals),
         reservesSum: '0',
         treasurySum: '0',
-        withdrawableAmount: account.rewards?.toString() || '0',
+        withdrawableAmount: ogmiosValueToLovelaceString(account.rewards),
         poolId: account.delegate?.id || account.delegation?.poolId || null,
         drepId: account.vote?.id || account.drep?.id || null,
         addresses: []
@@ -447,8 +498,8 @@ export class OgmiosBackend implements EvaluatingBackend {
         minFeeA: params.minFeeCoefficient || 0,
         minFeeB: Number(params.minFeeConstant?.ada?.lovelace || 0),
         maxBlockSize: params.maxBlockBodySize?.bytes || 0,
-        priceMem: Number(params.scriptExecutionPrices?.memory || 0),
-        priceStep: Number(params.scriptExecutionPrices?.cpu || 0),
+        priceMem: parseOgmiosRatio(params.scriptExecutionPrices?.memory),
+        priceStep: parseOgmiosRatio(params.scriptExecutionPrices?.cpu),
         maxTxExMem: (params.maxExecutionUnitsPerTransaction?.memory || 0).toString(),
         maxTxExSteps: (params.maxExecutionUnitsPerTransaction?.cpu || 0).toString(),
         maxBlockExMem: (params.maxExecutionUnitsPerBlock?.memory || 0).toString(),
@@ -464,9 +515,10 @@ export class OgmiosBackend implements EvaluatingBackend {
         poolDeposit: params.stakePoolDeposit?.ada?.lovelace?.toString() || '0',
         eMax: params.stakePoolRetirementEpochBound || 0,
         nOpt: params.desiredNumberOfStakePools || 0,
-        a0: Number(params.stakePoolPledgeInfluence || 0),
-        rho: Number(params.treasuryExpansion || 0),
-        tau: Number(params.monetaryExpansion || 0),
+        a0: parseOgmiosRatio(params.stakePoolPledgeInfluence),
+        // ρ = monetaryExpansion, τ = treasuryExpansion (was swapped; Koios maps it correctly)
+        rho: parseOgmiosRatio(params.monetaryExpansion),
+        tau: parseOgmiosRatio(params.treasuryExpansion),
         decentralisationParam: 0,
         extraEntropy: null,
         protocolMajorVer: params.version?.major || 0,
@@ -485,36 +537,23 @@ export class OgmiosBackend implements EvaluatingBackend {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
       
-      // Query epoch and era start in parallel for accurate data
-      const [currentEpoch, eraStart, tip] = await Promise.all([
+      const [currentEpoch, tip] = await Promise.all([
         this.stateQueryClient!.epoch(),
-        this.stateQueryClient!.eraStart(),
         this.stateQueryClient!.ledgerTip()
       ]);
-      
+
       const { slot } = resolveOgmiosTip(tip);
 
-      // Calculate epoch boundaries using era start as reference
-      const SLOTS_PER_EPOCH = CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
-      const epochStartSlot = currentEpoch * SLOTS_PER_EPOCH;
-      const epochEndSlot = (currentEpoch + 1) * SLOTS_PER_EPOCH;
-
-      // eraStart.time is RelativeTime { seconds: bigint }
-      const eraStartTime = Number(eraStart.time.seconds) * 1000;
-      const slotsSinceEraStart = slot - eraStart.slot;
-      const currentTime = eraStartTime + (slotsSinceEraStart * 1000);
-      
-      const slotsSinceEpochStart = slot - epochStartSlot;
-      const epochStartTime = currentTime - (slotsSinceEpochStart * 1000);
-      const slotsUntilEpochEnd = epochEndSlot - slot;
-      const epochEndTime = currentTime + (slotsUntilEpochEnd * 1000);
+      // Network-aware epoch geometry + Shelley-anchored slot→time conversion
+      const startSlot = epochStartSlot(this.network, currentEpoch);
+      const endSlot = startSlot + EPOCH_CONFIG_BY_NETWORK[this.network].slotsPerEpoch;
 
       return {
         epoch: currentEpoch,
-        start_time: Math.floor(epochStartTime / 1000),
-        end_time: Math.floor(epochEndTime / 1000),
-        first_block_time: Math.floor(epochStartTime / 1000),
-        last_block_time: Math.floor(currentTime / 1000),
+        start_time: slotToPosixSeconds(this.network, startSlot),
+        end_time: slotToPosixSeconds(this.network, endSlot),
+        first_block_time: slotToPosixSeconds(this.network, startSlot),
+        last_block_time: slotToPosixSeconds(this.network, slot),
         block_count: 0, // Not available from Ogmios state queries
         tx_count: 0, // Not available from Ogmios state queries
         output: '0',
@@ -532,27 +571,21 @@ export class OgmiosBackend implements EvaluatingBackend {
     return handleBackendRequest(async () => {
       this.ensureNotShutdown();
       
-      // Fetch ledger tip, block height, epoch, and era start in parallel
-      const [tip, blockHeight, epoch, eraStart] = await Promise.all([
+      // Fetch ledger tip, block height and epoch in parallel
+      const [tip, blockHeight, epoch] = await Promise.all([
         this.stateQueryClient!.ledgerTip(),
         this.stateQueryClient!.networkBlockHeight(),
-        this.stateQueryClient!.epoch(),
-        this.stateQueryClient!.eraStart()
+        this.stateQueryClient!.epoch()
       ]);
 
       const { slot, hash } = resolveOgmiosTip(tip);
       const height = resolveOgmiosHeight(blockHeight);
 
-      // eraStart.time is RelativeTime { seconds: bigint }
-      const eraStartTime = Number(eraStart.time.seconds) * 1000;
-      const slotsSinceEraStart = slot - eraStart.slot;
-      const blockTime = eraStartTime + (slotsSinceEraStart * 1000); // Each slot = 1 second
-
-      // Calculate slot within epoch
-      const epochSlot = slot % CARDANO_DEFAULTS.SLOTS_PER_EPOCH;
+      // network-aware slot-in-epoch (the old `slot % 432000` was wrong on every network)
+      const epochSlot = Math.max(0, slot - epochStartSlot(this.network, epoch));
 
       return {
-        time: Math.floor(blockTime / 1000), // Convert ms to seconds (mapBlock expects seconds)
+        time: slotToPosixSeconds(this.network, slot), // seconds (mapBlock expects seconds)
         height,
         hash,
         slot,

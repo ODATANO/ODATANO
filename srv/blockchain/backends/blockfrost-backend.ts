@@ -228,7 +228,9 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
-        const address_utxos = await this.api.addressesUtxos(address);
+        // *All variant paginates internally — addressesUtxos caps at 100 entries,
+        // silently truncating larger wallets (wrong balances / spurious InsufficientFunds)
+        const address_utxos = await this.api.addressesUtxosAll(address);
 
         return {
           address: address_data.address,
@@ -286,7 +288,8 @@ export class BlockfrostBackend implements CardanoBackend {
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
-        const utxo_data = await this.api.addressesUtxos(address);
+        // *All variant paginates internally (plain addressesUtxos caps at 100 entries)
+        const utxo_data = await this.api.addressesUtxosAll(address);
         return utxo_data.map(utxo => ({
           txHash: utxo.tx_hash,
           outputIndex: utxo.output_index,
@@ -465,7 +468,8 @@ export class BlockfrostBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
-        const addressData = await this.api.accountsAddresses(stakeAddress);
+        // *All variant paginates internally (plain accountsAddresses caps at 100 entries)
+        const addressData = await this.api.accountsAddressesAll(stakeAddress);
         const addresses: Address[] = [];
         const concurrent = BlockfrostBackend.MAX_CONCURRENT;
         for (let i = 0; i < addressData.length; i += concurrent) {

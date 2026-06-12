@@ -79,6 +79,39 @@ interface KoiosUtxoRow {
 }
 
 /**
+ * Koios `reference_script` (with `_extended: true`) is an OBJECT
+ * `{ hash, size, type, bytes, value }` — the previous `as string` cast handed
+ * that object downstream and broke the v1.6.1 input-side refScript feature.
+ * Returns the full script CBOR bytes when present (what the local Plutus eval
+ * needs), falling back to the hash (resolved on-chain only).
+ */
+function koiosRefScriptBytes(ref: unknown): string | null {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  const obj = ref as { bytes?: string | null; hash?: string | null };
+  return obj.bytes || obj.hash || null;
+}
+
+/** Like koiosRefScriptBytes, but strictly the script HASH (for *Hash fields). */
+function koiosRefScriptHash(ref: unknown): string | null {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  const obj = ref as { hash?: string | null };
+  return obj.hash || null;
+}
+
+/**
+ * Sort Koios /address_txs rows newest-first. Koios gives no ordering guarantee —
+ * a bare `slice(0, limit)` returned ARBITRARY rather than recent transactions
+ * (Blockfrost requests `order: 'desc'` for the same data).
+ */
+function sortAddressTxsDesc<T extends { block_height?: number | string | null; block_time?: number | null }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) =>
+    Number(b.block_height ?? b.block_time ?? 0) - Number(a.block_height ?? a.block_time ?? 0)
+  );
+}
+
+/**
  * KoiosBackend Implementation for CardanoBackend Interface
  * Implements the CardanoBackend interface using Koios API with Axios
  */
@@ -326,13 +359,15 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
 
-        // Limit before fetching individual transactions to save API calls
-        const limitedTxs = addressTxs.slice(0, limit);
+        // newest first, THEN limit (saves API calls); batch instead of unbounded Promise.all
+        const limitedTxs = sortAddressTxsDesc(addressTxs as Array<{ tx_hash: string; block_height?: number }>).slice(0, limit);
+        const batch = await this.getTransactionsBatch(limitedTxs.map(tx => tx.tx_hash));
 
-        const transactions = await Promise.all(limitedTxs.map(async (tx: { tx_hash: string }) => {
-          return this.getTransaction(tx.tx_hash);
-        }));
-
+        const transactions: Transaction[] = [];
+        for (const tx of limitedTxs) {
+          const resolved = batch.get(tx.tx_hash);
+          if (resolved) transactions.push(resolved);
+        }
         return transactions;
       },
       this.name
@@ -370,7 +405,7 @@ export class KoiosBackend implements CardanoBackend {
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: (utxo.reference_script as string | null | undefined) || null,
+            scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -414,7 +449,7 @@ export class KoiosBackend implements CardanoBackend {
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: (utxo.reference_script as string | null | undefined) || null,
+            scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -958,7 +993,9 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.post('/address_txs', { _addresses: [address] });
-        return data.slice(0, limit).map((tx: { tx_hash: string }) => tx.tx_hash);
+        return sortAddressTxsDesc(data as Array<{ tx_hash: string; block_height?: number }>)
+          .slice(0, limit)
+          .map(tx => tx.tx_hash);
       },
       this.name
     );
@@ -1056,7 +1093,7 @@ export class KoiosBackend implements CardanoBackend {
           amount: amount,
           dataHash: input.datum_hash || null,
           inlineDatum: inlineDatumToHex(input.inline_datum),
-          referenceScriptHash: (input.reference_script as string | null | undefined) || null,
+          referenceScriptHash: koiosRefScriptHash(input.reference_script),
         };
       }),
       outputs: tx.outputs.map((output: KoiosTxIO) => {
@@ -1079,7 +1116,7 @@ export class KoiosBackend implements CardanoBackend {
           dataHash: output.datum_hash || null,
           inlineDatum: inlineDatumToHex(output.inline_datum),
           isCollateral: false,
-          referenceScriptHash: (output.reference_script as string | null | undefined) || null,
+          referenceScriptHash: koiosRefScriptHash(output.reference_script),
         };
       }),
       metadata: labels
