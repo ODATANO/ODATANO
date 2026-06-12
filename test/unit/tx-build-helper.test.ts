@@ -111,6 +111,20 @@ describe('tx-build-helper utilities', () => {
       expect(() => getTxHashFromCbor('abcdefgh12345678')).toThrow('Invalid input: txCbor must be a valid hex string');
     });
 
+    it('should throw a typed 400 (TX_PARSE_FAILED) for valid hex that is not a transaction', () => {
+      const { TransactionValidationError } = require('../../srv/utils/errors');
+      const { ERROR_CODES } = require('../../srv/utils/error-codes');
+      try {
+        getTxHashFromCbor('deadbeef'); // parses as CBOR garbage, not a tx array
+        fail('expected throw');
+      } catch (err: any) {
+        // previously a plain Error → surfaced as 500 to the consumer
+        expect(err).toBeInstanceOf(TransactionValidationError);
+        expect(err.statusCode).toBe(400);
+        expect(err.code).toBe(ERROR_CODES.TX_PARSE_FAILED);
+      }
+    });
+
     it('should throw for malformed CBOR (valid hex but invalid structure)', () => {
       expect(() => getTxHashFromCbor('deadbeef')).toThrow('Failed to parse transaction CBOR');
     });

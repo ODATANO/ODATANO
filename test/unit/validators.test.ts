@@ -88,11 +88,20 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isAssetUnit(policyId)).toBe(true);
     });
 
-    it('should return true for asset unit with maximum asset name length', () => {
+    it('should return true for asset unit with maximum asset name length (32 bytes)', () => {
       const policyId = 'a'.repeat(56);
-      const assetName = 'b'.repeat(128); // 64 bytes = 128 hex chars
+      const assetName = 'b'.repeat(64); // ledger caps asset names at 32 bytes = 64 hex chars
       const assetUnit = policyId + assetName;
       expect(isAssetUnit(assetUnit)).toBe(true);
+    });
+
+    it('should return false for asset names above the 32-byte ledger cap', () => {
+      const policyId = 'a'.repeat(56);
+      expect(isAssetUnit(policyId + 'b'.repeat(66))).toBe(false);
+    });
+
+    it('should return false for unbounded hex strings (DoS guard for the String(120) key column)', () => {
+      expect(isAssetUnit('a'.repeat(56) + 'b'.repeat(10_000))).toBe(false);
     });
 
     it('should return false for asset unit shorter than 56 chars', () => {
@@ -100,8 +109,8 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isAssetUnit(shortUnit)).toBe(false);
     });
 
-    it('should return false for asset unit longer than 192 chars', () => {
-      const longUnit = 'a'.repeat(193);
+    it('should return false for asset unit longer than 120 chars', () => {
+      const longUnit = 'a'.repeat(122);
       expect(isAssetUnit(longUnit)).toBe(false);
     });
 

@@ -32,7 +32,9 @@ function indexOnMissRead<K = string>(
   const errMsg = options?.errorMessage || `Invalid ${reqKeyField} format`;
   return async (req: Request) => {
     const key = (req.data as Record<string, unknown>)?.[reqKeyField];
-    if (key && validate && !validate(key))
+    // explicit null/undefined check — `key &&` skipped validation for falsy keys
+    // like epoch=0 or an empty string (the latter then hit the backend unvalidated)
+    if (key !== undefined && key !== null && validate && !validate(key))
       rejectInvalid(req, dbKey, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
@@ -181,7 +183,7 @@ module.exports = (srv: cds.Service) => {
   // must call GetAssetHistory(unit) first to seed entries for a given asset,
   // then page via $top/$skip on the AssetHistory entity.
   srv.on('READ', AssetHistory, async (req: Request) => {
-    return await req.query;
+    return handleRequest(req, async (db) => db.run(req.query));
   });
 
   /**
@@ -194,7 +196,8 @@ module.exports = (srv: cds.Service) => {
     if (!isAssetUnit(unit)) {
       return rejectInvalid(req, 'GetAssetHistory', 'Invalid asset unit format', 'unit');
     }
-    const effectiveLimit = typeof limit === 'number' && limit > 0 ? limit : 100;
+    // clamp like GetLatestTransactionsByAddress — unbounded limits page the upstream backend indefinitely
+    const effectiveLimit = Math.min(Math.max(typeof limit === 'number' ? limit : 100, 1), 100);
     return handleRequest(req, async (db) => {
       return await indexer().indexAssetHistory(db, unit, effectiveLimit);
     });

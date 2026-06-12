@@ -37,82 +37,102 @@ service CardanoODataService @(impl: './cardano-service') {
     // Entity Projections
     // ---------------------------------------------------------------------------
 
+    @readonly
     @title      : 'Network Information'
     @description: 'Projection for Network Information'
     entity NetworkInformation       as projection on db.NetworkInformation;
 
+    @readonly
     @title      : 'Blocks'
     @description: 'Projection for Blocks'
     entity Blocks                   as projection on db.Blocks;
 
+    @readonly
     @title      : 'Epochs'
     @description: 'Projection for Epochs'
     entity Epochs                   as projection on db.Epochs;
 
+    @readonly
     @title      : 'Pools'
     @description: 'Projection for Pools'
     entity Pools                    as projection on db.Pools;
 
+    @readonly
     @title      : 'Dreps'
     @description: 'Projection for Dreps'
     entity Dreps                    as projection on db.Dreps;
 
+    @readonly
     @title      : 'Assets'
     @description: 'Projection for Native-Asset Information'
     entity Assets                   as projection on db.Assets;
 
+    @readonly
     @title      : 'Asset History'
     @description: 'Projection for Native-Asset Mint/Burn History'
     entity AssetHistory             as projection on db.AssetHistory;
 
+    @readonly
     @title      : 'Transactions'
     @description: 'Projection for Transactions'
     entity Transactions             as projection on db.Transactions;
 
+    @readonly
     @title      : 'Transaction Inputs'
     @description: 'Projection for Transaction Inputs'
     entity TransactionInputs        as projection on db.TransactionInputs;
 
+    @readonly
     @title      : 'Transaction Outputs'
     @description: 'Projection for Transaction Outputs'
     entity TransactionOutputs       as projection on db.TransactionOutputs;
 
+    @readonly
     @title      : 'Transaction Input Assets'
     @description: 'Projection for Transaction Input Assets'
     entity TransactionInputAssets   as projection on db.TransactionInputAssets;
 
+    @readonly
     @title      : 'Transaction Output Assets'
     @description: 'Projection for Transaction Output Assets'
     entity TransactionOutputAssets  as projection on db.TransactionOutputAssets;
 
+    @readonly
     @title      : 'Accounts'
     @description: 'Projection for Accounts'
     entity Accounts                 as projection on db.Accounts;
 
+    @readonly
     @title      : 'Addresses'
     @description: 'Projection for Addresses'
     entity Addresses                as projection on db.Addresses;
 
+    @readonly
     @title      : 'Address Assets'
     @description: 'Projection for Address Assets'
     entity AddressAssets            as projection on db.AddressAssets;
 
+    @readonly
     @title      : 'Address UTxOs'
     @description: 'Projection for Address UTxOs'
     entity AddressUTxOs             as projection on db.AddressUTxOs;
 
+    @readonly
     @title : 'Address Transactions'
     @description: 'Projection for Address Transactions'
     entity AddressTransactions     as projection on db.AddressTransactions;
 
+    @readonly
     @title      : 'UTxO Assets'
     @description: 'Projection for UTxO Assets'
     entity UTxOAssets               as projection on db.UTxOAssets;
 
+    @readonly
     @title      : 'Transaction Metadata'
     @description: 'Projection for Transaction Metadata'
     entity TransactionMetadata      as projection on db.TransactionMetadata;
 
+    @readonly
     @title      : 'Ledger Protocol Parameters'
     @description: 'Projection for Ledger Protocol Parameters'
     entity LedgerProtocolParameters as projection on db.LedgerProtocolParameters;
@@ -156,17 +176,17 @@ service CardanoODataService @(impl: './cardano-service') {
     @description: 'Retrieve native-asset information (supply, mint history, CIP-25 + CIP-26 metadata) by unit. Multi-backend (Blockfrost, Koios). Field availability differs slightly per backend — see entity description.'
     action GetAssetInfo(
                         @title: 'Asset Unit'
-                        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+                        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
                         unit: AssetUnit)                     returns Assets;
 
     @title      : 'Get Asset Mint/Burn History'
     @description: 'Retrieve recent mint/burn events for a native asset (most recent first). Koios is preferred (provides block timestamps); Blockfrost is the fallback (timestamps null). Always-fresh fetch — UPSERTs entries by (unit, txHash). For full pagination, query the AssetHistory entity directly with $top/$skip after seeding.'
     action GetAssetHistory(
                            @title: 'Asset Unit'
-                           @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+                           @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
                            unit: AssetUnit,
                            @title: 'Limit'
-                           @description: 'Maximum number of recent events to fetch (default 100)'
+                           @description: 'Maximum number of recent events to fetch (default 100, clamped to 1-100)'
                            limit: Integer)                   returns many AssetHistory;
 
     @title      : 'Get Accounts by Stake Address'

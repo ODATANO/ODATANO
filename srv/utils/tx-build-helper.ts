@@ -1,7 +1,8 @@
 import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
 import { toHex, fromHex } from '@harmoniclabs/uint8array-utils';
 import { blake2b_256 } from '@harmoniclabs/crypto';
-import { MixedAssetsError, InsufficientFundsError, BackendError } from './errors';
+import { MixedAssetsError, InsufficientFundsError, BackendError, TransactionValidationError } from './errors';
+import { ERROR_CODES } from './error-codes';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
 import { Cbor, CborArray, CborBytes } from '@harmoniclabs/cbor';
@@ -63,8 +64,9 @@ export function getTxHashFromCbor(txCbor: string): string {
     }
     const bodyBytes = tx.array[0].subCborRef.toBuffer();
     return toHex(blake2b_256(bodyBytes));
-  } catch {
-    throw new Error('Failed to parse transaction CBOR');
+  } catch (err: unknown) {
+    // typed 400 — a plain Error here surfaced as a 500 to the consumer
+    throw new TransactionValidationError('Failed to parse transaction CBOR', err, ERROR_CODES.TX_PARSE_FAILED);
   }
 }
 
