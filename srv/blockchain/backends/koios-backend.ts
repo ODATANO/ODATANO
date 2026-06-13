@@ -158,15 +158,15 @@ export class KoiosBackend implements CardanoBackend {
    * valid queries — a single retry is not always sufficient for historical
    * epoch lookups, so we retry with increasing delays (500 → 1000 → 2000 ms).
    */
-  // Generic helper. Kept as `any[]` to avoid forcing every Koios endpoint
-  // call site (block_info, epoch_info, account_info, ...) to declare a row
-  // shape just for the empty-array retry path. Row narrowing happens at use.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // Type-agnostic retry helper: it only checks that `.data` is a non-empty
+  // array, so the element type is intentionally `any` to avoid forcing every
+  // Koios endpoint call site (block_info, epoch_info, account_info, …) to
+  // declare a row shape just for the empty-array retry path. Row narrowing
+  // happens at the use sites.
   private async fetchWithRetryOnEmpty(
-    fn: () => Promise<{ data: any[] }>,
+    fn: () => Promise<{ data: any[] }>, // eslint-disable-line @typescript-eslint/no-explicit-any
     label: string
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ): Promise<any[]> {
+  ): Promise<any[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
     const maxRetries = 3;
     const baseDelayMs = 500;
 

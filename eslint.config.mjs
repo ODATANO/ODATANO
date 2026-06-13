@@ -14,11 +14,16 @@ export default [
       '**/coverage/**',
       '**/dist/**',
       '**/out/**',
+      '**/gen/**',
       '**/.cds-gen/**',
       '**/.cds-staging/**',
       '**/scripts/**',
       'srv/**/*.js',
       'src/**/*.js',
+      // compiled build artifacts emitted in-place (tsconfig.build.json outDir ".")
+      '**/*.d.ts',
+      // local debugging repros (gitignored / npmignored)
+      'repro-*.js',
     ],
   },
 
@@ -35,6 +40,11 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
+        // type-aware linting: auto-discover the nearest tsconfig per file so the
+        // typed rules below have real type information (previously absent — which
+        // also made the no-explicit-any disable-comments reference an inactive rule)
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
     plugins: {
@@ -51,6 +61,16 @@ export default [
       ],
 
       'no-undef': 'error',
+
+      // High-value type-aware rules — catch the bug classes surfaced during the
+      // review (unawaited promises, mis-used async, untyped any).
+      '@typescript-eslint/no-floating-promises': 'warn',
+      // arguments:false — async callbacks passed to event registrars like
+      // cds.on('served'/'shutdown', async …) are an idiomatic, awaited CAP
+      // pattern; keep the conditional/spread checks which catch real misuse.
+      '@typescript-eslint/no-misused-promises': ['warn', { checksVoidReturn: { arguments: false } }],
+      '@typescript-eslint/await-thenable': 'warn',
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
 
@@ -73,7 +93,15 @@ export default [
         beforeEach: 'readonly',
         afterEach: 'readonly',
         jest: 'readonly',
+        fail: 'readonly',
       },
+    },
+    rules: {
+      // type-aware rules are noisy and low-value in test fixtures
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/unbound-method': 'off',
     },
   },
 
