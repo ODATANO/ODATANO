@@ -6,7 +6,9 @@ import type { JSONValue } from './types';
  * Matches the full string form `__INPUT_IDX:<64-hex txHash>#<outputIndex>__`.
  * The placeholder must be the entire `int` field value — partial matches are ignored.
  */
-export const INPUT_IDX_REGEX = /^__INPUT_IDX:([0-9a-f]{64})#(\d+)__$/;
+// case-insensitive: tx hashes are conventionally lowercase, but accept either
+// case and normalize the captured hash to lowercase at the use site
+export const INPUT_IDX_REGEX = /^__INPUT_IDX:([0-9a-fA-F]{64})#(\d+)__$/;
 
 /** Minimal UTxO reference shape used by the placeholder resolver. */
 export interface InputRef {
@@ -68,7 +70,8 @@ function walk(node: JSONValue, ctx: ResolveContext, depth: number): JSONValue {
     if (key === 'int' && typeof value === 'string') {
       const match = INPUT_IDX_REGEX.exec(value);
       if (match) {
-        const [, txHash, idxStr] = match;
+        const [, rawTxHash, idxStr] = match;
+        const txHash = rawTxHash.toLowerCase(); // normalize to match validated lowercase input refs
         const outputIndex = Number(idxStr);
         const pos = ctx.sortedInputs.findIndex(
           ref => ref.txHash === txHash && ref.outputIndex === outputIndex
@@ -87,14 +90,3 @@ function walk(node: JSONValue, ctx: ResolveContext, depth: number): JSONValue {
   return out;
 }
 
-/**
- * Returns true if any string leaf in the JSON tree looks like an __INPUT_IDX__ placeholder.
- * Utility detector for __INPUT_IDX__ placeholders in a PlutusData JSON tree.
- */
-export function containsIndexPlaceholder(node: JSONValue): boolean {
-  if (node === null || typeof node !== 'object') {
-    return typeof node === 'string' && INPUT_IDX_REGEX.test(node);
-  }
-  if (Array.isArray(node)) return node.some(containsIndexPlaceholder);
-  return Object.values(node).some(containsIndexPlaceholder);
-}

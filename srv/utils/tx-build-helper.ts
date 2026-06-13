@@ -116,37 +116,6 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
   };
 }
 
-/**
- * Parse optional JSON string, returning undefined if not provided.
- * Throws with a descriptive message on parse failure.
- */
-export function parseOptionalJson(json: string | undefined, fieldName: string): unknown {
-  if (!json) return undefined;
-  try {
-    return JSON.parse(json);
-  } catch {
-    throw new Error(`${fieldName} must be valid JSON`);
-  }
-}
-
-/**
- * Parse optional JSON string that must be an array.
- * Returns undefined if not provided, throws on invalid JSON or non-array.
- */
-export function parseOptionalJsonArray(json: string | undefined, fieldName: string): unknown[] | undefined {
-  if (!json) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new Error(`${fieldName} must be valid JSON`);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${fieldName} must be a JSON array`);
-  }
-  return parsed;
-}
-
 /** Allowed keys in PlutusData JSON — strip anything else for defense-in-depth */
 const PLUTUS_DATA_ALLOWED_KEYS = new Set([
   'constructor', 'constr', 'fields', 'int', 'bytes', 'list', 'map', 'k', 'v'

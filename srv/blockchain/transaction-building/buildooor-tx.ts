@@ -7,8 +7,8 @@ import { ConfigError, InsufficientFundsError, TransactionValidationError } from 
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
-import type { ProtocolParameters } from "@harmoniclabs/cardano-ledger-ts/dist/ledger/protocol/ProtocolParameters";
 import {
+  type ProtocolParameters,
   defaultProtocolParameters,
   Address,
   UTxO as LedgerUTxO,
@@ -26,6 +26,10 @@ import {
   txRedeemerTagToString
 } from "@harmoniclabs/cardano-ledger-ts";
 
+// Metadata classes are imported from the DIST paths ON PURPOSE: buildooor's
+// AuxiliaryData/TxMetadata do internal `instanceof` checks against these exact
+// dist-class identities, which differ from the package-root re-exports. Mixing
+// root + dist identities breaks those checks at runtime. (See cbor-parse.test.)
 import { TxMetadata } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata";
 import {
   type TxMetadatum,

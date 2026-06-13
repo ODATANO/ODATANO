@@ -1,4 +1,5 @@
 import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
+// dist paths on purpose — must match the class identities buildooor-tx uses (see its import note)
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
@@ -146,7 +147,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
       } as any;
 
       const ctx = {
@@ -179,7 +180,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
         mintingPolicyScript: VALID_PLUTUS_SCRIPT,
         inlineDatum: { constructor: 0, fields: [] },  // exercises lines 257-259
@@ -205,7 +206,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: 'aaaa'.repeat(16), outputIndex: 0 },
@@ -259,7 +260,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         // No changeAddress → exercises fallback to senderAddress (line 422)
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
@@ -537,7 +538,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
@@ -578,7 +579,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
@@ -977,7 +978,7 @@ describe('BuildooorTxBuilder', () => {
       network: 'preview',
       senderAddress: TEST_ADDRESS,
       recipientAddress: TEST_ADDRESS,
-      lovelaceAmount: 2000000,
+      lovelaceAmount: '2000000',
       mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
       mintingPolicyScript: VALID_PLUTUS_SCRIPT,
     });
@@ -1164,7 +1165,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
         mintingPolicyScript: PLUTUS_V2_SCRIPT,
       };
@@ -1316,7 +1317,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptUtxo.txHash, outputIndex: 0 },

@@ -9,7 +9,6 @@ import {
   INPUT_IDX_REGEX,
   resolveIndexPlaceholders,
   sortInputsLikeBuildooor,
-  containsIndexPlaceholder,
   type InputRef,
 } from '../../srv/utils/plutus-placeholders';
 import { TransactionValidationError } from '../../srv/utils/errors';
@@ -27,8 +26,8 @@ describe('INPUT_IDX_REGEX', () => {
     expect(INPUT_IDX_REGEX.test(`__INPUT_IDX:${AA_HASH}#42__`)).toBe(true);
   });
 
-  it('rejects uppercase hex (placeholder is lower-case-only by contract)', () => {
-    expect(INPUT_IDX_REGEX.test(`__INPUT_IDX:${AA_HASH.toUpperCase()}#0__`)).toBe(false);
+  it('accepts uppercase hex (case-insensitive; normalized to lowercase at the use site)', () => {
+    expect(INPUT_IDX_REGEX.test(`__INPUT_IDX:${AA_HASH.toUpperCase()}#0__`)).toBe(true);
   });
 
   it('rejects missing trailing __ suffix', () => {
@@ -82,6 +81,11 @@ describe('resolveIndexPlaceholders', () => {
 
   it('replaces an int leaf placeholder with the resolved numeric index', () => {
     const tree = { int: `__INPUT_IDX:${BB_HASH}#0__` };
+    expect(resolveIndexPlaceholders(tree, ctx)).toEqual({ int: 1 });
+  });
+
+  it('resolves an UPPERCASE-hash placeholder against the lowercase input set', () => {
+    const tree = { int: `__INPUT_IDX:${BB_HASH.toUpperCase()}#0__` };
     expect(resolveIndexPlaceholders(tree, ctx)).toEqual({ int: 1 });
   });
 
@@ -150,25 +154,3 @@ describe('resolveIndexPlaceholders', () => {
   });
 });
 
-describe('containsIndexPlaceholder', () => {
-  it('returns true for a placeholder string nested inside an int field', () => {
-    const tree: any = { fields: [{ int: `__INPUT_IDX:${AA_HASH}#0__` }] };
-    expect(containsIndexPlaceholder(tree)).toBe(true);
-  });
-
-  it('returns true for a placeholder string anywhere in the tree (whole-tree scan)', () => {
-    const tree: any = { bytes: `__INPUT_IDX:${AA_HASH}#0__` };
-    expect(containsIndexPlaceholder(tree)).toBe(true);
-  });
-
-  it('returns false for a tree that contains no placeholders', () => {
-    const tree: any = { constructor: 0, fields: [{ int: 1 }] };
-    expect(containsIndexPlaceholder(tree)).toBe(false);
-  });
-
-  it('returns false for non-string primitive leaves (null, number, boolean)', () => {
-    expect(containsIndexPlaceholder(null as any)).toBe(false);
-    expect(containsIndexPlaceholder(42 as any)).toBe(false);
-    expect(containsIndexPlaceholder(true as any)).toBe(false);
-  });
-});

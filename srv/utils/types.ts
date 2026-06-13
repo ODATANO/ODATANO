@@ -330,11 +330,6 @@ export type PlutusScriptExecution = {
   redeemer: JSONValue;
   /** Datum data (JSON value, optional - required for hash-based datums) */
   datum?: JSONValue;
-  /** Execution units budget for script execution */
-  executionUnits?: {
-    mem: number;
-    cpu: number;
-  };
 };
 
 /** 
@@ -344,9 +339,10 @@ export type TxBuildRequest = {
   network: 'mainnet' | 'preprod' | 'preview';
   senderAddress: string;
   recipientAddress: string;
-  lovelaceAmount: number;
+  // OData `Lovelace` is Decimal(20,0) → delivered as a STRING at runtime (CAP
+  // preserves decimal precision). The handlers already BigInt()/String() it.
+  lovelaceAmount: string;
   changeAddress?: string;
-  feeLovelace?: string;
   metadataJson?: JSONValue;
   /** Multi-asset amounts to send (optional) */
   assets?: Amount[];

@@ -29,10 +29,11 @@ async function verifyBuildOwnership(
 ): Promise<TransactionBuildRecord> {
   const build = await db.run(SELECT.one.from(TransactionBuilds as never).where({ id: buildId })) as TransactionBuildRecord | undefined;
   if (!build) rejectInvalid(req, actionName, 'Build not found', 'buildId');
-  if (address && build!.senderAddress !== address) {
+  // rejectInvalid returns `never` → build is narrowed to non-null here
+  if (address && build.senderAddress !== address) {
     rejectInvalid(req, actionName, 'Address does not match build owner', 'address');
   }
-  return build!;
+  return build;
 }
 
 /**

@@ -444,7 +444,7 @@ export function validateTransactionInputs(
     }
   }
 
-  // Validate CBOR format and size (max 32K hex chars = 16KB binary)
+  // Validate CBOR format and size (max 65536 hex chars = 32 KB binary)
   const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
     errors.push({

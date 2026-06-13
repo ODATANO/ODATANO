@@ -900,7 +900,7 @@ module.exports = (srv: cds.Service) => {
         network: getCardanoClient().network,
         senderAddress: address,
         recipientAddress: address,
-        lovelaceAmount: Number(COLLATERAL_LOVELACE),
+        lovelaceAmount: COLLATERAL_LOVELACE.toString(),
         changeAddress: address,
       });
       return { ...result, collateralAvailable: false };

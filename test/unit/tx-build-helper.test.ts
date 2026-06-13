@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
@@ -388,42 +388,6 @@ describe('tx-build-helper utilities', () => {
       } catch (err) {
         expect(err).toBe(typedValidation);
       }
-    });
-  });
-
-  describe('parseOptionalJson', () => {
-    it('should return undefined for undefined input', () => {
-      expect(parseOptionalJson(undefined, 'test')).toBeUndefined();
-    });
-
-    it('should parse valid JSON', () => {
-      expect(parseOptionalJson('{"key":"value"}', 'test')).toEqual({ key: 'value' });
-    });
-
-    it('should throw for invalid JSON', () => {
-      expect(() => parseOptionalJson('{bad json', 'myField')).toThrow('myField must be valid JSON');
-    });
-  });
-
-  describe('parseOptionalJsonArray', () => {
-    it('should return undefined for undefined input', () => {
-      expect(parseOptionalJsonArray(undefined, 'test')).toBeUndefined();
-    });
-
-    it('should parse valid JSON array', () => {
-      expect(parseOptionalJsonArray('[1,2,3]', 'test')).toEqual([1, 2, 3]);
-    });
-
-    it('should throw for invalid JSON', () => {
-      expect(() => parseOptionalJsonArray('{bad', 'myField')).toThrow('myField must be valid JSON');
-    });
-
-    it('should throw for non-array JSON', () => {
-      expect(() => parseOptionalJsonArray('"hello"', 'myField')).toThrow('myField must be a JSON array');
-    });
-
-    it('should throw for object JSON (not array)', () => {
-      expect(() => parseOptionalJsonArray('{"a":1}', 'myField')).toThrow('myField must be a JSON array');
     });
   });
 

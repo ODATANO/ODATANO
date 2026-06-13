@@ -86,7 +86,7 @@ const mockTxRequest: TxBuildRequest = {
   network: 'preview',
   senderAddress: 'addr_test1sender',
   recipientAddress: 'addr_test1recipient',
-  lovelaceAmount: 5000000,
+  lovelaceAmount: '5000000',
 };
 
 const mockMintTxRequest: TxBuildRequest = {
