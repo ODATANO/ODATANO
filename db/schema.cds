@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -101,20 +101,20 @@ entity Epochs {
     key epoch         : Integer;
 
         @title      : 'Epoch Start Time'
-        @description: 'Epoch start time as unix timestamp'
-        startTime      : Integer;
+        @description: 'Epoch start time as unix timestamp (seconds)'
+        startTime      : Integer64; // Integer (32-bit) overflows on 2038-01-19
 
         @title      : 'Epoch End Time'
-        @description: 'Epoch end time as unix timestamp'
-        endTime        : Integer;
+        @description: 'Epoch end time as unix timestamp (seconds)'
+        endTime        : Integer64;
 
         @title      : 'First Block Time'
-        @description: 'First block time as unix timestamp'
-        firstBlockTime : Integer;
+        @description: 'First block time as unix timestamp (seconds)'
+        firstBlockTime : Integer64;
 
         @title      : 'Last Block Time'
-        @description: 'Last block time as unix timestamp'
-        lastBlockTime  : Integer;
+        @description: 'Last block time as unix timestamp (seconds)'
+        lastBlockTime  : Integer64;
 
         @title      : 'Block Count'
         @description: 'Number of blocks in the epoch'
@@ -143,7 +143,7 @@ entity Pools : temporal {
 
         @title      : 'Pool Id (Key)'
         @description: 'Unique stake pool identifier'
-    key poolId         : String;
+    key poolId         : Bech32;
 
         @title      : 'VRF Key Hash'
         @description: 'Pool VRF key hash as hex string'
@@ -212,7 +212,7 @@ entity Assets : temporal {
 
         @title      : 'Asset Name Hex'
         @description: 'Asset name as hex string (0-32 bytes / 0-64 hex chars)'
-        assetNameHex      : HexBytes;
+        assetNameHex      : String(64); // 32-byte ledger cap = 64 hex (was HexBytes=String(5000))
 
         @title      : 'Asset Name'
         @description: 'Asset name as UTF-8 string when decodable'
@@ -303,7 +303,7 @@ entity Dreps : temporal {
 
         @title      : 'Drep Id (Key)'
         @description: 'Unique drep identifier'
-    key drepId          : String;
+    key drepId          : Bech32;
 
         @title      : 'Drep VRF Key Hash'
         @description: 'Drep VRF key hash as hex string'
@@ -465,7 +465,7 @@ entity Accounts : temporal {
 
         @title      : 'Stake Address (Key)'
         @description: 'The Bech32 encoded stake address string'
-    key stakeAddress       : String;
+    key stakeAddress       : Bech32;
 
         @title      : 'Active Status'
         @description: 'Indicates if the account is active'
@@ -706,8 +706,8 @@ entity TransactionOutputAssets {
 entity TransactionMetadata {
 
         @title      : 'ID (key)'
-        @description: 'Unique identifier for the metadata entry'
-    key id      : Integer;
+        @description: 'The metadata label as a uint64 (also exposed as the string `label`)'
+    key id      : Integer64; // was Integer (32-bit): overflowed for labels > 2^31
 
         @title      : 'Transaction (key)'
         @description: 'The associated transaction'
@@ -715,7 +715,7 @@ entity TransactionMetadata {
 
         @title      : 'Label'
         @description: 'The metadata label as string'
-        label   : String;
+        label   : MetadataLabel;
 
         @title      : 'Metadata Payload'
         @description: 'The metadata payload as JSON string'

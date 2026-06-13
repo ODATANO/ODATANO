@@ -22,8 +22,8 @@ type Lovelace         : Decimal(20, 0);
 type AssetUnit        : String(120);
 
 @title      : 'Metadata Label'
-@description: 'Metadata label as string (max 5 digits)'
-type MetadataLabel    : String(5);
+@description: 'Metadata label as string — a uint64 (0 .. 18446744073709551615, up to 20 digits)'
+type MetadataLabel    : String(20); // was String(5): truncated labels above 5 digits
 
 @title      : 'Bech32 Address'
 @description: 'Bech32 encoded address string'

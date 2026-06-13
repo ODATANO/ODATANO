@@ -310,7 +310,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
         } else {
           // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
-          assetBalances.set(amount.unit, current - BigInt(amount.quantity));
+          assetBalances.set(amount.unit, current - BigInt(amount.quantity || '0'));
         }
       }
     }
@@ -325,7 +325,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
         } else {
           // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
-          assetBalances.set(amount.unit, current + BigInt(amount.quantity));
+          assetBalances.set(amount.unit, current + BigInt(amount.quantity || '0'));
         }
       }
     }
@@ -381,7 +381,11 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       blockHash: utxo.blockHash,
       utxodata_dataHash: utxo.datumHash,
       utxodata_inlineDatum: utxo.inlineDatum || null,
-      utxodata_referenceScriptHash: utxo.scriptRef,
+      // This column is a script HASH (Blake2b256). UTxO.scriptRef is overloaded:
+      // Blockfrost/Ogmios give a 56-hex hash (stored as-is); Koios gives the full
+      // script CBOR (used by the tx-builder, but it would truncate this hash
+      // column) — only persist hash-length values here.
+      utxodata_referenceScriptHash: utxo.scriptRef && utxo.scriptRef.length <= 64 ? utxo.scriptRef : null,
       lovelace: lovelace,
       validFrom: validFrom,
       validTo: validTo,
@@ -489,7 +493,8 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData?: Epoch
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
     hash: providerBlockData.hash,
-    slotLeader: String(providerBlockData.slotLeader ?? null),
+    // was `String(x ?? null)` → persisted the literal string "null" when absent
+    slotLeader: providerBlockData.slotLeader ?? null,
     epochNumber: epochData?.epoch ?? providerBlockData.epoch,
     epoch: epochData,
     epochSlot: providerBlockData.epochSlot,
@@ -530,8 +535,14 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
+    const numericId = Number(lbl.label);
+    // Metadata labels are uint64; the exact value is kept in the `label` string.
+    // The numeric `id` key (now Integer64) is exact up to 2^53 — warn beyond that.
+    if (!Number.isSafeInteger(numericId)) {
+      logger.warn(`Metadata label ${lbl.label} exceeds safe-integer range — numeric id key may lose precision (string label is exact)`);
+    }
     rows.push({
-      id: Number(lbl.label),
+      id: numericId,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
       payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
