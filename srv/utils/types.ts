@@ -548,6 +548,8 @@ export interface SigningInstructions {
     /** Whether to include partial witnesses */
     partialSign: boolean;
   };
+  /** Copy-pasteable cardano-cli signing recipe (for CLI/hardware signers) */
+  cardanoCliCommand?: string;
 }
 
 /**

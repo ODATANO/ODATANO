@@ -63,8 +63,11 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
       throw new TransactionValidationError('Witness set must be CBOR map per Cardano spec');
     }
 
-    // Re-encode the tx array, preserving encoding metadata on body and all witness values.
-    // Construct a new CborArray to avoid stale subCborRef pointing to the old bytes.
+    // Re-encode the tx as a NEW outer CborArray so the encoder cannot short-circuit
+    // to the original full-tx bytes via the outer value's subCborRef (which no longer
+    // matches now that the witness set changed). The INNER element subCborRefs are
+    // deliberately kept: that byte-preserves the body (array[0]), so the tx body hash
+    // the witnesses signed stays identical.
     const signedTxCbor = toHex(Cbor.encode(
       new CborArray(txObj.array, { indefinite: txObj.indefinite })
     ));

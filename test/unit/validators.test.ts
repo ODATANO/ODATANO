@@ -1161,4 +1161,38 @@ describe('Validator Helper Methods and Type Guards', () => {
       });
     });
   });
+
+  // ==========================================================================
+  // extractPaymentCredential (signature-binding support)
+  // ==========================================================================
+  describe('extractPaymentCredential', () => {
+    const { extractPaymentCredential } = require('../../srv/utils/validators');
+    // type-0 base address (key payment credential)
+    const KEY_ADDRESS = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+    // type-7 enterprise address (script payment credential)
+    const SCRIPT_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
+
+    it('extracts a 28-byte KEY credential from a base address', () => {
+      const cred = extractPaymentCredential(KEY_ADDRESS);
+      expect(cred).not.toBeNull();
+      expect(cred!.hash).toMatch(/^[0-9a-f]{56}$/);
+      expect(cred!.isScript).toBe(false);
+    });
+
+    it('flags SCRIPT payment credentials', () => {
+      const cred = extractPaymentCredential(SCRIPT_ADDRESS);
+      expect(cred).not.toBeNull();
+      expect(cred!.hash).toMatch(/^[0-9a-f]{56}$/);
+      expect(cred!.isScript).toBe(true);
+    });
+
+    it('returns null for stake addresses (no payment part)', () => {
+      expect(extractPaymentCredential('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr')).toBeNull();
+    });
+
+    it('returns null for undecodable input', () => {
+      expect(extractPaymentCredential('not-an-address')).toBeNull();
+      expect(extractPaymentCredential('')).toBeNull();
+    });
+  });
 });

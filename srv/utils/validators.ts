@@ -299,6 +299,30 @@ export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
 }
 
 /**
+ * Extract the payment credential from a Shelley bech32 address.
+ * Returns the 28-byte credential hash (hex) plus whether it is a SCRIPT
+ * credential (address type bit 0 of the header high nibble), or null when the
+ * address cannot be decoded / carries no payment part (stake addresses).
+ */
+export function extractPaymentCredential(address: string): { hash: string; isScript: boolean } | null {
+  try {
+    const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
+    const bytes = Buffer.from(bech32.fromWords(decoded.words));
+    // 1 header byte + 28-byte payment credential (+ optional 28-byte stake part)
+    if (bytes.length < 29) return null;
+    const addrType = bytes[0] >> 4;
+    // types 0-7 are payment addresses; 14/15 are stake addresses (no payment part)
+    if (addrType > 7) return null;
+    return {
+      hash: bytes.subarray(1, 29).toString('hex'),
+      isScript: (addrType & 0x1) === 1,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate an array of Ed25519 key hashes (hex, 28 bytes / 56 hex chars each).
  * @param signers - The parsed JSON array to validate
  * @returns validated string array
