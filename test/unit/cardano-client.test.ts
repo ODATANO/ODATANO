@@ -95,6 +95,16 @@ describe('CardanoClient Configuration', () => {
       expect(() => new CardanoClient(config)).not.toThrow();
     });
 
+    it('wires indexTtlMs into the cache TTL the indexer reads (was hardcoded 60s)', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 3_600_000 }));
+      expect(client.max_age_ms).toBe(3_600_000);
+    });
+
+    it('keeps the 60s default when indexTtlMs is zero/invalid', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 0 }));
+      expect(client.max_age_ms).toBe(60_000);
+    });
+
     it('should accept blockfrost backend', () => {
       const config = createTestConfig({ backends: ['blockfrost'] });
       expect(() => new CardanoClient(config)).not.toThrow();

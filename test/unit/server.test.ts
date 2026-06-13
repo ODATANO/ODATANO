@@ -104,6 +104,21 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Must be a number');
     });
 
+    it('should reject a CDS-config numeric 0 timeout instead of silently defaulting', () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const cds = require('@sap/cds');
+      const reqs = (cds.env.requires ??= {});
+      const prev = reqs['odatano-core'];
+      reqs['odatano-core'] = { backends: ['koios'], primaryTimeoutMs: 0 };
+      try {
+        // 0 is falsy: the old `timeout && …` guard skipped the <=0 check and 0
+        // silently became the 30000 default. Now it is rejected.
+        expect(() => loadConfigFromEnv()).toThrow('Must be a positive number');
+      } finally {
+        if (prev === undefined) delete reqs['odatano-core']; else reqs['odatano-core'] = prev;
+      }
+    });
+
     it('should throw on non-numeric FALLBACK_TIMEOUT_MS', () => {
       env.FALLBACK_TIMEOUT_MS = 'xyz';
       expect(() => loadConfigFromEnv()).toThrow('Invalid FALLBACK_TIMEOUT_MS "xyz"');

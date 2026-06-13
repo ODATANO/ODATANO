@@ -145,15 +145,16 @@ export class CardanoIndexer {
         await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
         logger.debug(`indexTransaction: upserted ${inputAssetRows.length} transaction input assets for ${txHash}`);
       }
+    }
 
-      // Outputs + OutputAssets
+    // Outputs + OutputAssets — independent of inputs (a tx with empty/missing
+    // `inputs` previously skipped its outputs entirely)
+    if (providerTx.outputs) {
       const outputRows = mapTransactionOutputs(txHash, providerTx.outputs);
       const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs);
 
       if (outputRows.length) {
-
         await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows))
-
       }
 
       if (outputAssetRows.length) {
@@ -348,16 +349,9 @@ export class CardanoIndexer {
       }
     }
 
-    // Create address-transaction mapping entries
-    const now = new Date().toISOString();
-    const validTo = new Date(Date.now() + 600000).toISOString(); // 10 min TTL
-
-    const transactionsEntities = mapAddressTransactions(
-      addr,
-      allTxData,
-      now,
-      validTo
-    );
+    // Create address-transaction mapping entries (no TTL — keyed by (address, tx),
+    // immutable per confirmed tx; the entity has no temporal columns)
+    const transactionsEntities = mapAddressTransactions(addr, allTxData);
 
     logger.debug({ count: transactionsEntities.length }, 'indexAddressTransactions: transaction entities');
 
@@ -497,7 +491,7 @@ export class CardanoIndexer {
    */
   async indexDrep(tx: CapTransaction, drepId: string): Promise<Drep> {
     const drepInfo = await this.client.getDrep(drepId);
-    const drepEntity = mapDrep(drepInfo);
+    const drepEntity = mapDrep(drepInfo, this.client.max_age_ms);
     await tx.run(UPSERT.into(Dreps).entries(drepEntity));
     return drepEntity;
   }
@@ -510,7 +504,7 @@ export class CardanoIndexer {
    */
   async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
     const poolInfo = await this.client.getPool(poolId);
-    const poolEntity = mapPool(poolInfo);
+    const poolEntity = mapPool(poolInfo, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Pools).entries(poolEntity))
 
@@ -619,8 +613,10 @@ export class CardanoIndexer {
     // Return cached DB row if within TTL (protocol params only change at epoch boundaries ~5 days)
     const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes — matches client cache TTL
     if (now - this.lastParamsFetchTime < PROTOCOL_PARAMS_TTL_MS) {
+      // (network, epoch) is the composite key — old epochs accumulate as rows, so
+      // order by epoch desc to return the LATEST instead of an arbitrary row.
       const existing = await tx.run(
-        SELECT.one.from(LedgerProtocolParameter).where({ network })
+        SELECT.one.from(LedgerProtocolParameter).where({ network }).orderBy('epoch desc')
       );
       if (existing) return existing;
     }
@@ -984,7 +980,10 @@ export class CardanoIndexer {
           const inputAssetRows = mapTransactionInputAssets(providerTx.hash, providerTx.inputs);
           if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
           if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
+        }
 
+        // outputs independent of inputs (see indexTransaction)
+        if (providerTx.outputs) {
           const outputRows = mapTransactionOutputs(providerTx.hash, providerTx.outputs);
           const outputAssetRows = mapTransactionOutputAssets(providerTx.hash, providerTx.outputs);
           if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));

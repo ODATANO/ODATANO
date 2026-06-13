@@ -72,6 +72,13 @@ cds.on('loaded', (model) => {
 cds.on('served', async () => {
   if (initialized) return;
 
+  // Honor SKIP_AUTO_INIT so consumer test suites can mount the plugin without it
+  // opening real backend connections (matches srv/server.ts's standalone hook).
+  if (process.env.SKIP_AUTO_INIT === 'true') {
+    logger.info('Skipping plugin auto-initialization (SKIP_AUTO_INIT=true)');
+    return;
+  }
+
   logger.debug('Plugin activation triggered');
 
   try {

@@ -75,6 +75,7 @@ export function getStatus(): { initialized: boolean; network?: string; backends?
     return {
       initialized: true,
       network: ctx.cardanoClient.network,
+      backends: ctx.cardanoClient.listBackends(),
     };
   } catch {
     return { initialized: false };

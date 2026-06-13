@@ -14,6 +14,8 @@ import {
   mapAsset,
   mapAssetHistory,
   mapBuildResult,
+  mapPool,
+  mapDrep,
   normalizeCostModels,
   scriptHashToEnterpriseAddress,
 } from '../../srv/utils/mappers';
@@ -317,7 +319,7 @@ describe('mappers', () => {
         blockTime: 1700000000,
         inputs: [{ txHash: 'in1', outputIndex: 0, address: addr, amount: [{ unit, quantity: '2' }] }],
         outputs: [{ txHash: 'tx123', outputIndex: 0, address: addr, amount: [{ unit, quantity: '5' }], dataHash: null, inlineDatum: null, isCollateral: false }],
-      } as any], '2024-01-01', '2025-01-01');
+      } as any]);
 
       expect(rows).toHaveLength(1);
       expect(rows[0].hasAssets).toBe(true);
@@ -463,6 +465,27 @@ describe('mappers', () => {
 
       expect(result.onchainMetadata).toBeNull();
       expect(result.assetName).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // mapPool / mapDrep — temporal stamping (Pools/Dreps are now : temporal)
+  // ==========================================================================
+  describe('mapPool / mapDrep temporal stamping', () => {
+    it('mapPool stamps validFrom/validTo from max_age so slices expire and re-fetch', () => {
+      const before = Date.now();
+      const row = mapPool({ poolId: 'pool1', margin: '0.05' } as any, 3_600_000);
+      expect(row.validFrom).toBeDefined();
+      expect(row.validTo).toBeDefined();
+      const span = new Date(row.validTo!).getTime() - new Date(row.validFrom!).getTime();
+      expect(span).toBe(3_600_000);
+      expect(new Date(row.validFrom!).getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it('mapDrep stamps validFrom/validTo from max_age', () => {
+      const row = mapDrep({ drepId: 'drep1', retired: false, expired: false } as any, 60_000);
+      const span = new Date(row.validTo!).getTime() - new Date(row.validFrom!).getTime();
+      expect(span).toBe(60_000);
     });
   });
 

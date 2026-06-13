@@ -127,8 +127,22 @@ export class CardanoClient {
     }
 
     this.circuitBreaker = new CircuitBreakerManager(clientConfig.circuitBreaker);
-    logger.info('CardanoClient instance created.');
+    // Wire the configured cache TTL into the field the indexer actually reads.
+    // Previously max_age_ms stayed hardcoded at 60s and indexTtlMs was dead — the
+    // documented/configurable 1h default never took effect.
+    if (Number.isFinite(clientConfig.indexTtlMs) && clientConfig.indexTtlMs > 0) {
+      this.max_age_ms = clientConfig.indexTtlMs;
+    }
+    logger.info(`CardanoClient instance created (cache TTL ${this.max_age_ms} ms).`);
     this.config = clientConfig;
+  }
+
+  /** Names of the configured backends (live + historical), for status reporting. */
+  listBackends(): string[] {
+    const names: string[] = [];
+    if (this.liveBackend) names.push(this.liveBackend.name);
+    names.push(...this.historicalBackends.map(b => b.name));
+    return names;
   }
 
   /**

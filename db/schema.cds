@@ -139,7 +139,7 @@ entity Epochs {
 
 @title      : 'Pool Entity'
 @description: 'Stake pool information entity definition'
-entity Pools {
+entity Pools : temporal {
 
         @title      : 'Pool Id (Key)'
         @description: 'Unique stake pool identifier'
@@ -299,7 +299,7 @@ entity AssetHistory {
 
 @title      : 'Drep Entity'
 @description: 'Drep information entity definition'
-entity Dreps {
+entity Dreps : temporal {
 
         @title      : 'Drep Id (Key)'
         @description: 'Unique drep identifier'

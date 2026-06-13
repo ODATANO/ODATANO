@@ -22,7 +22,9 @@ jest.mock('@sap/cds', () => {
   });
   const mockOne = {
     from: jest.fn().mockReturnValue({
-      where: jest.fn().mockReturnValue({})
+      where: jest.fn().mockReturnValue({
+        orderBy: jest.fn().mockReturnValue({})
+      })
     })
   };
 

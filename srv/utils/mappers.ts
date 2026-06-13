@@ -270,7 +270,10 @@ interface NetAsset {
  * @param addressTxsData address transactions data from provider
  * @returns {AddressTransactionRow[]} mapped address transaction rows
  *  */
-export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[],validFrom: string, validTo: string): AddressTransactionRow[] {
+// AddressTransactions is keyed by (address, tx) and the per-tx net amounts are
+// immutable once confirmed — no temporal validity. The entity has no
+// validFrom/validTo columns, so the previous TTL plumbing was silently dropped.
+export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[]): AddressTransactionRow[] {
 
   return addressTxsData.map((tx: TransactionProviderData) => {
     // Calculate net amounts for this address in this transaction
@@ -283,8 +286,6 @@ export function mapAddressTransactions(addr: string, addressTxsData: Transaction
       blockTime: tx.blockTime,
       netAssets: netAssets.length > 0 ? JSON.stringify(netAssets) : null,
       hasAssets: netAssets.length > 0,
-      validFrom: validFrom,
-      validTo: validTo,
     };
   });
 }
@@ -545,7 +546,11 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
  * @param providerPoolData pool data from provider
  * @returns {PoolRow} mapped pool row
  */
-export function mapPool(providerPoolData: PoolProviderData): PoolRow {
+export function mapPool(providerPoolData: PoolProviderData, max_age: number): PoolRow {
+  // temporal stamping: live fields (liveStake/liveSaturation/retired…) change every
+  // epoch, so a slice expires after max_age and the index-on-miss read re-fetches
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
   return {
     poolId: providerPoolData.poolId,
     vrfKeyHash: providerPoolData.vrfKeyHash,
@@ -561,6 +566,8 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
     margin: Number(providerPoolData.margin),
     fixedCost: providerPoolData.fixedCost,
     rewardAccount: providerPoolData.rewardAccount,
+    validFrom,
+    validTo,
   };
 }
 
@@ -624,7 +631,11 @@ export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): Asset
  * @param providerDrepData drep data from provider
  * @returns {DrepRow} mapped drep row
  */
-export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
+export function mapDrep(providerDrepData: DrepProviderData, max_age: number): DrepRow {
+  // temporal stamping: amount/retired/expired drift over time → slice expires
+  // after max_age so the index-on-miss read re-fetches fresh state
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
   return {
     drepId: providerDrepData.drepId,
     hex: providerDrepData.hex,
@@ -633,6 +644,8 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
     lastActiveEpoch: providerDrepData.lastActiveEpoch,
     retired: Boolean(providerDrepData.retired),
     expired: Boolean(providerDrepData.expired),
+    validFrom,
+    validTo,
   };
 }
 
