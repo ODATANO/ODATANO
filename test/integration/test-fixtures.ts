@@ -48,6 +48,12 @@ export const TEST_FIXTURES = {
   mintQuantity_1000: '1000',
   burnQuantity_500: '-500',
   validPlutusScript: "585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009",
+  // Genuinely PARAMETERIZED always-succeeds PlutusV3 script: `\param -> \ctx -> 0`.
+  // Applying one parameter leaves a valid single-arg validator that evaluates without
+  // error. (validPlutusScript above is non-parameterized — applying a param to it
+  // produces a script that fails local evaluation, which the builder now rejects when
+  // no Ogmios evaluator is available.)
+  parameterizedScript: "4701010022480001",
   validMetadataJson: JSON.stringify({"721": {"MyToken": {"name": "TokenM", "description": "My first minted token"}}}),
   invalidMintActionsJson: "invalid_json",
   invalidMintingPolicyScript: 'invalid_script',
@@ -383,6 +389,23 @@ export const metaDataRequestBody2 = {
 export const SCRIPT_UTXO_TX_HASH = 'aabb0011223344556677889900aabbccddeeff00112233445566778899001122';
 export const SCRIPT_UTXO_OUTPUT_INDEX = 0;
 
+// Enterprise script address (header 0x70) for the validSpendingScript hash — the
+// address the script UTxO actually lives at. Kept distinct from the sender so the
+// builder runs its getTransaction-based script-UTxO resolution (instead of finding
+// it among sender UTxOs) and the live-unspent pre-check queries it separately.
+export const SCRIPT_UTXO_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
+
+// Koios /address_utxos entry the script address returns, so _assertUnspent sees the
+// script UTxO as live. Only tx_hash/tx_index are consulted by the unspent check.
+export const scriptUtxoKoiosEntry = {
+  tx_hash: SCRIPT_UTXO_TX_HASH,
+  tx_index: SCRIPT_UTXO_OUTPUT_INDEX,
+  value: '10000000',
+  asset_list: [],
+  block_hash: 'mockscriptblockhash0000000000000000000000000000000000000000000000',
+  datum_hash: null,
+};
+
 export const plutusSpendRequestBody = {
   senderAddress: TEST_FIXTURES.addressWithFunds,
   recipientAddress: TEST_FIXTURES.emptyAddress,
@@ -416,7 +439,7 @@ export const mockScriptTxInfo = [{
   outputs: [{
     tx_index: SCRIPT_UTXO_OUTPUT_INDEX,
     value: '10000000',
-    payment_addr: { bech32: TEST_FIXTURES.addressWithFunds },
+    payment_addr: { bech32: SCRIPT_UTXO_ADDRESS },
     asset_list: [],
     datum_hash: null,
     inline_datum: null,

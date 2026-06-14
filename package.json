@@ -7,6 +7,19 @@
   },
   "main": "src/index.js",
   "types": "src/index.d.ts",
+  "files": [
+    "cds-plugin.js",
+    "src/**/*.js",
+    "src/**/*.d.ts",
+    "srv/**/*.js",
+    "srv/**/*.d.ts",
+    "srv/**/*.cds",
+    "db/**/*.cds",
+    "@cds-models/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
     "@sap/cds": ">=9"
   },
@@ -93,9 +106,11 @@
   },
   "scripts": {
     "clean": "node -e \"require('glob').sync('{srv,db,src}/**/*.{js,js.map,d.ts,d.ts.map}',{ignore:'**/node_modules/**'}).forEach(f=>require('fs').unlinkSync(f));console.log('Clean complete')\"",
+    "clean:models": "node -e \"require('fs').rmSync('@cds-models',{recursive:true,force:true});console.log('Removed @cds-models')\"",
     "build": "npm run cds:types && tsc",
     "build:plugin": "npm run cds:types && tsc -p tsconfig.build.json",
-    "prepublishOnly": "npm run build:plugin",
+    "prepare": "npm run build:plugin",
+    "prepublishOnly": "npm run clean && npm run clean:models && npm run build:plugin",
     "start": "cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",

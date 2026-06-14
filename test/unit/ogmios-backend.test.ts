@@ -264,6 +264,29 @@ describe('OgmiosBackend', () => {
       expect(result.controlledAmount).toBe('2000000');
       expect(result.rewardsSum).toBe('0');
     });
+
+    it('should extract lovelace from Ogmios v6 {ada:{lovelace}} value objects (no "[object Object]")', async () => {
+      const mockStateQueryClient = {
+        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+          // real Ogmios v6 shape — .toString() on these produced "[object Object]"
+          controlledAmount: { ada: { lovelace: 50_000_000_000n } },
+          rewards: { ada: { lovelace: 1_500_000n } },
+          withdrawals: { ada: { lovelace: 500_000n } },
+          delegate: { id: 'pool1abc123' },
+        }])
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+
+      const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
+
+      expect(result.controlledAmount).toBe('50000000000');
+      expect(result.rewardsSum).toBe('1500000');
+      expect(result.withdrawalsSum).toBe('500000');
+      expect(result.withdrawableAmount).toBe('1500000');
+      expect(result.poolId).toBe('pool1abc123');
+    });
   });
 
   describe('shutdown', () => {
@@ -618,6 +641,32 @@ describe('OgmiosBackend', () => {
       expect(result.rewardAccount).toBe('stake1u8reward');
     });
 
+    it('should map Ogmios v6 value shapes (ValueAdaOnly pledge/cost, Ratio margin) without fabricating activeStake', async () => {
+      const mockStateQueryClient = {
+        stakePools: jest.fn().mockResolvedValue({
+          'pool1v6': {
+            vrf: 'vrf456',
+            stake: { ada: { lovelace: 7000000000n } },
+            pledge: { ada: { lovelace: 1000000000n } }, // String() on this gave "[object Object]"
+            margin: '1/20',
+            cost: { ada: { lovelace: 340000000n } },
+            rewardAccount: 'stake1u8reward'
+          }
+        })
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getPool('pool1v6');
+      expect(result.pledge).toBe('1000000000');
+      expect(result.fixedCost).toBe('340000000');
+      expect(result.margin).toBeCloseTo(0.05, 10);
+      // activeStake is not derivable from pool params — no longer fabricated from pledge
+      expect(result.activeStake).toBe('0');
+    });
+
     it('should throw NotFoundError when pool does not exist', async () => {
       const mockStateQueryClient = {
         stakePools: jest.fn().mockResolvedValue({})
@@ -694,63 +743,157 @@ describe('OgmiosBackend', () => {
     });
   });
 
-  describe('getAddress', () => {
-    it('should handle UTxO with null transaction', async () => {
-      const mockStateQueryClient = {
-        utxo: jest.fn().mockResolvedValue([{
-          transaction: null,
-          index: 0,
-          address: 'addr_test1qtest',
-          value: { ada: { lovelace: 5000000 } }
-        }])
-      };
-
+  describe('ensureConnected — reconnect on dead socket', () => {
+    const mkDeadBackend = () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
+      // close handler cleared the clients; socket is CLOSED (3)
+      (backend as any).stateQueryClient = null;
+      (backend as any).context = { socket: { readyState: 3, OPEN: 1 } };
+      (backend as any).isShutdown = false;
+      const initSpy = jest.spyOn(backend, 'init').mockImplementation(async () => {
+        (backend as any).stateQueryClient = {
+          epoch: jest.fn().mockResolvedValue(450),
+          ledgerTip: jest.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
+        };
+        (backend as any).context = { socket: { readyState: 1, OPEN: 1 } };
+        return true;
+      });
+      return { backend, initSpy };
+    };
+
+    it('re-initializes on the next request instead of staying dead until restart', async () => {
+      const { backend, initSpy } = mkDeadBackend();
+
+      const result = await backend.getLatestEpoch();
+
+      expect(initSpy).toHaveBeenCalledTimes(1);
+      expect(result.epoch).toBe(450);
+    });
+
+    it('shares a single reconnect across concurrent requests', async () => {
+      const { backend, initSpy } = mkDeadBackend();
+
+      const [a, b] = await Promise.all([backend.getLatestEpoch(), backend.getLatestEpoch()]);
+
+      expect(initSpy).toHaveBeenCalledTimes(1);
+      expect(a.epoch).toBe(450);
+      expect(b.epoch).toBe(450);
+    });
+
+    it('does not reconnect when the socket is healthy', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {
+        epoch: jest.fn().mockResolvedValue(500),
+        ledgerTip: jest.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
+      };
+      (backend as any).context = { socket: { readyState: 1, OPEN: 1 } };
+      (backend as any).isShutdown = false;
+      const initSpy = jest.spyOn(backend, 'init');
+
+      await backend.getLatestEpoch();
+      expect(initSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getAddress / getNetworkInformation — declared unsupported (capability routing)', () => {
+    it('getAddress throws instead of fabricating type/stakeAddress/isScript', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {};
       (backend as any).isShutdown = false;
 
-      const result = await backend.getAddress('addr_test1qtest');
-      expect(result.utxos[0].txHash).toBe('');
-      expect(result.amount[0].quantity).toBe('5000000');
+      await expect(backend.getAddress('addr_test1qtest')).rejects.toThrow(/not supported/i);
+      expect(backend.unsupportedMethods.has('getAddress')).toBe(true);
+    });
+
+    it('getNetworkInformation throws instead of fabricating supply figures', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {};
+      (backend as any).isShutdown = false;
+
+      await expect(backend.getNetworkInformation()).rejects.toThrow(/not supported/i);
+      expect(backend.unsupportedMethods.has('getNetworkInformation')).toBe(true);
+    });
+
+    // Historic / out-of-protocol queries: Ogmios bridges live node state only, so these
+    // reject (declared in unsupportedMethods → orchestrator falls back to Blockfrost/Koios)
+    // instead of returning fabricated or empty data.
+    it.each([
+      ['getBlock', (b: any) => b.getBlock('a'.repeat(64))],
+      ['getTransaction', (b: any) => b.getTransaction('a'.repeat(64))],
+      ['getTransactionMetadata', (b: any) => b.getTransactionMetadata('a'.repeat(64))],
+      ['getDrep', (b: any) => b.getDrep('drep1test')],
+      ['getAssetInfo', (b: any) => b.getAssetInfo('a'.repeat(56) + '74657374')],
+      ['getAddressTransactions', (b: any) => b.getAddressTransactions('addr_test1qtest')],
+    ])('%s rejects (declared unsupported) rather than returning data', async (method, call) => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {};
+      (backend as any).isShutdown = false;
+
+      await expect(call(backend)).rejects.toThrow(/not supported|not available/i);
+      expect(backend.unsupportedMethods.has(method as string)).toBe(true);
+    });
+  });
+
+  describe('getAddressUtxos — UTxO mapping', () => {
+    const mkBackend = (utxos: unknown[]) => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { utxo: jest.fn().mockResolvedValue(utxos) };
+      (backend as any).isShutdown = false;
+      return backend;
+    };
+
+    it('should handle UTxO with null transaction', async () => {
+      const backend = mkBackend([{
+        transaction: null,
+        index: 0,
+        address: 'addr_test1qtest',
+        value: { ada: { lovelace: 5000000 } }
+      }]);
+
+      const result = await backend.getAddressUtxos('addr_test1qtest');
+      expect(result[0].txHash).toBe('');
+      expect(result[0].amount[0].quantity).toBe('5000000');
     });
 
     it('should handle UTxO with missing address fallback', async () => {
-      const mockStateQueryClient = {
-        utxo: jest.fn().mockResolvedValue([{
-          transaction: { id: 'txhash123' },
-          index: 2,
-          value: { ada: { lovelace: 3000000 } }
-          // no address field
-        }])
-      };
+      const backend = mkBackend([{
+        transaction: { id: 'txhash123' },
+        index: 2,
+        value: { ada: { lovelace: 3000000 } }
+        // no address field
+      }]);
 
-      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).isShutdown = false;
-
-      const result = await backend.getAddress('addr_test1qfallback');
-      expect(result.utxos[0].address).toBe('addr_test1qfallback');
+      const result = await backend.getAddressUtxos('addr_test1qfallback');
+      expect(result[0].address).toBe('addr_test1qfallback');
     });
 
-    it('should handle UTxO with datumHash and scriptRef', async () => {
-      const mockStateQueryClient = {
-        utxo: jest.fn().mockResolvedValue([{
-          transaction: { id: 'txhash456' },
-          index: 0,
-          address: 'addr_test1qscript',
-          value: { ada: { lovelace: 2000000 } },
-          datumHash: 'datum_hash_abc',
-          script: { hash: 'script_hash_def' }
-        }])
-      };
+    it('should map datumHash, scriptRef AND the inline datum (previously dropped)', async () => {
+      const backend = mkBackend([{
+        transaction: { id: 'txhash456' },
+        index: 0,
+        address: 'addr_test1qscript',
+        value: { ada: { lovelace: 2000000 } },
+        datumHash: 'datum_hash_abc',
+        datum: 'd87980', // inline datum CBOR hex — was lost before
+        script: { hash: 'script_hash_def' }
+      }]);
 
-      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
-      (backend as any).isShutdown = false;
+      const result = await backend.getAddressUtxos('addr_test1qscript');
+      expect(result[0].datumHash).toBe('datum_hash_abc');
+      expect(result[0].inlineDatum).toBe('d87980');
+      expect(result[0].scriptRef).toBe('script_hash_def');
+    });
 
-      const result = await backend.getAddress('addr_test1qscript');
-      expect(result.utxos[0].datumHash).toBe('datum_hash_abc');
-      expect(result.utxos[0].scriptRef).toBe('script_hash_def');
+    it('should map inlineDatum as null when absent', async () => {
+      const backend = mkBackend([{
+        transaction: { id: 'txhash789' },
+        index: 0,
+        address: 'addr_test1qplain',
+        value: { ada: { lovelace: 1000000 } }
+      }]);
+
+      const result = await backend.getAddressUtxos('addr_test1qplain');
+      expect(result[0].inlineDatum).toBeNull();
     });
   });
 
@@ -796,6 +939,11 @@ describe('OgmiosBackend', () => {
       expect(result.hash).toBe('blockhash123');
       expect(result.slot).toBe(432123);
       expect(result.epoch).toBe(1);
+      // preview: 86 400 slots/epoch → epoch 1 starts at slot 86 400
+      // (the old `slot % 432000` yielded 123 here)
+      expect(result.epochSlot).toBe(432123 - 86400);
+      // Shelley-anchored: previewSystemStart (1666656000) + slot seconds
+      expect(result.time).toBe(1666656000 + 432123);
     });
   });
 
@@ -880,6 +1028,31 @@ describe('OgmiosBackend', () => {
       expect(result.eMax).toBe(18);
       expect(result.nOpt).toBe(500);
     });
+
+    it('parses Ratio strings ("num/den") and maps rho/tau to the correct sources', async () => {
+      const mockStateQueryClient = {
+        protocolParameters: jest.fn().mockResolvedValue({
+          // Ogmios v6 delivers ratios as STRINGS — Number("3/1000") is NaN
+          scriptExecutionPrices: { memory: '577/10000', cpu: '721/10000000' },
+          stakePoolPledgeInfluence: '3/10',
+          monetaryExpansion: '3/1000', // ρ
+          treasuryExpansion: '1/5',    // τ
+        }),
+        epoch: jest.fn().mockResolvedValue(500)
+      };
+
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getProtocolParameters();
+      expect(result.priceMem).toBeCloseTo(0.0577, 10);
+      expect(result.priceStep).toBeCloseTo(0.0000721, 10);
+      expect(result.a0).toBeCloseTo(0.3, 10);
+      // ρ = monetaryExpansion, τ = treasuryCut — previously swapped (and NaN)
+      expect(result.rho).toBeCloseTo(0.003, 10);
+      expect(result.tau).toBeCloseTo(0.2, 10);
+    });
   });
 
   describe('shutdown - CONNECTING socket state', () => {
@@ -948,6 +1121,10 @@ describe('OgmiosBackend', () => {
       expect(result.epoch).toBe(100);
       expect(result.block_count).toBe(0);
       expect(result.tx_count).toBe(0);
+      // preview geometry: epoch 100 spans slots [8 640 000, 8 726 400)
+      expect(result.start_time).toBe(1666656000 + 100 * 86400);
+      expect(result.end_time).toBe(1666656000 + 101 * 86400);
+      expect(result.last_block_time).toBe(1666656000 + 43200100);
     });
   });
 

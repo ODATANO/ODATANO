@@ -1,8 +1,9 @@
 import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
+// dist paths on purpose — must match the class identities buildooor-tx uses (see its import note)
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
-import { TransactionValidationError } from '../../srv/utils/errors';
+import { TransactionValidationError, ScriptValidationError } from '../../srv/utils/errors';
 
 // Test addresses and script hex from integration test fixtures
 const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
@@ -47,6 +48,10 @@ describe('BuildooorTxBuilder', () => {
       const result = mapMetadata({ '721': 'nft-data', '1': 100 });
       expect(result).toBeInstanceOf(TxMetadata);
     });
+
+    it('should reject non-numeric labels with a clear 400', () => {
+      expect(() => mapMetadata({ foo: 'bar' })).toThrow('Invalid metadata label');
+    });
   });
 
   describe('_jsonToTxMetadatum', () => {
@@ -76,6 +81,60 @@ describe('BuildooorTxBuilder', () => {
     it('should throw on unsupported type (boolean)', () => {
       expect(() => toMetadatum(true)).toThrow('Unsupported metadata value type');
     });
+
+    it('should reject non-integer numbers with a clear 400 instead of a raw RangeError', () => {
+      expect(() => toMetadatum(1.5)).toThrow('Metadata numbers must be integers');
+    });
+
+    it('should keep short strings as a single TxMetadatumText', () => {
+      const result = toMetadatum('a'.repeat(64));
+      expect(result).toBeInstanceOf(TxMetadatumText);
+    });
+
+    it('should chunk text longer than 64 bytes into a list of ≤64-byte pieces', () => {
+      const long = 'a'.repeat(150);
+      const result = toMetadatum(long);
+      expect(result).toBeInstanceOf(TxMetadatumList);
+      const parts = (result as any).list as Array<{ text: string }>;
+      expect(parts.every(p => Buffer.byteLength(p.text, 'utf8') <= 64)).toBe(true);
+      expect(parts.map(p => p.text).join('')).toBe(long);
+    });
+
+    it('should chunk by BYTES without splitting multi-byte UTF-8 code points', () => {
+      const long = 'ä'.repeat(50); // 100 bytes, 50 chars
+      const result = toMetadatum(long);
+      expect(result).toBeInstanceOf(TxMetadatumList);
+      const parts = (result as any).list as Array<{ text: string }>;
+      expect(parts.every(p => Buffer.byteLength(p.text, 'utf8') <= 64)).toBe(true);
+      expect(parts.map(p => p.text).join('')).toBe(long);
+    });
+
+    it('should map 0x-prefixed hex strings to byte metadata', () => {
+      const { TxMetadatumBytes } = require('@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum');
+      const result = toMetadatum('0xdeadbeef');
+      expect(result).toBeInstanceOf(TxMetadatumBytes);
+      expect(Buffer.from((result as any).bytes).toString('hex')).toBe('deadbeef');
+    });
+
+    it('should chunk 0x byte strings longer than 64 bytes', () => {
+      const { TxMetadatumBytes } = require('@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum');
+      const hex = 'ab'.repeat(100); // 100 bytes
+      const result = toMetadatum('0x' + hex);
+      expect(result).toBeInstanceOf(TxMetadatumList);
+      const parts = (result as any).list;
+      expect(parts.length).toBe(2);
+      expect(parts[0]).toBeInstanceOf(TxMetadatumBytes);
+      expect(parts[0].bytes.length).toBe(64);
+      expect(parts[1].bytes.length).toBe(36);
+    });
+
+    it('should treat non-hex 0x strings as plain text', () => {
+      expect(toMetadatum('0xzz')).toBeInstanceOf(TxMetadatumText);
+    });
+
+    it('should reject map keys longer than 64 bytes', () => {
+      expect(() => toMetadatum({ ['k'.repeat(65)]: 1 })).toThrow('Metadata map key exceeds 64 bytes');
+    });
   });
 
   // =========================================================================
@@ -88,7 +147,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
       } as any;
 
       const ctx = {
@@ -121,7 +180,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
         mintingPolicyScript: VALID_PLUTUS_SCRIPT,
         inlineDatum: { constructor: 0, fields: [] },  // exercises lines 257-259
@@ -147,7 +206,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: 'aaaa'.repeat(16), outputIndex: 0 },
@@ -201,7 +260,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         // No changeAddress → exercises fallback to senderAddress (line 422)
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
@@ -479,7 +538,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
@@ -520,7 +579,7 @@ describe('BuildooorTxBuilder', () => {
         network: 'preview',
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
-        lovelaceAmount: 2000000,
+        lovelaceAmount: '2000000',
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
@@ -756,38 +815,716 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _evaluateExUnits — relative multiplier + absolute cushion
+  // _evaluateExUnitsByRedeemer — per-redeemer Ogmios mapping + cushion
   // =========================================================================
 
-  describe('_evaluateExUnits', () => {
-    const evaluateExUnits = async (evaluator?: any) => {
-      const buildEvalTx = async () => 'deadbeef';
-      return (builder as any)._evaluateExUnits(buildEvalTx, evaluator);
-    };
+  describe('_evaluateExUnitsByRedeemer', () => {
+    const evaluate = async (evaluator: any) =>
+      (builder as any)._evaluateExUnitsByRedeemer('deadbeef', evaluator);
 
-    it('returns defaults when no evaluator is provided', async () => {
-      const result = await evaluateExUnits(undefined);
-      expect(typeof result.mem).toBe('number');
-      expect(typeof result.cpu).toBe('number');
+    it('keys results by redeemer tag:index from the validator pointer', async () => {
+      const evaluator = async () => [
+        { validator: { purpose: 'spend', index: 0 }, budget: { memory: 100, cpu: 1000 } },
+        { validator: { purpose: 'mint', index: 0 }, budget: { memory: 200, cpu: 2000 } }
+      ];
+      const result = await evaluate(evaluator);
+      // TxRedeemerTag.Spend = 0, TxRedeemerTag.Mint = 1
+      expect(result.has('0:0')).toBe(true);
+      expect(result.has('1:0')).toBe(true);
+      expect(result.size).toBe(2);
     });
 
     // Regression: tiny validators were hitting ledger overspend by ~10k–30k CPU
     // because metadata presence shifted the real tx body vs evaluator's simulated
     // ScriptContext. Fixed absolute cushion (ABS_*_BUFFER) guards that gap.
     it('adds absolute cushion on top of the relative buffer for small budgets', async () => {
-      const tinyEvaluator = async () => [{ budget: { memory: 100, cpu: 1000 } }];
-      const result = await evaluateExUnits(tinyEvaluator);
-      // mem: ceil(100 * 1.1) + 1000 = 1110
-      expect(result.mem).toBeGreaterThanOrEqual(1100);
-      // cpu: ceil(1000 * 1.1) + 50000 = 51100
-      expect(result.cpu).toBeGreaterThanOrEqual(51000);
+      const evaluator = async () => [
+        { validator: { purpose: 'spend', index: 0 }, budget: { memory: 100, cpu: 1000 } }
+      ];
+      const result = await evaluate(evaluator);
+      const units = result.get('0:0');
+      // mem: ceil(100 * 1.1) + ABS_MEM_BUFFER(5000) = 5110
+      expect(units.mem).toBeGreaterThanOrEqual(1100n);
+      // cpu: ceil(1000 * 1.1) + ABS_CPU_BUFFER(200000) = 201100
+      expect(units.cpu).toBeGreaterThanOrEqual(51000n);
     });
 
     it('keeps proportional scaling for large budgets', async () => {
-      const bigEvaluator = async () => [{ budget: { memory: 10_000_000, cpu: 10_000_000_000 } }];
-      const result = await evaluateExUnits(bigEvaluator);
-      expect(result.mem).toBeGreaterThanOrEqual(11_000_000);
-      expect(result.cpu).toBeGreaterThanOrEqual(11_000_000_000);
+      const evaluator = async () => [
+        { validator: { purpose: 'spend', index: 0 }, budget: { memory: 10_000_000, cpu: 10_000_000_000 } }
+      ];
+      const result = await evaluate(evaluator);
+      const units = result.get('0:0');
+      expect(units.mem).toBeGreaterThanOrEqual(11_000_000n);
+      expect(units.cpu).toBeGreaterThanOrEqual(11_000_000_000n);
+    });
+
+    it('supports the legacy "purpose:index" string validator form', async () => {
+      const evaluator = async () => [
+        { validator: 'mint:1', budget: { memory: 50, cpu: 500 } }
+      ];
+      const result = await evaluate(evaluator);
+      expect(result.has('1:1')).toBe(true);
+    });
+
+    it('returns undefined for an empty evaluation result', async () => {
+      expect(await evaluate(async () => [])).toBeUndefined();
+    });
+
+    it('returns undefined on transient evaluator failure (fallback to local units)', async () => {
+      const evaluator = async () => { throw new Error('connection refused'); };
+      expect(await evaluate(evaluator)).toBeUndefined();
+    });
+
+    it('rethrows TransactionValidationError (authoritative script failure)', async () => {
+      const evaluator = async () => { throw new TransactionValidationError('script failed phase-2'); };
+      await expect(evaluate(evaluator)).rejects.toThrow(TransactionValidationError);
+    });
+
+    it('skips results with unrecognized validator pointers', async () => {
+      const evaluator = async () => [
+        { validator: { purpose: 'somethingelse', index: 0 }, budget: { memory: 1, cpu: 1 } }
+      ];
+      expect(await evaluate(evaluator)).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // _resolveTargetExUnits — stamping policy
+  // =========================================================================
+
+  describe('_resolveTargetExUnits', () => {
+    // The method only reads tag/index/execUnits, so lightweight fakes suffice.
+    const fakeRedeemer = (tag: number, index: number, mem: bigint, cpu: bigint) =>
+      ({ tag, index, execUnits: { mem, cpu } });
+    const resolve = (rdmrs: any[], evaluated?: Map<string, { mem: bigint; cpu: bigint }>, failures: any[] = []) =>
+      (builder as any)._resolveTargetExUnits(rdmrs, evaluated, failures);
+
+    it('buffers the local budget when no Ogmios result exists (local success)', () => {
+      const [target] = resolve([fakeRedeemer(0, 0, 1000n, 10000n)]);
+      // ceil(1000 * 1.1) + 5000 = 6100 / ceil(10000 * 1.1) + 200000 = 211000
+      expect(target.mem).toBe(6100n);
+      expect(target.cpu).toBe(211000n);
+    });
+
+    it('takes the componentwise max of local and Ogmios units (local success)', () => {
+      const evaluated = new Map([['0:0', { mem: 500n, cpu: 99999999n }]]);
+      const [target] = resolve([fakeRedeemer(0, 0, 1000n, 10000n)], evaluated);
+      expect(target.mem).toBe(1000n);      // local higher
+      expect(target.cpu).toBe(99999999n);  // ogmios higher
+    });
+
+    it('uses the Ogmios units verbatim when the local run failed (partial budget is meaningless)', () => {
+      const evaluated = new Map([['0:0', { mem: 777n, cpu: 8888n }]]);
+      const failures = [{ tag: 0, index: 0, logs: ['boom'] }];
+      const [target] = resolve([fakeRedeemer(0, 0, 999999n, 999999999n)], evaluated, failures);
+      expect(target.mem).toBe(777n);
+      expect(target.cpu).toBe(8888n);
+    });
+
+    it('throws when the local run failed and no Ogmios evaluation is available', () => {
+      const failures = [{ tag: 0, index: 0, logs: ['validator error'] }];
+      expect(() => resolve([fakeRedeemer(0, 0, 1n, 1n)], undefined, failures))
+        .toThrow(TransactionValidationError);
+      expect(() => resolve([fakeRedeemer(0, 0, 1n, 1n)], undefined, failures))
+        .toThrow(/forfeit the collateral/);
+    });
+
+    it('only fails the redeemer that actually failed', () => {
+      const evaluated = new Map([['1:0', { mem: 10n, cpu: 20n }]]);
+      const failures = [{ tag: 1, index: 0, logs: [] }];
+      const targets = resolve(
+        [fakeRedeemer(0, 0, 100n, 200n), fakeRedeemer(1, 0, 5n, 5n)],
+        evaluated,
+        failures
+      );
+      expect(targets[0].mem).toBeGreaterThan(100n); // buffered local
+      expect(targets[1]).toEqual({ mem: 10n, cpu: 20n }); // ogmios verbatim
+    });
+  });
+
+  // =========================================================================
+  // _buildScriptTx — end-to-end with the real Buildooor TxBuilder
+  // =========================================================================
+
+  describe('buildUnsignedMintTransaction — end-to-end ExUnits stamping', () => {
+    // Subset of the fields _mapLedgerParametersToBuildooorParams consumes; everything
+    // else (cost models, prices) falls back to Buildooor's defaults — the same ones the
+    // builder's local CEK evaluation and our scriptDataHash recompute use.
+    const PROTOCOL_PARAMS = {
+      minFeeA: 44,
+      minFeeB: 155381,
+      coinsPerUtxoSize: '4310',
+      maxTxSize: 16384,
+      maxValSize: '5000',
+      keyDeposit: '2000000',
+      poolDeposit: '500000000'
+    } as any;
+
+    const adaOnlyUtxo: UTxO = {
+      txHash: 'cc'.repeat(32),
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '5000000' }],
+    };
+    const fundingUtxo: UTxO = {
+      txHash: 'dd'.repeat(32),
+      outputIndex: 1,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '50000000' }],
+    };
+
+    const mintReq = (): TxBuildMintRequest => ({
+      network: 'preview',
+      senderAddress: TEST_ADDRESS,
+      recipientAddress: TEST_ADDRESS,
+      lovelaceAmount: '2000000',
+      mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+      mintingPolicyScript: VALID_PLUTUS_SCRIPT,
+    });
+
+    const initBuilder = async () => {
+      await builder.init({ network: 'preview' } as any, PROTOCOL_PARAMS);
+    };
+
+    /**
+     * Independent consistency check: re-parse the produced CBOR and recompute the
+     * script data hash from the *parsed* witness set (exact wire bytes) with the same
+     * language views the builder uses. A stale-witness hash (the TxBuilder
+     * overrideTxRedeemers bug) or any stamping inconsistency fails this check —
+     * on-chain it would surface as a PPViewHashesDontMatch phase-1 rejection.
+     */
+    const assertScriptDataHashConsistent = (unsignedTxCbor: string) => {
+      const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
+      const { getScriptDataHash, costModelsToLanguageViewCbor, defaultProtocolParameters } =
+        require('@harmoniclabs/buildooor');
+      const parsed = Tx.fromCbor(unsignedTxCbor);
+      const views = costModelsToLanguageViewCbor(defaultProtocolParameters.costModels, { mustHaveV3: true });
+      const recomputed = getScriptDataHash(parsed.witnesses, views);
+      expect(parsed.body.scriptDataHash?.toString()).toBe(recomputed?.toString());
+      return parsed;
+    };
+
+    it('stamps buffered local units and a consistent scriptDataHash without an evaluator', async () => {
+      await initBuilder();
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+        // no evaluateTransaction → buffered local units
+      };
+
+      const result = await builder.buildUnsignedMintTransaction(mintReq(), ctx);
+      expect(result.unsignedTxCbor).toBeDefined();
+
+      const parsed = assertScriptDataHashConsistent(result.unsignedTxCbor!);
+      const redeemers = parsed.witnesses.redeemers ?? [];
+      expect(redeemers.length).toBe(1);
+      // Buffered local: at least the absolute cushion on top of a real (>0) local run
+      expect(BigInt(redeemers[0].execUnits.mem)).toBeGreaterThanOrEqual(5000n);   // ABS_MEM_BUFFER
+      expect(BigInt(redeemers[0].execUnits.cpu)).toBeGreaterThanOrEqual(200000n); // ABS_CPU_BUFFER
+      expect(BigInt(parsed.body.fee)).toBeGreaterThan(0n);
+    });
+
+    it('stamps the evaluator units (with cushion) when they exceed the local budget', async () => {
+      await initBuilder();
+      // Far above any real local budget for this tiny policy → buffered evaluator
+      // units must win and appear verbatim in the produced CBOR.
+      const evaluatedMem = 5_000_000;
+      const evaluatedCpu = 2_000_000_000;
+      const expectedMem = BigInt(Math.ceil(evaluatedMem * 1.1) + 5_000);       // EXECUTION_UNIT_BUFFER / ABS_MEM_BUFFER
+      const expectedCpu = BigInt(Math.ceil(evaluatedCpu * 1.1) + 200_000);     // EXECUTION_UNIT_BUFFER / ABS_CPU_BUFFER
+
+      const evaluatorCalls: string[] = [];
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+        evaluateTransaction: async (cbor: string) => {
+          evaluatorCalls.push(cbor);
+          return [{ validator: { purpose: 'mint', index: 0 }, budget: { memory: evaluatedMem, cpu: evaluatedCpu } }];
+        },
+      };
+
+      const resultNoEval = await builder.buildUnsignedMintTransaction(mintReq(), {
+        utxos: [adaOnlyUtxo, fundingUtxo], protocolParameters: PROTOCOL_PARAMS,
+      });
+      const result = await builder.buildUnsignedMintTransaction(mintReq(), ctx);
+
+      expect(evaluatorCalls.length).toBe(1);
+      const parsed = assertScriptDataHashConsistent(result.unsignedTxCbor!);
+      const redeemers = parsed.witnesses.redeemers ?? [];
+      expect(redeemers.length).toBe(1);
+      expect(BigInt(redeemers[0].execUnits.mem)).toBe(expectedMem);
+      expect(BigInt(redeemers[0].execUnits.cpu)).toBe(expectedCpu);
+
+      // The fee must cover the much larger declared units: strictly higher than the
+      // buffered-local build of the identical request.
+      const parsedNoEval = require('@harmoniclabs/cardano-ledger-ts').Tx.fromCbor(resultNoEval.unsignedTxCbor!);
+      expect(BigInt(parsed.body.fee)).toBeGreaterThan(BigInt(parsedNoEval.body.fee));
+    });
+
+    // CBOR-wrapped flat UPLC for `(program 1.1.0 (error))` — a policy that always fails
+    // phase-2. Local CEK evaluation errors out, which previously produced a transaction
+    // carrying the partial budget (collateral-forfeiting if submitted).
+    const ALWAYS_FAIL_SCRIPT = '4401010061';
+
+    it('rejects with a clear error when local evaluation fails and no evaluator is configured', async () => {
+      await initBuilder();
+      const req: TxBuildMintRequest = {
+        ...mintReq(),
+        mintingPolicyScript: ALWAYS_FAIL_SCRIPT,
+      };
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+      };
+
+      await expect(builder.buildUnsignedMintTransaction(req, ctx))
+        .rejects.toThrow(/forfeit the collateral/);
+    });
+
+    it('builds successfully when local evaluation fails but Ogmios certifies the units', async () => {
+      await initBuilder();
+      const req: TxBuildMintRequest = {
+        ...mintReq(),
+        mintingPolicyScript: ALWAYS_FAIL_SCRIPT,
+      };
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+        evaluateTransaction: async () => [
+          { validator: { purpose: 'mint', index: 0 }, budget: { memory: 100_000, cpu: 50_000_000 } }
+        ],
+      };
+
+      const result = await builder.buildUnsignedMintTransaction(req, ctx);
+      const parsed = assertScriptDataHashConsistent(result.unsignedTxCbor!);
+      const redeemers = parsed.witnesses.redeemers ?? [];
+      expect(redeemers.length).toBe(1);
+      // Ogmios units verbatim (with cushion) — the local partial budget is discarded
+      expect(BigInt(redeemers[0].execUnits.mem)).toBe(BigInt(Math.ceil(100_000 * 1.1) + 5_000));
+      expect(BigInt(redeemers[0].execUnits.cpu)).toBe(BigInt(Math.ceil(50_000_000 * 1.1) + 200_000));
+    });
+
+    it('propagates an authoritative Ogmios ScriptValidationError instead of falling back to local units', async () => {
+      await initBuilder();
+      // VALID_PLUTUS_SCRIPT evaluates fine locally, so the ONLY failure signal is Ogmios's
+      // ledger phase-2 rejection (normalizeBackendError surfaces PlutusFailure/CekError as
+      // ScriptValidationError). That must propagate — silently returning local buffered units
+      // would hand back a transaction the node has already rejected.
+      const req: TxBuildMintRequest = { ...mintReq(), mintingPolicyScript: VALID_PLUTUS_SCRIPT };
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+        evaluateTransaction: async () => { throw new ScriptValidationError('Script validation failed: CekError'); },
+      };
+
+      await expect(builder.buildUnsignedMintTransaction(req, ctx))
+        .rejects.toThrow(/Script validation failed/);
+    });
+
+    it('stamps the collateral return output into the tx body when the collateral UTxO exceeds the floor', async () => {
+      await initBuilder();
+      // Only large ADA-only UTxOs: 50 ADA becomes collateral (smallest sufficient),
+      // 45 ADA must come back via collateralReturn; 100 ADA funds the mint.
+      const bigFunding: UTxO = {
+        txHash: 'aa'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '100000000' }],
+      };
+      const bigCollateral: UTxO = {
+        txHash: 'bb'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '50000000' }],
+      };
+      const ctx: TxBuildContext = {
+        utxos: [bigFunding, bigCollateral],
+        protocolParameters: PROTOCOL_PARAMS,
+      };
+
+      const result = await builder.buildUnsignedMintTransaction(mintReq(), ctx);
+      const parsed = assertScriptDataHashConsistent(result.unsignedTxCbor!);
+
+      const collaterals = parsed.body.collateralInputs ?? [];
+      expect(collaterals.length).toBe(1);
+      expect(collaterals[0].utxoRef.id.toString()).toBe(bigCollateral.txHash);
+
+      // Without the return, the full 50 ADA would be forfeited on phase-2 failure.
+      expect(parsed.body.collateralReturn).toBeDefined();
+      expect(parsed.body.collateralReturn!.address.toString()).toBe(TEST_ADDRESS);
+      expect(BigInt(parsed.body.collateralReturn!.value.lovelaces)).toBe(45_000_000n);
+    });
+  });
+
+  // =========================================================================
+  // _parsePlutusV3Script — UPLC version validation (V2-as-V3 guard)
+  // =========================================================================
+
+  describe('_parsePlutusV3Script — UPLC version validation', () => {
+    // always-succeed PlutusV2 script: CBOR-wrapped flat UPLC 1.0.0
+    const PLUTUS_V2_SCRIPT = '4e4d01000033222220051200120011';
+
+    const parse = (hex: string) => (builder as any)._parsePlutusV3Script(hex, 'testField');
+
+    it('accepts UPLC 1.1.0 (Plutus V3) scripts', () => {
+      const script = parse(VALID_PLUTUS_SCRIPT);
+      expect(script.hash.toString()).toBe(POLICY_ID);
+    });
+
+    it('rejects UPLC 1.0.0 (Plutus V1/V2) scripts with a clear 400', () => {
+      expect(() => parse(PLUTUS_V2_SCRIPT)).toThrow(TransactionValidationError);
+      expect(() => parse(PLUTUS_V2_SCRIPT)).toThrow(/UPLC 1\.0\.0/);
+    });
+
+    it('rejects unparseable script CBOR with a clear 400 naming the field', () => {
+      expect(() => parse('zz')).toThrow(/Invalid testField CBOR/);
+    });
+
+    it('rejects a V2 minting policy at the build entry point', async () => {
+      const req: TxBuildMintRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: '2000000',
+        mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+        mintingPolicyScript: PLUTUS_V2_SCRIPT,
+      };
+      const ctx: TxBuildContext = { utxos: [], protocolParameters: {} as any };
+
+      await expect(builder.buildUnsignedMintTransaction(req, ctx))
+        .rejects.toThrow(/UPLC 1\.0\.0/);
+    });
+  });
+
+  // =========================================================================
+  // _setupCollateral — smallest-sufficient selection + collateralReturn
+  // =========================================================================
+
+  describe('_setupCollateral — smallest-sufficient selection + collateralReturn', () => {
+    const adaUtxo = (txHashByte: string, lovelace: string): UTxO => ({
+      txHash: txHashByte.repeat(32),
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: lovelace }],
+    });
+    const assetUtxo: UTxO = {
+      txHash: 'ab'.repeat(32),
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '2000000' }, { unit: ASSET_UNIT, quantity: '1' }],
+    };
+
+    const setup = (utxos: UTxO[]) => (builder as any)._setupCollateral(utxos);
+
+    beforeEach(async () => {
+      // _setupCollateral needs an initialized TxBuilder for min-ADA computation
+      await builder.init({ network: 'preview' } as any, { minFeeA: 44, minFeeB: 155381, coinsPerUtxoSize: '4310' } as any);
+    });
+
+    it('picks the smallest ADA-only UTxO that covers the 5 ADA floor, not the first', () => {
+      const big = adaUtxo('aa', '100000000');   // 100 ADA, listed first
+      const small = adaUtxo('bb', '6000000');   // 6 ADA — smallest sufficient
+      const { collateralUtxos, fundingUtxos } = setup([big, small, assetUtxo]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(small.txHash);
+      // chosen UTxO removed from funding; everything else kept
+      expect(fundingUtxos.map((u: UTxO) => u.txHash)).toEqual([big.txHash, assetUtxo.txHash]);
+    });
+
+    it('sets a collateralReturn for the excess above the floor', () => {
+      const big = adaUtxo('aa', '50000000'); // 50 ADA → 45 ADA excess
+      const { collateralReturn } = setup([big]);
+
+      expect(collateralReturn).toBeDefined();
+      expect(collateralReturn!.address.toString()).toBe(TEST_ADDRESS);
+      expect(collateralReturn!.value.lovelaces).toBe(45_000_000n);
+    });
+
+    it('sets no collateralReturn when the UTxO matches the floor exactly', () => {
+      const { collateralReturn } = setup([adaUtxo('aa', '5000000')]);
+      expect(collateralReturn).toBeUndefined();
+    });
+
+    it('sets no collateralReturn when the excess is below min-ADA for the return output', () => {
+      // 5.2 ADA → 0.2 ADA excess, far below min-ADA (~0.86 ADA)
+      const { collateralReturn } = setup([adaUtxo('aa', '5200000')]);
+      expect(collateralReturn).toBeUndefined();
+    });
+
+    it('falls back to the largest ADA-only UTxO (with warning, without throwing) when none reaches the floor', () => {
+      const dust1 = adaUtxo('aa', '2000000');
+      const dust2 = adaUtxo('bb', '3000000');
+      const { collateralUtxos, collateralReturn } = setup([dust1, dust2]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(dust2.txHash);
+      expect(collateralReturn).toBeUndefined();
+    });
+
+    it('still throws when no ADA-only UTxO exists', () => {
+      expect(() => setup([assetUtxo])).toThrow('No ADA-only UTxO available for collateral');
+    });
+  });
+
+  // =========================================================================
+  // _mapMultiAssetUtxoToLedgerUtxo — datum mapping (M5)
+  // =========================================================================
+
+  describe('_mapMultiAssetUtxoToLedgerUtxo — datum mapping (M5)', () => {
+    const { Hash32 } = require('@harmoniclabs/cardano-ledger-ts');
+    // blake2b-256 of PlutusData Constr 0 []
+    const DATUM_HASH = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
+    const baseUtxo: UTxO = {
+      txHash: 'aa'.repeat(32),
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '5000000' }],
+    };
+    const map = (u: UTxO) => (builder as any)._mapMultiAssetUtxoToLedgerUtxo(u);
+
+    it('carries the datum hash into the resolved TxOut', () => {
+      const ledgerUtxo = map({ ...baseUtxo, datumHash: DATUM_HASH });
+      expect(ledgerUtxo.resolved.datum).toBeInstanceOf(Hash32);
+      expect(ledgerUtxo.resolved.datum.toString()).toBe(DATUM_HASH);
+    });
+
+    it('prefers the inline datum when both inlineDatum and datumHash are present', () => {
+      const ledgerUtxo = map({ ...baseUtxo, inlineDatum: 'd87980', datumHash: DATUM_HASH });
+      expect(ledgerUtxo.resolved.datum).toBeDefined();
+      expect(ledgerUtxo.resolved.datum).not.toBeInstanceOf(Hash32);
+    });
+
+    it('leaves the datum undefined when neither is present', () => {
+      expect(map(baseUtxo).resolved.datum).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (M5 E2E)
+  // =========================================================================
+
+  describe('buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (M5 E2E)', () => {
+    // Script address of VALID_SPENDING_SCRIPT (testnet) and the hash of Constr 0 []
+    const SCRIPT_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
+    const DATUM_HASH = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
+    const PARAMS = {
+      minFeeA: 44, minFeeB: 155381, coinsPerUtxoSize: '4310', maxTxSize: 16384,
+    } as any;
+
+    const scriptUtxo: UTxO = {
+      txHash: 'ee'.repeat(32),
+      outputIndex: 0,
+      address: SCRIPT_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '5000000' }],
+      datumHash: DATUM_HASH, // hash-locked, NO inline datum
+    };
+    const collateralUtxo: UTxO = {
+      txHash: 'cc'.repeat(32),
+      outputIndex: 0,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '5000000' }],
+    };
+    const fundingUtxo: UTxO = {
+      txHash: 'dd'.repeat(32),
+      outputIndex: 1,
+      address: TEST_ADDRESS,
+      amount: [{ unit: 'lovelace', quantity: '50000000' }],
+    };
+
+    it('includes the provided datum preimage in the witness set', async () => {
+      await builder.init({ network: 'preview' } as any, PARAMS);
+
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: '2000000',
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: scriptUtxo.txHash, outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+          datum: { constructor: 0, fields: [] }, // preimage of DATUM_HASH
+        },
+      };
+      const ctx: TxBuildContext = {
+        utxos: [scriptUtxo, collateralUtxo, fundingUtxo],
+        protocolParameters: PARAMS,
+        // Certified units for either possible spend-redeemer index, so the build
+        // completes independently of the local CEK outcome for the test validator.
+        evaluateTransaction: async () => [
+          { validator: { purpose: 'spend', index: 0 }, budget: { memory: 200_000, cpu: 100_000_000 } },
+          { validator: { purpose: 'spend', index: 1 }, budget: { memory: 200_000, cpu: 100_000_000 } },
+        ],
+      };
+
+      const result = await builder.buildUnsignedPlutusSpendTransaction(req, ctx);
+      expect(result.unsignedTxCbor).toBeDefined();
+
+      const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
+      const { hashData } = require('@harmoniclabs/buildooor');
+      const parsed = Tx.fromCbor(result.unsignedTxCbor!);
+      const datums = parsed.witnesses.datums ?? [];
+      // Without the datumHash mapping the preimage was silently dropped here
+      // (empty witness datums → MissingRequiredDatums on submit).
+      expect(datums.length).toBe(1);
+      expect(Buffer.from(hashData(datums[0])).toString('hex')).toBe(DATUM_HASH);
+    });
+  });
+
+  // =========================================================================
+  // _mapLedgerParametersToBuildooorParams (M3) — full mapping with null guards
+  // =========================================================================
+
+  describe('_mapLedgerParametersToBuildooorParams', () => {
+    const { defaultProtocolParameters, TxBuilder } = require('@harmoniclabs/buildooor');
+
+    const mapParams = (pp: any) =>
+      (builder as any)._mapLedgerParametersToBuildooorParams(pp);
+
+    it('keeps library defaults for missing/null fields instead of degrading to 0', () => {
+      const mapped = mapParams({ coinsPerUtxoSize: null, minFeeA: undefined, maxTxSize: '' });
+      // Number(null) === 0 previously set utxoCostPerByte = 0, disabling min-ADA checks
+      expect(mapped.utxoCostPerByte).toBe(defaultProtocolParameters.utxoCostPerByte);
+      expect(mapped.utxoCostPerByte).not.toBe(0);
+      expect(mapped.txFeePerByte).toBe(defaultProtocolParameters.txFeePerByte);
+      expect(mapped.maxTxSize).toBe(defaultProtocolParameters.maxTxSize);
+    });
+
+    it('maps all scalar fields including string→number conversion and deposit names', () => {
+      const mapped = mapParams({
+        minFeeA: 44,
+        minFeeB: '155381',
+        coinsPerUtxoSize: '4310',
+        maxTxSize: 16384,
+        maxValSize: '5000',
+        maxBlockSize: 90112,
+        maxBlockHeaderSize: 1100,
+        keyDeposit: '2000000',
+        poolDeposit: '500000000',
+        minPoolCost: '170000000',
+        eMax: 18,
+        nOpt: 500,
+        collateralPercent: 150,
+        maxCollateralInputs: 3,
+      });
+      expect(mapped.txFeePerByte).toBe(44);
+      expect(mapped.txFeeFixed).toBe(155381);
+      expect(mapped.utxoCostPerByte).toBe(4310);
+      expect(mapped.maxTxSize).toBe(16384);
+      expect(mapped.maxValueSize).toBe(5000);
+      expect(mapped.maxBlockBodySize).toBe(90112);
+      expect(mapped.maxBlockHeaderSize).toBe(1100);
+      expect(mapped.stakeAddressDeposit).toBe(2000000);
+      expect(mapped.stakePoolDeposit).toBe(500000000);
+      expect(mapped.minPoolCost).toBe(170000000);
+      expect(mapped.poolRetireMaxEpoch).toBe(18);
+      expect(mapped.stakePoolTargetNum).toBe(500);
+      expect(mapped.collateralPercentage).toBe(150);
+      expect(mapped.maxCollateralInputs).toBe(3);
+    });
+
+    it('maps execution-unit prices and caps when both halves of each pair are present', () => {
+      const mapped = mapParams({
+        priceMem: '0.0577',
+        priceStep: 0.0000721,
+        maxTxExMem: '14000000',
+        maxTxExSteps: '10000000000',
+        maxBlockExMem: 62000000,
+        maxBlockExSteps: 20000000000,
+      });
+      expect(mapped.executionUnitPrices).toEqual({ priceMemory: 0.0577, priceSteps: 0.0000721 });
+      expect(mapped.maxTxExecutionUnits).toEqual({ memory: 14000000, steps: 10000000000 });
+      expect(mapped.maxBlockExecutionUnits).toEqual({ memory: 62000000, steps: 20000000000 });
+    });
+
+    it('keeps default prices/caps when a pair is incomplete', () => {
+      const mapped = mapParams({ priceMem: 0.0577, maxTxExMem: 14000000 });
+      expect(mapped.executionUnitPrices).toBe(defaultProtocolParameters.executionUnitPrices);
+      expect(mapped.maxTxExecutionUnits).toBe(defaultProtocolParameters.maxTxExecutionUnits);
+    });
+
+    it('maps backend cost-model arrays into a form TxBuilder accepts', () => {
+      // Backend blob: number arrays with backend/Ogmios key styles
+      const v1Arr = Object.values(defaultProtocolParameters.costModels.PlutusScriptV1).map(Number);
+      const v3Arr = Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number);
+      const mapped = mapParams({
+        costModels: JSON.stringify({ PlutusV1: v1Arr, 'plutus:v3': v3Arr }),
+      });
+      expect(mapped.costModels.PlutusScriptV1).toBeDefined();
+      expect(mapped.costModels.PlutusScriptV3).toBeDefined();
+      expect(mapped.costModels.PlutusScriptV2).toBeUndefined();
+      // Arrays must be converted to named-key objects — raw arrays crash the CEK Machine
+      expect(Array.isArray(mapped.costModels.PlutusScriptV3)).toBe(false);
+      expect(() => new TxBuilder(mapped)).not.toThrow();
+    });
+
+    it('keeps default cost models on invalid JSON or unusable content', () => {
+      expect(mapParams({ costModels: 'not-json{' }).costModels)
+        .toBe(defaultProtocolParameters.costModels);
+      expect(mapParams({ costModels: JSON.stringify({ unknownKey: [1, 2] }) }).costModels)
+        .toBe(defaultProtocolParameters.costModels);
+      // Wrong array length → conversion fails → key skipped → defaults kept
+      expect(mapParams({ costModels: JSON.stringify({ PlutusV1: [1, 2, 3] }) }).costModels)
+        .toBe(defaultProtocolParameters.costModels);
+    });
+  });
+
+  // =========================================================================
+  // _ensureCurrentProtocolParameters (M4) — per-request param refresh
+  // =========================================================================
+
+  describe('_ensureCurrentProtocolParameters', () => {
+    const baseParams = {
+      network: 'preview',
+      epoch: 100,
+      minFeeA: 44,
+      minFeeB: 155381,
+      coinsPerUtxoSize: '4310',
+    } as any;
+
+    const initWith = async (params: any) => {
+      await builder.init({ network: 'preview' } as any, params);
+    };
+
+    it('rebuilds the TxBuilder when the network#epoch fingerprint changes', async () => {
+      await initWith(baseParams);
+      const before = (builder as any).txBuilder;
+
+      const nextEpochParams = { ...baseParams, epoch: 101, minFeeB: 200000 };
+      (builder as any)._ensureCurrentProtocolParameters({ utxos: [], protocolParameters: nextEpochParams });
+
+      const after = (builder as any).txBuilder;
+      expect(after).not.toBe(before);
+      // New params actually took effect
+      expect(Number(after.protocolParamters.txFeeFixed)).toBe(200000);
+    });
+
+    it('does not rebuild when the fingerprint is unchanged', async () => {
+      await initWith(baseParams);
+      const before = (builder as any).txBuilder;
+
+      (builder as any)._ensureCurrentProtocolParameters({ utxos: [], protocolParameters: { ...baseParams } });
+
+      expect((builder as any).txBuilder).toBe(before);
+    });
+
+    it('does not rebuild when the context carries no protocol parameters', async () => {
+      await initWith(baseParams);
+      const before = (builder as any).txBuilder;
+
+      (builder as any)._ensureCurrentProtocolParameters({ utxos: [] });
+
+      expect((builder as any).txBuilder).toBe(before);
+    });
+
+    it('falls back to a content fingerprint when network/epoch keys are missing', async () => {
+      const noKeyParams = { minFeeA: 44, minFeeB: 155381 } as any;
+      await initWith(noKeyParams);
+      const before = (builder as any).txBuilder;
+
+      // Same content → no rebuild even without network/epoch
+      (builder as any)._ensureCurrentProtocolParameters({ utxos: [], protocolParameters: { minFeeA: 44, minFeeB: 155381 } });
+      expect((builder as any).txBuilder).toBe(before);
+
+      // Changed content → rebuild
+      (builder as any)._ensureCurrentProtocolParameters({ utxos: [], protocolParameters: { minFeeA: 50, minFeeB: 155381 } });
+      expect((builder as any).txBuilder).not.toBe(before);
     });
   });
 });

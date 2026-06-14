@@ -19,6 +19,30 @@ const logger = cds.log('ExternalSigner');
  */
 const DEFAULT_SIGNING_TTL_MS = 30 * 60 * 1000;
 
+/** Network flag for cardano-cli (mainnet vs testnet-magic). */
+const CLI_NETWORK_FLAG: Record<string, string> = {
+  mainnet: '--mainnet',
+  preprod: '--testnet-magic 1',
+  preview: '--testnet-magic 2',
+};
+
+/**
+ * Build a copy-pasteable cardano-cli signing recipe for the unsigned tx.
+ * Templated (the caller supplies their own signing key file); the network flag
+ * and the unsigned CBOR are filled in. Previously this was always NULL despite
+ * the schema exposing a `cardanoCliCommand` field.
+ */
+function buildCardanoCliCommand(network: string, unsignedTxCbor: string): string {
+  const netFlag = CLI_NETWORK_FLAG[network] ?? '--testnet-magic <MAGIC>';
+  return [
+    '# 1) Save the unsigned transaction to a file:',
+    `echo '{"type":"Unwitnessed Tx ConwayEra","description":"","cborHex":"${unsignedTxCbor}"}' > tx.unsigned`,
+    '# 2) Sign it with your payment key:',
+    `cardano-cli conway transaction sign --tx-file tx.unsigned --signing-key-file payment.skey ${netFlag} --out-file tx.signed`,
+    '# 3) Submit the cborHex from tx.signed via SubmitSignedTransaction / SubmitVerifiedTransaction',
+  ].join('\n');
+}
+
 /**
  * ExternalSignerModule - Manages the external signing workflow
  *
@@ -118,6 +142,7 @@ export class ExternalSignerModule {
         txCbor: unsignedTxCbor,
         partialSign: false,
       },
+      cardanoCliCommand: buildCardanoCliCommand(network, unsignedTxCbor),
     };
   }
 

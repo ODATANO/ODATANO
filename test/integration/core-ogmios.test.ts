@@ -31,12 +31,12 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
   describe('Ogmios Backend Action Tests', () => {
 
-    it('POST /GetNetworkInformation - get network information', async () => {
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
-      expect(data).to.have.property('network');
-      expect(data).to.have.property('maxSupply');
-      expect(data).to.have.property('circulatingSupply');
-      expect(status).to.equal(200);
+    it('POST /GetNetworkInformation - unsupported on Ogmios (delegate to Blockfrost/Koios)', async () => {
+      // Ogmios can't serve network aggregates (max/circulating supply); it's declared in
+      // unsupportedMethods so the orchestrator skips it. Ogmios-only → no provider → 503.
+      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
+      expect(response.status).to.equal(503);
+      expect(response.data).to.have.property('error');
     });
 
     it('POST /GetUTxOsByAddress - read UTxOs for given address', async () => {
@@ -45,11 +45,13 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(status).to.be.equal(200);
     });
 
-    it('POST /GetAddressByBech32 - get address information', async () => {
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
-      expect(data).to.have.property('address');
-      expect(data).to.have.property('totalLovelace');
-      expect(status).to.equal(200);
+    it('POST /GetAddressByBech32 - unsupported on Ogmios (delegate to Blockfrost/Koios)', async () => {
+      // Ogmios can't aggregate address detail (type/script/stake) → getAddress is in
+      // unsupportedMethods. Ogmios-only → no provider → 503. (UTxOs remain available
+      // via GetUTxOsByAddress, which falls back to getAddressUtxos.)
+      const response = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds }).catch(err => err.response);
+      expect(response.status).to.equal(503);
+      expect(response.data).to.have.property('error');
     });
 
     it('POST /GetLatestBlock - get latest block information', async () => {
@@ -114,14 +116,11 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(Array.isArray(utxos)).to.be.true;
     });
 
-    // Test address with potential native assets
-    it('POST /GetAddressByBech32 - verify totalLovelace calculation from convertOgmiosValue', async () => {
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithAssets });
-      expect(status).to.equal(200);
-      expect(data).to.have.property('totalLovelace');
-      const lovelace = typeof data.totalLovelace === 'string' ? parseInt(data.totalLovelace) : data.totalLovelace;
-      expect(lovelace).to.be.a('number');
-      expect(lovelace).to.be.at.least(0);
+    // Address detail is not derivable from Ogmios state queries (delegated to Blockfrost/Koios)
+    it('POST /GetAddressByBech32 - unsupported on Ogmios (address detail not derivable)', async () => {
+      const response = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithAssets }).catch(err => err.response);
+      expect(response.status).to.equal(503);
+      expect(response.data).to.have.property('error');
     });
 
     // Test epoch calculation logic
@@ -140,10 +139,10 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
       expect(status).to.equal(200);
       expect(data.endTime).to.be.greaterThan(data.startTime);
-      // Epoch should be ~5 days (432000 seconds)
+      // Preview epoch is ~1 day (86400 slots * 1s = 86400 seconds), not mainnet's 5 days
       const epochDuration = data.endTime - data.startTime;
-      expect(epochDuration).to.be.greaterThan(400000); // At least ~4.6 days
-      expect(epochDuration).to.be.lessThan(450000); // Less than ~5.2 days
+      expect(epochDuration).to.be.greaterThan(80000); // ~1 day
+      expect(epochDuration).to.be.lessThan(90000);
     });
 
     // Test protocol parameters conversion
@@ -163,13 +162,11 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(costModels).to.be.an('object');
     });
 
-    // Test network information (uses hardcoded max supply)
-    it('POST /GetNetworkInformation - verify hardcoded cardano max supply', async () => {
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
-      expect(status).to.equal(200);
-      const maxSupply = typeof data.maxSupply === 'string' ? data.maxSupply : data.maxSupply.toString();
-      // Cardano max supply is 45 billion ADA = 45000000000000000 lovelace
-      expect(maxSupply).to.equal('45000000000000000');
+    // Network information is unsupported on Ogmios (delegated to Blockfrost/Koios)
+    it('POST /GetNetworkInformation - unsupported on Ogmios', async () => {
+      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
+      expect(response.status).to.equal(503);
+      expect(response.data).to.have.property('error');
     });
 
     // Test current epoch query
@@ -233,43 +230,34 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(data.endTime).to.be.a('number');
       expect(data.endTime).to.be.greaterThan(data.startTime);
       const duration = data.endTime - data.startTime;
-      expect(duration).to.be.greaterThan(400000); // At least close to expected duration
+      expect(duration).to.be.greaterThan(80000); // preview epoch ≈ 86400s (~1 day)
       expect(status).to.equal(200);
     });
 
-    // Test network information completeness
-    it('POST /GetNetworkInformation - verify network details', async () => {
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
-      expect(status).to.equal(200);
-
-      expect(data.network).to.equal('preview'); // Should match CONFIG.network
-      expect(data).to.have.property('maxSupply');
-      expect(data).to.have.property('circulatingSupply');
-
-      // Max supply for Cardano is 45 billion ADA
-      const maxSupplyNum = typeof data.maxSupply === 'string'
-        ? Number(data.maxSupply)
-        : data.maxSupply;
-      expect(maxSupplyNum).to.be.greaterThan(0);
+    // Network information is unsupported on Ogmios (delegated to Blockfrost/Koios)
+    it('POST /GetNetworkInformation - unsupported on Ogmios (network details)', async () => {
+      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
+      expect(response.status).to.equal(503);
+      expect(response.data).to.have.property('error');
     });
   });
 
   describe('Ogmios Backend tests for not supported historic calls', () => {
     it('POST /GetTransactionByHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.txHash }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getTransaction is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 
     it('POST /GetMetadataByTxHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txHash }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getTransactionMetadata is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 
     it('POST /GetBlockByHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: 'cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39' }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getBlock is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 

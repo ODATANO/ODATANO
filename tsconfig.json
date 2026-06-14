@@ -28,6 +28,7 @@
   },
   "include": [
     "srv/**/*.ts",
+    "src/**/*.ts",
     "app/**/*.ts",
     "db/**/*.ts",
     "@cds-models/**/*.ts",

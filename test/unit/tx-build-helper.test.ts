@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, parseOptionalJson, parseOptionalJsonArray, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
@@ -109,6 +109,20 @@ describe('tx-build-helper utilities', () => {
 
     it('should throw for string with non-hex characters', () => {
       expect(() => getTxHashFromCbor('abcdefgh12345678')).toThrow('Invalid input: txCbor must be a valid hex string');
+    });
+
+    it('should throw a typed 400 (TX_PARSE_FAILED) for valid hex that is not a transaction', () => {
+      const { TransactionValidationError } = require('../../srv/utils/errors');
+      const { ERROR_CODES } = require('../../srv/utils/error-codes');
+      try {
+        getTxHashFromCbor('deadbeef'); // parses as CBOR garbage, not a tx array
+        fail('expected throw');
+      } catch (err: any) {
+        // previously a plain Error → surfaced as 500 to the consumer
+        expect(err).toBeInstanceOf(TransactionValidationError);
+        expect(err.statusCode).toBe(400);
+        expect(err.code).toBe(ERROR_CODES.TX_PARSE_FAILED);
+      }
     });
 
     it('should throw for malformed CBOR (valid hex but invalid structure)', () => {
@@ -354,41 +368,26 @@ describe('tx-build-helper utilities', () => {
       const originalError = new Error('network timeout');
       expect(() => mapBuilderError(originalError)).toThrow(originalError);
     });
-  });
 
-  describe('parseOptionalJson', () => {
-    it('should return undefined for undefined input', () => {
-      expect(parseOptionalJson(undefined, 'test')).toBeUndefined();
-    });
+    it('should pass already-typed errors through unchanged (payload preserved)', () => {
+      const { InsufficientFundsError, TransactionValidationError } = require('../../srv/utils/errors');
+      // a typed InsufficientFundsError with REAL amounts — re-wrapping would zero them
+      const typedFunds = new InsufficientFundsError('lovelace', 5_000_000n, 2_000_000n);
+      try {
+        mapBuilderError(typedFunds);
+        fail('expected throw');
+      } catch (err) {
+        expect(err).toBe(typedFunds); // same instance, not a re-wrapped copy
+      }
 
-    it('should parse valid JSON', () => {
-      expect(parseOptionalJson('{"key":"value"}', 'test')).toEqual({ key: 'value' });
-    });
-
-    it('should throw for invalid JSON', () => {
-      expect(() => parseOptionalJson('{bad json', 'myField')).toThrow('myField must be valid JSON');
-    });
-  });
-
-  describe('parseOptionalJsonArray', () => {
-    it('should return undefined for undefined input', () => {
-      expect(parseOptionalJsonArray(undefined, 'test')).toBeUndefined();
-    });
-
-    it('should parse valid JSON array', () => {
-      expect(parseOptionalJsonArray('[1,2,3]', 'test')).toEqual([1, 2, 3]);
-    });
-
-    it('should throw for invalid JSON', () => {
-      expect(() => parseOptionalJsonArray('{bad', 'myField')).toThrow('myField must be valid JSON');
-    });
-
-    it('should throw for non-array JSON', () => {
-      expect(() => parseOptionalJsonArray('"hello"', 'myField')).toThrow('myField must be a JSON array');
-    });
-
-    it('should throw for object JSON (not array)', () => {
-      expect(() => parseOptionalJsonArray('{"a":1}', 'myField')).toThrow('myField must be a JSON array');
+      // a validation error whose message merely CONTAINS a funds keyword
+      const typedValidation = new TransactionValidationError('script consumed full balance budget');
+      try {
+        mapBuilderError(typedValidation);
+        fail('expected throw');
+      } catch (err) {
+        expect(err).toBe(typedValidation);
+      }
     });
   });
 

@@ -4,11 +4,21 @@
 export const CARDANO_DEFAULTS = {
   /** Maximum ADA supply in lovelace (45 billion ADA) */
   MAX_LOVELACE_SUPPLY: '45000000000000000',
-  /** Slots per epoch (mainnet/testnets) */
-  SLOTS_PER_EPOCH: 432_000,
   /** Milliseconds per slot */
   MS_PER_SLOT: 1000,
 };
+
+/**
+ * Network-specific epoch geometry, anchored at the Shelley transition:
+ * `epochStartSlot(epoch) = shelleyStartSlot + (epoch - shelleyStartEpoch) * slotsPerEpoch`.
+ * A single global SLOTS_PER_EPOCH is wrong twice over — preview uses 86 400 (1 day),
+ * and mainnet/preprod epochs are offset by their Byron era.
+ */
+export const EPOCH_CONFIG_BY_NETWORK = {
+  mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000 },
+  preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000 },
+  preview: { shelleyStartEpoch: 0, shelleyStartSlot: 0, slotsPerEpoch: 86_400 },
+} as const;
 
 /**
  * Default execution units for Plutus scripts
@@ -56,10 +66,6 @@ export const ABS_MEM_BUFFER = 5_000;
 /**
  * Transaction building constants
  */
-
-  /** Buffer for witness set CBOR overhead when signing adds ~44 bytes */
-export const  WITNESS_BUFFER_BYTES =  50;
-
 
 /** Collateral amount in lovelace (5 ADA) */
 export const COLLATERAL_LOVELACE = 5_000_000n;
@@ -151,7 +157,7 @@ export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
 /**
  * Asset unit Regex - policy ID (56 hex chars) + asset name (0-128 hex chars)
  */
-export const ASSET_UNIT_REGEX = /^[a-f0-9]{56}([a-f0-9]{2})*$/; // policy ID (56) + asset name (0-64 bytes -> 0-128 hex chars, even length)
+export const ASSET_UNIT_REGEX = /^[a-f0-9]{56}([a-f0-9]{2}){0,32}$/; // policy ID (56) + asset name (0-32 bytes per ledger rules -> 0-64 hex chars, even length; total ≤ 120 = String(120) key column)
 
 /**
  *  Pool ID Regex - bech32 with HRP "pool" and 28 bytes payload

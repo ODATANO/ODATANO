@@ -200,7 +200,7 @@ describe('HsmSigner', () => {
       const signer = new HsmSigner({ ...DEFAULT_HSM_CONFIG, slot: 0 });
 
       await expect(signer.init('preview')).rejects.toThrow(HsmError);
-      await expect(signer.init('preview')).rejects.toThrow(/slot 0 not found/);
+      await expect(signer.init('preview')).rejects.toThrow(/slot index 0 not found/);
       expect(signer.isConnected()).toBe(false);
     });
 

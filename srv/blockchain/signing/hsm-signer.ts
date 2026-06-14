@@ -90,11 +90,14 @@ export class HsmSigner {
       this.pkcs11.C_Initialize();
       logger.info({ module: this.config.pkcs11Module }, 'PKCS#11 module loaded');
 
-      // 2. Open session on configured slot
+      // 2. Open session on configured slot.
+      // NOTE: `config.slot` is the 0-based INDEX into the list of slots-with-token
+      // returned by C_GetSlotList(true), NOT the PKCS#11 slot ID (which need not be
+      // contiguous or zero-based). Configure it as a position, not a hardware slot id.
       const slots = this.pkcs11.C_GetSlotList(true);
       if (this.config.slot >= slots.length) {
         throw new HsmError(
-          `HSM slot ${this.config.slot} not found. Available slots: ${slots.length}`,
+          `HSM slot index ${this.config.slot} not found. ${slots.length} slot(s) with a token present (valid indices 0..${slots.length - 1}).`,
           503, ERROR_CODES.HSM_UNAVAILABLE
         );
       }
@@ -108,9 +111,18 @@ export class HsmSigner {
       try {
         this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER as number, this.config.pin);
       } finally {
-        // Clear PIN from memory regardless of login outcome — PIN is no longer needed
-        // even on failure (preventing in-memory PIN residue for crash-dump / heap-inspection scenarios)
-        this.config = { ...this.config, pin: '' };
+        // Zero the PIN everywhere it could residue after login (crash-dump /
+        // heap-inspection hardening), regardless of login outcome:
+        //  - this.config (shared reference with the server-side hsmConfigInstance
+        //    singleton) — mutate IN PLACE, not reassign, so the singleton clears too
+        //  - the HSM_PIN environment variable
+        //  - the CAP config (cds.env.requires['odatano-core'].hsm.pin)
+        this.config.pin = '';
+        if (process.env.HSM_PIN) delete process.env.HSM_PIN;
+        try {
+          const hsmCds = (cds.env?.requires as Record<string, { hsm?: { pin?: string } }>)?.['odatano-core']?.hsm;
+          if (hsmCds && 'pin' in hsmCds) hsmCds.pin = '';
+        } catch { /* best effort */ }
       }
       logger.debug('PKCS#11 login successful');
 

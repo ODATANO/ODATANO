@@ -95,6 +95,16 @@ describe('CardanoClient Configuration', () => {
       expect(() => new CardanoClient(config)).not.toThrow();
     });
 
+    it('wires indexTtlMs into the cache TTL the indexer reads (was hardcoded 60s)', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 3_600_000 }));
+      expect(client.max_age_ms).toBe(3_600_000);
+    });
+
+    it('keeps the 60s default when indexTtlMs is zero/invalid', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 0 }));
+      expect(client.max_age_ms).toBe(60_000);
+    });
+
     it('should accept blockfrost backend', () => {
       const config = createTestConfig({ backends: ['blockfrost'] });
       expect(() => new CardanoClient(config)).not.toThrow();
@@ -466,8 +476,11 @@ describe('CardanoClient Configuration', () => {
       const result = await client.getNetworkInformation();
       expect(result).toBeDefined();
       expect(result.supply).toBeDefined();
-      // Live backend should be removed after failed init
-      expect((client as any).liveBackend).toBeUndefined();
+      // Live backend is KEPT for lazy retry (previously removed permanently) —
+      // the request retried its init once before falling through to koios
+      expect((client as any).liveBackend).toBe(failingLiveBackend);
+      expect((client as any).uninitializedBackends.has(failingLiveBackend)).toBe(true);
+      expect(failingLiveBackend.init.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
     it('should throw AllBackendsInitFailedError when both live and historical backends fail', async () => {
@@ -487,6 +500,29 @@ describe('CardanoClient Configuration', () => {
         .reply(500, { error: 'Server error' });
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+    });
+
+    it('retries initialization on the next request after a transient startup failure', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
+      const backend = {
+        name: 'koios',
+        init: jest.fn()
+          .mockRejectedValueOnce(new Error('transient outage'))
+          .mockResolvedValue(true),
+        getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo),
+      };
+      (client as any).historicalBackends = [backend];
+
+      await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
+
+      // previously the rejected initPromise stayed cached — the client was
+      // permanently broken until process restart
+      const result = await client.getNetworkInformation();
+      expect(result).toBe(mockNetworkInfo);
+      expect(backend.init).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -560,6 +596,62 @@ describe('CardanoClient Configuration', () => {
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
       expect(mockBackend.getNetworkInformation).not.toHaveBeenCalled();
+    });
+
+    it('skips backends that declare a method unsupported — without breaker recording', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
+      const live = {
+        name: 'ogmios',
+        unsupportedMethods: new Set(['getNetworkInformation']),
+        getNetworkInformation: jest.fn().mockResolvedValue({ fabricated: true }),
+      };
+      const historical = { name: 'koios', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      (client as any).liveBackend = live;
+      (client as any).historicalBackends = [historical];
+      (client as any).initialized = true;
+
+      // getNetworkInformation prefers live — the declared non-support must skip
+      // Ogmios entirely (no call, no failure) and serve the historical answer
+      const result = await client.getNetworkInformation();
+      expect(result).toBe(mockNetworkInfo);
+      expect(live.getNetworkInformation).not.toHaveBeenCalled();
+      expect((client as any).circuitBreaker.shouldAttempt('ogmios')).toBe(true);
+    });
+
+    it('keeps the circuit closed on 4xx client errors but opens it on 5xx', async () => {
+      const { TransactionValidationError, RateLimitError, ProviderUnavailableError } = require('../../srv/utils/errors');
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const mockBackend = {
+        name: 'koios',
+        getNetworkInformation: jest.fn().mockRejectedValue(new TransactionValidationError('bad input')), // 400
+      };
+      (client as any).historicalBackends = [mockBackend];
+      (client as any).initialized = true;
+      const cb = (client as any).circuitBreaker;
+
+      // a storm of client errors must NOT take the backend out of rotation
+      for (let i = 0; i < 6; i++) {
+        await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
+      }
+      expect(cb.shouldAttempt('koios')).toBe(true);
+
+      mockBackend.getNetworkInformation.mockRejectedValue(new RateLimitError('rate limited', 'koios')); // 429
+      for (let i = 0; i < 6; i++) {
+        await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
+      }
+      expect(cb.shouldAttempt('koios')).toBe(true);
+
+      // real backend-health errors (5xx) still open the circuit
+      mockBackend.getNetworkInformation.mockRejectedValue(new ProviderUnavailableError('koios down', 'koios')); // 503
+      for (let i = 0; i < 6; i++) {
+        await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
+      }
+      expect(cb.shouldAttempt('koios')).toBe(false);
     });
   });
 
@@ -710,6 +802,68 @@ describe('CardanoClient Configuration', () => {
 
       const result = await client.evaluateTransaction('deadbeef');
       expect(result).toEqual(evaluation);
+    });
+
+    it('times out instead of hanging when the evaluating backend never responds', async () => {
+      const config = createTestConfig({ backends: ['koios'], primaryTimeoutMs: 50 });
+      const client = new CardanoClient(config);
+
+      (client as any).initialized = true;
+      (client as any).liveBackend = {
+        name: 'ogmios',
+        // hanging socket — previously blocked Plutus builds indefinitely
+        evaluateTransaction: jest.fn().mockReturnValue(new Promise(() => { /* never settles */ })),
+      };
+
+      await expect(client.evaluateTransaction('deadbeef')).rejects.toThrow(/timeout/i);
+    }, 5000);
+
+    it('skips evaluation while the circuit for the evaluating backend is open', async () => {
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      (client as any).initialized = true;
+      (client as any).liveBackend = {
+        name: 'ogmios',
+        evaluateTransaction: jest.fn().mockResolvedValue([]),
+      };
+      const cb = (client as any).circuitBreaker;
+      for (let i = 0; i < 6; i++) cb.recordFailure('ogmios');
+
+      await expect(client.evaluateTransaction('deadbeef')).rejects.toThrow(/circuit open/i);
+      expect((client as any).liveBackend.evaluateTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // Batch methods — resilience (timeout/breaker on the per-backend attempts)
+  // ============================================================================
+  describe('batch methods - resilience', () => {
+    it('fails over to the next batch-capable backend and records the failure', async () => {
+      const { ProviderUnavailableError } = require('../../srv/utils/errors');
+      const config = createTestConfig({ backends: ['koios'] });
+      const client = new CardanoClient(config);
+
+      const txMap = new Map([['a'.repeat(64), { hash: 'a'.repeat(64) } as any]]);
+      const failing = {
+        name: 'blockfrost',
+        getTransactionsBatch: jest.fn().mockRejectedValue(new ProviderUnavailableError('down', 'blockfrost')),
+      };
+      const healthy = {
+        name: 'koios',
+        getTransactionsBatch: jest.fn().mockResolvedValue(txMap),
+      };
+      (client as any).historicalBackends = [failing, healthy];
+      (client as any).initialized = true;
+
+      const result = await client.getTransactionsBatch(['a'.repeat(64)]);
+      expect(result).toBe(txMap);
+      expect(healthy.getTransactionsBatch).toHaveBeenCalledTimes(1);
+
+      // the 5xx failure was recorded against the failing backend
+      const cb = (client as any).circuitBreaker;
+      for (let i = 0; i < 5; i++) cb.recordFailure('blockfrost');
+      expect(cb.shouldAttempt('blockfrost')).toBe(false); // 1 (recorded) + 5 = threshold reached
     });
   });
 

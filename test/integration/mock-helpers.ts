@@ -7,7 +7,20 @@
  * loading nock and its @mswjs/interceptors dependency.
  */
 import nock from 'nock';
-import { mockUtxosAdaOnly, mockProtocolParams, TEST_FIXTURES } from './test-fixtures';
+import { mockUtxosAdaOnly, mockProtocolParams, TEST_FIXTURES, SCRIPT_UTXO_ADDRESS, scriptUtxoKoiosEntry } from './test-fixtures';
+
+// /address_utxos reply: the script address returns its (live) script UTxO so the
+// BuildPlutusSpendTransaction unspent pre-check passes; every other address returns
+// the configured sender UTxOs. Keeps the script UTxO out of the sender's coin-selection
+// set so the builder still resolves it via getTransaction.
+function addressUtxosReply(utxos: any[]) {
+  return function (_uri: string, body: any) {
+    if (Array.isArray(body?._addresses) && body._addresses.includes(SCRIPT_UTXO_ADDRESS)) {
+      return [scriptUtxoKoiosEntry];
+    }
+    return utxos;
+  };
+}
 
 export function setupKoiosMocks(utxos = mockUtxosAdaOnly) {
   // Mock /tip endpoint for backend initialization
@@ -30,7 +43,7 @@ export function setupKoiosMocks(utxos = mockUtxosAdaOnly) {
 
   nock('https://preview.koios.rest')
     .post('/api/v1/address_utxos', (body: any) => body._addresses !== undefined)
-    .reply(200, utxos)
+    .reply(200, addressUtxosReply(utxos))
     .persist();
 }
 
@@ -68,7 +81,7 @@ export function setupUtxoMock(utxos: any[]) {
 
   nock('https://preview.koios.rest')
     .post('/api/v1/address_utxos', (body: any) => body._addresses !== undefined)
-    .reply(200, utxos)
+    .reply(200, addressUtxosReply(utxos))
     .persist();
 }
 

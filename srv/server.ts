@@ -137,7 +137,16 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
     return;
   }
   hsmConfigInstance = hsmConfig;
-  appContext = await initializeAppContext(config, protocolParams, hsmConfig);
+  try {
+    appContext = await initializeAppContext(config, protocolParams, hsmConfig);
+    bootstrapError = null;
+  } catch (err) {
+    // Capture the cause so getAppContext() surfaces a structured 503 with diagnostics
+    // even in PLUGIN mode (src/plugin.ts only logs the error) — previously bootstrapError
+    // stayed null there and the failure showed up as a causeless "not initialized".
+    bootstrapError = err instanceof Error ? err : new Error(String(err));
+    throw err; // still propagate so the plugin/programmatic caller sees it
+  }
 }
 
 /**
@@ -238,16 +247,18 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   const primaryTimeout = cdsConfig.primaryTimeoutMs ?? env.PRIMARY_TIMEOUT_MS;
   const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;
 
-  if (primaryTimeout && isNaN(Number(primaryTimeout))) {
+  // `!= null` not truthiness: a CDS-config numeric 0 is falsy, so `timeout && …`
+  // skipped the <=0 check and 0 then silently became the default via `Number(0)||default`.
+  if (primaryTimeout != null && isNaN(Number(primaryTimeout))) {
     throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
   }
-  if (primaryTimeout && Number(primaryTimeout) <= 0) {
+  if (primaryTimeout != null && Number(primaryTimeout) <= 0) {
     throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
   }
-  if (fallbackTimeout && isNaN(Number(fallbackTimeout))) {
+  if (fallbackTimeout != null && isNaN(Number(fallbackTimeout))) {
     throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
   }
-  if (fallbackTimeout && Number(fallbackTimeout) <= 0) {
+  if (fallbackTimeout != null && Number(fallbackTimeout) <= 0) {
     throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
   }
 
@@ -346,11 +357,15 @@ cds.on('served', async () => {
     return;
   }
 
-  const config = loadConfigFromEnv();
-  const hsmConfig = loadHsmConfigFromEnv();
-  hsmConfigInstance = hsmConfig;
-
+  // NOTE: config loading is INSIDE the try — loadConfigFromEnv/loadHsmConfigFromEnv
+  // throw ConfigError synchronously (missing HSM_PIN, bad slot, no requiresRole…).
+  // Outside the try that would crash the host app's bootstrap in plugin mode,
+  // violating the plugin contract ("never throw on failure").
+  let config: ReturnType<typeof loadConfigFromEnv> | undefined;
   try {
+    config = loadConfigFromEnv();
+    const hsmConfig = loadHsmConfigFromEnv();
+    hsmConfigInstance = hsmConfig;
     appContext = await initializeAppContext(config, undefined, hsmConfig);
     bootstrapError = null;
     logger.info('CAP server bootstrap complete');
@@ -361,8 +376,9 @@ cds.on('served', async () => {
     bootstrapError = err instanceof Error ? err : new Error(String(err));
     // Write to stderr directly so the cause stays visible even when test runners
     // suppress console.error (jest.setup.ts in this repo silences it).
+    const where = config ? `backends={${config.backends.join(',')}} network=${config.network}` : 'config load';
     const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err);
-    process.stderr.write(`[ODATANO] Failed to initialize blockchain components — backends={${config.backends.join(',')}} network=${config.network}\n${msg}\n`);
+    process.stderr.write(`[ODATANO] Failed to initialize blockchain components — ${where}\n${msg}\n`);
     logger.error('Failed to initialize blockchain components:', err);
   }
 });

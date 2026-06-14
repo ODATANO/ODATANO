@@ -270,7 +270,10 @@ interface NetAsset {
  * @param addressTxsData address transactions data from provider
  * @returns {AddressTransactionRow[]} mapped address transaction rows
  *  */
-export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[],validFrom: string, validTo: string): AddressTransactionRow[] {
+// AddressTransactions is keyed by (address, tx) and the per-tx net amounts are
+// immutable once confirmed — no temporal validity. The entity has no
+// validFrom/validTo columns, so the previous TTL plumbing was silently dropped.
+export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[]): AddressTransactionRow[] {
 
   return addressTxsData.map((tx: TransactionProviderData) => {
     // Calculate net amounts for this address in this transaction
@@ -283,8 +286,6 @@ export function mapAddressTransactions(addr: string, addressTxsData: Transaction
       blockTime: tx.blockTime,
       netAssets: netAssets.length > 0 ? JSON.stringify(netAssets) : null,
       hasAssets: netAssets.length > 0,
-      validFrom: validFrom,
-      validTo: validTo,
     };
   });
 }
@@ -309,7 +310,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
         } else {
           // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
-          assetBalances.set(amount.unit, current - BigInt(amount.quantity));
+          assetBalances.set(amount.unit, current - BigInt(amount.quantity || '0'));
         }
       }
     }
@@ -324,7 +325,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
         } else {
           // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
-          assetBalances.set(amount.unit, current + BigInt(amount.quantity));
+          assetBalances.set(amount.unit, current + BigInt(amount.quantity || '0'));
         }
       }
     }
@@ -380,7 +381,11 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       blockHash: utxo.blockHash,
       utxodata_dataHash: utxo.datumHash,
       utxodata_inlineDatum: utxo.inlineDatum || null,
-      utxodata_referenceScriptHash: utxo.scriptRef,
+      // This column is a script HASH (Blake2b256). UTxO.scriptRef is overloaded:
+      // Blockfrost/Ogmios give a 56-hex hash (stored as-is); Koios gives the full
+      // script CBOR (used by the tx-builder, but it would truncate this hash
+      // column) — only persist hash-length values here.
+      utxodata_referenceScriptHash: utxo.scriptRef && utxo.scriptRef.length <= 64 ? utxo.scriptRef : null,
       lovelace: lovelace,
       validFrom: validFrom,
       validTo: validTo,
@@ -488,7 +493,8 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData?: Epoch
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
     hash: providerBlockData.hash,
-    slotLeader: String(providerBlockData.slotLeader ?? null),
+    // was `String(x ?? null)` → persisted the literal string "null" when absent
+    slotLeader: providerBlockData.slotLeader ?? null,
     epochNumber: epochData?.epoch ?? providerBlockData.epoch,
     epoch: epochData,
     epochSlot: providerBlockData.epochSlot,
@@ -529,8 +535,14 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
+    const numericId = Number(lbl.label);
+    // Metadata labels are uint64; the exact value is kept in the `label` string.
+    // The numeric `id` key (now Integer64) is exact up to 2^53 — warn beyond that.
+    if (!Number.isSafeInteger(numericId)) {
+      logger.warn(`Metadata label ${lbl.label} exceeds safe-integer range — numeric id key may lose precision (string label is exact)`);
+    }
     rows.push({
-      id: Number(lbl.label),
+      id: numericId,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
       payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
@@ -545,7 +557,11 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
  * @param providerPoolData pool data from provider
  * @returns {PoolRow} mapped pool row
  */
-export function mapPool(providerPoolData: PoolProviderData): PoolRow {
+export function mapPool(providerPoolData: PoolProviderData, max_age: number): PoolRow {
+  // temporal stamping: live fields (liveStake/liveSaturation/retired…) change every
+  // epoch, so a slice expires after max_age and the index-on-miss read re-fetches
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
   return {
     poolId: providerPoolData.poolId,
     vrfKeyHash: providerPoolData.vrfKeyHash,
@@ -561,6 +577,8 @@ export function mapPool(providerPoolData: PoolProviderData): PoolRow {
     margin: Number(providerPoolData.margin),
     fixedCost: providerPoolData.fixedCost,
     rewardAccount: providerPoolData.rewardAccount,
+    validFrom,
+    validTo,
   };
 }
 
@@ -624,7 +642,11 @@ export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): Asset
  * @param providerDrepData drep data from provider
  * @returns {DrepRow} mapped drep row
  */
-export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
+export function mapDrep(providerDrepData: DrepProviderData, max_age: number): DrepRow {
+  // temporal stamping: amount/retired/expired drift over time → slice expires
+  // after max_age so the index-on-miss read re-fetches fresh state
+  const validFrom = new Date().toISOString();
+  const validTo = new Date(Date.now() + max_age).toISOString();
   return {
     drepId: providerDrepData.drepId,
     hex: providerDrepData.hex,
@@ -633,6 +655,8 @@ export function mapDrep(providerDrepData: DrepProviderData): DrepRow {
     lastActiveEpoch: providerDrepData.lastActiveEpoch,
     retired: Boolean(providerDrepData.retired),
     expired: Boolean(providerDrepData.expired),
+    validFrom,
+    validTo,
   };
 }
 

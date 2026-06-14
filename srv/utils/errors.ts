@@ -252,8 +252,12 @@ export class AllBackendsFailedError extends BackendError {
     const lastError = errors[errors.length - 1];
 
     super(
+      // Empty errors == every backend was *skipped* (e.g. all declared the method
+      // unsupported), so nothing actually failed/connected: surface 503 (no provider
+      // available) rather than 502 (which implies an upstream backend returned a bad
+      // response). A real backend failure carries its own statusCode via lastError.
       `All backends failed: ${lastError?.message ?? 'unknown error'}`,
-      lastError?.statusCode ?? 502,
+      lastError?.statusCode ?? 503,
       lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
       undefined,
       originalError
@@ -382,6 +386,17 @@ export function normalizeBackendError(
     );
   }
 
+  // Priority 3a: Address-shaped lookup errors → 404. MUST precede the generic
+  // validation hints — 'malformed' there used to shadow 'malformed address',
+  // turning a Blockfrost 400 on a read into a TransactionValidationError.
+  const addressNotFoundHints = [
+    'invalid address',
+    'malformed address',
+  ];
+  if (addressNotFoundHints.some(h => messageLower.includes(h))) {
+    return new NotFoundError('Resource', backendName, err);
+  }
+
   // Priority 3: TX Submission - Validation/Signature errors → 400
   const validationErrorHints = [
     'signature',
@@ -399,19 +414,19 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 4: Message indicates "not found" or equivalent → always 404
-  // This also handles providers returning wrong status codes for missing resources
+  // Priority 4: Message indicates "not found" or equivalent → always 404.
+  // This also handles providers returning wrong status codes for missing
+  // resources. Deliberately NOT here: 'not available' / bare 'no data' — those
+  // also appear in provider OUTAGE messages, and classifying an outage as 404
+  // would make it circuit-breaker-exempt (4xx) on top of hiding the 503.
   const notFoundHints = [
     'not found',
     'has not been found',
     'does not exist',
-    'no data',
+    'no data found',
     'no records',
     'empty result',
-    'not available',
     'no metadata',
-    'invalid address',
-    'malformed address',
   ];
   if (notFoundHints.some(h => messageLower.includes(h))) {
     return new NotFoundError('Resource', backendName, err);

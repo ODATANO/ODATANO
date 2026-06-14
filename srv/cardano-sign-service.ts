@@ -1,7 +1,9 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest} from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address } from './utils/validators';
+import { rejectInvalid, throwIfValidationErrors,rejectMissing, TransactionAlreadySubmittedError } from './utils/errors';
+import { mapError } from './utils/mappers';
+import { validateTransactionInputs, isValidBech32Address, extractPaymentCredential } from './utils/validators';
+import { parseTransaction } from './cbor';
 import { getCardanoIndexer, getCardanoClient, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
@@ -27,10 +29,11 @@ async function verifyBuildOwnership(
 ): Promise<TransactionBuildRecord> {
   const build = await db.run(SELECT.one.from(TransactionBuilds as never).where({ id: buildId })) as TransactionBuildRecord | undefined;
   if (!build) rejectInvalid(req, actionName, 'Build not found', 'buildId');
-  if (address && build!.senderAddress !== address) {
+  // rejectInvalid returns `never` → build is narrowed to non-null here
+  if (address && build.senderAddress !== address) {
     rejectInvalid(req, actionName, 'Address does not match build owner', 'address');
   }
-  return build!;
+  return build;
 }
 
 /**
@@ -44,13 +47,129 @@ async function checkAndExpireSigningRequest(
   const result = await db.run(
     UPDATE.entity(SigningRequests as never)
       .set({ status: 'expired' })
-      .where({ id: signingRequest.id, expiresAt: { '<=': now } })
+      // status filter: only PENDING requests may expire — without it an old
+      // 'submitted'/'verified' record would be flipped to 'expired' here
+      .where({ id: signingRequest.id, status: 'pending', expiresAt: { '<=': now } })
   ) as number;
   if (result > 0) {
     signingRequest.status = 'expired';
     return true;
   }
+  // NOTE: when the surrounding request is subsequently rejected, CAP rolls the
+  // managed transaction back — including this update. The expiry status is
+  // then re-applied on the next touch; reads always re-check expiresAt.
   return false;
+}
+
+/**
+ * Resolve the key hashes that MUST witness a signing request:
+ * - the `required_signers` declared in the unsigned tx body (extra_signatories)
+ * - the payment KEY hash of the associated build's senderAddress (the fee
+ *   payer's inputs require its witness on-chain anyway; script credentials
+ *   are skipped — scripts witness via redeemers, not vkeys)
+ *
+ * Previously NONE of this was checked: any valid signature from ANY key
+ * flipped the request to 'verified' / let SubmitVerifiedTransaction proceed.
+ * Returns undefined when nothing is derivable (no over-restriction).
+ */
+async function resolveRequiredSigners(
+  db: cds.Transaction,
+  signingRequest: { unsignedTxCbor: string; build_id?: string | null },
+  TransactionBuilds: unknown
+): Promise<string[] | undefined> {
+  const signers = new Set<string>();
+
+  try {
+    const parsed = parseTransaction(signingRequest.unsignedTxCbor);
+    for (const s of parsed.requiredSigners ?? []) signers.add(s.toLowerCase());
+  } catch (err: unknown) {
+    // body-hash verification still protects integrity; just log
+    logger.warn(`Could not parse unsigned tx for required_signers: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (signingRequest.build_id) {
+    const build = await db.run(
+      SELECT.one.from(TransactionBuilds as never).where({ id: signingRequest.build_id })
+    ) as { senderAddress?: string } | undefined;
+    if (build?.senderAddress) {
+      const cred = extractPaymentCredential(build.senderAddress);
+      if (cred && !cred.isScript) signers.add(cred.hash.toLowerCase());
+    }
+  }
+
+  return signers.size > 0 ? [...signers] : undefined;
+}
+
+/** Shape persisted by indexVerifiedTransactionSubmission. */
+interface FinalizeParams {
+  signingRequestId: string;
+  buildId: string;
+  fullSignedTxCbor: string;
+  txHash: string;
+  verificationResult: {
+    txBodyHash: string;
+    witnessCount: number;
+    signerKeyHashes: string[];
+    warnings: string[];
+  };
+  signerType?: string;
+  signerInfo?: string;
+}
+
+/**
+ * Submit a verified+claimed signing request to the blockchain and persist the
+ * outcome — DELIBERATELY outside the caller's request transaction.
+ *
+ * The caller must already have durably committed `status:'submitting'` (the
+ * claim). This function then:
+ *   1. submits with NO DB write-lock held (the lock was the reason concurrent
+ *      submits serialized and the SQLite busy-timeout could fire mid-network),
+ *   2. on submit failure: marks the request 'failed' in its own committed tx
+ *      and rethrows (NOT rolled back to a pre-submit status — losing the
+ *      attempt would hide a tx the node may have accepted),
+ *   3. on success: persists the submission + 'submitted' status in a committed
+ *      transaction.
+ *
+ * Crash window: a process death between (1) and (3) leaves the request durably
+ * at 'submitting' — the operator/poller checks the chain — instead of silently
+ * reverting to 'pending'/'verified' with no on-chain trace.
+ */
+async function submitAndFinalize(
+  SigningRequests: unknown,
+  params: FinalizeParams,
+  afterFinalize?: (db: cds.Transaction) => Promise<void>
+): Promise<unknown> {
+  // Persist the submission + 'submitted' status in its own committed transaction.
+  const finalizeSubmitted = () => cds.tx(async (db: cds.Transaction) => {
+    const submission = await getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
+    if (afterFinalize) await afterFinalize(db);
+    return submission;
+  });
+
+  try {
+    await getCardanoClient().submitTransaction(params.fullSignedTxCbor);
+  } catch (submitErr: unknown) {
+    // Already-submitted means the tx reached the mempool — e.g. the first backend accepted
+    // it but its response was lost and a fallback observed the duplicate. That is SUCCESS,
+    // not failure: finalize it as 'submitted' (same as the happy path) instead of durably
+    // recording a spurious 'failed' for a tx the node already holds.
+    if (submitErr instanceof TransactionAlreadySubmittedError) {
+      logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
+        'Submit reported already-submitted — finalizing as submitted (tx already in mempool)');
+      return finalizeSubmitted();
+    }
+    try {
+      await cds.tx((db: cds.Transaction) => db.run(
+        UPDATE.entity(SigningRequests as never).set({ status: 'failed' }).where({ id: params.signingRequestId })
+      ));
+    } catch (markErr: unknown) {
+      logger.error({ err: markErr, signingRequestId: params.signingRequestId },
+        'Could not durably mark signing request failed after submit error');
+    }
+    throw submitErr;
+  }
+
+  return finalizeSubmitted();
 }
 
 /**
@@ -201,14 +320,26 @@ module.exports = (srv: cds.Service) => {
         await verifyBuildOwnership(req, db, signingRequest.build_id, address, TransactionBuilds, 'VerifySignature');
       }
 
-      // Check if expired
-      if (await checkAndExpireSigningRequest(db, signingRequest, SigningRequests)) {
-        rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
-      }
-
-      // Status check: only pending requests can be verified
-      if (signingRequest.status !== 'pending') {
-        rejectInvalid(req, 'VerifySignature', `Signing request status is '${signingRequest.status}', expected 'pending'`, 'signingRequestId');
+      // Atomically CLAIM the pending request (pending → 'signed' = verification
+      // in progress). Replaces the read-then-check pattern that let two
+      // concurrent verifies both pass `status === 'pending'` and double-insert
+      // verification records (last-writer-wins on status). The final status is
+      // overwritten to 'verified'/'failed' by persistSignatureVerification.
+      const now = new Date().toISOString();
+      const claimed = await db.run(
+        UPDATE.entity(SigningRequests)
+          .set({ status: 'signed' })
+          .where({ id: signingRequestId, status: 'pending', expiresAt: { '>': now } })
+      );
+      if (claimed === 0) {
+        // re-read the committed state for an accurate message (a concurrent
+        // verify may have moved it since our SELECT above)
+        const current = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+        if (current && current.status === 'pending' && current.expiresAt <= now) {
+          await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId, status: 'pending' }));
+          rejectInvalid(req, 'VerifySignature', 'Signing request has expired', 'signingRequestId');
+        }
+        rejectInvalid(req, 'VerifySignature', `Signing request status is '${current?.status ?? 'unknown'}', expected 'pending'`, 'signingRequestId');
       }
 
       // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
@@ -222,9 +353,11 @@ module.exports = (srv: cds.Service) => {
         fullSignedTxCbor = signedTxCbor;
       }
 
-      // Verify the signature
+      // Verify the signature — bound to the keys that must actually witness
+      // this transaction (declared required_signers + the build's fee payer)
+      const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);
       const signerModule = getExternalSignerModule();
-      const result = signerModule.verifySignedTransaction(fullSignedTxCbor, signingRequest.txBodyHash);
+      const result = signerModule.verifySignedTransaction(fullSignedTxCbor, signingRequest.txBodyHash, { requiredSigners });
 
       // Delegate persistence to indexer (store full signed tx for later submission)
       const verificationRecord = await getCardanoIndexer().persistSignatureVerification(db, {
@@ -262,90 +395,78 @@ module.exports = (srv: cds.Service) => {
     throwIfValidationErrors(req, 'SubmitVerifiedTransaction', errors);
     if (address && !isValidBech32Address(address)) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Invalid bech32 address format', 'address');
 
-    return handleRequest(req, async (db) => {
-      // Atomically claim the signing request by transitioning status to 'submitting'.
-      // This prevents concurrent calls from both passing the status check and double-submitting.
-      const now = new Date().toISOString();
-      const claimed = await db.run(
-        UPDATE.entity(SigningRequests)
-          .set({ status: 'submitting' })
-          .where({
-            id: signingRequestId,
-            status: { in: ['pending', 'verified'] },
-            expiresAt: { '>': now },
-          })
-      );
+    // Three committed phases instead of one request-long transaction (see
+    // submitAndFinalize): the network submit must NOT run inside an open DB
+    // transaction. Errors are mapped the same way handleRequest would.
+    try {
+      // PHASE 1 (committed): atomically claim → 'submitting' and fully verify.
+      // A reject/verification failure here rolls the claim back, so a bad
+      // signature never strands the request in 'submitting'.
+      const prep = await cds.tx(async (db: cds.Transaction) => {
+        const now = new Date().toISOString();
+        const claimed = await db.run(
+          UPDATE.entity(SigningRequests)
+            .set({ status: 'submitting' })
+            .where({
+              id: signingRequestId,
+              status: { in: ['pending', 'verified'] },
+              expiresAt: { '>': now },
+            })
+        );
 
-      if (claimed === 0) {
-        // Claim failed — fetch to provide a specific error message
-        const existing = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
-        if (!existing) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
-        if (existing.expiresAt <= now) {
-          await db.run(UPDATE.entity(SigningRequests).set({ status: 'expired' }).where({ id: signingRequestId }));
-          rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
+        if (claimed === 0) {
+          // Claim failed — fetch to provide a specific error message
+          const existing = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+          if (!existing) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
+          if (existing.expiresAt <= now) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
+          rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${existing.status}', expected 'pending' or 'verified'`, 'signingRequestId');
         }
-        rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${existing.status}', expected 'pending' or 'verified'`, 'signingRequestId');
-      }
 
-      // Re-fetch the full record (now with status='submitting')
-      const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+        // Re-fetch the full record (now with status='submitting')
+        const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
 
-      // Ownership check: verify address matches build owner (defense-in-depth)
-      if (address && signingRequest.build_id) {
-        await verifyBuildOwnership(req, db, signingRequest.build_id, address, TransactionBuilds, 'SubmitVerifiedTransaction');
-      }
+        // Ownership check: verify address matches build owner (defense-in-depth)
+        if (address && signingRequest.build_id) {
+          await verifyBuildOwnership(req, db, signingRequest.build_id, address, TransactionBuilds, 'SubmitVerifiedTransaction');
+        }
 
-      // Check if build association exists
-      if (!signingRequest.build_id) {
-        rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has no associated build', 'signingRequestId');
-      }
+        // Check if build association exists
+        if (!signingRequest.build_id) {
+          rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has no associated build', 'signingRequestId');
+        }
 
-      // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
-      let fullSignedTxCbor: string;
-      if (isWitnessSetCbor(signedTxCbor)) {
-        // CIP-30 wallet returns only witness set - combine with unsigned tx
-        fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
-        logger.debug({ signingRequestId }, 'Combined witness set with unsigned transaction');
-      } else {
-        // Full signed transaction provided (e.g., from cardano-cli)
-        fullSignedTxCbor = signedTxCbor;
-        logger.debug({ signingRequestId }, 'Using full signed transaction directly');
-      }
+        // Detect if signedTxCbor is a witness set (CIP-30) or a full signed transaction (cardano-cli)
+        const fullSignedTxCbor = isWitnessSetCbor(signedTxCbor)
+          ? combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor)
+          : signedTxCbor;
 
-      // Verify signature (throws on failure)
-      const signerModule = getExternalSignerModule();
-      const verificationResult = signerModule.verifyOrThrow(fullSignedTxCbor, signingRequest.txBodyHash);
+        // Verify signature (throws on failure) — bound to the keys that must
+        // actually witness this transaction (required_signers + fee payer)
+        const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);
+        const verificationResult = getExternalSignerModule().verifyOrThrow(fullSignedTxCbor, signingRequest.txBodyHash, { requiredSigners });
 
-      logger.info({
+        return { buildId: signingRequest.build_id as string, txHash: signingRequest.txBodyHash as string, fullSignedTxCbor, verificationResult };
+      });
+
+      logger.info({ signingRequestId, witnessCount: prep.verificationResult.witnessCount }, 'Signature verified, proceeding with submission');
+
+      // PHASES 2+3: submit outside any DB tx, then finalize in its own tx
+      const submissionRecord = await submitAndFinalize(SigningRequests, {
         signingRequestId,
-        witnessCount: verificationResult.witnessCount,
-        signers: verificationResult.signerKeyHashes,
-      }, 'Signature verified, proceeding with submission');
-
-      // Submit to blockchain
-      const txHash = signingRequest.txBodyHash;
-      await getCardanoClient().submitTransaction(fullSignedTxCbor);
-      logger.info({ txHash }, 'Verified transaction submitted to blockchain');
-
-      // Delegate all persistence to indexer
-      const submissionRecord = await getCardanoIndexer().indexVerifiedTransactionSubmission(db, {
-        signingRequestId,
-        buildId: signingRequest.build_id,
-        fullSignedTxCbor,
-        txHash,
-        verificationResult,
+        buildId: prep.buildId,
+        fullSignedTxCbor: prep.fullSignedTxCbor,
+        txHash: prep.txHash,
+        verificationResult: prep.verificationResult,
         signerType,
         signerInfo,
       });
 
-      logger.info({
-        signingRequestId,
-        submissionId: submissionRecord.id,
-        txHash,
-      }, 'Transaction submitted and all records updated');
-
+      logger.info({ signingRequestId, txHash: prep.txHash }, 'Transaction submitted and all records updated');
       return submissionRecord;
-    });
+    } catch (e: unknown) {
+      logger.error({ err: e }, 'SubmitVerifiedTransaction error');
+      return mapError(req, e, 'SubmitVerifiedTransaction');
+    }
   });
 
   /**
@@ -421,6 +542,14 @@ module.exports = (srv: cds.Service) => {
       const hsmStatus = hsmSigner!.getStatus();
       const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
 
+      // A failed HSM verification is an HSM/server fault, not a successful sign —
+      // reject (rolls back) instead of returning 200 with status 'failed', matching
+      // SignAndSubmitWithHsm.
+      if (!verificationResult.isValid) {
+        logger.error({ signingRequestId: signingRequestRecord.id, hsmKey: hsmKeyIdentifier }, 'HSM signature verification failed');
+        rejectInvalid(req, 'SignWithHsm', 'HSM signature verification failed', 'signedTxCbor');
+      }
+
       // 5. Persist verification
       await getCardanoIndexer().persistSignatureVerification(db, {
         signingRequestId: signingRequestRecord.id,
@@ -471,81 +600,69 @@ module.exports = (srv: cds.Service) => {
       rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM is not configured or not connected', 'hsm');
     }
 
-    return handleRequest(req, async (db) => {
-      // 1. Fetch the build (with ownership check)
-      const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignAndSubmitWithHsm');
+    try {
+      // PHASE 1 (committed): fetch build, sign with HSM, verify. A failure
+      // here rolls back the freshly-created signing request.
+      const prep = await cds.tx(async (db: cds.Transaction) => {
+        // 1. Fetch the build (with ownership check)
+        const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignAndSubmitWithHsm');
 
-      // HSM can only sign builds for its own address
-      const hsmAddress = hsmSigner!.getAddress();
-      if (build.senderAddress !== hsmAddress) {
-        rejectInvalid(req, 'SignAndSubmitWithHsm', `Build sender '${build.senderAddress}' does not match HSM address '${hsmAddress}'`, 'buildId');
-      }
+        // HSM can only sign builds for its own address
+        const hsmAddress = hsmSigner!.getAddress();
+        if (build.senderAddress !== hsmAddress) {
+          rejectInvalid(req, 'SignAndSubmitWithHsm', `Build sender '${build.senderAddress}' does not match HSM address '${hsmAddress}'`, 'buildId');
+        }
 
-      // 2. Create signing request
-      const signerModule = getExternalSignerModule();
-      const signingPayload = signerModule.createSigningRequest(
-        build.id, build.unsignedTxCbor, build.txBodyHash, build.network, 'HSM signing + submit'
-      );
+        // 2. Create signing request
+        const signerModule = getExternalSignerModule();
+        const signingPayload = signerModule.createSigningRequest(
+          build.id, build.unsignedTxCbor, build.txBodyHash, build.network, 'HSM signing + submit'
+        );
+        const signingRequestRecord = await getCardanoIndexer().persistSigningRequest(db, { buildId, signingPayload });
 
-      const signingRequestRecord = await getCardanoIndexer().persistSigningRequest(db, {
-        buildId,
-        signingPayload,
+        // 3. Sign with HSM
+        const signedTxCbor = hsmSigner!.signTransaction(build.unsignedTxCbor, build.txBodyHash);
+
+        // 4. Verify HSM signature — reject (rolls back) if invalid before submitting
+        const verificationResult = signerModule.verifySignedTransaction(signedTxCbor, build.txBodyHash);
+        const hsmStatus = hsmSigner!.getStatus();
+        const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
+
+        if (!verificationResult.isValid) {
+          logger.error({ signingRequestId: signingRequestRecord.id, hsmKey: hsmKeyIdentifier }, 'HSM signature verification failed — aborting submission');
+          rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
+        }
+
+        // Claim the request as 'submitting' in this same committed phase
+        await db.run(UPDATE.entity(SigningRequests).set({ status: 'submitting', hsmKeyId: hsmKeyIdentifier }).where({ id: signingRequestRecord.id }));
+
+        return { signingRequestId: signingRequestRecord.id as string, signedTxCbor, txHash: build.txBodyHash as string, verificationResult, hsmKeyIdentifier };
       });
 
-      // 3. Sign with HSM
-      const signedTxCbor = hsmSigner!.signTransaction(build.unsignedTxCbor, build.txBodyHash);
+      logger.info({ signingRequestId: prep.signingRequestId, witnessCount: prep.verificationResult.witnessCount, hsmKey: prep.hsmKeyIdentifier }, 'HSM signature verified, proceeding with submission');
 
-      // 4. Verify HSM signature — reject if invalid before submitting
-      const verificationResult = signerModule.verifySignedTransaction(signedTxCbor, build.txBodyHash);
-
-      const hsmStatus = hsmSigner!.getStatus();
-      const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
-
-      if (!verificationResult.isValid) {
-        logger.error({
-          signingRequestId: signingRequestRecord.id,
-          hsmKey: hsmKeyIdentifier,
-        }, 'HSM signature verification failed — aborting submission');
-        rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
-      }
-
-      logger.info({
-        signingRequestId: signingRequestRecord.id,
-        witnessCount: verificationResult.witnessCount,
-        hsmKey: hsmKeyIdentifier,
-      }, 'HSM signature verified, proceeding with submission');
-
-      // 5. Submit to blockchain
-      const txHash = build.txBodyHash;
-      await getCardanoClient().submitTransaction(signedTxCbor);
-      logger.info({ txHash }, 'HSM-signed transaction submitted to blockchain');
-
-      // 6. Persist everything atomically via indexer
-      const submissionRecord = await getCardanoIndexer().indexVerifiedTransactionSubmission(db, {
-        signingRequestId: signingRequestRecord.id,
-        buildId,
-        fullSignedTxCbor: signedTxCbor,
-        txHash,
-        verificationResult,
-        signerType: 'hsm',
-        signerInfo: `HSM key: ${hsmKeyIdentifier}`,
-      });
-
-      // 7. HSM audit field
-      await db.run(
-        UPDATE.entity(SigningRequests)
-          .set({ hsmKeyId: hsmKeyIdentifier })
-          .where({ id: signingRequestRecord.id })
+      // PHASES 2+3: submit outside any DB tx, then finalize (re-set hsmKeyId,
+      // which indexVerifiedTransactionSubmission does not touch)
+      const submissionRecord = await submitAndFinalize(
+        SigningRequests,
+        {
+          signingRequestId: prep.signingRequestId,
+          buildId,
+          fullSignedTxCbor: prep.signedTxCbor,
+          txHash: prep.txHash,
+          verificationResult: prep.verificationResult,
+          signerType: 'hsm',
+          signerInfo: `HSM key: ${prep.hsmKeyIdentifier}`,
+        },
+        (db) => db.run(UPDATE.entity(SigningRequests).set({ hsmKeyId: prep.hsmKeyIdentifier }).where({ id: prep.signingRequestId })).then(() => undefined)
       );
 
-      logger.info({
-        signingRequestId: signingRequestRecord.id,
-        submissionId: submissionRecord.id,
-        txHash,
-      }, 'HSM-signed transaction submitted and all records updated');
-
+      logger.info({ signingRequestId: prep.signingRequestId, txHash: prep.txHash }, 'HSM-signed transaction submitted and all records updated');
       return submissionRecord;
-    });
+    } catch (e: unknown) {
+      logger.error({ err: e }, 'SignAndSubmitWithHsm error');
+      return mapError(req, e, 'SignAndSubmitWithHsm');
+    }
   });
 
   /**

@@ -39,11 +39,16 @@ function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signat
   // would otherwise throw a TypeError and surface as an opaque internal error. Skip
   // any entry that isn't a [vkey, signature] pair of byte strings.
   const witnesses: { pubKey: Uint8Array; signature: Uint8Array }[] = [];
+  let skipped = 0;
   for (const pair of arr.array) {
-    if (!(pair instanceof CborArray) || pair.array.length !== 2) continue;
+    if (!(pair instanceof CborArray) || pair.array.length !== 2) { skipped++; continue; }
     const [vk, sg] = pair.array;
-    if (!(vk instanceof CborBytes) || !(sg instanceof CborBytes)) continue;
+    if (!(vk instanceof CborBytes) || !(sg instanceof CborBytes)) { skipped++; continue; }
     witnesses.push({ pubKey: vk.bytes, signature: sg.bytes });
+  }
+  if (skipped > 0) {
+    // not fatal, but a malformed witness in a signed tx is suspicious — surface it
+    logger.warn(`Skipped ${skipped} malformed vkey witness entr${skipped === 1 ? 'y' : 'ies'} while verifying (expected [vkey, signature] byte pairs)`);
   }
   return witnesses;
 }

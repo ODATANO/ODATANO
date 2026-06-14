@@ -467,11 +467,14 @@ describe('CardanoTransactionService Handler Validations', () => {
 
   describe('BuildSimpleAdaTransaction — assetsJson happy path', () => {
     it('should build transaction with valid assetsJson', async () => {
+      // assetsJson carries native tokens only (lovelace goes in lovelaceAmount and is
+      // rejected here by design) — fund the sender with the asset it sends.
+      setupUtxoMock(mockUtxosWithAssets);
       const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
         recipientAddress: TEST_FIXTURES.addressWithAssets,
         lovelaceAmount: '2000000',
-        assetsJson: JSON.stringify([{ unit: 'lovelace', quantity: '1000000' }]),
+        assetsJson: JSON.stringify([{ unit: TEST_FIXTURES.assetUnit, quantity: '100' }]),
       }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
 
       expect(status).toBe(200);
@@ -513,7 +516,10 @@ describe('CardanoTransactionService Handler Validations', () => {
         recipientAddress: TEST_FIXTURES.addressWithAssets,
         lovelaceAmount: '2000000',
         mintActionsJson: JSON.stringify([{ assetUnit: shortAssetName, quantity: '100' }]),
-        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        // Must be a genuinely parameterized policy: applying a param to a non-parameterized
+        // script (e.g. validPlutusScript) yields one that fails local evaluation, which the
+        // builder rejects without an Ogmios evaluator to certify execution units.
+        mintingPolicyScript: TEST_FIXTURES.parameterizedScript,
         scriptParamsJson: JSON.stringify([{ bytes: 'a'.repeat(56) }]),
         lockOnScript: true,
         changeAddress: TEST_FIXTURES.addressWithAssets,
@@ -562,6 +568,10 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
         ...plutusSpendRequestBody,
+        // Parameterized validator: applying a param leaves a still-evaluable validator.
+        // (buildooor doesn't bind the input address to the script hash at build time, so
+        // reusing the shared script UTxO is fine — only successful evaluation matters.)
+        validatorScript: TEST_FIXTURES.parameterizedScript,
         scriptParamsJson: JSON.stringify([{ bytes: 'a'.repeat(56) }]),
         lockOnScript: true,
       }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
@@ -793,7 +803,9 @@ describe('CardanoTransactionService Handler Validations', () => {
         INSERT.into('CardanoTransactionService.TransactionBuilds').entries({
           id: buildId,
           network: 'preview',
-          senderAddress: TEST_FIXTURES.addressWithAssets,
+          // SubmitVerifiedTransaction binds the fee-payer key: senderAddress' payment
+          // credential must match the signedTxCbor1 witness key (addressWithFunds).
+          senderAddress: TEST_FIXTURES.addressWithFunds,
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',

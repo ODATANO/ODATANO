@@ -195,25 +195,41 @@ describe('KoiosBackend', () => {
   });
 
   describe('getAddressTransactions', () => {
-    it('should fetch only up to the requested limit', async () => {
+    it('should sort newest-first, apply the limit, and fetch via batch', async () => {
+      // Koios gives NO ordering guarantee — rows arrive out of order here
       nock(KOIOS_BASE_URL)
         .post('/api/v1/address_txs')
         .reply(200, [
-          { tx_hash: 'a'.repeat(64) },
-          { tx_hash: 'b'.repeat(64) },
-          { tx_hash: 'c'.repeat(64) },
+          { tx_hash: 'a'.repeat(64), block_height: 100 },
+          { tx_hash: 'c'.repeat(64), block_height: 300 },
+          { tx_hash: 'b'.repeat(64), block_height: 200 },
         ]);
 
-      const getTxSpy = jest.spyOn(backend, 'getTransaction')
-        .mockResolvedValueOnce({ hash: 'a'.repeat(64) } as any)
-        .mockResolvedValueOnce({ hash: 'b'.repeat(64) } as any);
+      const batchSpy = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+        ['c'.repeat(64), { hash: 'c'.repeat(64) } as any],
+        ['b'.repeat(64), { hash: 'b'.repeat(64) } as any],
+      ]));
 
       const result = await backend.getAddressTransactions(TEST_ADDR, 2);
 
-      expect(result).toHaveLength(2);
-      expect(getTxSpy).toHaveBeenCalledTimes(2);
-      expect(getTxSpy).toHaveBeenNthCalledWith(1, 'a'.repeat(64));
-      expect(getTxSpy).toHaveBeenNthCalledWith(2, 'b'.repeat(64));
+      // newest two (heights 300, 200) — previously slice(0,2) returned a,c (arbitrary)
+      expect(batchSpy).toHaveBeenCalledWith(['c'.repeat(64), 'b'.repeat(64)]);
+      expect(result.map(t => t.hash)).toEqual(['c'.repeat(64), 'b'.repeat(64)]);
+    });
+  });
+
+  describe('getAddressTransactionHashes', () => {
+    it('should return the newest hashes first regardless of response order', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_txs')
+        .reply(200, [
+          { tx_hash: 'a'.repeat(64), block_height: 100 },
+          { tx_hash: 'c'.repeat(64), block_height: 300 },
+          { tx_hash: 'b'.repeat(64), block_height: 200 },
+        ]);
+
+      const result = await backend.getAddressTransactionHashes(TEST_ADDR, 2);
+      expect(result).toEqual(['c'.repeat(64), 'b'.repeat(64)]);
     });
   });
 
@@ -462,6 +478,55 @@ describe('KoiosBackend', () => {
       const result = await backend.getAddressUtxos(TEST_ADDR);
       expect(result).toHaveLength(1);
       expect(result[0].inlineDatum).toBeNull();
+    });
+
+    it('extracts script CBOR bytes from the extended reference_script OBJECT (v1.6.1 refScript)', async () => {
+      const scriptBytes = '5876010100' + 'ab'.repeat(40); // full CBOR-wrapped script hex (>56 chars)
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos')
+        .reply(200, [
+          {
+            tx_hash: 'a'.repeat(64),
+            tx_index: 0,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: null,
+            // _extended:true shape — the old `as string` cast handed this object downstream
+            reference_script: {
+              hash: 'd'.repeat(56),
+              size: 42,
+              type: 'plutusV3',
+              bytes: scriptBytes,
+              value: null,
+            },
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getAddressUtxos(TEST_ADDR);
+      expect(result).toHaveLength(1);
+      expect(result[0].scriptRef).toBe(scriptBytes);
+    });
+
+    it('falls back to the script hash when the extended object carries no bytes', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos')
+        .reply(200, [
+          {
+            tx_hash: 'a'.repeat(64),
+            tx_index: 0,
+            block_hash: 'c'.repeat(64),
+            value: '10000000',
+            datum_hash: null,
+            inline_datum: null,
+            reference_script: { hash: 'd'.repeat(56), size: 42, type: 'plutusV3', bytes: null, value: null },
+            asset_list: [],
+          },
+        ]);
+
+      const result = await backend.getAddressUtxos(TEST_ADDR);
+      expect(result[0].scriptRef).toBe('d'.repeat(56));
     });
   });
 

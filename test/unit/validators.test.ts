@@ -88,11 +88,20 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isAssetUnit(policyId)).toBe(true);
     });
 
-    it('should return true for asset unit with maximum asset name length', () => {
+    it('should return true for asset unit with maximum asset name length (32 bytes)', () => {
       const policyId = 'a'.repeat(56);
-      const assetName = 'b'.repeat(128); // 64 bytes = 128 hex chars
+      const assetName = 'b'.repeat(64); // ledger caps asset names at 32 bytes = 64 hex chars
       const assetUnit = policyId + assetName;
       expect(isAssetUnit(assetUnit)).toBe(true);
+    });
+
+    it('should return false for asset names above the 32-byte ledger cap', () => {
+      const policyId = 'a'.repeat(56);
+      expect(isAssetUnit(policyId + 'b'.repeat(66))).toBe(false);
+    });
+
+    it('should return false for unbounded hex strings (DoS guard for the String(120) key column)', () => {
+      expect(isAssetUnit('a'.repeat(56) + 'b'.repeat(10_000))).toBe(false);
     });
 
     it('should return false for asset unit shorter than 56 chars', () => {
@@ -100,8 +109,8 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(isAssetUnit(shortUnit)).toBe(false);
     });
 
-    it('should return false for asset unit longer than 192 chars', () => {
-      const longUnit = 'a'.repeat(193);
+    it('should return false for asset unit longer than 120 chars', () => {
+      const longUnit = 'a'.repeat(122);
       expect(isAssetUnit(longUnit)).toBe(false);
     });
 
@@ -1150,6 +1159,40 @@ describe('Validator Helper Methods and Type Guards', () => {
         expect(errors).toHaveLength(1);
         expect(errors[0].field).toBe('validityStartMs');
       });
+    });
+  });
+
+  // ==========================================================================
+  // extractPaymentCredential (signature-binding support)
+  // ==========================================================================
+  describe('extractPaymentCredential', () => {
+    const { extractPaymentCredential } = require('../../srv/utils/validators');
+    // type-0 base address (key payment credential)
+    const KEY_ADDRESS = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+    // type-7 enterprise address (script payment credential)
+    const SCRIPT_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
+
+    it('extracts a 28-byte KEY credential from a base address', () => {
+      const cred = extractPaymentCredential(KEY_ADDRESS);
+      expect(cred).not.toBeNull();
+      expect(cred!.hash).toMatch(/^[0-9a-f]{56}$/);
+      expect(cred!.isScript).toBe(false);
+    });
+
+    it('flags SCRIPT payment credentials', () => {
+      const cred = extractPaymentCredential(SCRIPT_ADDRESS);
+      expect(cred).not.toBeNull();
+      expect(cred!.hash).toMatch(/^[0-9a-f]{56}$/);
+      expect(cred!.isScript).toBe(true);
+    });
+
+    it('returns null for stake addresses (no payment part)', () => {
+      expect(extractPaymentCredential('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr')).toBeNull();
+    });
+
+    it('returns null for undecodable input', () => {
+      expect(extractPaymentCredential('not-an-address')).toBeNull();
+      expect(extractPaymentCredential('')).toBeNull();
     });
   });
 });

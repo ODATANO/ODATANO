@@ -1007,6 +1007,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             await cds.run(INSERT.into(Pools).entries({
               poolId: TEST_FIXTURES.validPoolId,
               vrfKeyHash: 'a'.repeat(64),
+              validFrom: new Date().toISOString(),
+              validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
             const { status, data } = await test.get(`/odata/v4/cardano-odata/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
@@ -1021,7 +1023,9 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
             await cds.run(INSERT.into(Pools).entries({
               poolId: TEST_FIXTURES.validPoolId,
-              vrfKeyHash: 'c'.repeat(64)
+              vrfKeyHash: 'c'.repeat(64),
+              validFrom: new Date().toISOString(),
+              validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
             const { status, data } = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
@@ -1090,6 +1094,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             await cds.run(INSERT.into(Dreps).entries({
               drepId: TEST_FIXTURES.validDrepId,
               rewardAddress: 'addr1' + 'e'.repeat(94),
+              validFrom: new Date().toISOString(),
+              validTo: new Date(Date.now() + 60000).toISOString(),
             }));
             const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
             expect(status).to.equal(200);
@@ -1103,6 +1109,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             await cds.run(INSERT.into(Dreps).entries({
               drepId: TEST_FIXTURES.validDrepId,
               rewardAddress: 'addr1' + 'f'.repeat(94),
+              validFrom: new Date().toISOString(),
+              validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
             const { status, data } = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });

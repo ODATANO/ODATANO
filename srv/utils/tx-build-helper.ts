@@ -1,7 +1,8 @@
 import type { UTxO as OdatanoUtxo, JSONValue } from '../utils/types';
 import { toHex, fromHex } from '@harmoniclabs/uint8array-utils';
 import { blake2b_256 } from '@harmoniclabs/crypto';
-import { MixedAssetsError, InsufficientFundsError } from './errors';
+import { MixedAssetsError, InsufficientFundsError, BackendError, TransactionValidationError } from './errors';
+import { ERROR_CODES } from './error-codes';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
 import { Cbor, CborArray, CborBytes } from '@harmoniclabs/cbor';
@@ -63,8 +64,9 @@ export function getTxHashFromCbor(txCbor: string): string {
     }
     const bodyBytes = tx.array[0].subCborRef.toBuffer();
     return toHex(blake2b_256(bodyBytes));
-  } catch {
-    throw new Error('Failed to parse transaction CBOR');
+  } catch (err: unknown) {
+    // typed 400 — a plain Error here surfaced as a 500 to the consumer
+    throw new TransactionValidationError('Failed to parse transaction CBOR', err, ERROR_CODES.TX_PARSE_FAILED);
   }
 }
 
@@ -79,6 +81,13 @@ export function getTxHashFromCbor(txCbor: string): string {
  * @throws {Error} original error if not mappable
  */
 export function mapBuilderError(err: unknown, assetUnit?: string): never {
+  // Already-typed errors carry their own status + payload (amounts, asset units,
+  // validation details) — re-wrapping them into a generic InsufficientFundsError
+  // because their MESSAGE happens to contain "balance"/"insufficient" destroys that.
+  if (err instanceof BackendError) {
+    throw err;
+  }
+
   const errObj = err as { message?: string; toString?: () => string } | null;
   const msg = (errObj?.message || errObj?.toString?.() || String(err)).toLowerCase();
 
@@ -105,37 +114,6 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
     policyId: assetUnit.substring(0, 56),
     assetName: assetUnit.substring(56)
   };
-}
-
-/**
- * Parse optional JSON string, returning undefined if not provided.
- * Throws with a descriptive message on parse failure.
- */
-export function parseOptionalJson(json: string | undefined, fieldName: string): unknown {
-  if (!json) return undefined;
-  try {
-    return JSON.parse(json);
-  } catch {
-    throw new Error(`${fieldName} must be valid JSON`);
-  }
-}
-
-/**
- * Parse optional JSON string that must be an array.
- * Returns undefined if not provided, throws on invalid JSON or non-array.
- */
-export function parseOptionalJsonArray(json: string | undefined, fieldName: string): unknown[] | undefined {
-  if (!json) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new Error(`${fieldName} must be valid JSON`);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${fieldName} must be a JSON array`);
-  }
-  return parsed;
 }
 
 /** Allowed keys in PlutusData JSON — strip anything else for defense-in-depth */

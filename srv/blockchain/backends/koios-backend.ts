@@ -56,8 +56,8 @@ interface KoiosTxInfo {
   block_time?: number;
   absolute_slot?: number;
   slot_no?: number;
-  tx_index: number;
-  tx_fee?: string;
+  tx_block_index?: number;
+  fee?: string;
   deposit?: string;
   tx_size: number;
   metadata?: Record<string, unknown> | null;
@@ -76,6 +76,39 @@ interface KoiosUtxoRow {
   reference_script?: unknown;
   inline_datum?: unknown;
   asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }>;
+}
+
+/**
+ * Koios `reference_script` (with `_extended: true`) is an OBJECT
+ * `{ hash, size, type, bytes, value }` — the previous `as string` cast handed
+ * that object downstream and broke the v1.6.1 input-side refScript feature.
+ * Returns the full script CBOR bytes when present (what the local Plutus eval
+ * needs), falling back to the hash (resolved on-chain only).
+ */
+function koiosRefScriptBytes(ref: unknown): string | null {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  const obj = ref as { bytes?: string | null; hash?: string | null };
+  return obj.bytes || obj.hash || null;
+}
+
+/** Like koiosRefScriptBytes, but strictly the script HASH (for *Hash fields). */
+function koiosRefScriptHash(ref: unknown): string | null {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  const obj = ref as { hash?: string | null };
+  return obj.hash || null;
+}
+
+/**
+ * Sort Koios /address_txs rows newest-first. Koios gives no ordering guarantee —
+ * a bare `slice(0, limit)` returned ARBITRARY rather than recent transactions
+ * (Blockfrost requests `order: 'desc'` for the same data).
+ */
+function sortAddressTxsDesc<T extends { block_height?: number | string | null; block_time?: number | null }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) =>
+    Number(b.block_height ?? b.block_time ?? 0) - Number(a.block_height ?? a.block_time ?? 0)
+  );
 }
 
 /**
@@ -125,15 +158,15 @@ export class KoiosBackend implements CardanoBackend {
    * valid queries — a single retry is not always sufficient for historical
    * epoch lookups, so we retry with increasing delays (500 → 1000 → 2000 ms).
    */
-  // Generic helper. Kept as `any[]` to avoid forcing every Koios endpoint
-  // call site (block_info, epoch_info, account_info, ...) to declare a row
-  // shape just for the empty-array retry path. Row narrowing happens at use.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // Type-agnostic retry helper: it only checks that `.data` is a non-empty
+  // array, so the element type is intentionally `any` to avoid forcing every
+  // Koios endpoint call site (block_info, epoch_info, account_info, …) to
+  // declare a row shape just for the empty-array retry path. Row narrowing
+  // happens at the use sites.
   private async fetchWithRetryOnEmpty(
-    fn: () => Promise<{ data: any[] }>,
+    fn: () => Promise<{ data: any[] }>, // eslint-disable-line @typescript-eslint/no-explicit-any
     label: string
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ): Promise<any[]> {
+  ): Promise<any[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
     const maxRetries = 3;
     const baseDelayMs = 500;
 
@@ -277,22 +310,13 @@ export class KoiosBackend implements CardanoBackend {
 
         const addressData = data[0];
         const addressUtxos = await this.getAddressUtxos(address);
+
+        // Sum balances from the already-mapped UTxOs instead of re-iterating
+        // address_info's utxo_set (whose asset_list can be null → crashed here).
         const totals = new Map<string, bigint>();
-
-        for (const u of addressData.utxo_set) {
-          // add lovelace
-          totals.set(
-            'lovelace',
-            (totals.get('lovelace') ?? 0n) + BigInt(u.value)
-          );
-
-          // add native assets
-          for (const a of u.asset_list) {
-            const unit = `${a.policy_id}${a.asset_name}`;
-            totals.set(
-              unit,
-              (totals.get(unit) ?? 0n) + BigInt(a.quantity)
-            );
+        for (const u of addressUtxos) {
+          for (const a of u.amount) {
+            totals.set(a.unit, (totals.get(a.unit) ?? 0n) + BigInt(a.quantity));
           }
         }
 
@@ -326,13 +350,15 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
         const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
 
-        // Limit before fetching individual transactions to save API calls
-        const limitedTxs = addressTxs.slice(0, limit);
+        // newest first, THEN limit (saves API calls); batch instead of unbounded Promise.all
+        const limitedTxs = sortAddressTxsDesc(addressTxs as Array<{ tx_hash: string; block_height?: number }>).slice(0, limit);
+        const batch = await this.getTransactionsBatch(limitedTxs.map(tx => tx.tx_hash));
 
-        const transactions = await Promise.all(limitedTxs.map(async (tx: { tx_hash: string }) => {
-          return this.getTransaction(tx.tx_hash);
-        }));
-
+        const transactions: Transaction[] = [];
+        for (const tx of limitedTxs) {
+          const resolved = batch.get(tx.tx_hash);
+          if (resolved) transactions.push(resolved);
+        }
         return transactions;
       },
       this.name
@@ -370,7 +396,7 @@ export class KoiosBackend implements CardanoBackend {
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: (utxo.reference_script as string | null | undefined) || null,
+            scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -414,7 +440,7 @@ export class KoiosBackend implements CardanoBackend {
             amount: amount,
             blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
-            scriptRef: (utxo.reference_script as string | null | undefined) || null,
+            scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -538,7 +564,10 @@ export class KoiosBackend implements CardanoBackend {
           poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
           vrfKeyHash: poolData.vrf_key_hash,
           blocksMinted: poolData.block_count,
-          blocksEpoch: poolData.epoch_no,
+          // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
+          // (the epoch NUMBER) was mapped here before, which is a different
+          // semantic than Blockfrost's blocks_epoch. 0 = not available.
+          blocksEpoch: 0,
           liveStake: poolData.live_stake || '0',
           liveSize: poolData.live_size || 0,
           liveDelegators: poolData.live_delegators || 0,
@@ -958,7 +987,9 @@ export class KoiosBackend implements CardanoBackend {
     return handleBackendRequest(
       async () => {
         const { data } = await this.api.post('/address_txs', { _addresses: [address] });
-        return data.slice(0, limit).map((tx: { tx_hash: string }) => tx.tx_hash);
+        return sortAddressTxsDesc(data as Array<{ tx_hash: string; block_height?: number }>)
+          .slice(0, limit)
+          .map(tx => tx.tx_hash);
       },
       this.name
     );
@@ -1033,8 +1064,11 @@ export class KoiosBackend implements CardanoBackend {
       blockHeight: Number(tx.block_height),
       blockTime: tx.tx_timestamp ?? tx.block_time ?? 0,
       slot: tx.absolute_slot ?? tx.slot_no ?? 0,
-      index: tx.tx_index,
-      fee: tx.tx_fee || '0',
+      // Koios /tx_info fields are `tx_block_index` and `fee` (verified against
+      // the live OpenAPI spec) — `tx_index`/`tx_fee` never existed, so the fee
+      // was always reported as '0'
+      index: tx.tx_block_index ?? 0,
+      fee: tx.fee || '0',
       deposit: tx.deposit || '0',
       size: tx.tx_size,
       inputs: tx.inputs.map((input: KoiosTxIO) => {
@@ -1056,7 +1090,7 @@ export class KoiosBackend implements CardanoBackend {
           amount: amount,
           dataHash: input.datum_hash || null,
           inlineDatum: inlineDatumToHex(input.inline_datum),
-          referenceScriptHash: (input.reference_script as string | null | undefined) || null,
+          referenceScriptHash: koiosRefScriptHash(input.reference_script),
         };
       }),
       outputs: tx.outputs.map((output: KoiosTxIO) => {
@@ -1079,7 +1113,7 @@ export class KoiosBackend implements CardanoBackend {
           dataHash: output.datum_hash || null,
           inlineDatum: inlineDatumToHex(output.inline_datum),
           isCollateral: false,
-          referenceScriptHash: (output.reference_script as string | null | undefined) || null,
+          referenceScriptHash: koiosRefScriptHash(output.reference_script),
         };
       }),
       metadata: labels

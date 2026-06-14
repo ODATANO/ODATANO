@@ -238,12 +238,17 @@ export class CardanoTransactionBuilder {
             if (!scriptOutput) {
                 throw new TransactionValidationError(`Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
             }
+            // spending an already-consumed script UTxO is the most common replay mistake —
+            // catch it here with a clear 400 instead of a node-side rejection at submit
+            await this._assertUnspent(scriptRef, scriptOutput.address, 'scriptUtxo', new Map());
             allUtxos.push({
                 txHash: scriptRef.txHash,
                 outputIndex: scriptRef.outputIndex,
                 address: scriptOutput.address,
                 amount: scriptOutput.amount,
                 inlineDatum: scriptOutput.inlineDatum,
+                datumHash: scriptOutput.dataHash ?? undefined,
+                scriptRef: scriptOutput.referenceScriptHash ?? undefined,
             });
         }
 
@@ -278,18 +283,79 @@ export class CardanoTransactionBuilder {
     }
 
     /**
-     * Resolve a list of {txHash, outputIndex} refs to full UTxO records.
-     * Prefers matching against already-fetched sender UTxOs to avoid extra backend calls.
-     * Throws TransactionValidationError if any ref cannot be resolved (missing or spent).
-     * Deduplicates input refs before lookup.
+     * Verify that a transaction output resolved via getTransaction is still unspent,
+     * by checking the live UTxO set of its address. getTransaction only proves the
+     * output EXISTED — a spent output would otherwise surface as a cryptic node-side
+     * rejection at submit instead of a clear 400 here.
      *
-     * @param refs forced-input refs from the request
-     * @param senderUtxos sender UTxOs already fetched (for cheap matching)
-     * @returns resolved UTxOs, in the same order as deduped refs
+     * Lookup failures are logged and tolerated (the check is best-effort; refusing to
+     * build on a flaky backend would be a new failure mode).
      */
-    private async _resolveForceInputs(
+    private async _assertUnspent(
+        ref: { txHash: string; outputIndex: number },
+        address: string,
+        kind: string,
+        liveUtxoCache: Map<string, UTxO[]>
+    ): Promise<void> {
+        let live: UTxO[];
+        try {
+            const cached = liveUtxoCache.get(address);
+            if (cached) {
+                live = cached;
+            } else {
+                live = await this.client.getAddressUtxos(address);
+                liveUtxoCache.set(address, live);
+            }
+        } catch (err: unknown) {
+            logger.warn(`Could not verify ${kind} ${ref.txHash}#${ref.outputIndex} is unspent: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+        const isLive = live.some(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
+        if (!isLive) {
+            throw new TransactionValidationError(
+                `${kind} ${ref.txHash}#${ref.outputIndex} is already spent`
+            );
+        }
+    }
+
+    /**
+     * Resolve forced-input refs (consumed) to full UTxO records.
+     * Thin wrapper over _resolveInputRefs — see it for behaviour.
+     */
+    private _resolveForceInputs(
         refs: Array<{ txHash: string; outputIndex: number }>,
         senderUtxos: UTxO[]
+    ): Promise<UTxO[]> {
+        return this._resolveInputRefs(refs, senderUtxos, 'forceInput');
+    }
+
+    /**
+     * Resolve CIP-31 reference input refs (read-only, NOT merged into the
+     * coin-selection set) to full UTxO records.
+     */
+    private _resolveReferenceInputs(
+        refs: Array<{ txHash: string; outputIndex: number }>,
+        knownUtxos: UTxO[]
+    ): Promise<UTxO[]> {
+        return this._resolveInputRefs(refs, knownUtxos, 'referenceInput');
+    }
+
+    /**
+     * Resolve a list of {txHash, outputIndex} refs to full UTxO records.
+     * Prefers matching against already-known UTxOs to avoid extra backend calls;
+     * otherwise fetches the producing transaction and verifies the output is
+     * unspent. Throws TransactionValidationError (labelled by `kind`) if any ref
+     * cannot be resolved (missing or spent). Deduplicates refs before lookup.
+     *
+     * @param refs input refs from the request
+     * @param knownUtxos UTxOs already fetched (cheap-match pool)
+     * @param kind label used in error messages / the spent-check
+     * @returns resolved UTxOs, in the same order as the deduped refs
+     */
+    private async _resolveInputRefs(
+        refs: Array<{ txHash: string; outputIndex: number }>,
+        knownUtxos: UTxO[],
+        kind: 'forceInput' | 'referenceInput'
     ): Promise<UTxO[]> {
         if (!refs || refs.length === 0) return [];
         // Dedup by "txHash#index" key
@@ -300,83 +366,33 @@ export class CardanoTransactionBuilder {
             seen.add(key);
             return true;
         });
+        const liveUtxoCache = new Map<string, UTxO[]>();
         const resolved: UTxO[] = [];
         for (const ref of dedupedRefs) {
-            // 1) Cheap path: already in sender UTxOs
-            const local = senderUtxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
-            if (local) {
-                resolved.push(local);
-                continue;
-            }
-            // 2) Fallback: fetch the producing transaction and look up the output.
-            // If the output does not exist OR the UTxO has already been spent, treat as missing.
-            let tx;
-            try {
-                tx = await this.client.getTransaction(ref.txHash);
-            } catch (err: unknown) {
-                throw new TransactionValidationError(
-                    `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
-                    err
-                );
-            }
-            const output = tx?.outputs?.find(o => o.outputIndex === ref.outputIndex);
-            if (!output) {
-                throw new TransactionValidationError(
-                    `forceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
-                );
-            }
-            resolved.push({
-                txHash: ref.txHash,
-                outputIndex: ref.outputIndex,
-                address: output.address,
-                amount: output.amount,
-                inlineDatum: output.inlineDatum,
-                datumHash: output.dataHash ?? undefined,
-                scriptRef: output.referenceScriptHash ?? undefined,
-            });
-        }
-        return resolved;
-    }
-
-    /**
-     * Resolve CIP-31 reference input refs to full UTxO records.
-     * Same resolution logic as _resolveForceInputs but with distinct error messages.
-     * Reference inputs are read-only — they are NOT merged into the coin-selection set.
-     */
-    private async _resolveReferenceInputs(
-        refs: Array<{ txHash: string; outputIndex: number }>,
-        knownUtxos: UTxO[]
-    ): Promise<UTxO[]> {
-        if (!refs || refs.length === 0) return [];
-        const seen = new Set<string>();
-        const dedupedRefs = refs.filter(r => {
-            const key = `${r.txHash}#${r.outputIndex}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-        const resolved: UTxO[] = [];
-        for (const ref of dedupedRefs) {
+            // 1) Cheap path: already known
             const local = knownUtxos.find(u => u.txHash === ref.txHash && u.outputIndex === ref.outputIndex);
             if (local) {
                 resolved.push(local);
                 continue;
             }
+            // 2) Fallback: fetch the producing transaction and look up the output.
             let tx;
             try {
                 tx = await this.client.getTransaction(ref.txHash);
             } catch (err: unknown) {
                 throw new TransactionValidationError(
-                    `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`,
+                    `${kind} ${ref.txHash}#${ref.outputIndex} not found on-chain`,
                     err
                 );
             }
             const output = tx?.outputs?.find(o => o.outputIndex === ref.outputIndex);
             if (!output) {
                 throw new TransactionValidationError(
-                    `referenceInput ${ref.txHash}#${ref.outputIndex} not found on-chain`
+                    `${kind} ${ref.txHash}#${ref.outputIndex} not found on-chain`
                 );
             }
+            // getTransaction proves existence, not spendability
+            await this._assertUnspent(ref, output.address, kind, liveUtxoCache);
             resolved.push({
                 txHash: ref.txHash,
                 outputIndex: ref.outputIndex,

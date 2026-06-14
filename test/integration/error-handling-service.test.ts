@@ -366,8 +366,8 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 					buildId: '00000000-0000-0000-0000-000000000000',
 					signedTxCbor: '84a300818258200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00018182581d61b3b8c9d7e6f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e41a000f4240021a0002a095031a012d14e0'
 				}).catch(err => err.response);
-				expect(response.data.error.message).to.include('Build not found');
-				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Build .*not found/);
+				expect(response.status).to.equal(404); // missing build → NotFoundError
 			});
 
 			it('POST /SubmitTransaction - invalid signedTxCbor format', async () => {
@@ -911,8 +911,8 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 					buildId: '00000000-0000-0000-0000-000000000000'
 				}).catch(err => err.response);
 
-				expect(response.data.error.message).to.include('Build not found');
-				expect(response.status).to.equal(400);
+				expect(response.data.error.message).to.match(/Build .*not found/);
+				expect(response.status).to.equal(404); // missing build → NotFoundError
 			});
 		});
 

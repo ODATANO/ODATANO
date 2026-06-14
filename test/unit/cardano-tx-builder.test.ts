@@ -86,7 +86,7 @@ const mockTxRequest: TxBuildRequest = {
   network: 'preview',
   senderAddress: 'addr_test1sender',
   recipientAddress: 'addr_test1recipient',
-  lovelaceAmount: 5000000,
+  lovelaceAmount: '5000000',
 };
 
 const mockMintTxRequest: TxBuildRequest = {
@@ -106,7 +106,13 @@ describe('CardanoTransactionBuilder', () => {
 
     // Create mock CardanoClient
     mockCardanoClient = {
-      getAddressUtxos: jest.fn().mockResolvedValue(mockUtxos),
+      // sender → mockUtxos; script address → the default getTransaction output is live
+      // (the spent-check verifies fetched outputs against the live UTxO set)
+      getAddressUtxos: jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1script'
+          ? [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr_test1script', amount: [{ unit: 'lovelace', quantity: '2000000' }] }]
+          : mockUtxos
+      ),
       hasOgmiosBackend: jest.fn().mockReturnValue(false),
       evaluateTransaction: jest.fn(),
       getTransaction: jest.fn().mockResolvedValue({
@@ -384,6 +390,77 @@ describe('CardanoTransactionBuilder', () => {
       const result = await builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters);
       expect(result.unsignedTxCbor).toBe('mock-plutus-spend-tx-cbor');
     });
+
+    it('should carry dataHash and referenceScriptHash into the fabricated script UTxO (M5)', async () => {
+      const scriptTxHash = 'f'.repeat(64);
+      const datumHash = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
+      const refScriptHash = 'c'.repeat(56);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: scriptTxHash,
+        outputs: [{
+          address: 'addr_test1script',
+          amount: [{ unit: 'lovelace', quantity: '2000000' }],
+          outputIndex: 0,
+          txHash: scriptTxHash,
+          dataHash: datumHash,
+          inlineDatum: null,
+          referenceScriptHash: refScriptHash,
+        }],
+      });
+
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1script'
+          ? [{ txHash: scriptTxHash, outputIndex: 0, address: 'addr_test1script', amount: [{ unit: 'lovelace', quantity: '2000000' }] }]
+          : mockUtxos
+      );
+
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedPlutusSpendTransaction as any) = jest.fn().mockImplementation(
+        async (_req: TxBuildRequest, ctx: TxBuildContext) => {
+          captured = ctx;
+          return {
+            unsignedTxCbor: 'mock', txBodyHash: 'mock', feeLovelace: '0',
+            inputs: [], outputs: [], warnings: [],
+          };
+        }
+      );
+
+      const plutusRequest: TxBuildRequest = {
+        ...mockTxRequest,
+        plutusScriptExecution: {
+          validatorScript: 'abcdef',
+          redeemer: { int: 0 },
+          scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
+        },
+      };
+      await builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters);
+
+      const fabricated = captured!.utxos.find(u => u.txHash === scriptTxHash);
+      expect(fabricated).toBeDefined();
+      // Both fields previously dropped — spending a datum-hash-locked UTxO then
+      // failed with MissingRequiredDatums because the hash never reached the builder.
+      expect(fabricated!.datumHash).toBe(datumHash);
+      expect(fabricated!.scriptRef).toBe(refScriptHash);
+    });
+
+    it('should reject an already-spent script UTxO with a clear 400 (replay protection)', async () => {
+      // default getTransaction returns a..a#0 at addr_test1script, but the live UTxO
+      // set of that address is empty → the output has been consumed
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1script' ? [] : mockUtxos
+      );
+      const plutusRequest: TxBuildRequest = {
+        ...mockTxRequest,
+        plutusScriptExecution: {
+          validatorScript: 'abcdef',
+          redeemer: { int: 0 },
+          scriptUtxo: { txHash: 'a'.repeat(64), outputIndex: 0 },
+        },
+      };
+
+      await expect(builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters))
+        .rejects.toThrow(`scriptUtxo ${'a'.repeat(64)}#0 is already spent`);
+    });
   });
 
   // ============================================================================
@@ -452,6 +529,11 @@ describe('CardanoTransactionBuilder', () => {
         inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1foreign'
+          ? [{ txHash: foreignTxHash, outputIndex: 0, address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }] }]
+          : mockUtxos
+      );
       const getCtx = captureCtx('buildUnsignedTransfer');
       const req: TxBuildRequest = {
         ...mockTxRequest,
@@ -476,6 +558,11 @@ describe('CardanoTransactionBuilder', () => {
         inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1foreign'
+          ? [{ txHash: foreignTxHash, outputIndex: 0, address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }] }]
+          : mockUtxos
+      );
       const getCtx = captureCtx('buildUnsignedTransfer');
       const req: TxBuildRequest = {
         ...mockTxRequest,
@@ -491,6 +578,53 @@ describe('CardanoTransactionBuilder', () => {
       const ctx = getCtx();
       const matches = ctx!.utxos.filter(u => u.txHash === foreignTxHash && u.outputIndex === 0);
       expect(matches).toHaveLength(1);
+    });
+
+    it('should reject a forceInput whose output exists but is already spent', async () => {
+      const foreignTxHash = 'e'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: foreignTxHash,
+        outputs: [
+          { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
+        ],
+        inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
+        fee: '0', deposit: '0', size: 0, blockTime: 0,
+      });
+      // live UTxO set of the foreign address does NOT contain the ref → spent
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+        addr === 'addr_test1foreign' ? [] : mockUtxos
+      );
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash: foreignTxHash, outputIndex: 0 }],
+      };
+
+      await expect(builder.buildSimpleAdaTransaction(req, mockProtocolParameters))
+        .rejects.toThrow(`forceInput ${foreignTxHash}#0 is already spent`);
+    });
+
+    it('should tolerate a failing live-UTxO lookup during the spent-check (best-effort)', async () => {
+      const foreignTxHash = 'e'.repeat(64);
+      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+        hash: foreignTxHash,
+        outputs: [
+          { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
+        ],
+        inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
+        fee: '0', deposit: '0', size: 0, blockTime: 0,
+      });
+      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) => {
+        if (addr === 'addr_test1foreign') throw new Error('backend hiccup');
+        return mockUtxos;
+      });
+      const getCtx = captureCtx('buildUnsignedTransfer');
+      const req: TxBuildRequest = {
+        ...mockTxRequest,
+        forceInputs: [{ txHash: foreignTxHash, outputIndex: 0 }],
+      };
+
+      await builder.buildSimpleAdaTransaction(req, mockProtocolParameters);
+      expect(getCtx()!.utxos.find(u => u.txHash === foreignTxHash)).toBeDefined();
     });
 
     it('should throw TransactionValidationError when forceInput UTxO is not found on-chain', async () => {

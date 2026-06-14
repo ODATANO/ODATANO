@@ -183,7 +183,9 @@ describe('Error Classes', () => {
       const error = new AllBackendsFailedError([]);
 
       expect(error.message).toContain('All backends failed');
-      expect(error.statusCode).toBe(502);
+      // Empty == every backend skipped (e.g. method unsupported) → 503 no-provider,
+      // not 502 (which would imply an upstream backend returned a bad response).
+      expect(error.statusCode).toBe(503);
     });
   });
 
@@ -578,10 +580,25 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
 
-    it('should detect "no data" as not found', () => {
-      const error = { status: 200, message: 'No data available for this transaction' };
+    it('should detect "no data found" as not found', () => {
+      const error = { status: 200, message: 'No data found for this transaction' };
       const result = normalizeBackendError(error, 'koios');
 
+      expect(result.statusCode).toBe(404);
+      expect(result).toBeInstanceOf(NotFoundError);
+    });
+
+    it('should NOT classify provider-outage wording as 404 (would be breaker-exempt)', () => {
+      // bare 'no data' / 'not available' also appear in outage messages —
+      // classifying them as 404 hid the 503 AND exempted it from the breaker
+      const outage = normalizeBackendError({ status: 503, message: 'Service temporarily not available' }, 'koios');
+      expect(outage.statusCode).toBe(503);
+      expect(outage).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should classify "malformed address" on a read as 404, not as tx validation', () => {
+      // 'malformed' in the validation hints used to shadow 'malformed address'
+      const result = normalizeBackendError({ status: 400, message: 'Malformed address provided' }, 'blockfrost');
       expect(result.statusCode).toBe(404);
       expect(result).toBeInstanceOf(NotFoundError);
     });

@@ -317,6 +317,19 @@ describe('ExternalSignerModule', () => {
       expect(request.signingInstructions.signerTypeHint).toBe(ExternalSignerType.CARDANO_CLI);
     });
 
+    it('should generate a network-aware cardanoCliCommand (was always NULL)', () => {
+      const txBodyHash = verifier.extractTxBodyHash(VALID_UNSIGNED_TX_CBOR);
+      const preview = module.createSigningRequest('b', VALID_UNSIGNED_TX_CBOR, txBodyHash, 'preview', 'm');
+      const cmd = preview.signingInstructions.cardanoCliCommand;
+      expect(cmd).toBeDefined();
+      expect(cmd).toContain('cardano-cli conway transaction sign');
+      expect(cmd).toContain('--testnet-magic 2');           // preview magic
+      expect(cmd).toContain(VALID_UNSIGNED_TX_CBOR);          // unsigned CBOR embedded
+
+      const mainnet = module.createSigningRequest('b', VALID_UNSIGNED_TX_CBOR, txBodyHash, 'mainnet', 'm');
+      expect(mainnet.signingInstructions.cardanoCliCommand).toContain('--mainnet');
+    });
+
     it('should include required signers when provided', () => {
       const txBodyHash = verifier.extractTxBodyHash(VALID_UNSIGNED_TX_CBOR);
       const requiredSigners = ['abcd1234'.repeat(7)];

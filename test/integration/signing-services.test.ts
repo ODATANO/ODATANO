@@ -5,7 +5,8 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
+import { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } from '../../srv/server';
+import { TransactionAlreadySubmittedError } from '../../srv/utils/errors';
 import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
 import { TEST_FIXTURES } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
@@ -48,7 +49,10 @@ describe('Signing Services Integration Tests', () => {
       INSERT.into('CardanoSignService.TransactionBuilds').entries({
         id: testBuildId,
         network: TEST_FIXTURES.network,
-        senderAddress: TEST_FIXTURES.addressWithAssets,
+        // Fee-payer key binding (resolveRequiredSigners) requires the senderAddress'
+        // payment credential to match a witness. addressWithFunds' cred == the key the
+        // signedTxCbor1/witnessSetCbor fixtures actually sign with (374610…0a1).
+        senderAddress: TEST_FIXTURES.addressWithFunds,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',
@@ -284,6 +288,25 @@ describe('Signing Services Integration Tests', () => {
       expect(status1).to.equal(400);
     });
 
+    it('finalizes as submitted when submit reports the tx is already in the mempool', async () => {
+      // Lost-response duplicate: the node already holds the tx, so submit throws 409
+      // (TransactionAlreadySubmittedError). That is success — the request must finalize as
+      // 'submitted', not record a spurious 'failed'.
+      const spy = jest.spyOn(getCardanoClient(), 'submitTransaction')
+        .mockRejectedValue(new TransactionAlreadySubmittedError('a'.repeat(64)));
+      try {
+        const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
+          signingRequestId,
+          signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+        });
+        expect(status).to.equal(200);
+        expect(data.status).to.equal('submitted');
+        expect(data).to.have.property('txHash');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('should reject expired requests', async () => {
       // Create new request for expiration test
       const { data: newData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
@@ -413,7 +436,7 @@ describe('Signing Services Integration Tests', () => {
       const signingRequestId = createData.id;
 
       // Read AddressSigningRequests filtered by address
-      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithAssets}'`);
+      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithFunds}'`);
 
       expect(status).to.equal(200);
       expect(data.value).to.be.an('array');
@@ -657,14 +680,14 @@ describe('Signing Services Integration Tests', () => {
 
       const badSigner = {
         isConnected: () => true,
-        getAddress: () => TEST_FIXTURES.addressWithAssets,
+        getAddress: () => TEST_FIXTURES.addressWithFunds,
         getPublicKeyHash: () => Buffer.alloc(28, 0xcc).toString('hex'),
         getStatus: () => ({
           connected: true,
           keyId: '0x0001',
           keyLabel: 'test-key',
           publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
-          address: TEST_FIXTURES.addressWithAssets,
+          address: TEST_FIXTURES.addressWithFunds,
         }),
         sign: () => ({
           signatureHex: Buffer.alloc(64, 0xbb).toString('hex'),
@@ -718,7 +741,7 @@ describe('Signing Services Integration Tests', () => {
       expect(data.keyId).to.equal('0x0001');
       expect(data.keyLabel).to.equal('test-key');
       expect(data.publicKeyHash).to.exist;
-      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithAssets);
+      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithFunds);
     });
 
     it('should return disconnected status when HSM is not configured', async () => {
@@ -932,14 +955,17 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   return {
     isConnected: () => connected,
-    getAddress: () => TEST_FIXTURES.addressWithAssets,
+    // HSM address must match the build sender (addressWithFunds) — the HSM flow only
+    // gates on senderAddress === getAddress(), then verifies the signature's crypto
+    // validity (no fee-payer key binding), so the real random keypair below still passes.
+    getAddress: () => TEST_FIXTURES.addressWithFunds,
     getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({
       connected,
       keyId: '0x0001',
       keyLabel: 'test-key',
       publicKeyHash: connected ? realKeyHash : undefined,
-      address: connected ? TEST_FIXTURES.addressWithAssets : undefined,
+      address: connected ? TEST_FIXTURES.addressWithFunds : undefined,
     }),
     sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;
