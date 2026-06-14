@@ -157,6 +157,7 @@ function createMockClient(overrides: Record<string, any> = {}) {
     getAddressTransactionHashes: jest.fn(),
     getTransactionsBatch: jest.fn(),
     getCredentialUtxos: jest.fn(),
+    getAddressUtxos: jest.fn(),
     getAssetInfo: jest.fn(),
     getAssetHistory: jest.fn(),
     ...overrides,
@@ -589,6 +590,48 @@ describe('CardanoIndexer', () => {
 
       const upsertedEntities = upsertInto.mock.calls.map((c: any[]) => c[0]);
       expect(upsertedEntities).not.toContain('Addresses');
+    });
+  });
+
+  describe('indexAddressUtxos', () => {
+    const ADDR = 'addr_test1qutxoonly';
+
+    it('skips all UPSERTs and returns [] when the address holds no UTxOs', async () => {
+      mockClient.getAddressUtxos.mockResolvedValue([]);
+      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      mapAddressUtxos.mockReturnValue([]);
+      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      mapAddressUtxoAssets.mockReturnValue([]);
+
+      const result = await indexer.indexAddressUtxos(mockTx as any, ADDR);
+
+      expect(result).toEqual([]);
+      expect(mockClient.getAddressUtxos).toHaveBeenCalledWith(ADDR);
+      // never calls getAddress (the whole point — works on Ogmios)
+      expect(mockClient.getAddress).not.toHaveBeenCalled();
+      expect(mockRun).not.toHaveBeenCalled();
+    });
+
+    it('UPSERTs AddressUTxOs + de-duplicated UTxOAssets and returns the rows', async () => {
+      mockClient.getAddressUtxos.mockResolvedValue([
+        { txHash: 'a'.repeat(64), outputIndex: 0, address: ADDR, amount: [{ unit: 'lovelace', quantity: '5' }, { unit: 'policy.tok', quantity: '1' }] },
+      ]);
+      const utxoRows = [{ address_address: ADDR, hash: 'a'.repeat(64), index: 0 }];
+      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      mapAddressUtxos.mockReturnValue(utxoRows);
+      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      // include a duplicate to exercise the dedup filter
+      mapAddressUtxoAssets.mockReturnValue([
+        { utxo_address_address: ADDR, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: 'policy.tok' },
+        { utxo_address_address: ADDR, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: 'policy.tok' },
+      ]);
+
+      const result = await indexer.indexAddressUtxos(mockTx as any, ADDR);
+
+      expect(mockClient.getAddress).not.toHaveBeenCalled();
+      expect(mapAddressUtxos).toHaveBeenCalledWith(ADDR, expect.any(String), expect.any(String), expect.any(Array));
+      expect(mockRun).toHaveBeenCalledTimes(2); // AddressUTxOs + UTxOAssets
+      expect(result).toEqual(utxoRows);
     });
   });
 

@@ -813,6 +813,25 @@ describe('OgmiosBackend', () => {
       await expect(backend.getNetworkInformation()).rejects.toThrow(/not supported/i);
       expect(backend.unsupportedMethods.has('getNetworkInformation')).toBe(true);
     });
+
+    // Historic / out-of-protocol queries: Ogmios bridges live node state only, so these
+    // reject (declared in unsupportedMethods → orchestrator falls back to Blockfrost/Koios)
+    // instead of returning fabricated or empty data.
+    it.each([
+      ['getBlock', (b: any) => b.getBlock('a'.repeat(64))],
+      ['getTransaction', (b: any) => b.getTransaction('a'.repeat(64))],
+      ['getTransactionMetadata', (b: any) => b.getTransactionMetadata('a'.repeat(64))],
+      ['getDrep', (b: any) => b.getDrep('drep1test')],
+      ['getAssetInfo', (b: any) => b.getAssetInfo('a'.repeat(56) + '74657374')],
+      ['getAddressTransactions', (b: any) => b.getAddressTransactions('addr_test1qtest')],
+    ])('%s rejects (declared unsupported) rather than returning data', async (method, call) => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {};
+      (backend as any).isShutdown = false;
+
+      await expect(call(backend)).rejects.toThrow(/not supported|not available/i);
+      expect(backend.unsupportedMethods.has(method as string)).toBe(true);
+    });
   });
 
   describe('getAddressUtxos — UTxO mapping', () => {
