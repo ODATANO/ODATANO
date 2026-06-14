@@ -140,10 +140,10 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
       expect(status).to.equal(200);
       expect(data.endTime).to.be.greaterThan(data.startTime);
-      // Epoch should be ~5 days (432000 seconds)
+      // Preview epoch is ~1 day (86400 slots * 1s = 86400 seconds), not mainnet's 5 days
       const epochDuration = data.endTime - data.startTime;
-      expect(epochDuration).to.be.greaterThan(400000); // At least ~4.6 days
-      expect(epochDuration).to.be.lessThan(450000); // Less than ~5.2 days
+      expect(epochDuration).to.be.greaterThan(80000); // ~1 day
+      expect(epochDuration).to.be.lessThan(90000);
     });
 
     // Test protocol parameters conversion
@@ -233,7 +233,7 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(data.endTime).to.be.a('number');
       expect(data.endTime).to.be.greaterThan(data.startTime);
       const duration = data.endTime - data.startTime;
-      expect(duration).to.be.greaterThan(400000); // At least close to expected duration
+      expect(duration).to.be.greaterThan(80000); // preview epoch ≈ 86400s (~1 day)
       expect(status).to.equal(200);
     });
 
@@ -257,19 +257,19 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
   describe('Ogmios Backend tests for not supported historic calls', () => {
     it('POST /GetTransactionByHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.txHash }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getTransaction is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 
     it('POST /GetMetadataByTxHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txHash }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getTransactionMetadata is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 
     it('POST /GetBlockByHash - unsupported operation should return error', async () => {
       const response = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: 'cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39' }).catch(err => err.response);
-      expect(response.status).to.equal(404);
+      expect(response.status).to.equal(503); // getBlock is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });
 

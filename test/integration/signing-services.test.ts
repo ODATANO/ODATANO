@@ -48,7 +48,10 @@ describe('Signing Services Integration Tests', () => {
       INSERT.into('CardanoSignService.TransactionBuilds').entries({
         id: testBuildId,
         network: TEST_FIXTURES.network,
-        senderAddress: TEST_FIXTURES.addressWithAssets,
+        // Fee-payer key binding (resolveRequiredSigners) requires the senderAddress'
+        // payment credential to match a witness. addressWithFunds' cred == the key the
+        // signedTxCbor1/witnessSetCbor fixtures actually sign with (374610…0a1).
+        senderAddress: TEST_FIXTURES.addressWithFunds,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',
@@ -413,7 +416,7 @@ describe('Signing Services Integration Tests', () => {
       const signingRequestId = createData.id;
 
       // Read AddressSigningRequests filtered by address
-      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithAssets}'`);
+      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithFunds}'`);
 
       expect(status).to.equal(200);
       expect(data.value).to.be.an('array');

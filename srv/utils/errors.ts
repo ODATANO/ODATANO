@@ -252,8 +252,12 @@ export class AllBackendsFailedError extends BackendError {
     const lastError = errors[errors.length - 1];
 
     super(
+      // Empty errors == every backend was *skipped* (e.g. all declared the method
+      // unsupported), so nothing actually failed/connected: surface 503 (no provider
+      // available) rather than 502 (which implies an upstream backend returned a bad
+      // response). A real backend failure carries its own statusCode via lastError.
       `All backends failed: ${lastError?.message ?? 'unknown error'}`,
-      lastError?.statusCode ?? 502,
+      lastError?.statusCode ?? 503,
       lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
       undefined,
       originalError
