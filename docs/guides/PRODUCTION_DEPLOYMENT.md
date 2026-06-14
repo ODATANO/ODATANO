@@ -1,6 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v1.0 | **Last Updated:** March 2026
+**Version:** v1.9 | **Last Updated:** June 2026
 ---
 
 ## Table of Contents
@@ -233,7 +233,7 @@ cd /mnt/c/Users/<you>/ODATANO/ODATANO && npm ci && mbt build
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
 # Deploy MTA (filename matches the version in mta.yaml)
-cf deploy mta_archives/odatano_1.7.10.mtar -e prod.mtaext
+cf deploy mta_archives/odatano_1.9.0.mtar -e prod.mtaext
 ```
 
 ### Environment Variables (`odatano-srv`)

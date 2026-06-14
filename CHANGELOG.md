@@ -5,6 +5,86 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.9.0] - 14-06-2026: Hardening pass — backend resilience, schema correctness, durable signing & tx-build robustness
+
+A broad correctness-and-resilience pass across every layer (PR #60, `dev/general-improvements`). No new OData actions, but several **schema data-type changes**, **error-status changes**, and **public-surface tightenings** that consumers should be aware of. Highlights: all read entities are now `@readonly` (writes → 405), Epoch/Metadata time/label columns widened to avoid overflow/truncation, Ogmios stops fabricating placeholder data and is skipped for unsupported methods, the signing/submit flow is now crash-durable, and Buildooor protocol-param/datum/collateral/metadata handling is hardened.
+
+### Added
+
+- **UTxO-only indexing fallback for `GetUTxOsByAddress`** (`srv/blockchain/cardano-indexer.ts`, `srv/cardano-service.ts`). New `CardanoIndexer.indexAddressUtxos(tx, addr)` indexes only the live UTxO set via `getAddressUtxos` — no `getAddress` (address-aggregation) call and no parent `Addresses` row (same pattern as `indexCredentialUtxos`). `GetUTxOsByAddress` now falls back to it when **no** configured backend supports `getAddress` (detected as `AllBackendsFailedError` with zero collected errors — every backend skipped the method). Net effect: an **Ogmios-only deployment can now serve `GetUTxOsByAddress`** (Ogmios has the live UTxO set but not address aggregation) instead of failing.
+- **`SigningInstructions.cardanoCliCommand`** (`srv/utils/types.ts`, `srv/cardano-sign-service.ts`): signing instructions now include a copy-pasteable `cardano-cli` signing recipe for CLI / hardware signers.
+- **`extractPaymentCredential(address)`** (`srv/utils/validators.ts`): decodes a Shelley bech32 address to its 28-byte payment-credential hash + an `isScript` flag, or `null` for undecodable / stake addresses. Used to bind signature verification to the build's fee-payer key.
+- **`getStatus().backends`** (`src/index.ts`): the programmatic status object now reports the configured backend list via `cardanoClient.listBackends()`.
+- **`CardanoBackend.unsupportedMethods?: ReadonlySet<string>`** (`srv/blockchain/backends/cardano-backend.ts`): backends can declare methods they don't support; the orchestrator skips them without counting a circuit-breaker failure.
+
+### Changed
+
+- **All 20 read-service entity projections are now `@readonly`** (`srv/cardano-service.cds`). External `CREATE` / `UPDATE` / `DELETE` against `CardanoODataService` entities now return **HTTP 405** instead of mutating the cache that is served as authoritative blockchain data. Behavior change for any consumer that was (incorrectly) writing to these projections.
+- **Schema data-type corrections** (`db/schema.cds`, `db/types.cds`) — these change the OData `$metadata` types consumers see:
+  - `Epochs.startTime` / `endTime` / `firstBlockTime` / `lastBlockTime`, `Transactions.blockTime` / `slot`, `Assets.initialMintTime`, `AssetHistory.blockTime`: `Integer` → **`Integer64`** (32-bit Integer overflows for Unix-second timestamps after 2038-01-19).
+  - `TransactionMetadata.id`: `Integer` → **`Integer64`** (the metadata label is a uint64; the 32-bit column overflowed for labels > 2³¹).
+  - `MetadataLabel` type: `String(5)` → **`String(20)`** (a uint64 label is up to 20 digits; `String(5)` truncated any label above 5 digits).
+  - `Assets.assetNameHex`: `HexBytes` (`String(5000)`) → **`String(64)`** (32-byte ledger cap = 64 hex).
+  - Key columns `Pools.poolId`, `Dreps.drepId`, `Accounts.stakeAddress`, address fields: `String` → **`Bech32`** (bounded type).
+  - `Pools`, `Dreps` and `Assets` entities are now **`temporal`**, so live pool/drep/asset stats refresh on TTL lapse instead of freezing on first index.
+- **`ASSET_UNIT_REGEX` tightened to the 32-byte ledger cap** (`srv/utils/const.ts`): asset-name portion bounded to 0-64 hex. `GetAssetInfo` / `GetAssetHistory` descriptions updated from "0-128 hex" to "0-64 hex; ledger caps asset names at 32 bytes". Over-long asset names now reject with a clear 400.
+- **`GetAssetHistory` `limit` is clamped to 1-100** (`srv/cardano-service.ts`, `srv/cardano-service.cds`): previously unbounded; now `Math.min(Math.max(limit, 1), 100)`.
+- **`SubmitSignedTransaction` now verifies its `network` parameter** against the deployment network (previously silently ignored).
+- **Error-status corrections** (consumer-visible HTTP codes):
+  - Missing build / submission record → **404 `NotFoundError`**.
+  - Malformed tx CBOR → **400 `TX_PARSE_FAILED`**.
+  - Script-parameter application failures in `BuildMintTransaction` / `BuildPlutusSpendTransaction` → field-attributed **400**.
+  - `AllBackendsFailedError` with no collected errors (every backend skipped the method) now surfaces **503** instead of **502**.
+  - `normalizeBackendError`: address-shaped hints (`invalid address` / `malformed address`) now classify as **404** before the generic validation hints; removed `not available` / bare `no data` from the not-found hints so provider **outages** stay **503** (and circuit-breaker-eligible) instead of being mislabeled 404.
+- **Durable, crash-safe signing/submit flow** (`srv/cardano-sign-service.ts`):
+  - `SubmitVerifiedTransaction` now submits in **3 committed phases** (claim → `submitting`, network submit outside any open DB lock, finalize → `submitted`). A post-accept crash leaves a durable `submitting` record instead of silently reverting to `pending`/`verified` with no on-chain trace.
+  - `VerifySignature` atomically claims `pending` → `signed` before verifying, fixing a concurrent-verify double-insert race.
+  - Expiry transitions are now status-filtered (only `pending` requests may expire).
+  - Signature verification is now **bound to the unsigned tx body's `required_signers` (extra_signatories) plus the build's fee-payer key**, not just any present witness.
+- **HSM hardening** (`srv/blockchain/signing/hsm-signer.ts`): rejects on failed verification, fully clears the PIN across singleton + env + config, slot documented as an index.
+- **Buildooor tx-build hardening** (`srv/blockchain/transaction-building/buildooor-tx.ts`, `srv/blockchain/cardano-tx-builder.ts`):
+  - All protocol parameters mapped with null guards; backend cost-model **arrays converted to named-key form** (raw arrays crash Buildooor's CEK machine); the `TxBuilder` is rebuilt per request when the `network#epoch` fingerprint changes.
+  - `datumHash` now carried into resolved `TxOut`s and fabricated script UTxOs so datum preimages reach the witness set (fixes `MissingRequiredDatums` on hash-locked spends).
+  - **Collateral**: picks the smallest ADA-only UTxO covering the 5-ADA floor and returns the excess via explicit `collateralReturn`.
+  - **Metadata**: text/bytes > 64 bytes are chunked (UTF-8-safe), `0x` byte strings supported, non-integer numbers and invalid labels/keys rejected with clear **400s**.
+  - **UPLC 1.0.0 (Plutus V1/V2) scripts are now rejected** at build time instead of being silently hashed as V3 (which produced a wrong policy ID / unspendable address).
+  - Force / reference / script UTxOs are verified unspent before building (clear **400** instead of a node-side rejection).
+- **`TxBuildRequest.lovelaceAmount` is now typed `string`** (`srv/utils/types.ts`): OData `Lovelace` is `Decimal(20,0)` and arrives as a string at runtime (CAP preserves precision); validators accept `string | number | bigint`.
+- **Backend pagination fixes** (`srv/blockchain/backends/*`):
+  - Blockfrost: `getAddressUtxos` / account-addresses use the `...All` variants — the plain variants capped at 100 entries and **silently truncated larger wallets**.
+  - Koios: `address_txs` sorted newest-first before limiting; transactions fetched via `getTransactionsBatch` instead of an unbounded `Promise.all`; extended `reference_script` object unwrapped.
+- **Ogmios data-correctness fixes** (`srv/blockchain/backends/ogmios-backend.ts`):
+  - Protocol-parameter **Ratio strings** (e.g. `"3/1000"`) parsed properly — `Number()` previously yielded `NaN` for `rho`, `tau`, `a0` and exec-unit prices; the `rho`/`tau` swap is fixed.
+  - `getAccount` extracts lovelace from `{ ada: { lovelace } }` value objects (was rendering `"[object Object]"`).
+  - Network-aware epoch geometry via new `EPOCH_CONFIG_BY_NETWORK` and Shelley-anchored slot times from the genesis infos the tx builder uses.
+  - Ogmios **no longer fabricates `getAddress` / `getNetworkInformation` placeholder data** (which `preferLive` routing then preferred over correct historical data) and now maps inline datums onto UTxOs.
+- **Backend capability routing & resilience** (`srv/blockchain/cardano-client.ts`, `srv/blockchain/circuit-breaker.ts`):
+  - Orchestrator skips a backend for any method in its `unsupportedMethods` set without counting a circuit-breaker failure.
+  - **All 4xx responses are exempted from the circuit breaker** — a definitive answer from a healthy backend must not take it out of rotation.
+  - New `callWithResilience` wraps every single-backend path with a breaker gate + timeout — most importantly `evaluateTransaction`, which previously hung Plutus builds indefinitely on a dead Ogmios socket.
+  - Lazy Ogmios reconnect on dead sockets, retryable client init, half-open probe cap.
+- **Caching / lifecycle / config robustness** (`srv/server.ts`, `src/plugin.ts`, `srv/blockchain/cardano-indexer.ts`, `srv/blockchain/cardano-client.ts`):
+  - `indexTtlMs` is now wired into the indexer's cache TTL (was hardcoded 60s).
+  - Config loading moved inside the served-hook `try` (a malformed config previously crashed the **plugin-mode** bootstrap); `bootstrapError` is now set in plugin mode too.
+  - Plugin mode now honors `SKIP_AUTO_INIT=true` (matches `srv/server.ts`), so consumer test suites can mount the plugin without opening real backend connections.
+
+### Fixed
+
+- **`mapBlock` stores a real `null` `slotLeader`** instead of a placeholder; BigInt asset-quantity fallback added (`srv/utils/mappers.ts`).
+- **Hash-length-only `scriptRef` written into the `Blake2b256` column** for Koios CBOR-truncation cases (`srv/utils/mappers.ts`).
+- **Falsy-key guard** in `indexOnMissRead` (`srv/cardano-service.ts`): `key &&` skipped validation for falsy keys like `epoch=0` or an empty string; now an explicit `null`/`undefined` check.
+- **`READ AssetHistory` now runs through `handleRequest`** (was returning `req.query` raw, bypassing error handling).
+- Malformed witness sets now produce a warning instead of an opaque failure during signing.
+
+### Internal
+
+- **Type-aware ESLint enabled** (`eslint.config.mjs`): `projectService` + curated typed rules, CAP lifecycle hooks exempted, generated/repro artifacts ignored; `src/**` added to `tsconfig.json` include.
+- **Dead code removed**: unused exports/request fields (`parseOptionalJson*`, `containsIndexPlaceholder`, `feeLovelace`, `executionUnits`) and their tests; `ProtocolParameters` type imported from the package root; `__INPUT_IDX__` regex made case-insensitive.
+- **Tx-building paths consolidated**: shared `_resolveInputRefs`, `_buildSimpleTransfer`, and `_buildMintEntries` across `cardano-tx-builder.ts` and `buildooor-tx.ts`.
+- **Test additions**: `indexAddressUtxos` unit tests, OgmiosBackend `unsupportedMethods` cases, and updated error-handling expectations across the unit and integration suites. Suite total now **35 suites (25 unit + 10 integration)**, 1549 tests, 96.58% statement coverage.
+- Version bumped `1.8.0` → `1.9.0`.
+
+
 ## [v1.8.0] - 09-06-2026: Drop CSL and make Buildooor the sole transaction builder
 
 Removes the `@emurgo/cardano-serialization-lib-nodejs` (CSL) dependency entirely. Buildooor (`@harmoniclabs/buildooor`) becomes the single transaction-building engine, and all hashing / signature-verification work moves onto the HarmonicLabs raw-CBOR stack. Net effect: **−2806 lines**, one fewer native WASM dependency, and the long-standing Plutus V3 `PPViewHashesDontMatch` bug is resolved by construction.

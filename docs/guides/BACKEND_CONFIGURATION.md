@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** v1.0 | **Last Updated:** March 2026
+**Version:** v1.9 | **Last Updated:** June 2026
 
 ## Architecture Overview
 

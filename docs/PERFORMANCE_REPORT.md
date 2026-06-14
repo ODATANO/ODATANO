@@ -1,4 +1,12 @@
-R# ODATANO Performance Report
+# ODATANO Performance Report
+
+> **⚠️ Historical benchmark (v1.7.x, dual-builder era).** This report was measured on
+> 2026-03-08 when ODATANO shipped both the CSL and Buildooor transaction builders.
+> **CSL was removed in v1.8.0** — Buildooor is now the sole builder, so every "CSL" row,
+> column, "winner", and "Recommended Configuration" below is no longer applicable.
+> The backend-only numbers (Koios / Blockfrost / Ogmios response times) remain
+> representative; the builder comparison is retained for historical reference only.
+> A Buildooor-only re-benchmark is pending.
 
 ## Overview
 

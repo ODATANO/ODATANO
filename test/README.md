@@ -14,7 +14,7 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 - **Line Coverage**: 97.26%
 - **Networks**: Cardano Preview testnet
 - **Backends**: Blockfrost, Koios, Ogmios
-- **TX Builders**: CSL (Cardano Serialization Lib), Buildooor
+- **TX Builder**: Buildooor (sole builder; CSL was removed in v1.8.0)
 - **Milestones Covered**: M1 (Read), M2 (Transaction Build), M3 (External Signing + Plutus Smart Contracts)
 
 ---
@@ -32,7 +32,6 @@ test/
 │   ├── error-handling.backend.ts          # Backend-level error handling (11 tests)
 │   ├── odata_features.test.ts             # OData query feature tests (41 tests)
 │   ├── tx-test-suite.ts                   # Transaction builder shared tests (117 tests)
-│   ├── tx.csl.test.ts                     # CSL builder integration tests
 │   ├── tx.buildooor.test.ts               # Buildooor builder integration tests
 │   ├── tx-submission-mock.test.ts         # Transaction submission tests (7 tests)
 │   ├── tx-error-handling.builder.ts       # TX builder error scenarios (20 tests)
@@ -48,15 +47,19 @@ test/
 │   ├── cardano-tx-builder.test.ts         # CardanoTransactionBuilder tests (22 tests)
 │   ├── blockfrost-backend.test.ts         # Blockfrost backend initialization (11 tests)
 │   ├── koios-backend.test.ts              # Koios backend unit tests (7 tests)
-│   ├── ogmios-backend.test.ts             # Ogmios backend tests (39 tests)
-│   ├── csl-tx-builder.test.ts             # CSL transaction builder tests (24 tests)
-│   ├── buildooor-tx-builder.test.ts       # Buildooor transaction builder tests (13 tests)
-│   ├── tx-builder-registry.test.ts        # Builder registry tests (21 tests)
-│   ├── tx-build-helper.test.ts            # Transaction helper utilities (45 tests)
-│   ├── signing.test.ts                    # External signing unit tests (62 tests)
-│   ├── hsm-signer.test.ts                 # HSM signer unit tests (33 tests)
-│   ├── server.test.ts                     # Server initialization & config tests (23 tests)
-│   ├── mappers.test.ts                    # Data mappers & address utilities (13 tests)
+│   ├── ogmios-backend.test.ts             # Ogmios backend tests
+│   ├── buildooor-tx-builder.test.ts       # Buildooor transaction builder tests
+│   ├── tx-build-helper.test.ts            # Transaction helper utilities
+│   ├── plutus-placeholders.test.ts        # __INPUT_IDX__ placeholder substitution tests
+│   ├── cbor-parse.test.ts                 # ParseTransactionCbor decoder tests
+│   ├── derive-script-address.test.ts      # DeriveScriptAddress action tests
+│   ├── extract-payment-key-hash.test.ts   # ExtractPaymentKeyHash action tests
+│   ├── cardano-service-readonly.test.ts   # @readonly projection enforcement tests
+│   ├── signing.test.ts                    # External signing unit tests
+│   ├── hsm-signer.test.ts                 # HSM signer unit tests
+│   ├── server.test.ts                     # Server initialization & config tests
+│   ├── plugin.test.ts                     # CAP plugin bootstrap tests
+│   ├── mappers.test.ts                    # Data mappers & address utilities
 │   ├── cip14-fingerprint.test.ts          # CIP-14 asset fingerprint tests (11 tests)
 │   ├── circuit-breaker.test.ts            # Circuit breaker logic tests (15 tests)
 │   ├── concurrency.test.ts                # Concurrency & race condition tests (5 tests)
@@ -76,7 +79,7 @@ Integration tests run against **real Cardano blockchain backends** on the **prev
 
 The integration test suite uses a **shared test suite pattern**:
 - The same test suite (`core-test-suite.ts`) runs against **multiple backends**
-- Transaction tests (`tx-test-suite.ts`) run against **multiple builders** (CSL + Buildooor)
+- Transaction tests (`tx-test-suite.ts`) run against the **Buildooor builder**
 - Each backend/builder has its own test entry file
 - Tests cover **GET (collection/key reads)**, **POST (action/function)**, and **transaction building** scenarios
 - All tests validate **cold indexing** (blockchain fetch + DB persistence) and **warm reads** (cached DB retrieval)
@@ -146,7 +149,7 @@ M2 milestone adds comprehensive transaction building and submission tests.
 
 ### tx-test-suite.ts (117 tests)
 
-Shared test suite for transaction builders, instantiated by both `tx.csl.test.ts` and `tx.buildooor.test.ts`:
+Shared test suite for the transaction builder, instantiated by `tx.buildooor.test.ts`:
 
 #### Entity READ Operations (5 tests)
 - TransactionBuilds collection reads and key access
@@ -181,12 +184,11 @@ Shared test suite for transaction builders, instantiated by both `tx.csl.test.ts
 #### M3 Signing Operations (4 tests)
 - AddressTransactionBuilds reads, GetTransactionBuildsByAddress action
 
-### tx.csl.test.ts & tx.buildooor.test.ts
+### tx.buildooor.test.ts
 
-Builder-specific integration tests:
-- **CSL** (Cardano Serialization Lib) builder — via Koios backend
-- **Buildooor** builder — via Koios backend
-- Both builders tested with identical test cases from `tx-test-suite.ts` + `tx-error-handling.builder.ts`
+Builder integration tests:
+- **Buildooor** builder — via Koios backend (the sole transaction builder since v1.8.0)
+- Tested with the full case set from `tx-test-suite.ts` + `tx-error-handling.builder.ts`
 
 ### tx-error-handling.builder.ts (20 tests)
 
@@ -319,7 +321,7 @@ CardanoClient configuration and orchestration tests:
 
 CardanoTransactionBuilder unit tests:
 
-- **init()** — Builder initialization from registry, idempotent init, error propagation
+- **init()** — Builder initialization (constructs `BuildooorTxBuilder` directly), idempotent init, error propagation
 - **ensureInitialized()** — Lazy initialization pattern, auto-init on first use
 - **reset() / setBuilder()** — Builder state management, custom builder injection
 - **buildSimpleAdaTransaction()** — ADA transfer building, UTxO fetching
@@ -329,38 +331,22 @@ CardanoTransactionBuilder unit tests:
 - **resetTransactionBuilder()** — Factory function for builder reset
 - Error handling — UTxO fetch errors, builder errors propagation
 
-### csl-tx-builder.test.ts (24 tests)
-
-CSL (Cardano Serialization Lib) transaction builder unit tests:
-
-- Transaction body construction and CBOR serialization
-- UTxO selection logic and coin selection
-- Fee calculation and change output creation
-- Witness set handling
-- Plutus script handling (V1/V2/V3)
-
-### buildooor-tx-builder.test.ts (13 tests)
+### buildooor-tx-builder.test.ts
 
 Buildooor transaction builder unit tests:
 
-- Transaction construction with Buildooor API
+- Transaction body construction, CBOR serialization, and coin selection
+- Fee calculation and change output creation
 - Minting transactions and Plutus spend transactions
+- Plutus script handling (V3; V1/V2 rejected at build time)
 - Edge cases and error handling
 
-### tx-builder-registry.test.ts (21 tests)
-
-Builder registry pattern tests:
-
-- Builder registration and discovery
-- Builder selection by type (CSL/Buildooor)
-- Fallback handling and error scenarios
-
-### tx-build-helper.test.ts (45 tests)
+### tx-build-helper.test.ts
 
 Transaction helper utility tests:
 
 - TX hash extraction from CBOR
-- PlutusData JSON conversion (CSL ↔ Buildooor format)
+- PlutusData JSON conversion to Buildooor format
 - `normalizeConstructorKey()` — `"constructor"` ↔ `"constr"` recursive conversion
 - Address validation and amount conversion utilities
 - Script parameter application helpers
@@ -529,7 +515,7 @@ npm test -- test/integration/odata_features.test.ts
 npm test -- test/unit/validators.test.ts
 
 # Run transaction builder tests
-npm test -- test/integration/tx.csl.test.ts
+npm test -- test/integration/tx.buildooor.test.ts
 ```
 
 ---
