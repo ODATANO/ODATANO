@@ -183,7 +183,9 @@ describe('Error Classes', () => {
       const error = new AllBackendsFailedError([]);
 
       expect(error.message).toContain('All backends failed');
-      expect(error.statusCode).toBe(502);
+      // Empty == every backend skipped (e.g. method unsupported) → 503 no-provider,
+      // not 502 (which would imply an upstream backend returned a bad response).
+      expect(error.statusCode).toBe(503);
     });
   });
 

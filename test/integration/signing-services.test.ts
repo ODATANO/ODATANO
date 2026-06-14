@@ -660,14 +660,14 @@ describe('Signing Services Integration Tests', () => {
 
       const badSigner = {
         isConnected: () => true,
-        getAddress: () => TEST_FIXTURES.addressWithAssets,
+        getAddress: () => TEST_FIXTURES.addressWithFunds,
         getPublicKeyHash: () => Buffer.alloc(28, 0xcc).toString('hex'),
         getStatus: () => ({
           connected: true,
           keyId: '0x0001',
           keyLabel: 'test-key',
           publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
-          address: TEST_FIXTURES.addressWithAssets,
+          address: TEST_FIXTURES.addressWithFunds,
         }),
         sign: () => ({
           signatureHex: Buffer.alloc(64, 0xbb).toString('hex'),
@@ -721,7 +721,7 @@ describe('Signing Services Integration Tests', () => {
       expect(data.keyId).to.equal('0x0001');
       expect(data.keyLabel).to.equal('test-key');
       expect(data.publicKeyHash).to.exist;
-      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithAssets);
+      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithFunds);
     });
 
     it('should return disconnected status when HSM is not configured', async () => {
@@ -935,14 +935,17 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   return {
     isConnected: () => connected,
-    getAddress: () => TEST_FIXTURES.addressWithAssets,
+    // HSM address must match the build sender (addressWithFunds) — the HSM flow only
+    // gates on senderAddress === getAddress(), then verifies the signature's crypto
+    // validity (no fee-payer key binding), so the real random keypair below still passes.
+    getAddress: () => TEST_FIXTURES.addressWithFunds,
     getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({
       connected,
       keyId: '0x0001',
       keyLabel: 'test-key',
       publicKeyHash: connected ? realKeyHash : undefined,
-      address: connected ? TEST_FIXTURES.addressWithAssets : undefined,
+      address: connected ? TEST_FIXTURES.addressWithFunds : undefined,
     }),
     sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;

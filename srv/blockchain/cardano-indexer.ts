@@ -308,6 +308,46 @@ export class CardanoIndexer {
   }
 
   /**
+   * Index ONLY the UTxOs at a bech32 address via getAddressUtxos — deliberately
+   * WITHOUT a getAddress (address-detail) call, so it works on backends that serve
+   * the live UTxO set but not address aggregation (e.g. Ogmios). Used as the
+   * GetUTxOsByAddress fallback when no configured backend supports getAddress.
+   *
+   * Does NOT upsert a parent Addresses row (same pattern as indexCredentialUtxos);
+   * AddressUTxOs/UTxOAssets reference the bech32 address directly.
+   *
+   * @param tx    CAP transaction
+   * @param addr  bech32 address
+   * @return UTxO entity rows for the address (empty when the address holds none)
+   */
+  async indexAddressUtxos(tx: CapTransaction, addr: string): Promise<AddressUTxOs[]> {
+    const utxos = await this.client.getAddressUtxos(addr);
+    logger.debug(`indexAddressUtxos: provider returned ${utxos.length} utxos for ${addr}`);
+
+    const validFrom = new Date().toISOString();
+    const validTo = new Date(Date.now() + this.client.max_age_ms).toISOString();
+
+    const utxoEntities = mapAddressUtxos(addr, validFrom, validTo, utxos);
+    if (utxoEntities.length) {
+      await tx.run(UPSERT.into(AddressUTxOs).entries(utxoEntities));
+    }
+
+    const utxoAssetEntities = mapAddressUtxoAssets(utxos, validFrom, validTo);
+    if (utxoAssetEntities.length) {
+      const seen = new Set<string>();
+      const uniqueAssets = utxoAssetEntities.filter(asset => {
+        const key = `${asset.utxo_address_address}|${asset.utxo_hash}|${asset.utxo_index}|${asset.unit}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      await tx.run(UPSERT.into(UTxOAssets).entries(uniqueAssets));
+    }
+
+    return utxoEntities as AddressUTxOs[];
+  }
+
+  /**
    * Index & return address transactions (separate from indexAddress for lazy loading)
    * @param tx       CAP transaction
    * @param addr     bech32 address

@@ -950,9 +950,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             txHash: inp.utxoRef.id.toString(),
             outputIndex: inp.utxoRef.index,
           }));
+          // Buildooor writes body inputs in insertion order (script input first) but resolves
+          // redeemer Spend indices against the lexicographically-sorted input set — which is how
+          // the ledger reads them on-chain. So the placeholder must resolve to the script UTxO's
+          // position in the SORTED set, not its position in the body's CBOR order.
           const sortedRefs = sortInputsLikeBuildooor(inputRefs);
-          // inputs in CBOR are already sorted — sanity check
-          expect(JSON.stringify(inputRefs)).to.equal(JSON.stringify(sortedRefs));
 
           const expectedIdx = sortedRefs.findIndex(
             r => r.txHash === SCRIPT_UTXO_TX_HASH && r.outputIndex === SCRIPT_UTXO_OUTPUT_INDEX
