@@ -5,7 +5,8 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
+import { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } from '../../srv/server';
+import { TransactionAlreadySubmittedError } from '../../srv/utils/errors';
 import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
 import { TEST_FIXTURES } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
@@ -285,6 +286,25 @@ describe('Signing Services Integration Tests', () => {
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
       }).catch(err => err.response);
       expect(status1).to.equal(400);
+    });
+
+    it('finalizes as submitted when submit reports the tx is already in the mempool', async () => {
+      // Lost-response duplicate: the node already holds the tx, so submit throws 409
+      // (TransactionAlreadySubmittedError). That is success — the request must finalize as
+      // 'submitted', not record a spurious 'failed'.
+      const spy = jest.spyOn(getCardanoClient(), 'submitTransaction')
+        .mockRejectedValue(new TransactionAlreadySubmittedError('a'.repeat(64)));
+      try {
+        const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
+          signingRequestId,
+          signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+        });
+        expect(status).to.equal(200);
+        expect(data.status).to.equal('submitted');
+        expect(data).to.have.property('txHash');
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('should reject expired requests', async () => {

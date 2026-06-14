@@ -3,7 +3,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
-import { ConfigError, InsufficientFundsError, TransactionValidationError } from "../../utils/errors";
+import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
@@ -646,8 +646,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Evaluate a transaction via Ogmios and return cushioned budgets keyed per redeemer
    * (`tag:index`). Returns undefined when the evaluation is unusable (transient backend
    * failure, empty result) so callers fall back to buffered local units. A
-   * TransactionValidationError from the evaluator is authoritative (the script really
-   * failed) and is rethrown.
+   * TransactionValidationError or ScriptValidationError from the evaluator is
+   * authoritative (the script really failed on the ledger) and is rethrown.
    */
   private async _evaluateExUnitsByRedeemer(
     evalTxCbor: string,
@@ -681,8 +681,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
       return byRedeemer.size > 0 ? byRedeemer : undefined;
     } catch (evalError: unknown) {
-      if (evalError instanceof TransactionValidationError) {
-        // Authoritative: the evaluator executed the script and it failed.
+      if (evalError instanceof TransactionValidationError || evalError instanceof ScriptValidationError) {
+        // Authoritative: Ogmios executed the script and the ledger rejected it. This is
+        // either a TransactionValidationError or, after normalizeBackendError, a
+        // ScriptValidationError (PlutusFailure / CekError / budget overspend). Falling
+        // back to local buffered units here would hand back a transaction the node has
+        // already rejected — so propagate the failure instead.
         throw evalError;
       }
       const msg = evalError instanceof Error ? evalError.message : String(evalError);

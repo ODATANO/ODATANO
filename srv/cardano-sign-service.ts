@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest} from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
+import { rejectInvalid, throwIfValidationErrors,rejectMissing, TransactionAlreadySubmittedError } from './utils/errors';
 import { mapError } from './utils/mappers';
 import { validateTransactionInputs, isValidBech32Address, extractPaymentCredential } from './utils/validators';
 import { parseTransaction } from './cbor';
@@ -139,9 +139,25 @@ async function submitAndFinalize(
   params: FinalizeParams,
   afterFinalize?: (db: cds.Transaction) => Promise<void>
 ): Promise<unknown> {
+  // Persist the submission + 'submitted' status in its own committed transaction.
+  const finalizeSubmitted = () => cds.tx(async (db: cds.Transaction) => {
+    const submission = await getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
+    if (afterFinalize) await afterFinalize(db);
+    return submission;
+  });
+
   try {
     await getCardanoClient().submitTransaction(params.fullSignedTxCbor);
   } catch (submitErr: unknown) {
+    // Already-submitted means the tx reached the mempool — e.g. the first backend accepted
+    // it but its response was lost and a fallback observed the duplicate. That is SUCCESS,
+    // not failure: finalize it as 'submitted' (same as the happy path) instead of durably
+    // recording a spurious 'failed' for a tx the node already holds.
+    if (submitErr instanceof TransactionAlreadySubmittedError) {
+      logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
+        'Submit reported already-submitted — finalizing as submitted (tx already in mempool)');
+      return finalizeSubmitted();
+    }
     try {
       await cds.tx((db: cds.Transaction) => db.run(
         UPDATE.entity(SigningRequests as never).set({ status: 'failed' }).where({ id: params.signingRequestId })
@@ -153,11 +169,7 @@ async function submitAndFinalize(
     throw submitErr;
   }
 
-  return cds.tx(async (db: cds.Transaction) => {
-    const submission = await getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
-    if (afterFinalize) await afterFinalize(db);
-    return submission;
-  });
+  return finalizeSubmitted();
 }
 
 /**

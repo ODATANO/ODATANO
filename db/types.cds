@@ -62,7 +62,7 @@ type AssetSlice {
 type MetadataSlice {
 
     @title      : 'Metadata Label'
-    @description: 'Metadata label as string (max 5 digits)'
+    @description: 'Metadata label as string — a uint64 (0 .. 18446744073709551615, up to 20 digits)'
     label   : MetadataLabel;
 
     @title      : 'Metadata Payload'

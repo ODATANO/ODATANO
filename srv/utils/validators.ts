@@ -356,7 +356,9 @@ export interface TransactionInputs {
   senderAddress?: string;
   recipientAddress?: string;
   changeAddress?: string;
-  lovelaceAmount?: number | bigint;
+  // Runtime value is a STRING (OData Lovelace = Decimal(20,0); CAP preserves precision),
+  // but bigint/number are accepted too — validateTransactionInputs coerces via String().
+  lovelaceAmount?: string | number | bigint;
   signedTxCbor?: string;
   metadataJson?: string;
   assetsJson?: string;

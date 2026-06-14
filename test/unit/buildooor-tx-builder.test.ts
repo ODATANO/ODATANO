@@ -3,7 +3,7 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
-import { TransactionValidationError } from '../../srv/utils/errors';
+import { TransactionValidationError, ScriptValidationError } from '../../srv/utils/errors';
 
 // Test addresses and script hex from integration test fixtures
 const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
@@ -1103,6 +1103,23 @@ describe('BuildooorTxBuilder', () => {
       // Ogmios units verbatim (with cushion) — the local partial budget is discarded
       expect(BigInt(redeemers[0].execUnits.mem)).toBe(BigInt(Math.ceil(100_000 * 1.1) + 5_000));
       expect(BigInt(redeemers[0].execUnits.cpu)).toBe(BigInt(Math.ceil(50_000_000 * 1.1) + 200_000));
+    });
+
+    it('propagates an authoritative Ogmios ScriptValidationError instead of falling back to local units', async () => {
+      await initBuilder();
+      // VALID_PLUTUS_SCRIPT evaluates fine locally, so the ONLY failure signal is Ogmios's
+      // ledger phase-2 rejection (normalizeBackendError surfaces PlutusFailure/CekError as
+      // ScriptValidationError). That must propagate — silently returning local buffered units
+      // would hand back a transaction the node has already rejected.
+      const req: TxBuildMintRequest = { ...mintReq(), mintingPolicyScript: VALID_PLUTUS_SCRIPT };
+      const ctx: TxBuildContext = {
+        utxos: [adaOnlyUtxo, fundingUtxo],
+        protocolParameters: PROTOCOL_PARAMS,
+        evaluateTransaction: async () => { throw new ScriptValidationError('Script validation failed: CekError'); },
+      };
+
+      await expect(builder.buildUnsignedMintTransaction(req, ctx))
+        .rejects.toThrow(/Script validation failed/);
     });
 
     it('stamps the collateral return output into the tx body when the collateral UTxO exceeds the floor', async () => {
