@@ -109,7 +109,6 @@
     "clean:models": "node -e \"require('fs').rmSync('@cds-models',{recursive:true,force:true});console.log('Removed @cds-models')\"",
     "build": "npm run cds:types && tsc",
     "build:plugin": "npm run cds:types && tsc -p tsconfig.build.json",
-    "prepare": "npm run build:plugin",
     "prepublishOnly": "npm run clean && npm run clean:models && npm run build:plugin",
     "start": "cds-serve",
     "cds:watch": "cds watch",
