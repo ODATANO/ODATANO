@@ -85,6 +85,31 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
 
     // ---------------------------------------------------------------------------
+    // CIP-30 signData (COSE_Sign1) message-signature verification
+    // ---------------------------------------------------------------------------
+
+    // Public override: this action is the crypto check behind wallet-based LOGIN,
+    // so the caller is not yet authenticated. It is a stateless verification —
+    // no DB write, no key access, no state — so exposing it leaks nothing.
+    @requires   : 'any'
+    @title      : 'Verify Data Signature (CIP-30 signData)'
+    @description: 'Verify a COSE_Sign1 message signature against a bech32 address. Confirms the Ed25519 signature, that the signer key hashes to the address payment credential, and (optionally) that the signed payload matches an expected value.'
+    action VerifyDataSignature(
+                               @description: 'Bech32 address the wallet claimed to sign with'
+                               address        : Bech32,
+                               @description: 'Hex-encoded COSE_Sign1 CBOR (the `signature` field from CIP-30 signData)'
+                               coseSignature  : String,
+                               @description: 'Hex-encoded COSE_Key CBOR (the `key` field from CIP-30 signData)'
+                               coseKey        : String,
+                               @description: 'Optional expected UTF-8 payload; when set, the signed payload must equal it (anti-replay). When omitted, the decoded payload is returned for the caller to check.'
+                               expectedPayload: String)         returns {
+        @description: 'Whether the signature is valid and all checks passed'  valid                              : Boolean;
+        @description: 'Failure detail when not valid'  reason                                                : String;
+        @description: 'UTF-8 of the signed payload, echoed back'  signedPayload                               : String;
+        @description: 'Hex blake2b-224 of the signer public key'  signerVkh                                   : String;
+    };
+
+    // ---------------------------------------------------------------------------
     // General Signing Workflow Actions
     // ---------------------------------------------------------------------------
 

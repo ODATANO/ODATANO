@@ -3,7 +3,10 @@ import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_
   POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
-import { getCardanoClient } from "../server";
+// Read the active network from a tiny leaf module rather than from `../server`:
+// importing server here would pull the whole server → indexer graph (which
+// accesses cds.ql at module load) into every consumer of a validator.
+import { getActiveNetwork } from "./network-context";
 /** 
  * Safely trim a string value
  * @param s - The value to trim
@@ -212,17 +215,13 @@ export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
-  // get client to check right network. If the app context isn't ready yet
-  // (e.g., a backend init failure left it null), don't throw a raw error —
-  // return false so the handler responds with a clean 400 "Invalid bech32
-  // address format" instead of leaking "Application not initialized" to the
-  // client. The actual init failure is surfaced via stderr in server.ts.
-  let network: ReturnType<typeof getCardanoClient>['network'];
-  try {
-    network = getCardanoClient().network;
-  } catch {
-    return false;
-  }
+  // get the active network to check the right HRP. If the app context isn't
+  // ready yet (e.g., a backend init failure left it uninitialized) the network
+  // is null — return false so the handler responds with a clean 400 "Invalid
+  // bech32 address format" instead of leaking an init error to the client. The
+  // actual init failure is surfaced via stderr in server.ts.
+  const network = getActiveNetwork();
+  if (!network) return false;
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].addr.test(addr)) return false;
@@ -247,12 +246,8 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
   if (!stake) return false;
 
   // Defensive against unset app context — same rationale as isValidBech32Address.
-  let network: ReturnType<typeof getCardanoClient>['network'];
-  try {
-    network = getCardanoClient().network;
-  } catch {
-    return false;
-  }
+  const network = getActiveNetwork();
+  if (!network) return false;
 
   // prefilter from config to make sure it is the right network
   if (!HRP[network].stake.test(stake)) return false;

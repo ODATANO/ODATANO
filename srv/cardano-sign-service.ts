@@ -7,6 +7,7 @@ import { parseTransaction } from './cbor';
 import { getCardanoIndexer, getCardanoClient, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
+import { verifyDataSignature } from './blockchain/signing/cose-verifier';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
 const { SELECT, UPDATE } = cds.ql;
 
@@ -467,6 +468,28 @@ module.exports = (srv: cds.Service) => {
       logger.error({ err: e }, 'SubmitVerifiedTransaction error');
       return mapError(req, e, 'SubmitVerifiedTransaction');
     }
+  });
+
+  /**
+   * Verify a CIP-30 signData (COSE_Sign1) message signature (unbound action).
+   * Stateless crypto check behind wallet-based login — no DB write, no state.
+   * Public (@requires:'any' in CDS) because the caller is not yet authenticated.
+   * @param req - CDS request with address, coseSignature, coseKey, expectedPayload
+   * @returns { valid, reason, signedPayload, signerVkh }
+   */
+  srv.on('VerifyDataSignature', async (req: Request) => {
+    logger.debug('VerifyDataSignature Action handler called');
+    const { address, coseSignature, coseKey, expectedPayload } = req.data;
+
+    // Validate inputs before the crypto check
+    if (!address) rejectMissing(req, 'VerifyDataSignature', 'address');
+    if (!isValidBech32Address(address)) rejectInvalid(req, 'VerifyDataSignature', 'Invalid bech32 address format', 'address');
+    if (!coseSignature) rejectMissing(req, 'VerifyDataSignature', 'coseSignature');
+    if (!coseKey) rejectMissing(req, 'VerifyDataSignature', 'coseKey');
+
+    // verifyDataSignature never throws: a bad/forged signature is a 200 with
+    // valid:false + reason, not an error. Only malformed *inputs* reject above.
+    return verifyDataSignature({ address, coseSignature, coseKey, expectedPayload });
   });
 
   /**

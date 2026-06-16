@@ -1,8 +1,3 @@
-// Mock getCardanoClient before imports
-jest.mock('../../srv/server', () => ({
-  getCardanoClient: jest.fn()
-}));
-
 import {
   isTxHash,
   isAssetUnit,
@@ -17,16 +12,15 @@ import {
   validateRequiredSigners,
   validateTransactionInputs,
 } from '../../srv/utils/validators';
-import { getCardanoClient } from '../../srv/server';
-
-// Type the mock for better IntelliSense
-const mockGetCardanoClient = getCardanoClient as jest.MockedFunction<typeof getCardanoClient>;
+// Network-aware validators read the active network from this leaf module
+// (no longer from srv/server — that back-dependency was removed).
+import { setActiveNetwork } from '../../srv/utils/network-context';
 
 describe('Validator Helper Methods and Type Guards', () => {
 
   // Set default network for all tests
   beforeEach(() => {
-    mockGetCardanoClient.mockReturnValue({ network: 'preview' } as any);
+    setActiveNetwork('preview');
   });
 
   // ==========================================================================

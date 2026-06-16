@@ -499,6 +499,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 | `VerifySignature` | Cryptographically verify signed transaction |
 | `SubmitVerifiedTransaction` | Verify and submit in one step |
 | `GetSigningRequestsByAddress` | Get signing requests for an address |
+| `VerifyDataSignature` | Verify a CIP-30 `signData` (COSE_Sign1) message signature -- wallet login, no transaction |
 | `SignWithHsm` | Sign transaction with HSM (server-side, returns signing request) |
 | `SignAndSubmitWithHsm` | Sign with HSM and submit to blockchain in one step |
 | `GetHsmStatus` | Check HSM connection status and key information |
@@ -511,6 +512,48 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 | **Cardano CLI** | Command-line signing with payment.skey |
 | **Hardware Wallets** | Ledger, Trezor via browser extensions |
 | **HSM (PKCS#11)** | YubiHSM, AWS CloudHSM, Thales Luna -- automated server-side signing |
+
+### Wallet Login -- Verify a CIP-30 Data Signature
+
+`VerifyDataSignature` verifies a **signed message** (CIP-30 `signData` / COSE_Sign1), **not** a transaction. It is the Cardano equivalent of "Sign-In with Ethereum": prove a user controls a wallet address without spending anything on-chain.
+
+This is the only `CardanoSignService` action that does **not** require authentication (`@requires: 'any'`) -- by definition the caller is logging in and has no token yet. It is a stateless crypto check: no database write, no key access. Nonce issuance, replay protection, and session/JWT minting stay in your application.
+
+**Typical flow:**
+
+1. Your app issues a one-time, time-limited message (e.g. `MyApp login: <nonce>`).
+2. The user signs it in their wallet via CIP-30 `signData(address, payload)`, which returns `{ signature, key }`.
+3. Your app calls `VerifyDataSignature` with those values; on `valid: true` it mints a session.
+
+```bash
+curl -X POST http://localhost:4004/odata/v4/cardano-sign/VerifyDataSignature \
+  -H "Content-Type: application/json" \
+  -d '{
+    "address": "addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8",
+    "coseSignature": "845869a30127...",
+    "coseKey": "a40101032720...",
+    "expectedPayload": "MyApp login: 7f3a9c1e"
+  }'
+```
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `address` | yes | Bech32 address the wallet claimed to sign with (base or enterprise, key-hash credential) |
+| `coseSignature` | yes | Hex COSE_Sign1 CBOR -- the `signature` field from `signData` |
+| `coseKey` | yes | Hex COSE_Key CBOR -- the `key` field from `signData` |
+| `expectedPayload` | no | When set, the signed payload must equal this exactly (anti-replay). When omitted, the decoded payload is returned for you to check. |
+
+**Response:**
+```json
+{
+  "valid": true,
+  "reason": "",
+  "signedPayload": "MyApp login: 7f3a9c1e",
+  "signerVkh": "2b59938fe8ab0e76054925a575b1c50e406594300cf8f7b09328b863"
+}
+```
+
+The action verifies three things: (1) the Ed25519 signature over the COSE `Sig_structure`, (2) that the signer's public key hashes (`blake2b-224`) to the address payment credential, and (3) optionally that the payload matches `expectedPayload`. A forged or mismatched signature returns HTTP 200 with `valid: false` and a `reason` -- only malformed inputs (missing/invalid address, missing CBOR) return a 400.
 
 ### HSM Signing (Server-Side)
 

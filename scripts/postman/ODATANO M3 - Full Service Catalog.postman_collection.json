@@ -243,6 +243,37 @@
       "response": []
     },
     {
+      "name": "VerifyDataSignature",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"address\": \"addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8\",\r\n    \"coseSignature\": \"845869a30127...\",\r\n    \"coseKey\": \"a40101032720...\",\r\n    \"expectedPayload\": \"MyApp login: 7f3a9c1e\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:4004/odata/v4/cardano-sign/VerifyDataSignature",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "4004",
+          "path": [
+            "odata",
+            "v4",
+            "cardano-sign",
+            "VerifyDataSignature"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
       "name": "SubmitVerifiedTransaction",
       "request": {
         "method": "POST",

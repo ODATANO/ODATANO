@@ -5,6 +5,7 @@ import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
 import { ConfigError, ProviderUnavailableError } from './utils/errors';
+import { setActiveNetwork } from './utils/network-context';
 
 import { env } from 'process';
 
@@ -41,6 +42,10 @@ async function initializeAppContext(
 
   // Create CardanoClient from configuration
   const cardanoClient = new CardanoClient(config);
+
+  // Publish the active network for leaf utilities (e.g. network-aware validators)
+  // without forcing them to import this module / the full server graph.
+  setActiveNetwork(config.network);
 
   // Create CardanoTransactionBuilder with the client
   const cardanoTxBuilder = new CardanoTransactionBuilder(cardanoClient);
@@ -159,6 +164,8 @@ export function resetAppContext(context: AppContext | null): void {
   }
   appContext = context;
   bootstrapError = null;
+  // Keep the published network in sync with the injected context (or clear it).
+  setActiveNetwork(context?.cardanoClient.network ?? null);
   logger.debug('Application context reset');
 }
 
@@ -209,6 +216,7 @@ export async function shutdownAppContext(): Promise<void> {
 
     await appContext.cardanoClient.shutdown();
     appContext = null;
+    setActiveNetwork(null);
   }
 }
 

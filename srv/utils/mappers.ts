@@ -559,9 +559,12 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
  */
 export function mapPool(providerPoolData: PoolProviderData, max_age: number): PoolRow {
   // temporal stamping: live fields (liveStake/liveSaturation/retired…) change every
-  // epoch, so a slice expires after max_age and the index-on-miss read re-fetches
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + max_age).toISOString();
+  // epoch, so a slice expires after max_age and the index-on-miss read re-fetches.
+  // Read the clock ONCE — separate Date.now() calls for validFrom/validTo let the
+  // millisecond tick over between them, making the span max_age+1.
+  const now = Date.now();
+  const validFrom = new Date(now).toISOString();
+  const validTo = new Date(now + max_age).toISOString();
   return {
     poolId: providerPoolData.poolId,
     vrfKeyHash: providerPoolData.vrfKeyHash,
@@ -592,8 +595,10 @@ export function mapPool(providerPoolData: PoolProviderData, max_age: number): Po
  * @returns {AssetRow} mapped asset row
  */
 export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: number): AssetRow {
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + max_age).toISOString();
+  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  const now = Date.now();
+  const validFrom = new Date(now).toISOString();
+  const validTo = new Date(now + max_age).toISOString();
 
   return {
     unit: providerAssetInfo.unit,
@@ -644,9 +649,11 @@ export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): Asset
  */
 export function mapDrep(providerDrepData: DrepProviderData, max_age: number): DrepRow {
   // temporal stamping: amount/retired/expired drift over time → slice expires
-  // after max_age so the index-on-miss read re-fetches fresh state
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + max_age).toISOString();
+  // after max_age so the index-on-miss read re-fetches fresh state.
+  // Read the clock once so the span is exactly max_age (see mapPool).
+  const now = Date.now();
+  const validFrom = new Date(now).toISOString();
+  const validTo = new Date(now + max_age).toISOString();
   return {
     drepId: providerDrepData.drepId,
     hex: providerDrepData.hex,
@@ -667,8 +674,10 @@ export function mapDrep(providerDrepData: DrepProviderData, max_age: number): Dr
  * @returns {AccountRow} mapped account row
  */
 export function mapAccount(providerAccountData: AccountProviderData, max_age: number): AccountRow {
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + max_age).toISOString();
+  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  const now = Date.now();
+  const validFrom = new Date(now).toISOString();
+  const validTo = new Date(now + max_age).toISOString();
 
   return {
     validFrom: validFrom,
@@ -716,9 +725,11 @@ export function mapError(req: Request, err: unknown, ctx: string) {
  */
 export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: number): TransactionBuildRow {
   const buildId = cds.utils.uuid();
-  const now = Math.floor(Date.now() / 1000);
-  const validFrom = new Date().toISOString();
-  const validTo = new Date(Date.now() + max_age).toISOString();
+  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  const nowMs = Date.now();
+  const now = Math.floor(nowMs / 1000);
+  const validFrom = new Date(nowMs).toISOString();
+  const validTo = new Date(nowMs + max_age).toISOString();
   const hasInputs = Array.isArray(txbuildResult.inputs) && txbuildResult.inputs.length > 0;
   const hasOutputs = Array.isArray(txbuildResult.outputs) && txbuildResult.outputs.length > 0;
 
