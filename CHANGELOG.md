@@ -5,6 +5,22 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.9.2] - 26-06-2026: Typed script-parameter application
+
+### Added
+
+- **Typed script parameters in `applyScriptParameters`** (`srv/utils/tx-build-helper.ts`, new exported `encodeScriptParam` + `ScriptParamUplcType`). A parameter entry may now be `{ "uplc": "data" | "bytes" | "int" | "bool" | "unit", "value": … }`, applied to the parameterized script as a UPLC constant of that **native type** instead of always as `Data`:
+  - `data` → `UPLCConst.data(jsonToPlutusData(value))` (value: PlutusData JSON)
+  - `bytes` → `UPLCConst.byteString(value)` (value: even-length hex string)
+  - `int` → `UPLCConst.int(value)` (value: number | numeric string)
+  - `bool` → `UPLCConst.bool(value)` / `unit` → `UPLCConst.unit`
+
+  **Why:** some compilers type scalar parameters natively rather than as `Data` — e.g. Pebble, where `param owner: PubKeyHash` expects a native `bytestring`; applying it as a `Data`-wrapped bytestring makes the validator reject (`case: expected constr or constant value`). The previous Data-only application could not parameterize such scripts. The off-chain side must know each param's UPLC type (which it does — it authors/consumes the contract), and can now mix native and Data params in one call (e.g. a native `PubKeyHash` plus a `Data` `TxOutRef`).
+
+### Changed
+
+- **`applyScriptParameters` is fully backward-compatible in effect.** A **bare PlutusData entry** (e.g. `{ "bytes": "ab.." }`, `{ "constructor": 0, … }`) is treated as shorthand for `{ "uplc": "data", … }` — the Aiken / CIP-57 blueprint convention where every parameter is `Data`. Existing `scriptParamsJson` inputs produce **byte-identical** applied scripts; no consumer or on-chain behavior changes.
+
 ## [v1.9.0] - 14-06-2026: Hardening pass — backend resilience, schema correctness, durable signing & tx-build robustness
 
 A broad correctness-and-resilience pass across every layer (PR #60, `dev/general-improvements`). No new OData actions, but several **schema data-type changes**, **error-status changes**, and **public-surface tightenings** that consumers should be aware of. Highlights: all read entities are now `@readonly` (writes → 405), Epoch/Metadata time/label columns widened to avoid overflow/truncation, Ogmios stops fabricating placeholder data and is skipped for unsupported methods, the signing/submit flow is now crash-durable, and Buildooor protocol-param/datum/collateral/metadata handling is hardened.

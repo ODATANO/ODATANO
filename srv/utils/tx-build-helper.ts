@@ -239,11 +239,86 @@ export function inlineDatumToHex(datum: unknown): string | null {
   }
 }
 
+/** UPLC type tag for a typed script parameter (see {@link encodeScriptParam}). */
+export type ScriptParamUplcType = 'data' | 'bytes' | 'int' | 'bool' | 'unit';
+
+/**
+ * Encode a single script parameter into the UPLC constant the parameterized
+ * script expects.
+ *
+ * A script parameter is applied as a UPLC constant whose TYPE must match what
+ * the compiled validator expects for that parameter. Two input shapes are
+ * accepted:
+ *
+ *  1. Typed — `{ "uplc": "<type>", "value": <...> }`:
+ *       - `"data"`  → `UPLCConst.data(...)`        value: PlutusData JSON ("constr"/cardano-cli form)
+ *       - `"bytes"` → `UPLCConst.byteString(...)`  value: even-length hex string
+ *       - `"int"`   → `UPLCConst.int(...)`         value: number | numeric string
+ *       - `"bool"`  → `UPLCConst.bool(...)`        value: boolean
+ *       - `"unit"`  → `UPLCConst.unit`             value: omitted
+ *     Required for compilers whose scalar params are NATIVE-typed rather than
+ *     Data-wrapped (e.g. Pebble: `param x: PubKeyHash` expects a native
+ *     `bytestring`, not a `Data` bytestring).
+ *
+ *  2. Bare PlutusData object (e.g. `{ "bytes": "ab.." }`, `{ "constructor": 0, ... }`)
+ *     — shorthand for `{ "uplc": "data", "value": <object> }`. This is the
+ *     Aiken / CIP-57 blueprint convention, where every parameter is Data.
+ */
+export function encodeScriptParam(param: JSONValue): UPLCConst {
+  if (
+    param !== null &&
+    typeof param === 'object' &&
+    !Array.isArray(param) &&
+    'uplc' in (param as Record<string, unknown>)
+  ) {
+    const { uplc, value } = param as { uplc: unknown; value?: JSONValue };
+    switch (uplc) {
+      case 'data':
+        return UPLCConst.data(jsonToPlutusData(value as JSONValue));
+      case 'bytes': {
+        if (typeof value !== 'string' || !/^([0-9a-fA-F]{2})*$/.test(value)) {
+          throw new Error('Script param of uplc type "bytes" requires an even-length hex string "value"');
+        }
+        return UPLCConst.byteString(fromHex(value));
+      }
+      case 'int': {
+        if (typeof value !== 'number' && typeof value !== 'string') {
+          throw new Error('Script param of uplc type "int" requires a number or numeric-string "value"');
+        }
+        let n: bigint;
+        try {
+          n = BigInt(value as string | number);
+        } catch {
+          throw new Error(`Script param of uplc type "int" has a non-integer "value": ${String(value)}`);
+        }
+        return UPLCConst.int(n);
+      }
+      case 'bool': {
+        if (typeof value !== 'boolean') {
+          throw new Error('Script param of uplc type "bool" requires a boolean "value"');
+        }
+        return UPLCConst.bool(value);
+      }
+      case 'unit':
+        return UPLCConst.unit;
+      default:
+        throw new Error(`Unknown script param uplc type "${String(uplc)}"; expected one of: data, bytes, int, bool, unit`);
+    }
+  }
+  // Bare PlutusData → apply as Data (Aiken / blueprint convention)
+  return UPLCConst.data(jsonToPlutusData(param));
+}
+
 /**
  * Apply parameters to a parameterized PlutusV3 script (CBOR-wrapped flat UPLC).
- * Each parameter is applied as a successive UPLC Application node wrapping the program body.
- * @param scriptHex CBOR hex of the unapplied Plutus script (as output by Aiken/Plutus compilers)
- * @param params Array of PlutusData JSON objects (DetailedSchema format) to apply in order
+ * Each parameter becomes a successive UPLC Application wrapping the program body.
+ *
+ * Parameters are applied in their declared UPLC type via {@link encodeScriptParam}:
+ * pass `{ uplc, value }` entries for native-typed params (e.g. Pebble scalars),
+ * or bare PlutusData objects for the Data convention (Aiken / CIP-57 blueprints).
+ *
+ * @param scriptHex CBOR hex of the unapplied Plutus script (as output by Aiken/Pebble/Plutus compilers)
+ * @param params Array of script parameters (typed `{uplc,value}` and/or bare PlutusData JSON) to apply in order
  * @returns CBOR hex of the applied script (ready for transaction building)
  */
 export function applyScriptParameters(scriptHex: string, params: JSONValue[]): string {
@@ -258,11 +333,10 @@ export function applyScriptParameters(scriptHex: string, params: JSONValue[]): s
   // 2. Flat-decode → UPLCProgram
   const program = UPLCDecoder.parse(flatBytes, 'flat');
 
-  // 3. Apply each parameter as Application(body, UPLCConst.data(paramData))
+  // 3. Apply each parameter as Application(body, <typed UPLC constant>)
   let body = program.body;
   for (const param of params) {
-    const paramData = jsonToPlutusData(param);
-    body = new Application(body, UPLCConst.data(paramData));
+    body = new Application(body, encodeScriptParam(param));
   }
 
   // 4. Create new program with applied body, flat-encode, CBOR-wrap

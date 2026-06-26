@@ -349,6 +349,69 @@ describe('tx-build-helper utilities', () => {
 
       expect(result1).not.toBe(result2);
     });
+
+    // --- typed (native) parameters: { uplc, value } ---
+
+    it('should treat a bare PlutusData object as { uplc: "data" } (byte-identical)', () => {
+      const bare = applyScriptParameters(validScript, [{ bytes: 'deadbeef' }]);
+      const typed = applyScriptParameters(validScript, [{ uplc: 'data', value: { bytes: 'deadbeef' } }]);
+      expect(typed).toBe(bare);
+    });
+
+    it('should apply a NATIVE bytestring param distinctly from a Data-wrapped one', () => {
+      const asData = applyScriptParameters(validScript, [{ uplc: 'data', value: { bytes: 'deadbeef' } }]);
+      const asNative = applyScriptParameters(validScript, [{ uplc: 'bytes', value: 'deadbeef' }]);
+      expect(asNative).toMatch(/^[a-f0-9]+$/);
+      // native bytestring != Data-wrapped bytestring -> different applied script
+      expect(asNative).not.toBe(asData);
+    });
+
+    it('should apply a NATIVE integer param distinctly from a Data-wrapped one', () => {
+      const asData = applyScriptParameters(validScript, [{ uplc: 'data', value: { int: 42 } }]);
+      const asNative = applyScriptParameters(validScript, [{ uplc: 'int', value: 42 }]);
+      expect(asNative).not.toBe(asData);
+    });
+
+    it('should accept a numeric-string value for a native int param', () => {
+      const fromNum = applyScriptParameters(validScript, [{ uplc: 'int', value: 7 }]);
+      const fromStr = applyScriptParameters(validScript, [{ uplc: 'int', value: '7' }]);
+      expect(fromStr).toBe(fromNum);
+    });
+
+    it('should apply native bool and unit params', () => {
+      expect(applyScriptParameters(validScript, [{ uplc: 'bool', value: true }])).toMatch(/^[a-f0-9]+$/);
+      expect(applyScriptParameters(validScript, [{ uplc: 'unit' }])).toMatch(/^[a-f0-9]+$/);
+    });
+
+    it('should apply mixed native + data params in order (e.g. Pebble: native VKH + Data TxOutRef)', () => {
+      const params: JSONValue[] = [
+        { uplc: 'bytes', value: 'aa'.repeat(28) },                                  // PubKeyHash -> native
+        { uplc: 'data', value: { constructor: 0, fields: [{ bytes: 'bb'.repeat(32) }, { int: 0 }] } }, // TxOutRef -> Data
+      ];
+      const result = applyScriptParameters(validScript, params);
+      expect(result).toMatch(/^[a-f0-9]+$/);
+      expect(result).not.toBe(validScript);
+    });
+
+    it('should throw for an unknown uplc type', () => {
+      expect(() => applyScriptParameters(validScript, [{ uplc: 'list', value: [] } as any]))
+        .toThrow('Unknown script param uplc type');
+    });
+
+    it('should throw for a native bytes param with a non-hex value', () => {
+      expect(() => applyScriptParameters(validScript, [{ uplc: 'bytes', value: 'nothex' } as any]))
+        .toThrow('even-length hex string');
+    });
+
+    it('should throw for a native int param with a non-numeric value', () => {
+      expect(() => applyScriptParameters(validScript, [{ uplc: 'int', value: 'abc' } as any]))
+        .toThrow('non-integer');
+    });
+
+    it('should throw for a native bool param with a non-boolean value', () => {
+      expect(() => applyScriptParameters(validScript, [{ uplc: 'bool', value: 'yes' } as any]))
+        .toThrow('requires a boolean');
+    });
   });
 
   describe('mapBuilderError', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -27,7 +27,7 @@
     "@blockfrost/blockfrost-js": "~6.0.0",
     "@cap-js/hana": "^2",
     "@cardano-ogmios/client": "^6.14.0",
-    "@harmoniclabs/buildooor": "^0.2.6",
+    "@harmoniclabs/buildooor": "0.2.6",
     "@harmoniclabs/cardano-costmodels-ts": "~1.4.0",
     "@harmoniclabs/cardano-ledger-ts": "^0.5.1",
     "@harmoniclabs/cbor": "^2.0.1",
@@ -61,6 +61,7 @@
     "eslint": "^9.39.2",
     "jest": "^29.6.1",
     "nock": "^13.5.6",
+    "patch-package": "8.0.1",
     "ts-jest": "^29.4.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
@@ -105,6 +106,7 @@
     }
   },
   "scripts": {
+    "postinstall": "patch-package",
     "clean": "node -e \"require('glob').sync('{srv,db,src}/**/*.{js,js.map,d.ts,d.ts.map}',{ignore:'**/node_modules/**'}).forEach(f=>require('fs').unlinkSync(f));console.log('Clean complete')\"",
     "clean:models": "node -e \"require('fs').rmSync('@cds-models',{recursive:true,force:true});console.log('Removed @cds-models')\"",
     "build": "npm run cds:types && tsc",
