@@ -144,7 +144,14 @@ jobs:
         THRESHOLD: ${{ inputs.synchronization-level || '0.99' }}
       run: |
         URL="http://localhost:1337/health"
-        WARMUP=900       # node must answer /health within 15 min
+        # A "dirty" restored DB (e.g. after an ungraceful prior stop) makes the
+        # node do a FULL ImmutableDB re-validation before it opens the node
+        # socket -- ~70-90 min for the preview chain. Ogmios only answers /health
+        # once that socket exists, so the warmup window must comfortably exceed a
+        # full revalidation, otherwise we kill a perfectly healthy startup early.
+        # The per-iteration container-alive check below still catches real
+        # crashes within seconds, so a generous backstop costs nothing.
+        WARMUP=7200      # node must answer /health within 2h (covers full re-validation)
         BUDGET=19800     # sync for at most 5h30m, then save partial progress
         start="$(date +%s)"
         warmup_deadline=$(( start + WARMUP ))
@@ -176,7 +183,10 @@ jobs:
           h="$(curl -sS --max-time 5 "$URL" 2>/dev/null || true)"
           tip="$(sed -n 's/.*"lastKnownTip":{"slot":\([0-9]*\).*/\1/p' <<< "$h")"
           ns="$(sed -n 's/.*"networkSynchronization":\([0-9.]*\).*/\1/p' <<< "$h")"
-          echo "waiting for ogmios... tip slot: ${tip:-?}  sync: ${ns:-0}"
+          # Before Ogmios connects, /health is empty -- surface the node's own
+          # ImmutableDB validation/replay progress so the long warmup is visible.
+          node_prog="$(docker logs --tail 1 cardano-node 2>&1 | grep -oE '(Validat|Replay)[a-z]* .*Progress: [0-9.]+%' | tail -1)"
+          echo "waiting for ogmios... tip slot: ${tip:-?}  sync: ${ns:-0}  node: ${node_prog:-starting}"
           sleep 10
         done
         echo "Ogmios is up. Target synchronization: ${THRESHOLD}"
@@ -208,18 +218,26 @@ jobs:
       if: always()
       shell: bash
       run: |
-        docker stop ogmios cardano-node || true
+        # Order matters: stop the Ogmios client first, then shut the node down
+        # GRACEFULLY. cardano-node needs well beyond Docker's default 10s SIGTERM
+        # grace period to write its clean-shutdown marker + a ledger snapshot.
+        # A premature SIGKILL leaves the ImmutableDB "dirty", which forces a full
+        # chunk re-validation (and lost snapshot) on the next restore.
+        docker stop -t 30 ogmios || true
+        echo "Gracefully stopping cardano-node (up to 10 min for snapshot + clean marker)..."
+        docker stop -t 600 cardano-node || true
+        # Confirm the node closed its DB cleanly before we cache it.
+        docker logs --tail 30 cardano-node 2>&1 | grep -iE "Closed db|ShutdownRequested|Closing" || \
+          echo "::warning::No clean-shutdown marker found in node logs — cache may trigger re-validation"
         docker rm ogmios cardano-node || true
 
-    - name: Prune node db
-      # Only prune near tip, to keep the cache size manageable.
-      if: ${{ steps.sync.outputs.level >= 0.98 }}
-      continue-on-error: true
-      shell: bash
-      working-directory: ${{ runner.temp }}/db-${{ matrix.network }}
-      run: |
-        sudo chown -R "$(whoami):$(whoami)" immutable
-        ls immutable/*.chunk | sort | head -n -2500 | xargs -r rm -f --
+    # NOTE: Do NOT prune the ImmutableDB by deleting front *.chunk files. The
+    # node's ImmutableDB must be contiguous from genesis; removing leading chunks
+    # (while their .primary/.secondary indexes and the ledger snapshot remain)
+    # corrupts the DB and the node fails to start on the next restore. The full
+    # preview DB is well within the GitHub Actions cache budget, so we cache it
+    # whole. If size ever becomes a problem, shrink via snapshot count, never by
+    # deleting immutable chunks.
 
     # Save whatever progress we made (success() is implied -> only when the
     # sync step didn't hard-fail), so subsequent runs resume from here.
