@@ -183,6 +183,22 @@ jobs:
           INDEX_TTL_MS: 60000
         run: npm run test:coverage
 
+      # On failure, capture node/ogmios state so we can tell a transient
+      # catch-up hiccup ("Premature close", recovered by init-retry) apart from
+      # a real crash/OOM (RestartCount>0 / OOMKilled=true / "Killed" in logs).
+      - name: Dump Cardano Node + Ogmios diagnostics on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          for c in cardano-node-preview ogmios-preview; do
+            echo "===== docker inspect: $c ====="
+            docker inspect -f 'Running={{.State.Running}} RestartCount={{.RestartCount}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}} Status={{.State.Status}}' "$c" 2>&1 || true
+            echo "===== last 120 log lines: $c ====="
+            docker logs --tail 120 "$c" 2>&1 || true
+          done
+          echo "===== /health at failure time ====="
+          curl -s --max-time 5 http://localhost:1337/health || echo "(no response)"
+
       # ==========================================
       # Save Cardano Node DB Cache
       # ==========================================

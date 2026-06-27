@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import { CardanoBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
@@ -189,6 +189,39 @@ export class KoiosBackend implements CardanoBackend {
   }
 
   /**
+   * Koios runs several load-balanced grest instances and they are occasionally
+   * version-skewed: some return HTTP 400 with Postgres error 42804 ("structure
+   * of query does not match function result type", e.g. `out_sum_lovelace`
+   * word128 vs numeric on /epoch_info) while healthy instances serve the
+   * IDENTICAL request fine. The same request therefore flips 200/400 between
+   * calls. Retrying a few times lands on a healthy instance. Scoped strictly to
+   * the 42804 type-skew error so genuine 400s (bad params) still fail fast.
+   */
+  private async getWithRetryOn42804(
+    url: string,
+    config: AxiosRequestConfig,
+    label: string
+  ): Promise<{ data: any[] }> { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const maxRetries = 8;
+    const baseDelayMs = 300;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.api.get(url, config);
+      } catch (err: unknown) {
+        const e = err as { response?: { status?: number; data?: { code?: string; message?: string } } };
+        const isSkew =
+          e?.response?.status === 400 &&
+          (e.response.data?.code === '42804' ||
+            /structure of query does not match function result type/i.test(e.response.data?.message ?? ''));
+        if (!isSkew || attempt >= maxRetries) throw err;
+        const delay = baseDelayMs * (attempt + 1);
+        logger.warn(`${label}: Koios transient 42804 (grest version skew), retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
+  /**
    * Get Transaction Data for specified transaction hash
    * @param hash transaction hash (hex)
    * @returns {Promise<Transaction>} transaction data
@@ -267,7 +300,7 @@ export class KoiosBackend implements CardanoBackend {
       async () => {
 
         const results = await this.fetchWithRetryOnEmpty(
-          () => this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } }),
+          () => this.getWithRetryOn42804('/epoch_info', { params: { _epoch_no: epochNumber } }, `getEpoch(${epochNumber})`),
           `getEpoch(${epochNumber})`
         );
 
