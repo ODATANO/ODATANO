@@ -102,33 +102,40 @@ jobs:
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          echo "Waiting for Ogmios to sync (max 15 minutes)..."
+          echo "Waiting for Ogmios to connect + sync (max 15 minutes)..."
           MAX_WAIT=900
           ELAPSED=0
           THRESHOLD=0.99
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
-            HEALTH=$(curl -s http://localhost:1337/health 2>/dev/null || echo "{}")
-            SYNC=$(echo "$HEALTH" | sed 's/.*"networkSynchronization":\([0-9]\+\.\?[0-9]*\).*/\1/' || echo "0")
+            HEALTH=$(curl -s --max-time 5 http://localhost:1337/health 2>/dev/null || echo "{}")
+            # Ogmios answers /health even while DISCONNECTED from the node (then
+            # connectionStatus="disconnected", networkSynchronization=null). A
+            # reachable endpoint therefore does NOT mean usable -- we must require
+            # an ACTIVE node connection AND near-tip sync, otherwise the gate
+            # false-positives and the Ogmios suite runs against a dead backend.
+            CONN=$(sed -n 's/.*"connectionStatus":"\([^"]*\)".*/\1/p' <<< "$HEALTH")
+            SYNC=$(sed -n 's/.*"networkSynchronization":\([0-9.]*\).*/\1/p' <<< "$HEALTH")
+            [ -z "$SYNC" ] && SYNC=0
 
-            if [ "$SYNC" != "$HEALTH" ] && [ -n "$SYNC" ]; then
+            if [ "$CONN" = "connected" ]; then
               PERCENT=$(echo "$SYNC * 100" | bc -l 2>/dev/null | cut -c1-5 || echo "0")
-              echo "Sync progress: ${PERCENT}%"
+              echo "Connected — sync progress: ${PERCENT}%"
 
               if [ "$(echo "$SYNC >= $THRESHOLD" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
-                echo "✅ Ogmios synced to tip!"
+                echo "✅ Ogmios connected and synced to tip!"
                 echo "ready=true" >> $GITHUB_OUTPUT
                 exit 0
               fi
             else
-              echo "Waiting for Ogmios to start..."
+              echo "Waiting for Ogmios to connect to node (status=${CONN:-none})..."
             fi
 
             sleep 10
             ELAPSED=$((ELAPSED + 10))
           done
 
-          echo "⚠️ Sync timeout after ${MAX_WAIT}s"
+          echo "⚠️ Ogmios not connected+synced after ${MAX_WAIT}s — Ogmios suite will be skipped"
           echo "ready=false" >> $GITHUB_OUTPUT
 
       - name: Cache Status Info
