@@ -16,7 +16,14 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Hard cap: without this a hung backend init / test makes the job run to the
+    # 6h GitHub default before it's killed. 45 min comfortably covers a full
+    # gate catch-up (≤25 min) + the test suite (~5 min) with margin.
+    timeout-minutes: 45
     strategy:
+      # Don't cancel node 20 just because node 22 hangs (or vice versa) — let
+      # both report so a single flaky runner doesn't mask the other's result.
+      fail-fast: false
       matrix:
         node-version: [20.x, 22.x]
     steps:

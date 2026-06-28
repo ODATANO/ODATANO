@@ -184,6 +184,28 @@ export class OgmiosBackend implements EvaluatingBackend {
   }
 
   /**
+   * Bound an init step in time. A hung WebSocket connect/handshake (e.g. the
+   * node is alive but too busy catching up to answer) would otherwise block
+   * forever — there is no built-in connect timeout — hanging the whole
+   * app-context bootstrap (seen as a 6h CI job timeout). On timeout we reject
+   * with a message containing "timeout" so the orchestrator's transient-error
+   * retry picks it up instead of dying.
+   */
+  private withInitTimeout<T>(p: Promise<T>, label: string): Promise<T> {
+    // Keep this comfortably under the integration suite's 20s cds.test() hook
+    // timeout so a hung connect fails the bootstrap cleanly instead of tripping
+    // the hook (which would mark every test as a hook-timeout). Still bounds a
+    // genuinely hung connect in production.
+    const ms = Math.min(this.timeoutMs, 10000);
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Ogmios init timeout after ${ms}ms (${label})`)), ms);
+      timer.unref?.();
+    });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /**
    * Initialize the Ogmios backend connection
    */
   async init(): Promise<boolean> {
@@ -195,7 +217,7 @@ export class OgmiosBackend implements EvaluatingBackend {
       tls: url.protocol === 'wss:'
     };
 
-    const context = await createInteractionContext(
+    const context = await this.withInitTimeout(createInteractionContext(
       /* c8 ignore next */
       (err) => logger.error(`[OgmiosBackend] Interaction context error: ${err.message}`),
       () => {
@@ -208,11 +230,11 @@ export class OgmiosBackend implements EvaluatingBackend {
         this.txSubmissionClient = null;
       },
       { connection }
-    );
+    ), 'createInteractionContext');
 
     try {
-      this.stateQueryClient = await createLedgerStateQueryClient(context);
-      this.txSubmissionClient = await createTransactionSubmissionClient(context);
+      this.stateQueryClient = await this.withInitTimeout(createLedgerStateQueryClient(context), 'ledgerStateQueryClient');
+      this.txSubmissionClient = await this.withInitTimeout(createTransactionSubmissionClient(context), 'txSubmissionClient');
     } catch (err: unknown) {
       // don't leak the WebSocket when client creation fails mid-init
       // (runtime socket is node `ws`, which exposes terminate())
