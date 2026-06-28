@@ -21,17 +21,14 @@ jobs:
     # gate catch-up (≤25 min) + the test suite (~5 min) with margin.
     timeout-minutes: 45
     strategy:
-      # Don't cancel node 20 just because node 22 hangs (or vice versa) — let
-      # both report so a single flaky runner doesn't mask the other's result.
+      # Don't cancel one node version just because another hangs — let both
+      # report so a single flaky runner doesn't mask the other's result.
       fail-fast: false
       matrix:
-        # Node 22/24 schlugen am Ogmios-/health-Bootstrap fehl ("Premature close"),
-        # Node 20 nicht — Ursache: node-fetch v2 (via cross-fetch in der Ogmios-Lib)
-        # reused unter Node 22/24 keep-alive-Sockets, die Ogmios' Warp-Server bereits
-        # geschlossen hat. Fix: OgmiosBackend schaltet http keep-alive ab
-        # (siehe disableHttpKeepAlive). Wir testen alle drei, um den Fix auf 22/24 zu
-        # belegen und keine Regression auf 20 zu verursachen.
-        node-version: [20.x, 22.x, 24.x]
+        # Node 20 is EOL — dropped. Both supported LTS lines are tested.
+        # (The Ogmios-/health "Premature close" on Node 22/24 from node-fetch v2
+        # keep-alive socket reuse is fixed in OgmiosBackend.disableHttpKeepAlive.)
+        node-version: [22.x, 24.x]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
