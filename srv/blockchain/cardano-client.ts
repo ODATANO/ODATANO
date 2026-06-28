@@ -186,14 +186,14 @@ export class CardanoClient {
    * runs (the context was never created). Non-transient errors fail fast.
    */
   private async initBackendWithRetry(backend: CardanoBackend): Promise<void> {
-    const maxAttempts = 5;
+    const maxAttempts = 7;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await backend.init();
         return;
       } catch (err: unknown) {
         if (attempt >= maxAttempts || !CardanoClient.isTransientInitError(err)) throw err;
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 8000); // 1s,2s,4s,8s,8s
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 8000); // 1,2,4,8,8,8s ≈ 31s total
         logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}) — transient, retrying in ${delay}ms`, err);
         await new Promise(r => setTimeout(r, delay));
       }

@@ -102,10 +102,18 @@ jobs:
         if: steps.cache-cardano.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
-          echo "Waiting for Ogmios to connect + sync (max 15 minutes)..."
-          MAX_WAIT=900
+          echo "Waiting for Ogmios to connect + sync (max 25 minutes)..."
+          MAX_WAIT=1500
           ELAPSED=0
-          THRESHOLD=0.99
+          # 0.99 is reported the instant the node opens the socket (it just
+          # echoes the CACHED tip, which is ~13 days behind live). Passing at
+          # 0.99 lets the node do its heavy multi-day catch-up DURING the test
+          # run, starving Ogmios while jest hammers the CPU → "Premature close"
+          # at backend init → whole Ogmios suite 503s. Requiring 0.999 (~1 day
+          # behind) forces the bulk catch-up to finish HERE — in the gate step,
+          # with no jest competing — so tests run against a near-tip, lightly
+          # loaded node where Ogmios stays responsive.
+          THRESHOLD=0.999
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             HEALTH=$(curl -s --max-time 5 http://localhost:1337/health 2>/dev/null || echo "{}")
