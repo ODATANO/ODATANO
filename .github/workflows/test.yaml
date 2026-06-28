@@ -25,7 +25,12 @@ jobs:
       # both report so a single flaky runner doesn't mask the other's result.
       fail-fast: false
       matrix:
-        node-version: [20.x, 22.x]
+        # Node 20 läuft konstant grün, Node 22 fällt konstant am Ogmios-/health-
+        # Bootstrap aus ("Premature close") — vermutlich ein undici-Unterschied im
+        # neueren fetch-Stack von Node 22. Wir testen 24 (noch neuere undici) statt
+        # 22, um zu sehen ob das Problem 22-spezifisch ist oder alle modernen
+        # Node-Versionen betrifft. Danach entscheiden wir den finalen Fix.
+        node-version: [20.x, 24.x]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
