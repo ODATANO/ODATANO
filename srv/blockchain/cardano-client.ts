@@ -177,23 +177,32 @@ export class CardanoClient {
   }
 
   /**
-   * Init a backend, retrying brief transient failures. Deliberately SMALL: the
-   * integration suites bootstrap under a 20s cds.test() hook, so total retry
-   * time must stay well under it (≤3 attempts × 4s init-timeout + 1s backoff
-   * ≈ 14s worst case; in practice "Premature close" returns sub-second). With
-   * the node at tip these failures are momentary block-processing blips, so a
-   * couple of quick retries ride over them; a sustained outage still fails fast.
+   * Init a backend, retrying brief transient failures with EXPONENTIAL backoff.
+   *
+   * The failure this rides over is a "Premature close" on Ogmios's /health probe
+   * (inside createInteractionContext): the cardano-node is momentarily too busy
+   * to finish the HTTP response, so the socket is cut. In CI this isn't a sub-
+   * second blip — under `jest --coverage` pegging a 2-core runner the node can
+   * stay starved for 10-15s while it finishes catch-up, which a flat 3×1s window
+   * (~5s) exhausts → AllBackendsInitFailedError → whole app context fails to boot
+   * (observed: node-22 leg only, node-20 passed — a classic timing flake).
+   *
+   * Backoff is 1s, 2s, 4s, 8s between 5 attempts (15s of waiting + ≤5×4s init-
+   * timeout ≈ 35s worst case), so the integration suites that exercise this path
+   * raise their bootstrap budget accordingly (see core-ogmios.test.ts). Transient
+   * errors retry; config/validation errors still throw on the first attempt.
    */
   private async initBackendWithRetry(backend: CardanoBackend): Promise<void> {
-    const maxAttempts = 3;
+    const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await backend.init();
         return;
       } catch (err: unknown) {
         if (attempt >= maxAttempts || !CardanoClient.isTransientInitError(err)) throw err;
-        logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}) — transient, retrying in 1s`, err);
-        await new Promise(r => setTimeout(r, 1000));
+        const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
+        logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}) — transient, retrying in ${backoffMs}ms`, err);
+        await new Promise(r => setTimeout(r, backoffMs));
       }
     }
   }

@@ -2,7 +2,13 @@ import cds from '@sap/cds';
 import { TEST_FIXTURES } from './test-fixtures';
 import { simpleRequestBody } from './test-fixtures';
 
-jest.setTimeout(20000);
+// 60s, not the usual 20s: this suite forces BACKENDS=ogmios (no fallback), so
+// app-context bootstrap depends solely on Ogmios's init. Under CI CPU contention
+// the node can momentarily cut the /health probe ("Premature close"), and the
+// orchestrator now rides that out with exponential-backoff retries (up to ~35s —
+// see CardanoClient.initBackendWithRetry). The bootstrap (cds.served) runs inside
+// this hook budget, so it must comfortably exceed the retry window.
+jest.setTimeout(60000);
 
 /**
  * Ogmios Backend Integration Tests
