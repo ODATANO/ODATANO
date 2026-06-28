@@ -192,11 +192,10 @@ export class OgmiosBackend implements EvaluatingBackend {
    * retry picks it up instead of dying.
    */
   private withInitTimeout<T>(p: Promise<T>, label: string): Promise<T> {
-    // Keep this comfortably under the integration suite's 20s cds.test() hook
-    // timeout so a hung connect fails the bootstrap cleanly instead of tripping
-    // the hook (which would mark every test as a hook-timeout). Still bounds a
-    // genuinely hung connect in production.
-    const ms = Math.min(this.timeoutMs, 10000);
+    // Keep this SHORT: the orchestrator retries init a few times within the
+    // integration suite's 20s cds.test() hook, so each attempt must be brief.
+    // Still bounds a genuinely hung connect in production.
+    const ms = Math.min(this.timeoutMs, 4000);
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<T>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`Ogmios init timeout after ${ms}ms (${label})`)), ms);

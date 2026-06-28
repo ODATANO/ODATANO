@@ -163,6 +163,42 @@ export class CardanoClient {
   }
 
   /**
+   * Transient (retryable) init failures: a backend momentarily unreachable at
+   * startup — e.g. Ogmios's /health response cut short while the node processes
+   * a freshly-arrived block ("Premature close"), or the socket still coming up
+   * (ECONNREFUSED). Config/validation errors are NOT transient.
+   */
+  private static isTransientInitError(err: unknown): boolean {
+    const e = err as { code?: string; message?: string; cause?: { code?: string; message?: string } };
+    const code = e?.code ?? e?.cause?.code ?? '';
+    const msg = `${e?.message ?? ''} ${e?.cause?.message ?? ''}`.toLowerCase();
+    if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_SOCKET'].includes(code)) return true;
+    return /premature close|socket hang up|econnreset|econnrefused|etimedout|timeout|fetch failed|terminated|other side closed/.test(msg);
+  }
+
+  /**
+   * Init a backend, retrying brief transient failures. Deliberately SMALL: the
+   * integration suites bootstrap under a 20s cds.test() hook, so total retry
+   * time must stay well under it (≤3 attempts × 4s init-timeout + 1s backoff
+   * ≈ 14s worst case; in practice "Premature close" returns sub-second). With
+   * the node at tip these failures are momentary block-processing blips, so a
+   * couple of quick retries ride over them; a sustained outage still fails fast.
+   */
+  private async initBackendWithRetry(backend: CardanoBackend): Promise<void> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await backend.init();
+        return;
+      } catch (err: unknown) {
+        if (attempt >= maxAttempts || !CardanoClient.isTransientInitError(err)) throw err;
+        logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}) — transient, retrying in 1s`, err);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  /**
    * Initialize all backends from configuration.
    * Backends that fail to initialize are KEPT (previously removed permanently)
    * and tracked in `uninitializedBackends` — the request loops retry their
@@ -177,7 +213,7 @@ export class CardanoClient {
     if (this.liveBackend) {
       try {
         logger.debug(`Initializing live backend: ${this.liveBackend.name}`);
-        await this.liveBackend.init();
+        await this.initBackendWithRetry(this.liveBackend);
         this.uninitializedBackends.delete(this.liveBackend);
         logger.debug(`Live backend initialized: ${this.liveBackend.name}`);
       } catch (err: unknown) {
@@ -191,7 +227,7 @@ export class CardanoClient {
     for (const backend of this.historicalBackends) {
       try {
         logger.debug(`Initializing historical backend: ${backend.name}`);
-        await backend.init();
+        await this.initBackendWithRetry(backend);
         this.uninitializedBackends.delete(backend);
         logger.debug(`Historical backend initialized: ${backend.name}`);
       } catch (err: unknown) {
