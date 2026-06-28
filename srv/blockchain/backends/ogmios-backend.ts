@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import http from 'node:http';
 import {
   createInteractionContext,
   createTransactionSubmissionClient,
@@ -162,6 +163,30 @@ export class OgmiosBackend implements EvaluatingBackend {
     this.ogmiosUrl = ogmiosUrl;
   }
 
+  /**
+   * Force fresh (non-keep-alive) HTTP connections for the Ogmios `/health` probe.
+   *
+   * createInteractionContext() opens the WebSocket, but FIRST probes
+   * `GET http://<ogmios>/health` via the library's `cross-fetch` → node-fetch v2
+   * → Node-core `http`. Since Node 19, `http.globalAgent` defaults to
+   * keepAlive:true, so node-fetch reuses pooled sockets. Against Ogmios' Warp
+   * server on Node 22/24 a reused socket the server has already half-closed
+   * yields "Invalid response body … Premature close" the instant the body is
+   * read — deterministically (Node 20's older http client tolerated it; `curl`
+   * does too, so the /health response itself is well-formed and the node is
+   * healthy). The lib pins cross-fetch even in 7.0 and exposes no way to inject
+   * an agent into that internal fetch, so we neutralise keep-alive process-wide
+   * for `http://`. Blast radius is tiny: the only `http://` consumer is the local
+   * Ogmios probe — Blockfrost/Koios run over `https` with their own axios agents
+   * and are unaffected. Runs once, lazily, only when Ogmios is actually used.
+   */
+  private static keepAliveDisabled = false;
+  private static disableHttpKeepAlive(): void {
+    if (OgmiosBackend.keepAliveDisabled) return;
+    http.globalAgent = new http.Agent({ keepAlive: false });
+    OgmiosBackend.keepAliveDisabled = true;
+  }
+
   /** Validate Ogmios URL scheme and reject dangerous protocols */
   private static validateOgmiosUrl(rawUrl: string): void {
     const url = new URL(rawUrl);
@@ -208,6 +233,7 @@ export class OgmiosBackend implements EvaluatingBackend {
    * Initialize the Ogmios backend connection
    */
   async init(): Promise<boolean> {
+    OgmiosBackend.disableHttpKeepAlive();
     OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
     const url = new URL(this.ogmiosUrl);
     const connection = {
