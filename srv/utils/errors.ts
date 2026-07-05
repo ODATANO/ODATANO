@@ -138,18 +138,24 @@ export class TransactionAlreadySubmittedError extends BackendError {
 export class InsufficientFundsError extends BackendError {
   /** Constructor
    * @param assetUnit the asset unit that is insufficient (e.g., "lovelace" or "policyId.assetName")
-   * @param required the required amount
-   * @param available the available amount
+   * @param required the required amount (0n when unknown)
+   * @param available the available amount (0n when unknown)
    * @param originalError original error object
+   * @param detail human-readable cause shown INSTEAD of the amounts — use when
+   *               the amounts are unknown; "required 0, available 0" reads as
+   *               nonsense from the consumer's perspective
    */
   constructor(
     public readonly assetUnit: string,
     public readonly required: bigint,
     public readonly available: bigint,
-    originalError?: unknown
+    originalError?: unknown,
+    detail?: string
   ) {
     super(
-      `Insufficient ${assetUnit}: required ${required}, available ${available}`,
+      detail
+        ? `Insufficient ${assetUnit}: ${detail}`
+        : `Insufficient ${assetUnit}: required ${required}, available ${available}`,
       400,
       ERROR_CODES.INSUFFICIENT_FUNDS,
       undefined,

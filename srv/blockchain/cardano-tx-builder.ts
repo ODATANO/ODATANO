@@ -420,7 +420,8 @@ export class CardanoTransactionBuilder {
                 'lovelace',
                 BigInt(0),
                 BigInt(0),
-                new Error(`Address ${address} has no UTxOs. Verify this is the correct sender address and that it has been funded.`)
+                undefined,
+                `address ${address} has no UTxOs — verify this is the correct sender address and that it has been funded`
             );
         }
         return utxos;

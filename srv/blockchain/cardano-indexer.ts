@@ -78,8 +78,9 @@ import {
 } from '../utils/mappers';
 
 import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult } from '../utils/types';
+import type { TxCacheTargets } from '../utils/tx-build-helper';
 
-const { UPSERT, INSERT, UPDATE, SELECT } = cds.ql;
+const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
 
 const logger = cds.log('CardanoIndexer');
 
@@ -345,6 +346,44 @@ export class CardanoIndexer {
     }
 
     return utxoEntities as AddressUTxOs[];
+  }
+
+  /**
+   * Evict cached rows a submitted transaction made stale, so the next read
+   * refetches instead of serving spent UTxOs for up to indexTtlMs:
+   *   - every consumed input ref (spent under WHATEVER address cached it),
+   *   - all address-level rows of the output addresses (their UTxO set gained
+   *     the new outputs — sender change included) and of `extraAddresses`
+   *     (e.g. the build's sender when the CBOR could not be parsed).
+   *
+   * Only the read cache is touched; submissions/builds stay untouched. Note the
+   * next refetch may STILL see pre-submit state on lagging backends
+   * (Blockfrost/Koios propagation) — that matches cache-less behaviour and is
+   * not recoverable server-side.
+   *
+   * @param tx             CAP transaction
+   * @param targets        input refs + output addresses from extractTxCacheTargets
+   * @param extraAddresses additional bech32 addresses to evict
+   */
+  async invalidateUtxoCacheForTx(
+    tx: CapTransaction,
+    targets: TxCacheTargets,
+    extraAddresses: string[] = []
+  ): Promise<void> {
+    const addresses = [...new Set([...targets.outputAddresses, ...extraAddresses])];
+    for (const address of addresses) {
+      await tx.run(DELETE.from(UTxOAssets).where({ utxo_address_address: address }));
+      await tx.run(DELETE.from(AddressUTxOs).where({ address_address: address }));
+      await tx.run(DELETE.from(AddressAssets).where({ address_address: address }));
+      await tx.run(DELETE.from(Addresses).where({ address }));
+    }
+    for (const input of targets.inputs) {
+      await tx.run(DELETE.from(UTxOAssets).where({ utxo_hash: input.txHash, utxo_index: input.outputIndex }));
+      await tx.run(DELETE.from(AddressUTxOs).where({ hash: input.txHash, index: input.outputIndex }));
+    }
+    if (addresses.length || targets.inputs.length) {
+      logger.debug(`Invalidated UTxO cache: ${addresses.length} address(es), ${targets.inputs.length} spent input ref(s)`);
+    }
   }
 
   /**

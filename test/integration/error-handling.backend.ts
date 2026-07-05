@@ -59,7 +59,7 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 
 				it('POST / Transaction with no metadata: GetMetadataByTxHash returns 404', async () => {
 					const txHashWithNoMetadata = '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83';
-					const { status, data } = await POST('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: txHashWithNoMetadata }).catch(err => err.response);
+					const { status, data } = await POST('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: txHashWithNoMetadata }).catch(err => err.response);
 					expect(data.error).to.exist;
 					expect(data.error.message).to.match(/not found/i);
 					expect(status).to.equal(404);

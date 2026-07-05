@@ -5,7 +5,8 @@ import { MixedAssetsError, InsufficientFundsError, BackendError, TransactionVali
 import { ERROR_CODES } from './error-codes';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
-import { Cbor, CborArray, CborBytes } from '@harmoniclabs/cbor';
+import { Cbor, CborArray, CborBytes, CborMap, CborUInt, CborTag, type CborObj } from '@harmoniclabs/cbor';
+import { Address } from '@harmoniclabs/cardano-ledger-ts';
 
 /**
  * Extract lovelace amount from UTxO
@@ -70,6 +71,78 @@ export function getTxHashFromCbor(txCbor: string): string {
   }
 }
 
+/** Cache-invalidation targets of a submitted transaction (see extractTxCacheTargets). */
+export interface TxCacheTargets {
+  /** UTxO refs consumed by the transaction (now spent). */
+  inputs: Array<{ txHash: string; outputIndex: number }>;
+  /** Distinct bech32 addresses receiving outputs (sender change + recipients). */
+  outputAddresses: string[];
+}
+
+/**
+ * Extract the consumed input refs and the output addresses from a transaction
+ * CBOR (signed or unsigned) — the rows a successful submit makes stale in the
+ * UTxO cache. Works at the raw-CBOR level for the same reason as
+ * getTxHashFromCbor (the high-level Tx.fromCbor rejects its own tag-259
+ * AuxiliaryData builds).
+ *
+ * Outputs whose address bytes cannot be decoded (e.g. Byron bootstrap
+ * addresses) are skipped — invalidation is best-effort per address.
+ *
+ * @param txCbor transaction in CBOR hex format
+ * @throws {TransactionValidationError} if the CBOR is not a transaction
+ */
+export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
+  let body: CborMap;
+  try {
+    const tx = Cbor.parse(fromHex(txCbor));
+    if (!(tx instanceof CborArray) || !(tx.array[0] instanceof CborMap)) {
+      throw new Error('not a transaction');
+    }
+    body = tx.array[0];
+  } catch (err: unknown) {
+    throw new TransactionValidationError('Failed to parse transaction CBOR', err, ERROR_CODES.TX_PARSE_FAILED);
+  }
+
+  const bodyValue = (key: number): CborObj | undefined =>
+    body.map.find(e => e.k instanceof CborUInt && e.k.num === BigInt(key))?.v;
+
+  // key 0: inputs — plain array or a CBOR tag-258 set (Conway)
+  const inputs: TxCacheTargets['inputs'] = [];
+  let inputsObj = bodyValue(0);
+  if (inputsObj instanceof CborTag) inputsObj = inputsObj.data;
+  if (inputsObj instanceof CborArray) {
+    for (const entry of inputsObj.array) {
+      if (
+        entry instanceof CborArray &&
+        entry.array[0] instanceof CborBytes &&
+        entry.array[1] instanceof CborUInt
+      ) {
+        inputs.push({ txHash: toHex(entry.array[0].bytes), outputIndex: Number(entry.array[1].num) });
+      }
+    }
+  }
+
+  // key 1: outputs — post-alonzo map form ({0: address, ...}) or legacy array form ([address, amount, ...])
+  const outputAddresses = new Set<string>();
+  const outputsObj = bodyValue(1);
+  if (outputsObj instanceof CborArray) {
+    for (const output of outputsObj.array) {
+      const addrObj = output instanceof CborMap
+        ? output.map.find(e => e.k instanceof CborUInt && e.k.num === 0n)?.v
+        : output instanceof CborArray ? output.array[0] : undefined;
+      if (!(addrObj instanceof CborBytes)) continue;
+      try {
+        outputAddresses.add(Address.fromBuffer(addrObj.bytes).toString());
+      } catch {
+        // non-Shelley address bytes — nothing cached under a bech32 key for it
+      }
+    }
+  }
+
+  return { inputs, outputAddresses: [...outputAddresses] };
+}
+
 /**
  * Maps builder errors to typed BackendErrors
  * Used by the Buildooor transaction builder.
@@ -77,10 +150,13 @@ export function getTxHashFromCbor(txCbor: string): string {
  * (e.g. "not enough <policyId.assetName>"), falling back to 'lovelace'.
  * @param err Error from builder
  * @param assetUnit Optional asset unit override (auto-extracted from error message if omitted)
+ * @param context Optional build-flow context (e.g. the collateral/funding partition)
+ *                appended to the consumer-facing message — the builder's own message
+ *                has no way of knowing it
  * @throws {InsufficientFundsError} if error is related to insufficient funds
  * @throws {Error} original error if not mappable
  */
-export function mapBuilderError(err: unknown, assetUnit?: string): never {
+export function mapBuilderError(err: unknown, assetUnit?: string, context?: string): never {
   // Already-typed errors carry their own status + payload (amounts, asset units,
   // validation details) — re-wrapping them into a generic InsufficientFundsError
   // because their MESSAGE happens to contain "balance"/"insufficient" destroys that.
@@ -89,7 +165,8 @@ export function mapBuilderError(err: unknown, assetUnit?: string): never {
   }
 
   const errObj = err as { message?: string; toString?: () => string } | null;
-  const msg = (errObj?.message || errObj?.toString?.() || String(err)).toLowerCase();
+  const rawMsg = errObj?.message || errObj?.toString?.() || String(err);
+  const msg = rawMsg.toLowerCase();
 
   if (msg.includes('not enough') ||
       msg.includes('insufficient') ||
@@ -98,7 +175,10 @@ export function mapBuilderError(err: unknown, assetUnit?: string): never {
       const match = msg.match(/not enough\s+([a-f0-9.]+)/i);
       return match?.[1] || 'lovelace';
     })();
-    throw new InsufficientFundsError(effectiveUnit, 0n, 0n, err);
+    // The builder knows no amounts here — surface its own message (plus the build
+    // context) instead of a meaningless "required 0, available 0".
+    throw new InsufficientFundsError(effectiveUnit, 0n, 0n, err,
+      context ? `${rawMsg} (${context})` : rawMsg);
   }
 
   throw err;

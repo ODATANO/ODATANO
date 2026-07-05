@@ -2,10 +2,11 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
+import { getLovelace, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
-import { Cbor, CborBytes } from '@harmoniclabs/cbor';
+import { Cbor, CborBytes, CborArray, CborMap, CborUInt, CborTag } from '@harmoniclabs/cbor';
+import { Address } from '@harmoniclabs/cardano-ledger-ts';
 
 describe('tx-build-helper utilities', () => {
   describe('getLovelace', () => {
@@ -145,6 +146,71 @@ describe('tx-build-helper utilities', () => {
       const upperHash = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR.toUpperCase());
       const lowerHash = getTxHashFromCbor(VALID_UNSIGNED_TX_CBOR);
       expect(upperHash).toBe(lowerHash);
+    });
+  });
+
+  describe('extractTxCacheTargets', () => {
+    // Same minimal Conway ADA transfer as the getTxHashFromCbor fixture:
+    // 1 input (…bccb#1), 2 map-form outputs (base + enterprise testnet address).
+    const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
+    const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
+
+    const inputRef = (txHash: string, index: number) =>
+      new CborArray([new CborBytes(Buffer.from(txHash, 'hex')), new CborUInt(index)]);
+    const mapOutput = (addressBytes: Uint8Array) =>
+      new CborMap([{ k: new CborUInt(0), v: new CborBytes(addressBytes) }]);
+    const txCborHex = (bodyEntries: Array<{ k: CborUInt; v: any }>) =>
+      Buffer.from(Cbor.encode(new CborArray([new CborMap(bodyEntries), new CborMap([])]))).toString('hex');
+
+    it('extracts input refs and distinct output addresses from a real Conway tx', () => {
+      const targets = extractTxCacheTargets(VALID_UNSIGNED_TX_CBOR);
+      expect(targets.inputs).toEqual([
+        { txHash: '2db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb', outputIndex: 1 }
+      ]);
+      expect(targets.outputAddresses.length).toBe(2);
+      for (const addr of targets.outputAddresses) {
+        expect(addr).toMatch(/^addr_test1/);
+      }
+      expect(new Set(targets.outputAddresses).size).toBe(2);
+    });
+
+    it('handles the Conway tag-258 input set and dedups repeated output addresses', () => {
+      const addrBytes = Address.fromString(TEST_ADDRESS).toBuffer();
+      const cbor = txCborHex([
+        { k: new CborUInt(0), v: new CborTag(258, new CborArray([inputRef('ab'.repeat(32), 0), inputRef('cd'.repeat(32), 3)])) },
+        { k: new CborUInt(1), v: new CborArray([mapOutput(addrBytes), mapOutput(addrBytes)]) },
+      ]);
+      const targets = extractTxCacheTargets(cbor);
+      expect(targets.inputs).toEqual([
+        { txHash: 'ab'.repeat(32), outputIndex: 0 },
+        { txHash: 'cd'.repeat(32), outputIndex: 3 },
+      ]);
+      expect(targets.outputAddresses).toEqual([TEST_ADDRESS]);
+    });
+
+    it('handles legacy array-form outputs', () => {
+      const addrBytes = Address.fromString(TEST_ADDRESS).toBuffer();
+      const legacyOutput = new CborArray([new CborBytes(addrBytes), new CborUInt(1_000_000)]);
+      const cbor = txCborHex([
+        { k: new CborUInt(0), v: new CborArray([inputRef('ab'.repeat(32), 0)]) },
+        { k: new CborUInt(1), v: new CborArray([legacyOutput]) },
+      ]);
+      expect(extractTxCacheTargets(cbor).outputAddresses).toEqual([TEST_ADDRESS]);
+    });
+
+    it('skips outputs whose address bytes cannot be decoded', () => {
+      const cbor = txCborHex([
+        { k: new CborUInt(0), v: new CborArray([inputRef('ab'.repeat(32), 0)]) },
+        { k: new CborUInt(1), v: new CborArray([mapOutput(Uint8Array.from([0xff, 0x00]))]) },
+      ]);
+      const targets = extractTxCacheTargets(cbor);
+      expect(targets.outputAddresses).toEqual([]);
+      expect(targets.inputs.length).toBe(1); // inputs still extracted
+    });
+
+    it('throws a typed 400 for CBOR that is not a transaction', () => {
+      const { TransactionValidationError } = require('../../srv/utils/errors');
+      expect(() => extractTxCacheTargets('deadbeef')).toThrow(TransactionValidationError);
     });
   });
 
@@ -417,6 +483,19 @@ describe('tx-build-helper utilities', () => {
   describe('mapBuilderError', () => {
     it('should throw InsufficientFundsError for "not enough" messages', () => {
       expect(() => mapBuilderError(new Error('not enough lovelace'))).toThrow('Insufficient');
+    });
+
+    it('should surface the builder message instead of "required 0, available 0"', () => {
+      expect(() => mapBuilderError(new Error('not enough lovelace; missing 3210000')))
+        .toThrow('Insufficient lovelace: not enough lovelace; missing 3210000');
+      expect(() => mapBuilderError(new Error('not enough lovelace')))
+        .not.toThrow('required 0, available 0');
+    });
+
+    it('should append the build-flow context when provided', () => {
+      expect(() => mapBuilderError(new Error('not enough lovelace'), undefined,
+        '1 UTxO(s) with 5000000 lovelace reserved as collateral; 0 UTxO(s) with 0 lovelace remained for coin selection'))
+        .toThrow(/not enough lovelace \(1 UTxO\(s\) with 5000000 lovelace reserved as collateral/);
     });
 
     it('should throw InsufficientFundsError for "insufficient" messages', () => {

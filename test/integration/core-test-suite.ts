@@ -474,12 +474,12 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('READ TransactionMetadata Entity', () => {
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata by transaction hash', async () => {
-            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txWithMetadata });
+            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             expect(status).to.equal(200);
           });
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata (transaction with metadata)', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txWithMetadata });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
 
             expect(data.value[0]).to.have.property('label');
             expect(status).to.equal(200);
@@ -504,7 +504,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata via indexing path', async () => {
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txWithMetadata });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
 
             expect(data.value[0]).to.have.property('label');
             expect(data.value[0]).to.have.property('payload');
@@ -520,7 +520,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(TransactionMetadata).where({ tx_hash: TEST_FIXTURES.txWithMetadata }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txWithMetadata });
+            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             expect(status).to.equal(200);
           });
         });
@@ -548,7 +548,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               }),
             );
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.validTxHash });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.validTxHash });
             // get first row 
             const firstrow = data.value[0];
 

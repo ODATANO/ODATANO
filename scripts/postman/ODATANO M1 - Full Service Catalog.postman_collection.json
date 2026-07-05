@@ -518,7 +518,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n  \"tx_hash\": \"95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1\"\n}",
+					"raw": "{\n  \"txHash\": \"95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1\"\n}",
 					"options": {
 						"raw": {
 							"language": "json"
@@ -539,7 +539,7 @@
 						"GetMetadataByTxHash"
 					]
 				},
-				"description": "**Description**  \nExecutes a service action that returns all metadata entries associated with a specific Cardano transaction identified by its transaction hash.  \nThe response includes on-chain metadata labels and their corresponding payloads attached to the transaction.\n\n**Typical Use Case**  \nUsed to retrieve and inspect application-specific or protocol-level metadata embedded in a transaction when the transaction hash is known.\n\n**Parameter:**\n\ntx_hash: hash of the transaction contraining the metadata"
+				"description": "**Description**  \nExecutes a service action that returns all metadata entries associated with a specific Cardano transaction identified by its transaction hash.  \nThe response includes on-chain metadata labels and their corresponding payloads attached to the transaction.\n\n**Typical Use Case**  \nUsed to retrieve and inspect application-specific or protocol-level metadata embedded in a transaction when the transaction hash is known.\n\n**Parameter:**\n\ntxHash: hash of the transaction containing the metadata"
 			},
 			"response": []
 		},

@@ -5,6 +5,8 @@ import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
+// Vendored coin selection (buildooor PR #12 fix) — NOT this.txBuilder.keepRelevant; see keep-relevant.ts
+import { keepRelevant } from "./keep-relevant";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
 import {
@@ -54,6 +56,9 @@ interface LocalEvalFailure {
 
 /** Execution units as bigints (matching ExBudget's mem/cpu). */
 type ExUnitsBig = { mem: bigint; cpu: bigint };
+
+/** Cost-model arrays exactly as served by the chain, keyed like Buildooor's CostModels. */
+type RawCostModelArrays = Partial<Record<'PlutusScriptV1' | 'PlutusScriptV2' | 'PlutusScriptV3', number[]>>;
 
 /**
  * Build options for script-bearing transactions.
@@ -175,6 +180,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private cardanoClient!: CardanoClient;
   private genesisInfos!: NonNullable<ConstructorParameters<typeof TxBuilder>[1]>;
   private paramsFingerprint: string | undefined;
+  /**
+   * Chain cost-model arrays kept verbatim for language-view hashing. Maintained by
+   * _mapCostModels (in lockstep with the named-key models the TxBuilder is built
+   * with); consumed by _languageViewCostModels. Empty when the current parameters
+   * carry no usable cost models (library defaults in effect).
+   */
+  private rawCostModelArrays: RawCostModelArrays = {};
 
   /**
    * Initialize the builder
@@ -260,7 +272,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Coin selection on candidates only; forced inputs are prepended unconditionally
-      const selected = this.txBuilder.keepRelevant(outputValue, candidateInputs);
+      const selected = keepRelevant(outputValue, candidateInputs);
       const inputs = [...forcedInputs, ...selected];
       logger.debug(`Coin selection: ${selected.length}/${candidateInputs.length} UTxOs selected (${forcedInputs.length} forced) for ${label}`);
 
@@ -278,6 +290,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    // Set once the collateral partition is known — an insufficient-funds rejection
+    // after that point is usually CAUSED by it, and the builder's message can't know.
+    let coinSelectionContext: string | undefined;
     try {
       this._ensureCurrentProtocolParameters(ctx);
       const recipientAddress = Address.fromString(req.recipientAddress);
@@ -303,12 +318,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
       const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
 
       // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from thin air)
       const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
-      const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+      const selectedFunding = keepRelevant(requiredFundingValue, allFundingInputs);
       const inputs = [...forcedInputs, ...selectedFunding];
       logger.debug(`Coin selection: ${selectedFunding.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for mint`);
 
@@ -364,11 +380,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length, referenceInputsUsed: readonlyRefInputs.length });
     } catch (err: unknown) {
-      mapBuilderError(err);
+      mapBuilderError(err, undefined, coinSelectionContext);
     }
   }
 
   public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    // See buildUnsignedMintTransaction — same collateral-partition context for rejections.
+    let coinSelectionContext: string | undefined;
     try {
       this._ensureCurrentProtocolParameters(ctx);
       const { plutusScriptExecution } = req;
@@ -410,6 +428,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
       const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
 
       // Coin selection: funding UTxOs only need to cover fee + min change (script UTxO covers the output).
@@ -425,7 +444,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           );
         }
       }
-      const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+      const selectedFundingInputs = keepRelevant(requiredFundingValue, allFundingInputs);
       logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for Plutus spend`);
 
       // FR-3: compute the final input order (replicates Buildooor's lex sort) and resolve any
@@ -519,7 +538,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         referenceInputsUsed: readonlyRefInputs.length
       });
     } catch (err: unknown) {
-      mapBuilderError(err);
+      mapBuilderError(err, undefined, coinSelectionContext);
     }
   }
 
@@ -784,16 +803,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Not implemented via TxBuilder.overrideTxRedeemers: that method computes the script
    * data hash from the OLD witness set (library bug), which would yield a phase-1
    * rejection (PPViewHashesDontMatch). We rebuild the witness set first and hash it with
-   * the same exported getScriptDataHash + language views the build itself uses.
+   * the same exported getScriptDataHash the build itself uses.
+   *
+   * The hash is recomputed even when the target units already match: Buildooor's
+   * internal hash comes from the named-key cost models, which clamp the chain array
+   * to the parameter count the library release knows — wrong on networks whose cost
+   * model has grown past that (ScriptIntegrityHashMismatch at submit). This recompute
+   * with _languageViewCostModels (raw chain arrays) is where the hash becomes correct.
    */
   private _stampExecUnits(tx: LedgerTx, targets: ExUnitsBig[]): LedgerTx {
     const rdmrs = tx.witnesses.redeemers ?? [];
     const unchanged = rdmrs.every((r, i) =>
       BigInt(r.execUnits.mem) === targets[i].mem && BigInt(r.execUnits.cpu) === targets[i].cpu
     );
-    if (unchanged) return tx;
-
-    const stamped = rdmrs.map((r, i) => new TxRedeemer({
+    const stamped = unchanged ? [...rdmrs] : rdmrs.map((r, i) => new TxRedeemer({
       tag: r.tag,
       index: r.index,
       data: r.data,
@@ -801,13 +824,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }));
     const newWitnesses = new TxWitnessSet({ ...tx.witnesses, vkeyWitnesses: [], redeemers: stamped });
     const languageViews = costModelsToLanguageViewCbor(
-      this.txBuilder.protocolParamters.costModels,
+      this._languageViewCostModels(),
       this._usedLanguageViewOpts(tx)
     );
     const newBody = new TxBody({ ...tx.body, scriptDataHash: getScriptDataHash(newWitnesses, languageViews) });
     const finalTx = new LedgerTx({ ...tx, body: newBody, witnesses: newWitnesses });
-    logger.info(`Stamped execution units into ${stamped.length} redeemer(s): ` +
-      stamped.map(s => `${txRedeemerTagToString(s.tag)}:${s.index} mem=${s.execUnits.mem} cpu=${s.execUnits.cpu}`).join('; '));
+    if (!unchanged) {
+      logger.info(`Stamped execution units into ${stamped.length} redeemer(s): ` +
+        stamped.map(s => `${txRedeemerTagToString(s.tag)}:${s.index} mem=${s.execUnits.mem} cpu=${s.execUnits.cpu}`).join('; '));
+    }
     return finalTx;
   }
 
@@ -825,6 +850,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
     if (!opts.mustHaveV1 && !opts.mustHaveV2 && !opts.mustHaveV3) opts.mustHaveV3 = true;
     return opts;
+  }
+
+  /**
+   * Cost models for language-view hashing. The named-key objects the TxBuilder was
+   * constructed with clamp the chain array to the parameter count this costmodels-ts
+   * release knows (e.g. 297 for V3 pre-protocol-11), but the ledger hashes EVERY
+   * entry the chain serves (350 on protocol-11 networks). toCostModelArrVN passes
+   * array form through unclamped, so substitute the raw chain arrays where we have
+   * them. (The named-key form stays in the TxBuilder — the CEK machine needs it.)
+   */
+  private _languageViewCostModels(): CostModels {
+    const models = this.txBuilder.protocolParamters.costModels;
+    if (Object.keys(this.rawCostModelArrays).length === 0) return models;
+    return { ...models, ...this.rawCostModelArrays } as CostModels;
   }
 
   /**
@@ -874,6 +913,19 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         }
       };
     });
+  }
+
+  /**
+   * Consumer-facing context for insufficient-funds rejections after the
+   * collateral partition: the builder's own "not enough …" message counts only
+   * the funding pool, and without this the reservation is invisible ("but the
+   * address HAS enough ADA").
+   */
+  private _collateralPartitionContext(collateralUtxos: LedgerUTxO[], fundingUtxos: OdatanoUtxo[]): string {
+    const collateralLovelace = collateralUtxos.reduce((s, u) => s + u.resolved.value.lovelaces, 0n);
+    const fundingLovelace = fundingUtxos.reduce((s, u) => s + getLovelace(u), 0n);
+    return `${collateralUtxos.length} UTxO(s) with ${collateralLovelace} lovelace reserved as collateral; ` +
+      `${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace remained for coin selection`;
   }
 
   /**
@@ -1188,8 +1240,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * 'PlutusV1'/'PlutusV2'/'PlutusV3' or Ogmios 'plutus:vN') into Buildooor's
    * CostModels shape ('PlutusScriptVN' keys). Returns undefined when nothing
    * usable is found, so the caller can keep defaults and warn.
+   *
+   * Side effect: (re)sets this.rawCostModelArrays with the unclamped chain arrays
+   * for the versions mapped here — the named-key conversion drops every entry past
+   * the parameter count this costmodels-ts release knows, and the scriptDataHash
+   * must cover all of them (see _languageViewCostModels).
    */
   private _mapCostModels(costModelsJson: string | null | undefined): CostModels | undefined {
+    this.rawCostModelArrays = {};
     if (!costModelsJson) return undefined;
     let raw: unknown;
     try {
@@ -1207,6 +1265,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
     // Buildooor's CEK Machine rejects array-form cost models — convert to named-key objects.
     const result: Record<string, unknown> = {};
+    const rawArrays: RawCostModelArrays = {};
     for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
       const target = KEY_MAP[key];
       if (!target || !Array.isArray(value)) continue;
@@ -1215,6 +1274,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         if (target === 'PlutusScriptV1') result[target] = toCostModelV1(arr as Parameters<typeof toCostModelV1>[0]);
         else if (target === 'PlutusScriptV2') result[target] = toCostModelV2(arr as Parameters<typeof toCostModelV2>[0]);
         else result[target] = toCostModelV3(arr as Parameters<typeof toCostModelV3>[0]);
+        // Non-finite entries would break the language-view CBOR; without a raw array
+        // the hash falls back to the clamped named-key form for this version.
+        if (arr.every(Number.isFinite)) rawArrays[target] = arr;
       } catch {
         logger.warn(`Cost-model array for ${key} has unexpected length (${value.length}) — skipping`);
       }
@@ -1225,6 +1287,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       logger.warn('Mapped cost models failed Buildooor validation — keeping library defaults');
       return undefined;
     }
+    this.rawCostModelArrays = rawArrays;
     return result as CostModels;
   }
 
@@ -1287,7 +1350,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           `Invalid metadata label "${label}" — labels must be non-negative integers`
         );
       }
-      metadata[Number(label)] = this._jsonToTxMetadatum(value);
+      metadata[Number(label)] = this._jsonToTxMetadatum(value, label);
     }
 
     return new TxMetadata(metadata);
@@ -1304,12 +1367,16 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * - strings prefixed with "0x" (even hex length) become byte metadata
    * - map keys are not auto-chunked (readers match on the literal key) — over-long
    *   keys are rejected with a clear 400
+   *
+   * @param path position of `value` inside the metadata JSON (label-rooted, e.g.
+   *             "1155.result" or "721.files[0].src") — named in every rejection
+   *             so the consumer can locate the offending value.
    */
-  private _jsonToTxMetadatum(value: JSONValue): TxMetadatum {
+  private _jsonToTxMetadatum(value: JSONValue, path: string): TxMetadatum {
     if (typeof value === 'number' || typeof value === 'bigint') {
       if (typeof value === 'number' && !Number.isInteger(value)) {
         throw new TransactionValidationError(
-          `Metadata numbers must be integers (got ${value}) — encode decimals as strings`
+          `Metadata numbers must be integers (got ${value} at ${path}) — encode decimals as strings`
         );
       }
       return new TxMetadatumInt(BigInt(value));
@@ -1331,7 +1398,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
 
     if (Array.isArray(value)) {
-      return new TxMetadatumList(value.map(v => this._jsonToTxMetadatum(v)));
+      return new TxMetadatumList(value.map((v, i) => this._jsonToTxMetadatum(v, `${path}[${i}]`)));
     }
 
     if (typeof value === 'object' && value !== null) {
@@ -1339,17 +1406,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       for (const [k, v] of Object.entries(value)) {
         if (Buffer.byteLength(k, 'utf8') > METADATA_BYTE_LIMIT) {
           throw new TransactionValidationError(
-            `Metadata map key exceeds ${METADATA_BYTE_LIMIT} bytes (UTF-8): "${k.slice(0, 32)}…"`
+            `Metadata map key exceeds ${METADATA_BYTE_LIMIT} bytes (UTF-8) at ${path}: "${k.slice(0, 32)}…"`
           );
         }
         map.push({
           k: new TxMetadatumText(k),
-          v: this._jsonToTxMetadatum(v)
+          v: this._jsonToTxMetadatum(v, `${path}.${k}`)
         });
       }
       return new TxMetadatumMap(map);
     }
 
-    throw new TransactionValidationError(`Unsupported metadata value type: ${typeof value}`);
+    throw new TransactionValidationError(
+      `Unsupported metadata value type: ${value === null ? 'null' : typeof value} at ${path}` +
+      (typeof value === 'boolean' ? ' — on-chain metadata has no boolean; encode as string or 0/1' : '')
+    );
   }
 }

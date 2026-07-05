@@ -125,7 +125,7 @@ const examples: ExampleRequest[] = [
     method: 'POST',
     url: `${BASE_URL}/GetMetadataByTxHash`,
     data: {
-      tx_hash: '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1',
+      txHash: '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1',
     },
   },
   {

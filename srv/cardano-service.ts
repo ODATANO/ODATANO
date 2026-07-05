@@ -311,16 +311,17 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Action: GetMetadataByTxHash - returns multiple metadata rows (uses SELECT.from, not SELECT.one).
+   * Takes camelCase `txHash` like every other action (renamed from `tx_hash` in 1.9.4).
    */
   srv.on('GetMetadataByTxHash', async (req: Request) => {
-    const { tx_hash } = req.data as { tx_hash?: string };
-    if (!tx_hash) rejectMissing(req, 'GetMetadataByTxHash', 'tx_hash');
-    if (!isTxHash(tx_hash)) rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'tx_hash');
+    const { txHash } = req.data as { txHash?: string };
+    if (!txHash) rejectMissing(req, 'GetMetadataByTxHash', 'txHash');
+    if (!isTxHash(txHash)) rejectInvalid(req, 'GetMetadataByTxHash', 'Invalid transaction hash format', 'txHash');
 
     return handleRequest(req, async (db) => {
-      const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash }));
+      const existing = await db.run(SELECT.from(TransactionMetadata).where({ tx_hash: txHash }));
       if (!existing || existing.length === 0) {
-        return await indexer().indexTransactionMetadata(db, tx_hash);
+        return await indexer().indexTransactionMetadata(db, txHash);
       }
       return existing;
     });

@@ -90,7 +90,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 
 			it('POST / TransactionMetadata with tx key containing invalid characters', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetMetadataByTxHash`, { tx_hash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano-odata/GetMetadataByTxHash`, { txHash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid');
 			});
@@ -98,7 +98,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			it('POST / TransactionMetadata without tx key', async () => {
 				const response = await test.POST(`/odata/v4/cardano-odata/GetMetadataByTxHash`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
-				expect(response.data.error.message).to.include('tx_hash is required');
+				expect(response.data.error.message).to.include('txHash is required');
 			});
 		});
 

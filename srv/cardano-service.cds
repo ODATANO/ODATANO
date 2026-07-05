@@ -208,7 +208,7 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetMetadataByTxHash(
                                @title: 'Transaction Hash'
                                @description: 'The unique identifier of the transaction'
-                               tx_hash: Blake2b256)       returns many TransactionMetadata;
+                               txHash: Blake2b256)        returns many TransactionMetadata;
 
     @title      : 'Get Addresses by Bech32 Address'
     @description: 'Retrieve address information using the Bech32 Address'

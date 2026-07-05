@@ -129,7 +129,7 @@ export function buildEndpoints(base: string): Endpoint[] {
 
     // Transactions
     { name: 'GetTransactionByHash', method: 'POST', url: `${ODATA}/GetTransactionByHash`, data: { hash: TX_HASH }, category: 'transaction' },
-    { name: 'GetMetadataByTxHash', method: 'POST', url: `${ODATA}/GetMetadataByTxHash`, data: { tx_hash: METADATA_TX }, category: 'metadata' },
+    { name: 'GetMetadataByTxHash', method: 'POST', url: `${ODATA}/GetMetadataByTxHash`, data: { txHash: METADATA_TX }, category: 'metadata' },
 
     // Address (these hit blockchain backends)
     { name: 'GetAddressByBech32', method: 'POST', url: `${ODATA}/GetAddressByBech32`, data: { address: ADDR }, category: 'address' },

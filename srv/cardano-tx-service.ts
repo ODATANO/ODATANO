@@ -3,7 +3,7 @@ import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit, isValidCbor, validateRequiredSigners } from './utils/validators';
-import { getTxHashFromCbor, getLovelace, applyScriptParameters } from './utils/tx-build-helper';
+import { getTxHashFromCbor, getLovelace, applyScriptParameters, extractTxCacheTargets } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
@@ -12,7 +12,7 @@ import type { JSONValue, TxBuildPlutusSpendRequest } from './utils/types';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
-const { SELECT, UPDATE, DELETE: DELETE_FROM } = cds.ql;
+const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
 
@@ -193,12 +193,6 @@ module.exports = (srv: cds.Service) => {
     TransactionSubmissions,
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
-
-  const {
-    Addresses,
-    AddressUTxOs,
-    AddressAssets
-  } = require('#cds-models/CardanoODataService');
 
   /**
    * Build a simple ADA-only transaction
@@ -950,15 +944,20 @@ module.exports = (srv: cds.Service) => {
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
 
-        // Invalidate sender address cache so next read fetches fresh data
-        const addrBuild = await db.run(
-          SELECT.one.from(AddressTransactionBuilds).where({ txBuild_id: buildId })
-        );
-        if (addrBuild?.address_address) {
-          await db.run(DELETE_FROM.from(Addresses).where({ address: addrBuild.address_address }));
-          await db.run(DELETE_FROM.from(AddressUTxOs).where({ address_address: addrBuild.address_address }));
-          await db.run(DELETE_FROM.from(AddressAssets).where({ address_address: addrBuild.address_address }));
-          logger.debug(`Invalidated cache for sender address ${addrBuild.address_address.substring(0, 20)}...`);
+        // Invalidate stale UTxO cache: spent input refs + output addresses from
+        // the signed CBOR, plus the build's sender address. Best-effort — a
+        // failure here must not fail the already-successful submit.
+        try {
+          const addrBuild = await db.run(
+            SELECT.one.from(AddressTransactionBuilds).where({ txBuild_id: buildId })
+          );
+          await getCardanoIndexer().invalidateUtxoCacheForTx(
+            db,
+            extractTxCacheTargets(signedTxCbor),
+            addrBuild?.address_address ? [addrBuild.address_address] : []
+          );
+        } catch (invalidateErr: unknown) {
+          logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
         }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1009,6 +1008,13 @@ module.exports = (srv: cds.Service) => {
         logger.info({ txHash }, 'External transaction submitted');
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
+
+        // Invalidate stale UTxO cache (spent inputs + output addresses) — best-effort
+        try {
+          await getCardanoIndexer().invalidateUtxoCacheForTx(db, extractTxCacheTargets(signedTxCbor));
+        } catch (invalidateErr: unknown) {
+          logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         logger.error({ txHash, error: errMsg }, 'External transaction submission failed');

@@ -56,7 +56,7 @@ describe('BuildooorTxBuilder', () => {
 
   describe('_jsonToTxMetadatum', () => {
     const toMetadatum = (value: any) =>
-      (builder as any)._jsonToTxMetadatum(value);
+      (builder as any)._jsonToTxMetadatum(value, '721');
 
     it('should convert number to TxMetadatumInt', () => {
       const result = toMetadatum(42);
@@ -134,6 +134,15 @@ describe('BuildooorTxBuilder', () => {
 
     it('should reject map keys longer than 64 bytes', () => {
       expect(() => toMetadatum({ ['k'.repeat(65)]: 1 })).toThrow('Metadata map key exceeds 64 bytes');
+    });
+
+    it('should name the label-rooted path of the offending value in rejections', () => {
+      // nested map: 721.result → boolean
+      expect(() => toMetadatum({ result: true })).toThrow('at 721.result');
+      // nested list element: 721.files[1] → non-integer number
+      expect(() => toMetadatum({ files: ['ok', 1.5] })).toThrow('at 721.files[1]');
+      // over-long key reports the containing map's path
+      expect(() => toMetadatum({ nested: { ['k'.repeat(65)]: 1 } })).toThrow('at 721.nested');
     });
   });
 
@@ -1151,6 +1160,58 @@ describe('BuildooorTxBuilder', () => {
       expect(parsed.body.collateralReturn!.address.toString()).toBe(TEST_ADDRESS);
       expect(BigInt(parsed.body.collateralReturn!.value.lovelaces)).toBe(45_000_000n);
     });
+
+    it('names the collateral partition when funding is insufficient after the reservation', async () => {
+      await initBuilder();
+      // 6 ADA UTxO becomes collateral (smallest ≥ 5 ADA floor); only 4.4 ADA remains
+      // for funding a 4.4 ADA mint output + fee → insufficient. The old message was
+      // "required 0, available 0" with the reservation invisible.
+      const smallFunding: UTxO = {
+        txHash: 'ee'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '4400000' }],
+      };
+      const collateral: UTxO = {
+        txHash: 'ff'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '6000000' }],
+      };
+      const ctx: TxBuildContext = {
+        utxos: [smallFunding, collateral],
+        protocolParameters: PROTOCOL_PARAMS,
+      };
+
+      await expect(builder.buildUnsignedMintTransaction({ ...mintReq(), lovelaceAmount: '4400000' }, ctx))
+        .rejects.toThrow(/reserved as collateral/);
+    });
+
+    it('hashes the language views from the raw chain cost-model array (protocol-11: 350 V3 entries)', async () => {
+      const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
+      const { getScriptDataHash, costModelsToLanguageViewCbor, defaultProtocolParameters } =
+        require('@harmoniclabs/buildooor');
+
+      // Protocol-11 networks serve 350 V3 entries; costmodels-ts only knows 297.
+      const v3Extended = [
+        ...Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number),
+        ...Array.from({ length: 53 }, (_, i) => 1_000_000 + i),
+      ];
+      const params = { ...PROTOCOL_PARAMS, costModels: JSON.stringify({ PlutusV3: v3Extended }) };
+      await builder.init({ network: 'preview' } as any, params);
+
+      const ctx: TxBuildContext = { utxos: [adaOnlyUtxo, fundingUtxo], protocolParameters: params };
+      const result = await builder.buildUnsignedMintTransaction(mintReq(), ctx);
+      const parsed = Tx.fromCbor(result.unsignedTxCbor!);
+
+      // The stamped hash must cover all 350 entries (raw array form passes through unclamped)…
+      const rawViews = costModelsToLanguageViewCbor({ PlutusScriptV3: v3Extended }, { mustHaveV3: true });
+      expect(parsed.body.scriptDataHash?.toString())
+        .toBe(getScriptDataHash(parsed.witnesses, rawViews)?.toString());
+
+      // …and must differ from the clamped named-key hash (297 entries), which the node
+      // rejects with ScriptIntegrityHashMismatch on protocol-11 networks.
+      const clamped = (builder as any).txBuilder.protocolParamters.costModels;
+      const clampedViews = costModelsToLanguageViewCbor(clamped, { mustHaveV3: true });
+      expect(parsed.body.scriptDataHash?.toString())
+        .not.toBe(getScriptDataHash(parsed.witnesses, clampedViews)?.toString());
+    });
   });
 
   // =========================================================================
@@ -1462,6 +1523,28 @@ describe('BuildooorTxBuilder', () => {
       // Wrong array length → conversion fails → key skipped → defaults kept
       expect(mapParams({ costModels: JSON.stringify({ PlutusV1: [1, 2, 3] }) }).costModels)
         .toBe(defaultProtocolParameters.costModels);
+    });
+
+    it('keeps the raw chain arrays (unclamped) for language-view hashing', () => {
+      // Protocol-11 shape: the library's 297 known V3 params plus 53 newer entries.
+      const v3Extended = [
+        ...Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number),
+        ...Array.from({ length: 53 }, (_, i) => 1_000_000 + i),
+      ];
+      expect(v3Extended.length).toBe(350);
+      const mapped = mapParams({ costModels: JSON.stringify({ 'plutus:v3': v3Extended }) });
+      // Named-key form for the TxBuilder/CEK machine stays clamped to the known params…
+      expect(Array.isArray(mapped.costModels.PlutusScriptV3)).toBe(false);
+      // …but the raw 350-entry array is preserved verbatim for the scriptDataHash views.
+      expect((builder as any).rawCostModelArrays.PlutusScriptV3).toEqual(v3Extended);
+    });
+
+    it('clears stale raw arrays when the next parameters carry no usable cost models', () => {
+      const v3Arr = Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number);
+      mapParams({ costModels: JSON.stringify({ PlutusV3: v3Arr }) });
+      expect((builder as any).rawCostModelArrays.PlutusScriptV3).toBeDefined();
+      mapParams({ costModels: 'not-json{' });
+      expect((builder as any).rawCostModelArrays).toEqual({});
     });
   });
 

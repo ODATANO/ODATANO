@@ -9,6 +9,7 @@ import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { verifyDataSignature } from './blockchain/signing/cose-verifier';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
+import { extractTxCacheTargets } from './utils/tx-build-helper';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoSignService');
@@ -144,6 +145,13 @@ async function submitAndFinalize(
   const finalizeSubmitted = () => cds.tx(async (db: cds.Transaction) => {
     const submission = await getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
     if (afterFinalize) await afterFinalize(db);
+    // Invalidate stale UTxO cache (spent inputs + output addresses) — best-effort,
+    // must never roll back the durable submission record.
+    try {
+      await getCardanoIndexer().invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.fullSignedTxCbor));
+    } catch (invalidateErr: unknown) {
+      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
+    }
     return submission;
   });
 

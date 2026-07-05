@@ -273,7 +273,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress \
 ```bash
 curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash \
   -H "Content-Type: application/json" \
-  -d '{"tx_hash":"<64-hex-hash>"}'
+  -d '{"txHash":"<64-hex-hash>"}'
 ```
 
 Tip: You can also read by keys where applicable, e.g.:

@@ -250,7 +250,7 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
     });
 
     it('POST /GetMetadataByTxHash - unsupported operation should return error', async () => {
-      const response = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { tx_hash: TEST_FIXTURES.txHash }).catch(err => err.response);
+      const response = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txHash }).catch(err => err.response);
       expect(response.status).to.equal(503); // getTransactionMetadata is in Ogmios unsupportedMethods → no provider available
       expect(response.data).to.have.property('error');
     });

@@ -91,7 +91,7 @@ POST /GetTransactionByHash
 {"hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"}
 
 POST /GetMetadataByTxHash
-{"tx_hash": "95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1"}
+{"txHash": "95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1"}
 ```
 
 **Response Example (Transaction):**
