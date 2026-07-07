@@ -25,6 +25,7 @@ import {
 // use internally.
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
+import { Cbor, CborArray } from '@harmoniclabs/cbor';
 
 import { parseTransaction } from '../../srv/cbor';
 import { isValidTxCborHex } from '../../srv/utils/validators';
@@ -246,14 +247,36 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(roundtrip.hash.toString()).toBe(script.hash.toString());
   });
 
-  // TODO: enable when @harmoniclabs/cardano-ledger-ts ships a fix for the
-  // AuxiliaryData.fromCborObj bug: the Conway decode path at
-  // dist/tx/AuxiliaryData/AuxiliaryData.js:199-203 requires all four optional
-  // script-collection fields (native, plutusV1/V2/V3) to be present as CborArrays,
-  // and throws "Invalid CBOR format for AuxiliaryData" on metadata-only aux_data.
-  // The handler itself (extractMetadataLabels) is correct — covered by integration
-  // tests against real on-chain CBOR that bypass AuxiliaryData.fromCbor.
-  it.skip('parses metadata labels from auxiliary data', () => {
+  // The legacy Shelley aux-data format (plain metadata CborMap — still valid on-chain
+  // CBOR) decodes fine in ledger-ts, so extractMetadataLabels is testable end-to-end
+  // through parseTransaction today: build the tx (serializes aux data as Conway
+  // tag-259), then surgically swap the aux-data slot (tx = [body, wits, isValid, aux])
+  // to the legacy metadata map before parsing.
+  it('parses metadata labels from auxiliary data (legacy Shelley format)', () => {
+    const metadata = new TxMetadata({
+      '721': new TxMetadatumInt(1n),
+      '674': new TxMetadatumInt(2n),
+    });
+    const tx = buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 2_000_000n)],
+      auxiliaryData: new AuxiliaryData({ metadata }),
+    });
+
+    const txCbor = Cbor.parse(Buffer.from(cborHex(tx), 'hex')) as CborArray;
+    txCbor.array[3] = metadata.toCborObj(); // tag-259 → plain metadata map (Shelley)
+    const legacyHex = Buffer.from(Cbor.encode(txCbor)).toString('hex');
+
+    const parsed = parseTransaction(legacyHex);
+
+    expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
+  });
+
+  // Enabled via the vendored runtime patch (srv/blockchain/transaction-building/
+  // auxiliary-data-patch.ts) for ledger-ts 0.5.1's broken Conway tag-259 decode —
+  // loaded through parseTransaction's module. Once an upstream release (> 0.5.1)
+  // contains the fix: bump the dep and delete the patch; this test keeps guarding
+  // the behavior either way.
+  it('parses metadata labels from Conway tag-259 auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),
       '674': new TxMetadatumInt(2n),

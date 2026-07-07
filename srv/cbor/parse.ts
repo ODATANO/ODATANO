@@ -1,3 +1,7 @@
+// Side-effect import: vendored fix for ledger-ts 0.5.1's broken Conway tag-259
+// AuxiliaryData decode — without it Tx.fromCbor below rejects every Conway-format
+// metadata transaction. Remove together with the patch once upstream releases the fix.
+import '../blockchain/transaction-building/auxiliary-data-patch';
 import { Tx, Hash32, dataToCbor } from '@harmoniclabs/buildooor';
 import type { TxOut, TxWitnessSet, UTxO, Value } from '@harmoniclabs/buildooor';
 import type { Data } from '@harmoniclabs/plutus-data';
