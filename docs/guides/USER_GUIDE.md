@@ -100,7 +100,7 @@ POST /GetMetadataByTxHash
 {
   "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83",
   "blockHash": "cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39",
-  "slot": 12345678,
+  "slot": "12345678",
   "size": 450,
   "fee": "200000",
   "deposit": "0"
@@ -400,7 +400,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTr
   "id": "uuid-here",
   "unsignedTxCbor": "84a50081825820...",
   "txBodyHash": "abc123...",
-  "fee": 170000
+  "fee": "170000"
 }
 ```
 
@@ -613,6 +613,38 @@ HSM signing requires configuration. See [Security Guide](SECURITY_GUIDE.md#hsm-p
 | `failed` | Signing or verification failed |
 
 See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documentation.
+
+---
+
+## Chain Crawler / Pre-Sync (v2.0, opt-in)
+
+By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2.0 adds an optional **crawler** that pre-syncs `Blocks` and `Transactions` (+ inputs/outputs/assets/metadata) forward from a configured start block, so subsequent queries hit local data instead of a backend per request.
+
+**Enable it** (plugin config or env):
+
+```jsonc
+"cds": { "requires": { "odatano-core": {
+  "crawler": {
+    "enabled": true,
+    "startSlot": 12345678,
+    "startBlockHash": "abc...",
+    "source": "auto",            // ogmios (chain-sync, reorg-aware) | pagination (Blockfrost/Koios) | auto
+    "confirmationDepth": 3        // stay N blocks behind the tip
+  }
+}}}
+```
+
+The crawler starts automatically on server boot and resumes from its cursor after a restart. Ogmios is the preferred source (native rollback/reorg handling); Blockfrost/Koios are the fallback. Control + status via **CardanoIndexerService** at `/odata/v4/cardano-indexer/`:
+
+```http
+GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, syncStatus, progress
+GET  /odata/v4/cardano-indexer/ReorgLog         # audit of handled rollbacks
+POST /odata/v4/cardano-indexer/getStatus        # live run state summary
+POST /odata/v4/cardano-indexer/pauseCrawler
+POST /odata/v4/cardano-indexer/resumeCrawler
+```
+
+**Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10). See `CRAWLER_DESIGN.md` for the architecture.
 
 ---
 
