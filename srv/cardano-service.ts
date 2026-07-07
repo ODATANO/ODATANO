@@ -87,20 +87,27 @@ function indexOnMissAction<K = string>(
 module.exports = (srv: cds.Service) => {
   logger.debug('Module loaded - registering handlers');
 
+  // NOTE: for entities whose name is already plural-shaped (NetworkInformation,
+  // TransactionMetadata, AssetHistory) cds-typer exports the SINGULAR class under the
+  // plain name and the plural (entity-set) class with a trailing underscore. Handler
+  // registration must use the plural class — under cds 10 registering `srv.on('READ',
+  // <singular proxy>)` no longer matches incoming OData READs, so the generic CRUD
+  // handler silently served those entities (empty results / 404 instead of
+  // index-on-miss). All other names below already resolve to plural classes.
   const {
-    NetworkInformation,
+    NetworkInformation_: NetworkInformation,
     Blocks,
     Epochs,
     Addresses,
     AddressAssets,
     AddressUTxOs,
     Transactions,
-    TransactionMetadata,
+    TransactionMetadata_: TransactionMetadata,
     Pools,
     Accounts,
     Dreps,
     Assets,
-    AssetHistory,
+    AssetHistory_: AssetHistory,
     LedgerProtocolParameters,
     AddressTransactions
   } = require('#cds-models/CardanoODataService');

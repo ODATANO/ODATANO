@@ -142,8 +142,9 @@ describe('OData Query Features', () => {
 
         // OData v4 includes @odata.count when $count=true
         if (data['@odata.count'] !== undefined) {
-          expect(typeof data['@odata.count']).to.equal('number');
-          expect(data['@odata.count']).to.be.at.least(0);
+          // CAP 10: @odata.count serializes as string (Edm.Int64) — accept both, normalize for range check
+          expect(typeof data['@odata.count']).to.be.oneOf(['number', 'string']);
+          expect(Number(data['@odata.count'])).to.be.at.least(0);
         }
       });
 
@@ -295,7 +296,7 @@ describe('OData Query Features', () => {
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {
-          expect(data['@odata.count']).to.be.at.least(0);
+          expect(Number(data['@odata.count'])).to.be.at.least(0); // CAP 10: @odata.count → string
         }
       });
     });

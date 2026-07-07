@@ -146,7 +146,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           // Should have recipient output
           const recipientOutput = outputs.find((o: any) => o.address === TEST_FIXTURES.emptyAddress);
           expect(recipientOutput).to.exist;
-          expect(recipientOutput.lovelace).to.equal(Number(TEST_FIXTURES.lovelaceAmount));
+          expect(Number(recipientOutput.lovelace)).to.equal(Number(TEST_FIXTURES.lovelaceAmount)); // CAP 10: Lovelace → string
         });
 
         it('POST /BuildSimpleAdaTransaction - without change address (fallback to sender)', async () => {

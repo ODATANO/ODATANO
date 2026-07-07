@@ -101,3 +101,5 @@ LEDGERTS_*.md
 repro-*.js
 feature_req.md
 KNOWN_ISSUES.md
+CAP10_MIGRATION_PLAN.md
+CRAWLER_DESIGN.md
