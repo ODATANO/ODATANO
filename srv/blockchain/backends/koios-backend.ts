@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import { CardanoBackend } from './cardano-backend';
+import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
@@ -115,7 +115,7 @@ function sortAddressTxsDesc<T extends { block_height?: number | string | null; b
  * KoiosBackend Implementation for CardanoBackend Interface
  * Implements the CardanoBackend interface using Koios API with Axios
  */
-export class KoiosBackend implements CardanoBackend {
+export class KoiosBackend implements CardanoBackend, PaginatingBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   private network: Network;
@@ -271,20 +271,7 @@ export class KoiosBackend implements CardanoBackend {
           throw new NotFoundError('Block', this.name);
         }
 
-        const data = results[0];
-
-        return {
-          time: data.block_time,
-          height: data.block_height,
-          hash: data.hash,
-          slot: data.abs_slot,
-          epoch: data.epoch_no,
-          epochSlot: data.epoch_slot,
-          slotLeader: data.vrf_key,
-          size: data.block_size,
-          txCount: data.tx_count,
-          fees: data.total_fees,
-        };
+        return this.mapKoiosBlockInfo(results[0]);
       },
       this.name
     );
@@ -1067,6 +1054,112 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         return result;
+      },
+      this.name
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // PaginatingBackend — forward iteration for the chain crawler (v2.0)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Map a Koios /block_info response object to our BlockData (same shape getBlock
+   * maps inline; kept private to avoid touching getBlock).
+   */
+  private mapKoiosBlockInfo(data: {
+    block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
+    epoch_no: number | null; epoch_slot: number | null; vrf_key: string; block_size: number;
+    tx_count: number; total_fees?: string | null;
+  }): BlockData {
+    return {
+      time: data.block_time,
+      height: data.block_height,
+      hash: data.hash,
+      slot: data.abs_slot,
+      epoch: data.epoch_no,
+      epochSlot: data.epoch_slot,
+      slotLeader: data.vrf_key,
+      size: data.block_size,
+      txCount: data.tx_count,
+      fees: data.total_fees,
+    };
+  }
+
+  /**
+   * Get a block by its height via the PostgREST-filtered /blocks list, then resolve
+   * full data through /block_info.
+   */
+  async getBlockByHeight(height: number): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => {
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.get(`/blocks?block_height=eq.${height}&limit=1`),
+          `getBlockByHeight(${height})`
+        );
+        if (!rows.length) throw new NotFoundError('Block', this.name);
+        return await this.getBlock(rows[0].hash);
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get up to `count` blocks following `afterHash`, in ascending chain order.
+   * Koios has no "next after hash" endpoint, so we resolve the height of `afterHash`
+   * and list the blocks above it (PostgREST gt + order + limit), then batch /block_info.
+   */
+  async getNextBlocks(afterHash: string, count: number): Promise<BlockData[]> {
+    return handleBackendRequest(
+      async () => {
+        const info = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_info', { _block_hashes: [afterHash] }),
+          `getNextBlocks/height(${afterHash})`
+        );
+        if (!info.length) throw new NotFoundError('Block', this.name);
+        const afterHeight = info[0].block_height;
+
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.get(`/blocks?block_height=gt.${afterHeight}&order=block_height.asc&limit=${count}`),
+          `getNextBlocks(${afterHash})`
+        );
+        if (!rows.length) return [];
+
+        const infos = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_info', { _block_hashes: rows.map((r: { hash: string }) => r.hash) }),
+          `getNextBlocks/info(${afterHash})`
+        );
+        return infos
+          .map((d: Parameters<KoiosBackend['mapKoiosBlockInfo']>[0]) => this.mapKoiosBlockInfo(d))
+          .sort((a: BlockData, b: BlockData) => (a.height ?? 0) - (b.height ?? 0));
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get the full transaction list of a block in block order via /block_txs → /tx_info
+   * batch. Handles both the current flattened shape ({tx_hash} per row) and the older
+   * {tx_hashes:[...]} shape defensively.
+   */
+  async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
+    return handleBackendRequest(
+      async () => {
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_txs', { _block_hashes: [blockHash] }),
+          `getBlockTransactions(${blockHash})`
+        );
+        const hashes: string[] = [];
+        for (const row of rows) {
+          if (Array.isArray(row.tx_hashes)) hashes.push(...row.tx_hashes);
+          else if (row.tx_hash) hashes.push(row.tx_hash);
+        }
+        if (!hashes.length) return [];
+
+        const byHash = await this.getTransactionsBatch(hashes);
+        return hashes
+          .map(h => byHash.get(h))
+          .filter((t): t is Transaction => t !== undefined);
       },
       this.name
     );

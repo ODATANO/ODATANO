@@ -77,7 +77,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine } from '../utils/types';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -101,6 +101,13 @@ export class CardanoIndexer {
   private client: CardanoClient;
   private txBuilder: CardanoTransactionBuilder;
   private lastParamsFetchTime = 0;
+  /**
+   * Crawler epoch memo: epochs change once per ~5 days, but indexBlockFull runs per
+   * block — without this, every crawled block paid one client.getEpoch() HTTP call
+   * (and on Ogmios-only deployments a guaranteed AllBackendsFailedError round-trip).
+   * `row: undefined` is a cached negative so a failing epoch isn't retried per block.
+   */
+  private crawlEpochCache: { epoch: number; row?: Epoch } | null = null;
 
   /**
    * Create a new CardanoIndexer instance
@@ -525,6 +532,125 @@ export class CardanoIndexer {
     const blockEntity = mapBlock(blockInfo, epoch);
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
+  }
+
+  /**
+   * Bulk-index a whole block and all of its transactions in ONE pass (chain crawler,
+   * v2.0). Unlike indexTransaction()/indexBlock() this does NOT re-fetch per hash — the
+   * crawler already carries the block + full tx list from the stream/page. Rows are
+   * accumulated across the block's txs and UPSERTed once per table (few statements).
+   *
+   * All writes run inside the caller's CAP transaction (`tx`), so a block is persisted
+   * atomically — a failure mid-block rolls the whole block back, keeping the cursor and
+   * the data consistent.
+   *
+   * Inputs from the Ogmios chain-sync path arrive as bare references (no address/amount);
+   * resolveInputs() backfills them from this block's own outputs and previously-indexed
+   * outputs before mapping. Blockfrost/Koios inputs already carry address/amount and are
+   * left untouched.
+   *
+   * @param tx        CAP transaction (one per block, committed by the crawler)
+   * @param blockData block header/summary from the crawler source
+   * @param txs       the block's full transaction list (in block order)
+   */
+  async indexBlockFull(tx: CapTransaction, blockData: BlockData, txs: ProviderTransaction[]): Promise<void> {
+    // Block row — best-effort epoch enrichment, memoized per epoch (NOT per block:
+    // an uncached getEpoch here means one backend HTTP call for every crawled block)
+    let epoch: Epoch | undefined;
+    if (blockData.epoch != null) {
+      if (this.crawlEpochCache?.epoch === blockData.epoch) {
+        epoch = this.crawlEpochCache.row;
+      } else {
+        try {
+          epoch = await this.indexEpoch(tx, blockData.epoch);
+        } catch {
+          // epoch data may be unavailable (e.g. Koios drops in-progress/old epochs;
+          // Ogmios only serves the current epoch) — cache the miss too
+          epoch = undefined;
+        }
+        this.crawlEpochCache = { epoch: blockData.epoch, row: epoch };
+      }
+    }
+    await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
+
+    // Backfill chain-sync inputs (empty address/amount) from local outputs
+    await this.resolveInputs(tx, txs);
+
+    // Accumulate rows across the whole block, then one bulk UPSERT per table
+    const txRows = txs.map(t => mapTransaction(t));
+    const inputRows = txs.flatMap(t => mapTransactionInputs(t.hash, t.inputs ?? []));
+    const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(t.hash, t.inputs ?? []));
+    const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
+    const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
+    const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
+
+    if (txRows.length) await tx.run(UPSERT.into(Transactions).entries(txRows));
+    if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
+    if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
+    if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
+    if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
+    if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+
+    logger.debug(`indexBlockFull: block ${blockData.hash} — ${txs.length} txs, ${outputRows.length} outputs`);
+  }
+
+  /**
+   * Backfill input address/amount for chain-sync transactions whose inputs are bare
+   * references. Resolves first from this block's own outputs (a tx may spend an earlier
+   * tx's output in the same block), then batch-reads previously-indexed outputs from the
+   * DB. Inputs that already carry an address (Blockfrost/Koios) are skipped.
+   */
+  private async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
+    // 1. In-memory index of this block's outputs (txHash#outputIndex -> {address, amount})
+    const blockOutputs = new Map<string, { address: string; amount: Amount[] }>();
+    for (const t of txs) {
+      for (const o of t.outputs ?? []) {
+        blockOutputs.set(`${t.hash}#${o.outputIndex}`, { address: o.address, amount: o.amount ?? [] });
+      }
+    }
+
+    // 2. Collect inputs still needing resolution after the same-block pass
+    const unresolved: { input: TxInputLine; key: string }[] = [];
+    for (const t of txs) {
+      for (const input of t.inputs ?? []) {
+        if (input.address) continue; // already resolved by the backend (Blockfrost/Koios)
+        const key = `${input.txHash}#${input.outputIndex}`;
+        const local = blockOutputs.get(key);
+        if (local) {
+          input.address = local.address;
+          input.amount = local.amount;
+        } else {
+          unresolved.push({ input, key });
+        }
+      }
+    }
+    if (!unresolved.length) return;
+
+    // 3. Batch-read prior-block outputs from the DB
+    const sourceHashes = [...new Set(unresolved.map(u => u.key.split('#')[0]))];
+    const [outRows, assetRows] = await Promise.all([
+      tx.run(SELECT.from(TransactionOutputs).where({ tx_hash: { in: sourceHashes } })),
+      tx.run(SELECT.from(TransactionOutputAssets).where({ output_tx_hash: { in: sourceHashes } })),
+    ]);
+
+    const addrByKey = new Map<string, string>();
+    for (const r of outRows as Array<{ tx_hash: string; outputIndex: number; address_address: string }>) {
+      addrByKey.set(`${r.tx_hash}#${r.outputIndex}`, r.address_address);
+    }
+    const amtByKey = new Map<string, Amount[]>();
+    for (const r of assetRows as Array<{ output_tx_hash: string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
+      const k = `${r.output_tx_hash}#${r.output_outputIndex}`;
+      const list = amtByKey.get(k) ?? [];
+      list.push({ unit: r.unit, quantity: String(r.asset_quantity) });
+      amtByKey.set(k, list);
+    }
+
+    for (const { input, key } of unresolved) {
+      const addr = addrByKey.get(key);
+      if (addr != null) input.address = addr;
+      const amt = amtByKey.get(key);
+      if (amt) input.amount = amt;
+    }
   }
 
   /** 

@@ -6,6 +6,8 @@ import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
 import { ConfigError, ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
+import { startCrawler, stopCrawler } from './blockchain/crawler';
+import type { CrawlerConfig } from './blockchain/crawler/crawler';
 
 import { env } from 'process';
 
@@ -203,6 +205,13 @@ export async function createTestContext(
  * Closes all backend connections to allow process to exit cleanly
  */
 export async function shutdownAppContext(): Promise<void> {
+  // Stop the crawler first so its in-flight block writes don't hit a torn-down client.
+  try {
+    await stopCrawler();
+  } catch (err) {
+    logger.warn('Crawler shutdown failed (continuing):', err);
+  }
+
   if (appContext) {
     logger.info('Shutting down application context...');
 
@@ -354,6 +363,69 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
   };
 }
 
+/**
+ * Load the chain-crawler configuration from CDS config or environment variables.
+ * Returns { enabled:false } when the crawler is not switched on (the default), so
+ * existing deployments are unaffected.
+ *
+ * Plugin mode: cds.requires.odatano-core.crawler.{enabled,startSlot,startBlockHash,...}
+ * Env mode:    CRAWLER_ENABLED / CRAWLER_START_SLOT / CRAWLER_START_HASH / ...
+ */
+export function loadCrawlerConfigFromEnv(): CrawlerConfig {
+  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
+  const c = cdsConfig.crawler ?? {};
+
+  const enabled = c.enabled === true || env.CRAWLER_ENABLED === 'true';
+  const startSlot = c.startSlot ?? (env.CRAWLER_START_SLOT ? Number(env.CRAWLER_START_SLOT) : undefined);
+  const startBlockHash = c.startBlockHash ?? env.CRAWLER_START_HASH ?? undefined;
+  const startHeight = c.startHeight ?? (env.CRAWLER_START_HEIGHT ? Number(env.CRAWLER_START_HEIGHT) : undefined);
+  const source = (c.source ?? env.CRAWLER_SOURCE ?? 'auto') as CrawlerConfig['source'];
+  const batchSize = Number(c.batchSize ?? env.CRAWLER_BATCH_SIZE) || 20;
+  const confirmationDepth = Number(c.confirmationDepth ?? env.CRAWLER_CONFIRMATION_DEPTH ?? 3);
+  const pollIntervalMs = Number(c.pollIntervalMs ?? env.CRAWLER_POLL_INTERVAL_MS) || 20000;
+
+  if (enabled && (startSlot == null || Number.isNaN(startSlot) || !startBlockHash)) {
+    throw new ConfigError(
+      'Crawler is enabled but no start block is configured — set crawler.startSlot + crawler.startBlockHash ' +
+      '(or CRAWLER_START_SLOT + CRAWLER_START_HASH).'
+    );
+  }
+  if (!['ogmios', 'pagination', 'auto'].includes(source)) {
+    throw new ConfigError(`Invalid CRAWLER_SOURCE "${source}". Must be one of: ogmios, pagination, auto.`);
+  }
+
+  return { enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs };
+}
+
+/**
+ * Start the chain crawler if it is enabled and the app context is ready. Never throws
+ * (crawler failure must not affect request serving) — errors are logged. Idempotent:
+ * startCrawler() is a no-op when one is already running.
+ */
+export async function startCrawlerIfConfigured(): Promise<void> {
+  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  let config: CrawlerConfig;
+  try {
+    config = loadCrawlerConfigFromEnv();
+  } catch (err) {
+    logger.error('Invalid crawler configuration — crawler not started:', err);
+    return;
+  }
+  if (!config.enabled) return;
+
+  try {
+    await startCrawler({
+      client: appContext.cardanoClient,
+      indexer: appContext.cardanoIndexer,
+      network: appContext.cardanoClient.network,
+      config,
+    });
+    logger.info(`Chain crawler started (source=${config.source}, start=${config.startBlockHash})`);
+  } catch (err) {
+    logger.error('Failed to start chain crawler (non-fatal):', err);
+  }
+}
+
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
   // Skip if already initialized by plugin (src/plugin.ts runs first)
@@ -389,6 +461,9 @@ cds.on('served', async () => {
     process.stderr.write(`[ODATANO] Failed to initialize blockchain components — ${where}\n${msg}\n`);
     logger.error('Failed to initialize blockchain components:', err);
   }
+
+  // Start the pre-sync crawler if configured (standalone mode). Non-fatal.
+  await startCrawlerIfConfigured();
 });
 
 // Shutdown hook - runs when CAP server is shutting down (e.g., cds.shutdown() in tests)

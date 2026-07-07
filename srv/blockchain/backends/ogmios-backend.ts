@@ -3,7 +3,8 @@ import http from 'node:http';
 import {
   createInteractionContext,
   createTransactionSubmissionClient,
-  createLedgerStateQueryClient
+  createLedgerStateQueryClient,
+  createChainSynchronizationClient
 } from '@cardano-ogmios/client';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
@@ -22,10 +23,13 @@ import {
   DrepData,
   AssetInfo,
   LedgerProtocolParameters,
-  ScriptEvaluationResult
+  ScriptEvaluationResult,
+  Amount,
+  TxInputLine,
+  TxOutputLine
 } from '../../utils/types';
 
-import { EvaluatingBackend } from './cardano-backend';
+import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint } from './cardano-backend';
 
 import { EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
@@ -119,7 +123,32 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
  * Ogmios Backend Implementation for Cardano Backend Interface
  * Implements the CardanoBackend interface using Ogmios WebSocket client for local node interaction
  */
-export class OgmiosBackend implements EvaluatingBackend {
+/**
+ * Minimal structural views of the Ogmios chain-sync `BlockPraos` / `Transaction`
+ * JSON we consume (Shelley-era onward). Declared locally rather than importing the
+ * full `@cardano-ogmios/schema` union so the crawler mapper isn't coupled to a
+ * transitive dependency; fields not needed for indexing are omitted.
+ */
+interface OgmiosChainSyncTx {
+  id: string;
+  inputs: { transaction: { id: string }; index: number }[];
+  outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string }[];
+  fee?: { ada: { lovelace: number | bigint } };
+  metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
+}
+interface OgmiosPraosBlock {
+  type: string; // 'praos' | 'ebb' | 'bft' — only 'praos' carries indexable txs
+  era: string;
+  id: string;
+  ancestor: string; // parent block hash (used by the crawler's reorg parent check)
+  height: number;
+  slot: number;
+  size?: { bytes: number };
+  issuer?: { verificationKey?: string };
+  transactions?: OgmiosChainSyncTx[];
+}
+
+export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
   public readonly name = 'ogmios';
   /**
    * Capability declaration — the orchestrator skips Ogmios for these without
@@ -786,5 +815,159 @@ export class OgmiosBackend implements EvaluatingBackend {
       }
     }
     return amounts;
+  }
+
+  // ---------------------------------------------------------------------------
+  // ChainSyncBackend — streamed forward sync for the chain crawler (v2.0)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Open a dedicated chain-synchronization stream. Uses its own InteractionContext
+   * (a separate WebSocket) from the query/submission clients, because it is a
+   * long-lived stream. `sequential: true` + `inFlight: 1` deliver blocks one at a
+   * time in order, which the crawler needs for reorg detection and serial persist.
+   *
+   * KNOWN LIMITATIONS (documented, to harden against a live node — see CRAWLER_DESIGN.md):
+   *  - Input address/amount are left empty: Ogmios chain-sync inputs are bare
+   *    references ({txId,index}); the indexer resolves them from already-indexed
+   *    outputs (indexBlockFull, C3).
+   *  - Per-tx `size` and `deposit` are not surfaced by chain-sync (set 0).
+   *  - Output `referenceScriptHash` is not derived from the inline script yet.
+   */
+  async openChainSync(from: ChainPoint | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle> {
+    OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
+    const url = new URL(this.ogmiosUrl);
+    const connection = {
+      host: url.hostname,
+      port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80),
+      tls: url.protocol === 'wss:'
+    };
+
+    const context = await createInteractionContext(
+      /* c8 ignore next */
+      (err) => logger.error(`[OgmiosBackend] chain-sync context error: ${err.message}`),
+      () => { if (!this.isShutdown) logger.warn('[OgmiosBackend] chain-sync socket closed'); },
+      { connection }
+    );
+
+    // Both handlers are fully try/caught: the ogmios client lib awaits them with NO
+    // catch of its own, and with sequential+inFlight:1 a throw before nextBlock()
+    // stalls the stream forever. On error we deliberately do NOT call nextBlock()
+    // (stopping deterministically instead of skipping a block) and surface the error
+    // via callbacks.onError so the consumer can record it and close/restart.
+    const client = await createChainSynchronizationClient(context, {
+      rollForward: async ({ block, tip }, nextBlock) => {
+        try {
+          const b = block as unknown as OgmiosPraosBlock;
+          // Byron epoch-boundary (ebb) / bft blocks carry no indexable Praos txs — skip.
+          if (b.type !== 'praos') { nextBlock(); return; }
+          const mapped = this.mapOgmiosBlock(b);
+          const t = tip as { slot?: number; id?: string; height?: number } | 'origin';
+          const tipPoint = t && t !== 'origin' && t.slot != null && t.id
+            ? { slot: t.slot, hash: t.id, height: t.height }
+            : undefined;
+          await callbacks.rollForward(mapped.block, mapped.txs, tipPoint);
+          nextBlock();
+        } catch (err) {
+          logger.error('[OgmiosBackend] chain-sync rollForward failed — stream halted:', err);
+          await callbacks.onError?.(err);
+        }
+      },
+      rollBackward: async ({ point }, nextBlock) => {
+        try {
+          const p = point as { slot: number; id: string } | 'origin';
+          await callbacks.rollBackward(p === 'origin' ? 'origin' : { slot: p.slot, hash: p.id });
+          nextBlock();
+        } catch (err) {
+          logger.error('[OgmiosBackend] chain-sync rollBackward failed — stream halted:', err);
+          await callbacks.onError?.(err);
+        }
+      },
+    }, { sequential: true });
+
+    const points = from === 'origin' ? ['origin'] : [{ slot: from.slot, id: from.hash }];
+    await client.resume(points as Parameters<typeof client.resume>[0], 1);
+
+    return { close: async () => { await client.shutdown(); } };
+  }
+
+  /**
+   * Map an Ogmios Praos block into our BlockData + its transactions. Block-level
+   * fees are the sum of per-tx fees; epoch/epochSlot are derived from the slot via
+   * the network's Shelley anchor (same config the tx-builder uses).
+   */
+  private mapOgmiosBlock(block: OgmiosPraosBlock): { block: BlockData; txs: Transaction[] } {
+    const txs = (block.transactions ?? []).map((t, i) => this.mapOgmiosTx(t, block, i));
+    const totalFees = txs.reduce((sum, t) => sum + BigInt(t.fee || 0), 0n);
+
+    const cfg = EPOCH_CONFIG_BY_NETWORK[this.network];
+    const epoch = cfg.shelleyStartEpoch + Math.floor((block.slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
+    // reuse the Shelley-anchored helper (carries the preview/preprod/Byron-offset fix)
+    // instead of a second inline modulo formula
+    const epochSlot = block.slot - epochStartSlot(this.network, epoch);
+
+    const blockData: BlockData = {
+      time: slotToPosixSeconds(this.network, block.slot),
+      height: block.height,
+      hash: block.id,
+      slot: block.slot,
+      slotLeader: block.issuer?.verificationKey ?? '',
+      epoch,
+      epochSlot,
+      size: block.size?.bytes ?? 0,
+      txCount: txs.length,
+      fees: totalFees.toString(),
+    };
+    return { block: blockData, txs };
+  }
+
+  /**
+   * Map a single Ogmios chain-sync transaction into our Transaction. Outputs, fee
+   * and metadata are mapped fully; inputs are kept as bare references (address/amount
+   * resolved downstream by the indexer). See openChainSync KNOWN LIMITATIONS.
+   */
+  private mapOgmiosTx(tx: OgmiosChainSyncTx, block: OgmiosPraosBlock, index: number): Transaction {
+    const inputs: TxInputLine[] = (tx.inputs ?? []).map(i => ({
+      address: '',
+      amount: [] as Amount[],
+      txHash: i.transaction.id,
+      outputIndex: i.index,
+    }));
+
+    const outputs: TxOutputLine[] = (tx.outputs ?? []).map((o, i) => ({
+      address: o.address,
+      amount: this.convertOgmiosValue(o.value),
+      txHash: tx.id,
+      outputIndex: i,
+      dataHash: o.datumHash ?? null,
+      inlineDatum: o.datum ?? null,
+      isCollateral: false,
+      referenceScriptHash: null,
+    }));
+
+    const metadataEntries: MetadataLabelTx[] = tx.metadata?.labels
+      ? Object.entries(tx.metadata.labels).map(([label, v]) => ({
+          txHash: tx.id,
+          label,
+          json: v.json as MetadataLabelTx['json'],
+        }))
+      : [];
+
+    return {
+      hash: tx.id,
+      blockHash: block.id,
+      blockHeight: block.height,
+      slot: block.slot,
+      index,
+      fee: (tx.fee?.ada?.lovelace ?? 0).toString(),
+      deposit: '0',
+      size: 0,
+      blockTime: slotToPosixSeconds(this.network, block.slot),
+      inputs,
+      outputs,
+      // undefined (not []) when absent — matches the Blockfrost path so
+      // mapTransaction's hasMetadata flag stays false for metadata-less txs
+      metadata: metadataEntries.length ? metadataEntries : undefined,
+    };
   }
 }

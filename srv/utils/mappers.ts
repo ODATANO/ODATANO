@@ -76,7 +76,9 @@ import { BackendError } from './errors';
  */
 export function mapTransaction(providerTx: TransactionProviderData): TransactionRow {
   // determine presence of optional data
-  const hasMetadata = providerTx.metadata != null && (Array.isArray(providerTx.metadata));
+  // length check matters: the Ogmios chain-sync mapper produced `[]` for metadata-less
+  // txs, which the old `Array.isArray` test counted as "has metadata"
+  const hasMetadata = Array.isArray(providerTx.metadata) && providerTx.metadata.length > 0;
   const hasInputs = Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
   const hasOutputs = Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
 
@@ -115,7 +117,9 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
     return {
       tx_hash: txHash,
       inputIndex: inputIndex,
-      address_address: input.address,
+      // `|| null`: unresolved chain-sync inputs carry '' — persist a null FK, not a
+      // dangling empty-string Addresses association (lazy-path inputs are never empty)
+      address_address: input.address || null,
       utxoData_dataHash: input.dataHash || null,
       utxoData_inlineDatum: input.inlineDatum || null,
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
@@ -497,6 +501,8 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData?: Epoch
     slotLeader: providerBlockData.slotLeader ?? null,
     epochNumber: epochData?.epoch ?? providerBlockData.epoch,
     epoch: epochData,
+    // absolute slot — the crawler's reorg cut axis (same axis as Transactions.slot)
+    slot: providerBlockData.slot ?? null,
     epochSlot: providerBlockData.epochSlot,
     size: providerBlockData.size,
     txCount: providerBlockData.txCount,

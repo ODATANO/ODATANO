@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -73,6 +73,10 @@ entity Blocks {
         @description: 'Association to Epochs entity'
         epoch       : Association to Epochs
                           on epoch.epoch = $self.epochNumber;
+
+        @title      : 'Block Absolute Slot'
+        @description: 'Absolute slot number of the block'
+        slot        : Integer64;
 
         @title      : 'Block Slot within Epoch'
         @description: 'Slot number within the epoch as integer'
@@ -1344,4 +1348,118 @@ entity SignatureVerifications {
         @title      : 'Verified At'
         @description: 'Timestamp when the verification was performed'
         verifiedAt       : Timestamp;
+}
+
+// -----------------------------------------------------
+// Chain Crawler / Pre-Sync (v2.0)
+// -----------------------------------------------------
+
+@title      : 'Cardano Sync State'
+@description: 'Singleton crawl cursor tracking the pre-sync progress of the chain crawler'
+entity CardanoSyncState {
+
+        @title      : 'Cursor Id (Key)'
+        @description: 'Singleton key — always the literal string SINGLETON'
+    key ID                : String(10) default 'SINGLETON';
+
+        @title      : 'Network'
+        @description: 'The Cardano network this cursor tracks (mainnet | preprod | preview)'
+        network           : String(10);
+
+        @title      : 'Start Slot'
+        @description: 'Absolute slot of the configured pre-sync origin (immutable once syncing starts)'
+        startSlot         : Integer64;
+
+        @title      : 'Start Block Hash'
+        @description: 'Block hash of the configured pre-sync origin'
+        startBlockHash    : Blake2b256;
+
+        @title      : 'Last Slot'
+        @description: 'Absolute slot of the last indexed block (resume point)'
+        lastSlot          : Integer64 default 0;
+
+        @title      : 'Last Block Hash'
+        @description: 'Hash of the last indexed block — used for the reorg parent-hash check'
+        lastBlockHash     : Blake2b256;
+
+        @title      : 'Last Height'
+        @description: 'Block height of the last indexed block'
+        lastHeight        : Integer64 default 0;
+
+        @title      : 'Last Indexed At'
+        @description: 'Wall-clock timestamp of the last successful block persist'
+        lastIndexedAt     : Timestamp;
+
+        @title      : 'Tip Slot'
+        @description: 'Latest known chain-tip slot, for lag/progress calculation'
+        tipSlot           : Integer64;
+
+        @title      : 'Tip Height'
+        @description: 'Latest known chain-tip height'
+        tipHeight         : Integer64;
+
+        @title      : 'Sync Status'
+        @description: 'Current crawler state (stopped | syncing | synced | error)'
+        syncStatus        : CrawlSyncStatus default 'stopped';
+
+        @title      : 'Sync Progress'
+        @description: 'Percentage of the range from startSlot to tipSlot that is indexed (0..100)'
+        syncProgress      : Decimal(5, 2);
+
+        @title      : 'Blocks Per Second'
+        @description: 'Rolling throughput of the catch-up phase'
+        blocksPerSecond   : Decimal(10, 2);
+
+        @title      : 'Last Error'
+        @description: 'Message of the most recent crawler error (null when healthy)'
+        lastError         : String(500);
+
+        @title      : 'Last Error At'
+        @description: 'Timestamp of the most recent crawler error'
+        lastErrorAt       : Timestamp;
+
+        @title      : 'Consecutive Errors'
+        @description: 'Count of back-to-back failures; trips the circuit breaker past its threshold'
+        consecutiveErrors : Integer default 0;
+}
+
+@title      : 'Cardano Reorg Log'
+@description: 'Audit trail of chain rollbacks (reorgs) handled by the crawler'
+entity CardanoReorgLog {
+
+        @title      : 'Reorg Id (Key)'
+        @description: 'Unique identifier of the reorg event'
+    key ID               : UUID;
+
+        @title      : 'Detected At'
+        @description: 'Timestamp when the rollback was detected'
+        detectedAt       : Timestamp;
+
+        @title      : 'Fork Slot'
+        @description: 'Absolute slot of the common ancestor the chain rolled back to'
+        forkSlot         : Integer64;
+
+        @title      : 'Fork Height'
+        @description: 'Block height of the common ancestor the chain rolled back to'
+        forkHeight       : Integer64;
+
+        @title      : 'Old Tip Hash'
+        @description: 'Hash of the abandoned tip before the rollback'
+        oldTipHash       : Blake2b256;
+
+        @title      : 'New Tip Hash'
+        @description: 'Hash of the block the chain rolled back to'
+        newTipHash       : Blake2b256;
+
+        @title      : 'Blocks Rolled Back'
+        @description: 'Number of blocks (and their child rows) deleted during rollback'
+        blocksRolledBack : Integer;
+
+        @title      : 'Blocks Reindexed'
+        @description: 'Number of blocks re-indexed on the new chain after the rollback'
+        blocksReindexed  : Integer;
+
+        @title      : 'Status'
+        @description: 'Lifecycle of the reorg handling (detected | rolling_back | reindexing | completed)'
+        status           : ReorgStatus;
 }

@@ -111,6 +111,24 @@ type SigningStatus    : String(20) enum {
     failed = 'failed';
 }
 
+@title      : 'Crawl Sync Status'
+@description: 'Enum type for the chain crawler / pre-sync cursor state'
+type CrawlSyncStatus  : String(12) enum {
+    stopped = 'stopped'; // crawler not running
+    syncing = 'syncing'; // actively catching up / streaming
+    synced = 'synced'; // caught up to (tip - confirmationDepth)
+    error = 'error'; // circuit-broken after repeated failures
+}
+
+@title      : 'Reorg Status'
+@description: 'Enum type for the lifecycle of a handled chain rollback'
+type ReorgStatus      : String(12) enum {
+    detected = 'detected';
+    rolling_back = 'rolling_back';
+    reindexing = 'reindexing';
+    completed = 'completed';
+}
+
 // -----------------------------------------------------
 // Parsed Transaction (ParseTransactionCbor action result)
 // -----------------------------------------------------

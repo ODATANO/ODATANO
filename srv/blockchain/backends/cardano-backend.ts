@@ -224,3 +224,80 @@ export interface EvaluatingBackend extends CardanoBackend {
 export function isEvaluatingBackend(backend: CardanoBackend): backend is EvaluatingBackend {
   return typeof (backend as EvaluatingBackend).evaluateTransaction === 'function';
 }
+
+// -----------------------------------------------------
+// Chain crawler / pre-sync (v2.0) — forward iteration
+// -----------------------------------------------------
+
+/** A chain position the crawler can start from, stream to, or roll back to. */
+export interface ChainPoint {
+  slot: number;
+  hash: string;
+  height?: number;
+}
+
+/** Callbacks driven by a streamed chain-sync (Ogmios). */
+export interface ChainSyncCallbacks {
+  /**
+   * A new block (with its full transaction list) extends the chain.
+   * @param tip the node's current chain tip, when the protocol supplies it — lets the
+   *            consumer track sync progress / detect being caught up
+   */
+  rollForward(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<void>;
+  /** The chain rolled back to `point` (or to genesis). All blocks after it are abandoned. */
+  rollBackward(point: ChainPoint | 'origin'): Promise<void>;
+  /**
+   * A message-handler error stalled the stream (mapping failure, callback throw). The
+   * stream stops requesting further blocks; the consumer should record the error and
+   * close/restart. Optional — without it such errors are only logged.
+   */
+  onError?(err: unknown): Promise<void>;
+}
+
+/** Handle to an open chain-sync stream. */
+export interface ChainSyncHandle {
+  /** Stop streaming and release the underlying connection. */
+  close(): Promise<void>;
+}
+
+/**
+ * Backend that can stream the chain forward from a point, emitting ordered
+ * rollForward + native rollBackward (reorg) events. Implemented by Ogmios via the
+ * chain-synchronization protocol — the crawler's primary, reorg-aware source.
+ */
+export interface ChainSyncBackend extends CardanoBackend {
+  /**
+   * Open a chain-sync stream starting just after `from` (or from genesis).
+   * @param from     the last-indexed point to intersect on, or 'origin' for a fresh sync
+   * @param callbacks rollForward / rollBackward handlers
+   * @returns a handle to close the stream
+   */
+  openChainSync(from: ChainPoint | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle>;
+}
+
+/** Type guard: does this backend support streamed chain-sync? */
+export function isChainSyncBackend(backend: CardanoBackend): backend is ChainSyncBackend {
+  return typeof (backend as ChainSyncBackend).openChainSync === 'function';
+}
+
+/**
+ * Backend that can walk the chain forward by pagination (no live node). The
+ * crawler's fallback source when no Ogmios chain-sync is available. Reorgs are
+ * detected by the crawler via parent-hash mismatch (not delivered natively).
+ */
+export interface PaginatingBackend extends CardanoBackend {
+  /** Fetch a block by its height. */
+  getBlockByHeight(height: number): Promise<BlockData>;
+  /** Fetch up to `count` blocks immediately following `afterHash`, in chain order. */
+  getNextBlocks(afterHash: string, count: number): Promise<BlockData[]>;
+  /** Fetch the full transaction list of a block, in block order. */
+  getBlockTransactions(blockHash: string): Promise<Transaction[]>;
+}
+
+/** Type guard: can this backend be walked forward by pagination? */
+export function isPaginatingBackend(backend: CardanoBackend): backend is PaginatingBackend {
+  const b = backend as PaginatingBackend;
+  return typeof b.getBlockByHeight === 'function'
+    && typeof b.getNextBlocks === 'function'
+    && typeof b.getBlockTransactions === 'function';
+}

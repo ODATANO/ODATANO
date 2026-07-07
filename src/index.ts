@@ -16,6 +16,8 @@ export {
   getCardanoTxBuilder,
   loadConfigFromEnv,
   loadHsmConfigFromEnv,
+  loadCrawlerConfigFromEnv,
+  startCrawlerIfConfigured,
   shutdownAppContext,
 } from '../srv/server';
 
@@ -53,6 +55,10 @@ export async function initialize(): Promise<void> {
   if (!alreadyInitialized) {
     logger.info('ODATANO core initialized');
   }
+
+  // Start the pre-sync crawler if configured (plugin mode). Non-fatal.
+  const { startCrawlerIfConfigured } = await import('../srv/server');
+  await startCrawlerIfConfigured();
 }
 
 /**

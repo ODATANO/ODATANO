@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, isChainSyncBackend, isPaginatingBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -637,6 +637,36 @@ export class CardanoClient {
     const backends: CardanoBackend[] = [...this.historicalBackends];
     if (this.liveBackend) backends.push(this.liveBackend);
     return backends;
+  }
+
+  /**
+   * Get a backend that supports streamed chain-synchronization (Ogmios), or null.
+   * The crawler's primary, reorg-aware source. Checks the live backend first.
+   * Backends whose init() failed are skipped — the crawler uses these instances
+   * DIRECTLY (outside executeWithPriority's lazy-retry/breaker), so handing out an
+   * uninitialized backend would wedge it.
+   */
+  getChainSyncBackend(): ChainSyncBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isChainSyncBackend(b)) return b;
+    }
+    return null;
+  }
+
+  /**
+   * Get a backend that can be walked forward by pagination (Blockfrost/Koios), or null.
+   * The crawler's fallback source when no Ogmios chain-sync is available.
+   * Skips backends whose init() failed (see getChainSyncBackend).
+   */
+  getPaginatingBackend(): PaginatingBackend | null {
+    for (const b of this.historicalBackends) {
+      if (!this.uninitializedBackends.has(b) && isPaginatingBackend(b)) return b;
+    }
+    if (this.liveBackend && !this.uninitializedBackends.has(this.liveBackend) && isPaginatingBackend(this.liveBackend)) {
+      return this.liveBackend;
+    }
+    return null;
   }
 
   /**

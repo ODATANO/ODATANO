@@ -1,4 +1,4 @@
-import { CardanoBackend } from './cardano-backend';
+import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
@@ -26,7 +26,7 @@ import { Network } from '../cardano-client';
  * BlockfrostBackend Implementation for CardanoBackend Interface
  * Implements the CardanoBackend interface using Blockfrost API SDK
  */
-export class BlockfrostBackend implements CardanoBackend {
+export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
   private network: Network;
@@ -94,21 +94,7 @@ export class BlockfrostBackend implements CardanoBackend {
    */
   async getBlock(blockHash: string): Promise<BlockData> {
     return handleBackendRequest(
-      async () => {
-        const blockdata = await this.api.blocks(blockHash);
-        return {
-          time: blockdata.time,
-          height: blockdata.height,
-          hash: blockdata.hash,
-          slot: blockdata.slot,
-          slotLeader: blockdata.slot_leader,
-          epoch: blockdata.epoch,
-          epochSlot: blockdata.epoch_slot,
-          size: blockdata.size,
-          txCount: blockdata.tx_count,
-          fees: blockdata.fees,
-        };
-      },
+      async () => this.toBlockData(await this.api.blocks(blockHash)),
       this.name
     );
   }
@@ -713,6 +699,75 @@ export class BlockfrostBackend implements CardanoBackend {
           }
         }
         return result;
+      },
+      this.name
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // PaginatingBackend — forward iteration for the chain crawler (v2.0)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Map a Blockfrost block summary (from blocks()/blocksNext()) to our BlockData.
+   * Same shape getBlock() maps inline — kept private to avoid touching getBlock().
+   */
+  private toBlockData(b: {
+    time: number; height: number | null; hash: string; slot: number | null;
+    slot_leader: string; epoch: number | null; epoch_slot: number | null;
+    size: number; tx_count: number; fees?: string | null;
+  }): BlockData {
+    return {
+      time: b.time,
+      height: b.height,
+      hash: b.hash,
+      slot: b.slot,
+      slotLeader: b.slot_leader,
+      epoch: b.epoch,
+      epochSlot: b.epoch_slot,
+      size: b.size,
+      txCount: b.tx_count,
+      fees: b.fees,
+    };
+  }
+
+  /**
+   * Get a block by its height. Blockfrost's `blocks` endpoint accepts a height as
+   * well as a hash.
+   */
+  async getBlockByHeight(height: number): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => this.toBlockData(await this.api.blocks(height)),
+      this.name
+    );
+  }
+
+  /**
+   * Get up to `count` blocks immediately following `afterHash`, in ascending chain order.
+   */
+  async getNextBlocks(afterHash: string, count: number): Promise<BlockData[]> {
+    return handleBackendRequest(
+      async () => {
+        const blocks = await this.api.blocksNext(afterHash, { count });
+        return blocks.map(b => this.toBlockData(b));
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get the full transaction list of a block in block order. Blockfrost returns tx
+   * hashes; details are batched via getTransactionsBatch. Order is preserved.
+   */
+  async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
+    return handleBackendRequest(
+      async () => {
+        const hashes = await this.api.blocksTxsAll(blockHash);
+        if (!hashes.length) return [];
+        const byHash = await this.getTransactionsBatch(hashes);
+        return hashes
+          .map(h => byHash.get(h))
+          .filter((t): t is Transaction => t !== undefined);
       },
       this.name
     );
