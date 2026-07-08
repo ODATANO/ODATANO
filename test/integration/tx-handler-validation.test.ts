@@ -959,6 +959,80 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
+  // BUG 9: assetUnit policyId prefix check — an assetUnit >= 57 hex is parsed
+  // as policyId+assetName and minted under the policy script's hash; a bare
+  // 29-32-byte asset name is length-indistinguishable from a full unit and
+  // must be rejected instead of silently minting a truncated name.
+  // ==========================================================================
+
+  describe('mint assetUnit policyId prefix check (BUG 9)', () => {
+    // 32-byte asset name — 64 hex, length-indistinguishable from a full unit
+    const longAssetName = 'ab'.repeat(32);
+
+    const baseMintPayload = () => ({
+      senderAddress: TEST_FIXTURES.addressWithFunds,
+      recipientAddress: TEST_FIXTURES.emptyAddress,
+      lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
+      changeAddress: TEST_FIXTURES.addressWithFunds,
+      mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+    });
+
+    it('rejects a bare 64-hex asset name (would silently mint a truncated name)', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        mintActionsJson: JSON.stringify([{ assetUnit: longAssetName, quantity: '1' }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(status).toBe(400);
+      expect(data.error?.message).toContain('does not start with the minting policy id');
+    });
+
+    it('rejects a full unit whose prefix is a foreign policyId', async () => {
+      const foreignUnit = 'ab'.repeat(28) + TEST_FIXTURES.assetName;
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        mintActionsJson: JSON.stringify([{ assetUnit: foreignUnit, quantity: '1' }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('rejects a 56-hex unit (empty asset name) under a foreign policyId', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        mintActionsJson: JSON.stringify([{ assetUnit: 'ab'.repeat(28), quantity: '1' }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('keeps a 32-byte asset name intact when passed as a full unit with the matching policyId', async () => {
+      const fullUnit = TEST_FIXTURES.policyId + longAssetName;
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        ...baseMintPayload(),
+        mintActionsJson: JSON.stringify([{ assetUnit: fullUnit, quantity: '1' }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(status).toBe(200);
+      // the full 32-byte name must survive into the unsigned tx's mint field
+      expect(data.unsignedTxCbor).toContain(longAssetName);
+    });
+
+    it('rejects a foreign-prefix unit on BuildPlutusSpendTransaction combined mint', async () => {
+      setupTxInfoMock(mockScriptTxInfo);
+      const foreignUnit = 'ab'.repeat(28) + TEST_FIXTURES.assetName;
+      const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        ...plutusSpendRequestBody,
+        mintActionsJson: JSON.stringify([{ assetUnit: foreignUnit, quantity: '1' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(status).toBe(400);
+      expect(data.error?.message).toContain('does not start with the minting policy id');
+    });
+  });
+
+  // ==========================================================================
   // BuildPlutusSpendTransaction — Additional Branch Coverage
   // ==========================================================================
 
