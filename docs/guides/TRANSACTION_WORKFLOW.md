@@ -239,6 +239,12 @@ For HSM security details, supported hardware, and SoftHSM dev setup, see [Securi
 
 Returns `scriptHash`, `fingerprint`, `scriptAddress` when applicable.
 
+`assetUnit` is either the full `policyId+assetName` hex — the 56-hex policyId prefix must
+match the minting policy's script hash, otherwise the request is rejected with 400 — or,
+when `scriptParamsJson` is set, a bare assetName of at most 28 bytes (56 hex) that is
+expanded with the applied script's policyId. Asset names longer than 28 bytes are
+length-indistinguishable from a full unit and must always be passed as a full unit.
+
 ### BuildPlutusSpendTransaction
 
 | Parameter | Type | Required | Description |

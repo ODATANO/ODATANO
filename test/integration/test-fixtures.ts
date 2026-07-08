@@ -60,6 +60,8 @@ export const TEST_FIXTURES = {
   validAssetsJson: JSON.stringify([{ unit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '100' }]),
   validMintActionsJson: JSON.stringify([{ assetUnit: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea546f6b656e4d', quantity: '1000' }]),
   validSpendingScript: '587601010029800aba2aba1aab9eaab9dab9a48888966002646465300130053754003300700398038012444b30013370e9000001c4c9289bae300a3009375400915980099b874800800e2646644944c02c004c02cc030004c024dd5002459007200e18031803800980300098019baa0068a4d13656400401',
+  // blake2b_224(0x03 || validSpendingScript bytes) — the policyId when validSpendingScript mints
+  spendingScriptPolicyId: '61e32e15ca8e4b37687f007d13467d1ee84327d02aac9168d7e42a2c',
 };
 
 export const MOCK_EVALUATED_BUDGET = {
@@ -542,7 +544,9 @@ export const plutusSpendWithMintRequestBody = {
  */
 export const plutusSpendMultiPurposeScriptRequestBody = {
   ...plutusSpendRequestBody,
-  mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1' }]),
+  // BUG 9: full assetUnits must carry the policyId of the minting script — here the
+  // multi-purpose validator (validSpendingScript), not the standalone mint policy.
+  mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.spendingScriptPolicyId + TEST_FIXTURES.assetName, quantity: '1' }]),
   mintingPolicyScript: TEST_FIXTURES.validSpendingScript,
 };
 

@@ -531,29 +531,55 @@ module.exports = (srv: cds.Service) => {
 
       // Apply script parameters if provided (for parameterized validators)
       let finalMintingPolicyScript = mintingPolicyScript;
+      let effectivePolicyId: string | undefined;
       if (scriptParams && scriptParams.length > 0) {
-        let appliedPolicyId: string;
         try {
           finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
 
           // BUG 7 fix: expand assetName-only entries to full assetUnit using the applied script's policyId.
           const appliedScript = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex'));
-          appliedPolicyId = appliedScript.hash.toString();
+          effectivePolicyId = appliedScript.hash.toString();
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
           return rejectInvalid(req, 'BuildMintTransaction', `Failed to apply script parameters: ${errMsg}`, 'scriptParamsJson');
         }
         for (const action of parsedMintActions) {
           if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-            action.assetUnit = appliedPolicyId + action.assetUnit;
+            action.assetUnit = effectivePolicyId + action.assetUnit;
           }
         }
 
         // lockOnScript: route output to the enterprise script address derived from applied script hash
         if (lockOnScript) {
-          const scriptAddr = scriptHashToEnterpriseAddress(appliedPolicyId, getCardanoClient().network);
+          const scriptAddr = scriptHashToEnterpriseAddress(effectivePolicyId, getCardanoClient().network);
           cleanData.recipientAddress = scriptAddr;
-          logger.debug({ scriptAddress: scriptAddr, scriptHash: appliedPolicyId }, 'lockOnScript: routing output to script address');
+          logger.debug({ scriptAddress: scriptAddr, scriptHash: effectivePolicyId }, 'lockOnScript: routing output to script address');
+        }
+      } else {
+        try {
+          effectivePolicyId = Script.fromCbor(Buffer.from(mintingPolicyScript, 'hex')).hash.toString();
+        } catch {
+          // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+        }
+      }
+
+      // BUG 9 fix: the builder mints every action under the policy script's hash and
+      // parseAssetUnit silently discards the unit's first 56 hex chars. A bare asset name
+      // of 29-32 bytes is length-indistinguishable from a full unit, so a mismatched
+      // prefix would mint a truncated name. At this point every action holds a full
+      // unit (bare names were expanded above), so all of them must carry the policyId.
+      if (effectivePolicyId) {
+        const policyId = effectivePolicyId;
+        const mismatch = parsedMintActions.find(
+          (action) => !action.assetUnit.toLowerCase().startsWith(policyId)
+        );
+        if (mismatch) {
+          return rejectInvalid(
+            req,
+            'BuildMintTransaction',
+            `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
+            'mintActionsJson'
+          );
         }
       }
 
@@ -573,10 +599,13 @@ module.exports = (srv: cds.Service) => {
         const policyId = buildResult.scriptHash;
         const updates: Record<string, string> = {};
 
-        // CIP-14 asset fingerprint for the first minted asset
+        // CIP-14 asset fingerprint for the first minted asset. The unit is always a
+        // full policyId+assetName here: bare names were expanded before the build and
+        // the BUG 9 prefix check rejected everything else (a 56-hex unit is an empty
+        // asset name, not a bare 28-byte name).
         if (parsedMintActions.length > 0) {
           const firstAssetUnit = parsedMintActions[0].assetUnit;
-          const assetNameHex = firstAssetUnit.length >= MIN_FULL_ASSET_UNIT_LENGTH ? firstAssetUnit.slice(POLICY_ID_HEX_LENGTH) : firstAssetUnit;
+          const assetNameHex = firstAssetUnit.slice(POLICY_ID_HEX_LENGTH);
           buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
           updates.fingerprint = buildResult.fingerprint;
         }
@@ -753,6 +782,33 @@ module.exports = (srv: cds.Service) => {
           for (const action of parsedMintActions) {
             if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
               action.assetUnit = appliedPolicyId + action.assetUnit;
+            }
+          }
+        }
+
+        // BUG 9 fix: same policyId-prefix check as BuildMintTransaction — the builder
+        // mints every action under the mint script's hash and parseAssetUnit silently
+        // discards the unit's first 56 hex chars, so a mismatched prefix would mint a
+        // truncated asset name.
+        if (finalMintingPolicyScript) {
+          let mintPolicyId: string | undefined;
+          try {
+            mintPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
+          } catch {
+            // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+          }
+          if (mintPolicyId) {
+            const policyId = mintPolicyId;
+            const mismatch = parsedMintActions.find(
+              (action) => !action.assetUnit.toLowerCase().startsWith(policyId)
+            );
+            if (mismatch) {
+              return rejectInvalid(
+                req,
+                'BuildPlutusSpendTransaction',
+                `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
+                'mintActionsJson'
+              );
             }
           }
         }
