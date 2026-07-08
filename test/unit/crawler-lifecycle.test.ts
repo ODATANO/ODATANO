@@ -71,7 +71,7 @@ function cursorExists() {
   });
 }
 
-function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: jest.fn() }) {
+function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: jest.fn(), prefetchCrawlEpoch: jest.fn() }) {
   const crawler = new CardanoCrawler(client as never, indexer as never, 'preview', config);
   // collapse retry/poll sleeps so loops run instantly
   jest.spyOn(crawler as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
@@ -153,7 +153,7 @@ describe('CardanoCrawler chain-sync path', () => {
     cursorExists();
     const indexBlockFull = jest.fn();
     const { client, openChainSync, cbs } = chainSyncClient();
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
 
@@ -177,6 +177,53 @@ describe('CardanoCrawler chain-sync path', () => {
 
     expect(updatesWith(s => s.syncStatus === 'synced')).toHaveLength(1);
     await crawler.stop();
+  });
+
+  it('acknowledges the initial intersection rollBackward WITHOUT logging a reorg', async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = chainSyncClient();
+    const crawler = makeCrawler(client);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    // Ogmios protocol handshake: rollBackward to exactly our cursor point
+    await cbs().rollBackward({ slot: 4000, hash: CURSOR_ROW.lastBlockHash });
+
+    expect(opsFor('INSERT')).toHaveLength(0); // no spurious CardanoReorgLog row
+    expect(opsFor('DELETE')).toHaveLength(0);
+    await crawler.stop();
+  });
+
+  it('treats a rollBackward to a DIFFERENT point as a real reorg', async () => {
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW };
+      if (q._op === 'SELECT.many') return [];
+      return undefined;
+    });
+    const { client, openChainSync, cbs } = chainSyncClient();
+    const crawler = makeCrawler(client);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    await cbs().rollBackward({ slot: 3000, hash: 'fork'.padEnd(64, '9') });
+
+    const reorgLog = opsFor('INSERT').filter(q => q.entity.endsWith('CardanoReorgLog'));
+    expect(reorgLog).toHaveLength(1);
+    await crawler.stop();
+  });
+
+  it("records and halts with 'error' when the stream cannot resume (pipeline crash is not silent)", async () => {
+    cursorExists();
+    const openChainSync = jest.fn(async (): Promise<ChainSyncHandle> => { throw new Error('IntersectionNotFound'); });
+    const client = { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: jest.fn() };
+    const crawler = makeCrawler(client);
+
+    await crawler.start();
+    await settle(() => !crawler.isRunning());
+
+    expect(crawler.isRunning()).toBe(false); // NOT a healthy-looking zombie
+    expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+    expect(updatesWith(s => typeof s.lastError === 'string' && (s.lastError as string).includes('IntersectionNotFound')).length).toBe(1);
   });
 
   it("onError records the failure and stops with status 'error'", async () => {
@@ -205,9 +252,9 @@ describe('CardanoCrawler chain-sync path', () => {
 
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
-    await crawler.stop();      // races the pending open
-    release();                 // open resolves AFTER stop
-    await settle(() => close.mock.calls.length > 0);
+    const stopP = crawler.stop(); // races the pending open (stop awaits the pipeline)
+    release();                    // open resolves AFTER stop halted the crawler
+    await stopP;                  // stop returns only after the pipeline closed the socket
 
     expect(close).toHaveBeenCalledTimes(1);
   });
@@ -253,7 +300,7 @@ describe('CardanoCrawler pagination path', () => {
     const { client, backend } = paginationSetup();
     const crawler = makeCrawler(client);
     // stop after the first idle sleep so the loop exits
-    (crawler as unknown as { sleep: jest.Mock }).sleep = jest.fn(async () => { await crawler.stop(); });
+    (crawler as unknown as { sleep: jest.Mock }).sleep = jest.fn(async () => { void crawler.stop(); }); // fire-and-forget: stop() awaits the pipeline, awaiting it from inside the pipeline's sleep would deadlock
 
     await crawler.start();
     await settle(() => !crawler.isRunning());
@@ -286,15 +333,16 @@ describe('CardanoCrawler pagination path', () => {
         ])
         .mockResolvedValue([]), // subsequent rounds: nothing new → idle sleep
     });
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull });
-    (crawler as unknown as { sleep: jest.Mock }).sleep = jest.fn(async () => { await crawler.stop(); });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
+    (crawler as unknown as { sleep: jest.Mock }).sleep = jest.fn(async () => { void crawler.stop(); }); // fire-and-forget: stop() awaits the pipeline, awaiting it from inside the pipeline's sleep would deadlock
 
     await crawler.start();
     await settle(() => !crawler.isRunning(), 1000);
 
-    expect(backend.getNextBlocks).toHaveBeenCalledWith(CURSOR_ROW.lastBlockHash, CONFIG.batchSize);
+    expect(backend.getNextBlocks).toHaveBeenCalledWith(CURSOR_ROW.lastBlockHash, CONFIG.batchSize, 40); // cursor height passed as anchor hint
     expect(backend.getBlockTransactions).toHaveBeenCalledTimes(2); // 41 + 42, NOT 98
     expect(indexBlockFull).toHaveBeenCalledTimes(2);
+    expect(client.getLatestBlock).toHaveBeenCalledTimes(1); // tip cached while behind the target
   });
 
   it('records an error streak on repeated round failures and stops at the breaker threshold', async () => {
@@ -332,7 +380,7 @@ describe('CardanoCrawler.persistBlock', () => {
     const indexBlockFull = jest.fn()
       .mockRejectedValueOnce(new Error('SQLITE_BUSY'))
       .mockResolvedValueOnce(undefined);
-    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull });
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
     (crawler as unknown as { running: boolean }).running = true;
 
     const ok = await (crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })
@@ -346,7 +394,7 @@ describe('CardanoCrawler.persistBlock', () => {
   it("stops with 'error' only after exhausting the bounded retries", async () => {
     cursorExists();
     const indexBlockFull = jest.fn().mockRejectedValue(new Error('disk full'));
-    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull });
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
     (crawler as unknown as { running: boolean }).running = true;
 
     const ok = await (crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })

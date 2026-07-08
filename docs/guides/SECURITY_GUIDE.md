@@ -113,7 +113,7 @@ SAP CAP provides declarative authorization via `@requires` annotations in CDS.
 
 ### CDS Annotations
 
-All three services require an authenticated user at the service level:
+All four services (CardanoODataService, CardanoTransactionService, CardanoSignService, CardanoIndexerService) require an authenticated user at the service level — note the crawler control actions (pauseCrawler/resumeCrawler on CardanoIndexerService) are state-changing operational endpoints and belong in any role-gating review:
 
 ```cds
 @requires: 'authenticated-user'

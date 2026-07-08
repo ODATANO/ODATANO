@@ -45,7 +45,13 @@ export interface SyncCursor {
   consecutiveErrors: number;
 }
 
-/** Coerce a CAP-10 numeric-as-string (or number/bigint/null) into a JS number. */
+/**
+ * Coerce a CAP-10 numeric-as-string (or number/bigint/null) into a JS number.
+ * Overloaded so the return type tracks the fallback — a numeric fallback guarantees
+ * a number (no `as number` casts at the call sites).
+ */
+function num(v: unknown): number | null;
+function num(v: unknown, fallback: number): number;
 function num(v: unknown, fallback: number | null = null): number | null {
   if (v === null || v === undefined || v === '') return fallback;
   const n = Number(v);
@@ -58,13 +64,13 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
     network: (row.network as string) ?? null,
     startSlot: num(row.startSlot),
     startBlockHash: (row.startBlockHash as string) ?? null,
-    lastSlot: num(row.lastSlot, 0) as number,
+    lastSlot: num(row.lastSlot, 0),
     lastBlockHash: (row.lastBlockHash as string) ?? null,
-    lastHeight: num(row.lastHeight, 0) as number,
+    lastHeight: num(row.lastHeight, 0),
     tipSlot: num(row.tipSlot),
     tipHeight: num(row.tipHeight),
     syncStatus: ((row.syncStatus as CrawlSyncStatusValue) ?? 'stopped'),
-    consecutiveErrors: num(row.consecutiveErrors, 0) as number,
+    consecutiveErrors: num(row.consecutiveErrors, 0),
   };
 }
 
@@ -93,7 +99,6 @@ export async function ensureSyncStateSingleton(
     tipSlot: null,
     tipHeight: null,
     syncStatus: 'stopped' as CrawlSyncStatusValue,
-    syncProgress: 0,
     consecutiveErrors: 0,
   };
   await db.run(INSERT.into(CardanoSyncState).entries(row));

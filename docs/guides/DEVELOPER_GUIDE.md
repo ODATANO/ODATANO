@@ -22,7 +22,7 @@
 
 ### Service Surface
 
-**31 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds
+**33 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (v2.0 crawler cursor + reorg audit, exposed via CardanoIndexerService)
 
 **19 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor
 
@@ -124,7 +124,7 @@ srv/
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds                   # 31 entities with temporal support
+db/schema.cds                   # 33 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
 test/                           # 35 test suites (25 unit + 10 integration)
 ```
@@ -166,7 +166,7 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── blockchain/              # Backends, indexer, tx builder, signing
 │   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds               # 31 entities (namespace: odatano.cardano)
+│   └── schema.cds               # 33 entities (namespace: odatano.cardano)
 └── config/                      # Network genesis configurations
 ```
 

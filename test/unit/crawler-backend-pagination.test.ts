@@ -172,6 +172,20 @@ describe('KoiosBackend pagination (forward iteration)', () => {
     ]);
   });
 
+  it('getNextBlocks skips the hash→height resolution when the caller supplies the anchor height', async () => {
+    // NOTE: no /block_info nock for the anchor — the hint must make that call unnecessary
+    nock(KOIOS_BASE)
+      .get('/api/v1/blocks')
+      .query({ block_height: 'gt.100', order: 'block_height.asc', limit: '1' })
+      .reply(200, [{ hash: 'd'.repeat(64) }]);
+    nock(KOIOS_BASE)
+      .post('/api/v1/block_info')
+      .reply(200, [koiosBlockInfo({ hash: 'd'.repeat(64), block_height: 101 })]);
+
+    const blocks = await backend.getNextBlocks('a'.repeat(64), 1, 100);
+    expect(blocks.map(b => b.height)).toEqual([101]);
+  });
+
   it('getBlockTransactions maps the flattened /block_txs shape through the /tx_info batch', async () => {
     nock(KOIOS_BASE)
       .post('/api/v1/block_txs')
@@ -245,14 +259,14 @@ describe('CardanoClient.getChainSyncBackend / getPaginatingBackend', () => {
     expect(client.getChainSyncBackend()).toBeNull();
   });
 
-  it('prefers the first initialized historical backend for pagination', () => {
+  it('prefers Koios for pagination (batched /tx_info) over Blockfrost (N+1 per tx)', () => {
     const client = makeClient(['blockfrost', 'koios']);
-    expect(client.getPaginatingBackend()?.name).toBe('blockfrost');
-
-    uninit(client).add(historical(client)[0]); // blockfrost init failed
     expect(client.getPaginatingBackend()?.name).toBe('koios');
 
-    uninit(client).add(historical(client)[1]); // koios too
+    uninit(client).add(historical(client)[1]); // koios init failed → fall back
+    expect(client.getPaginatingBackend()?.name).toBe('blockfrost');
+
+    uninit(client).add(historical(client)[0]); // blockfrost too
     expect(client.getPaginatingBackend()).toBeNull(); // ogmios not configured / not paginating
   });
 });

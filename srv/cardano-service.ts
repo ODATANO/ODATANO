@@ -112,6 +112,23 @@ module.exports = (srv: cds.Service) => {
     AddressTransactions
   } = require('#cds-models/CardanoODataService');
 
+  // Fail fast if a future edit reintroduces a SINGULAR class here (the cds-10 trap
+  // above): a singular registration silently degrades to the generic CRUD handler.
+  // Every cds-typer proxy carries an explicit is_singular marker we can assert on.
+  for (const [name, entity] of Object.entries({
+    NetworkInformation, Blocks, Epochs, Addresses, AddressAssets, AddressUTxOs,
+    Transactions, TransactionMetadata, Pools, Accounts, Dreps, Assets, AssetHistory,
+    LedgerProtocolParameters, AddressTransactions,
+  })) {
+    if ((entity as { is_singular?: boolean })?.is_singular) {
+      throw new Error(
+        `CardanoODataService: '${name}' resolves to the SINGULAR cds-typer class — ` +
+        `READ handlers registered with it never match under cds 10. Destructure the ` +
+        `plural entity-set class instead (e.g. '${name}_ as ${name}').`
+      );
+    }
+  }
+
   // Helper: shorthand for indexer access
   const indexer = () => getCardanoIndexer();
 

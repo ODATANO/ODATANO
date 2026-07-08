@@ -961,7 +961,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
       index,
       fee: (tx.fee?.ada?.lovelace ?? 0).toString(),
       deposit: '0',
-      size: 0,
+      // null = unknown (chain-sync doesn't surface the serialized size) — matches the
+      // lazy path's `size ?? null` convention; 0 would masquerade as a real size
+      size: null,
       blockTime: slotToPosixSeconds(this.network, block.slot),
       inputs,
       outputs,

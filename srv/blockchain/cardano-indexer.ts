@@ -78,6 +78,7 @@ import {
 } from '../utils/mappers';
 
 import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine } from '../utils/types';
+import { chunk, IN_CHUNK } from '../utils/collections';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -104,10 +105,29 @@ export class CardanoIndexer {
   /**
    * Crawler epoch memo: epochs change once per ~5 days, but indexBlockFull runs per
    * block — without this, every crawled block paid one client.getEpoch() HTTP call
-   * (and on Ogmios-only deployments a guaranteed AllBackendsFailedError round-trip).
-   * `row: undefined` is a cached negative so a failing epoch isn't retried per block.
+   * (and on Ogmios-only deployments a guaranteed failing round-trip).
+   * `row: undefined` is a cached negative so a failing epoch isn't retried per block;
+   * `persisted` tracks the one-time Epoch UPSERT inside the block transaction.
    */
-  private crawlEpochCache: { epoch: number; row?: Epoch } | null = null;
+  private crawlEpochCache: { epoch: number; row?: Epoch; persisted: boolean } | null = null;
+
+  /**
+   * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block
+   * write transaction — the backend round-trip must never run while the DB write
+   * lock is held (indexBlockFull then serves the epoch from this memo). Never throws.
+   */
+  async prefetchCrawlEpoch(epochNumber: number): Promise<void> {
+    if (this.crawlEpochCache?.epoch === epochNumber) return;
+    let row: Epoch | undefined;
+    try {
+      row = mapEpoch(await this.client.getEpoch(epochNumber));
+    } catch {
+      // epoch data may be unavailable (e.g. Koios drops in-progress/old epochs;
+      // Ogmios only serves the current epoch) — cache the miss too
+      row = undefined;
+    }
+    this.crawlEpochCache = { epoch: epochNumber, row, persisted: false };
+  }
 
   /**
    * Create a new CardanoIndexer instance
@@ -554,21 +574,18 @@ export class CardanoIndexer {
    * @param txs       the block's full transaction list (in block order)
    */
   async indexBlockFull(tx: CapTransaction, blockData: BlockData, txs: ProviderTransaction[]): Promise<void> {
-    // Block row — best-effort epoch enrichment, memoized per epoch (NOT per block:
-    // an uncached getEpoch here means one backend HTTP call for every crawled block)
+    // Block row — best-effort epoch enrichment from the prefetched memo. The network
+    // fetch happens in prefetchCrawlEpoch() BEFORE the caller opened this write tx;
+    // if the caller skipped it, resolve now (memoized) and accept the in-tx fetch.
     let epoch: Epoch | undefined;
     if (blockData.epoch != null) {
-      if (this.crawlEpochCache?.epoch === blockData.epoch) {
-        epoch = this.crawlEpochCache.row;
-      } else {
-        try {
-          epoch = await this.indexEpoch(tx, blockData.epoch);
-        } catch {
-          // epoch data may be unavailable (e.g. Koios drops in-progress/old epochs;
-          // Ogmios only serves the current epoch) — cache the miss too
-          epoch = undefined;
-        }
-        this.crawlEpochCache = { epoch: blockData.epoch, row: epoch };
+      if (this.crawlEpochCache?.epoch !== blockData.epoch) {
+        await this.prefetchCrawlEpoch(blockData.epoch);
+      }
+      epoch = this.crawlEpochCache?.row;
+      if (epoch && this.crawlEpochCache && !this.crawlEpochCache.persisted) {
+        await tx.run(UPSERT.into(Epoch).entries([epoch]));
+        this.crawlEpochCache.persisted = true;
       }
     }
     await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
@@ -626,23 +643,26 @@ export class CardanoIndexer {
     }
     if (!unresolved.length) return;
 
-    // 3. Batch-read prior-block outputs from the DB
-    const sourceHashes = [...new Set(unresolved.map(u => u.key.split('#')[0]))];
-    const [outRows, assetRows] = await Promise.all([
-      tx.run(SELECT.from(TransactionOutputs).where({ tx_hash: { in: sourceHashes } })),
-      tx.run(SELECT.from(TransactionOutputAssets).where({ output_tx_hash: { in: sourceHashes } })),
-    ]);
-
+    // 3. Batch-read prior-block outputs from the DB — chunked so a dense block's
+    //    input set can never exceed a driver's bind-variable cap (same IN_CHUNK
+    //    discipline as the crawler's reorg deletes)
+    const sourceHashes = [...new Set(unresolved.map(u => u.input.txHash))];
     const addrByKey = new Map<string, string>();
-    for (const r of outRows as Array<{ tx_hash: string; outputIndex: number; address_address: string }>) {
-      addrByKey.set(`${r.tx_hash}#${r.outputIndex}`, r.address_address);
-    }
     const amtByKey = new Map<string, Amount[]>();
-    for (const r of assetRows as Array<{ output_tx_hash: string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
-      const k = `${r.output_tx_hash}#${r.output_outputIndex}`;
-      const list = amtByKey.get(k) ?? [];
-      list.push({ unit: r.unit, quantity: String(r.asset_quantity) });
-      amtByKey.set(k, list);
+    for (const hashChunk of chunk(sourceHashes, IN_CHUNK)) {
+      const [outRows, assetRows] = await Promise.all([
+        tx.run(SELECT.from(TransactionOutputs).where({ tx_hash: { in: hashChunk } })),
+        tx.run(SELECT.from(TransactionOutputAssets).where({ output_tx_hash: { in: hashChunk } })),
+      ]);
+      for (const r of outRows as Array<{ tx_hash: string; outputIndex: number; address_address: string }>) {
+        addrByKey.set(`${r.tx_hash}#${r.outputIndex}`, r.address_address);
+      }
+      for (const r of assetRows as Array<{ output_tx_hash: string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
+        const k = `${r.output_tx_hash}#${r.output_outputIndex}`;
+        const list = amtByKey.get(k) ?? [];
+        list.push({ unit: r.unit, quantity: String(r.asset_quantity) });
+        amtByKey.set(k, list);
+      }
     }
 
     for (const { input, key } of unresolved) {

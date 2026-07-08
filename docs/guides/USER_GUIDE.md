@@ -637,7 +637,7 @@ By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2
 The crawler starts automatically on server boot and resumes from its cursor after a restart. Ogmios is the preferred source (native rollback/reorg handling); Blockfrost/Koios are the fallback. Control + status via **CardanoIndexerService** at `/odata/v4/cardano-indexer/`:
 
 ```http
-GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, syncStatus, progress
+GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, tip, syncStatus, errors
 GET  /odata/v4/cardano-indexer/ReorgLog         # audit of handled rollbacks
 POST /odata/v4/cardano-indexer/getStatus        # live run state summary
 POST /odata/v4/cardano-indexer/pauseCrawler

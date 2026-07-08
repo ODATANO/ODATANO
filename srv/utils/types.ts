@@ -65,7 +65,8 @@ export interface Transaction {
   index: number;
   fee: Lovelace | string;
   deposit: Lovelace | string;
-  size: number;
+  /** Tx size in bytes; null when the source cannot provide it (Ogmios chain-sync). */
+  size: number | null;
   blockTime: number;
   outputAmount?: Amount[];
   inputs: TxInputLine[];

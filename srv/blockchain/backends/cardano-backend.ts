@@ -288,8 +288,13 @@ export function isChainSyncBackend(backend: CardanoBackend): backend is ChainSyn
 export interface PaginatingBackend extends CardanoBackend {
   /** Fetch a block by its height. */
   getBlockByHeight(height: number): Promise<BlockData>;
-  /** Fetch up to `count` blocks immediately following `afterHash`, in chain order. */
-  getNextBlocks(afterHash: string, count: number): Promise<BlockData[]>;
+  /**
+   * Fetch up to `count` blocks immediately following `afterHash`, in chain order.
+   * @param afterHeight optional height of `afterHash` when the caller already knows it
+   *                    (the crawler's cursor does) — lets height-listing backends
+   *                    (Koios) skip a hash→height resolution round-trip
+   */
+  getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]>;
   /** Fetch the full transaction list of a block, in block order. */
   getBlockTransactions(blockHash: string): Promise<Transaction[]>;
 }

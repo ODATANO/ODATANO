@@ -1402,13 +1402,9 @@ entity CardanoSyncState {
         @description: 'Current crawler state (stopped | syncing | synced | error)'
         syncStatus        : CrawlSyncStatus default 'stopped';
 
-        @title      : 'Sync Progress'
-        @description: 'Percentage of the range from startSlot to tipSlot that is indexed (0..100)'
-        syncProgress      : Decimal(5, 2);
-
-        @title      : 'Blocks Per Second'
-        @description: 'Rolling throughput of the catch-up phase'
-        blocksPerSecond   : Decimal(10, 2);
+        // NOTE: live progress is computed by CardanoIndexerService.getStatus from
+        // lastHeight/tipHeight — deliberately NOT persisted here (a stored copy went
+        // stale immediately and misled OData readers).
 
         @title      : 'Last Error'
         @description: 'Message of the most recent crawler error (null when healthy)'
@@ -1454,10 +1450,6 @@ entity CardanoReorgLog {
         @title      : 'Blocks Rolled Back'
         @description: 'Number of blocks (and their child rows) deleted during rollback'
         blocksRolledBack : Integer;
-
-        @title      : 'Blocks Reindexed'
-        @description: 'Number of blocks re-indexed on the new chain after the rollback'
-        blocksReindexed  : Integer;
 
         @title      : 'Status'
         @description: 'Lifecycle of the reorg handling (detected | rolling_back | reindexing | completed)'

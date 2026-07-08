@@ -1106,21 +1106,26 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
 
   /**
    * Get up to `count` blocks following `afterHash`, in ascending chain order.
-   * Koios has no "next after hash" endpoint, so we resolve the height of `afterHash`
-   * and list the blocks above it (PostgREST gt + order + limit), then batch /block_info.
+   * Koios has no "next after hash" endpoint, so we list blocks above the anchor height
+   * (PostgREST gt + order + limit), then batch /block_info. When the caller already
+   * knows the anchor height (the crawler's cursor), the hash→height resolution
+   * round-trip is skipped entirely.
    */
-  async getNextBlocks(afterHash: string, count: number): Promise<BlockData[]> {
+  async getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]> {
     return handleBackendRequest(
       async () => {
-        const info = await this.fetchWithRetryOnEmpty(
-          () => this.api.post('/block_info', { _block_hashes: [afterHash] }),
-          `getNextBlocks/height(${afterHash})`
-        );
-        if (!info.length) throw new NotFoundError('Block', this.name);
-        const afterHeight = info[0].block_height;
+        let anchorHeight = afterHeight;
+        if (anchorHeight == null || anchorHeight <= 0) {
+          const info = await this.fetchWithRetryOnEmpty(
+            () => this.api.post('/block_info', { _block_hashes: [afterHash] }),
+            `getNextBlocks/height(${afterHash})`
+          );
+          if (!info.length) throw new NotFoundError('Block', this.name);
+          anchorHeight = info[0].block_height;
+        }
 
         const rows = await this.fetchWithRetryOnEmpty(
-          () => this.api.get(`/blocks?block_height=gt.${afterHeight}&order=block_height.asc&limit=${count}`),
+          () => this.api.get(`/blocks?block_height=gt.${anchorHeight}&order=block_height.asc&limit=${count}`),
           `getNextBlocks(${afterHash})`
         );
         if (!rows.length) return [];

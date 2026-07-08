@@ -658,11 +658,18 @@ export class CardanoClient {
    * Get a backend that can be walked forward by pagination (Blockfrost/Koios), or null.
    * The crawler's fallback source when no Ogmios chain-sync is available.
    * Skips backends whose init() failed (see getChainSyncBackend).
+   *
+   * Koios is preferred over Blockfrost for bulk block-crawling: Koios batches 100 txs
+   * per POST /tx_info, while Blockfrost has no batch endpoint (~3 HTTP calls per tx) —
+   * roughly a 40x difference in request volume per crawled block.
    */
   getPaginatingBackend(): PaginatingBackend | null {
-    for (const b of this.historicalBackends) {
-      if (!this.uninitializedBackends.has(b) && isPaginatingBackend(b)) return b;
-    }
+    const usable = this.historicalBackends.filter(
+      (b) => !this.uninitializedBackends.has(b) && isPaginatingBackend(b)
+    ) as PaginatingBackend[];
+    const koios = usable.find((b) => b.name === 'koios');
+    if (koios) return koios;
+    if (usable.length) return usable[0];
     if (this.liveBackend && !this.uninitializedBackends.has(this.liveBackend) && isPaginatingBackend(this.liveBackend)) {
       return this.liveBackend;
     }

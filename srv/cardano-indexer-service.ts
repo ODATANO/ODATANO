@@ -1,8 +1,10 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
+import { rejectInvalid } from './utils/errors';
 import { isCrawlerRunning, startCrawler, stopCrawler } from './blockchain/crawler';
 import { readCursor } from './blockchain/crawler/sync-state';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
+import type { CrawlerConfig } from './blockchain/crawler/crawler';
 
 const logger = cds.log('CardanoIndexerService');
 
@@ -45,10 +47,19 @@ module.exports = (srv: cds.Service) => {
   // resumeCrawler — (re)start from the persisted cursor using the configured source.
   // Gated on config.enabled: the control action must not start a crawler the operator
   // never configured (an unconfigured start would otherwise sync from genesis).
+  // NOTE: to apply CHANGED config to a running crawler, call pauseCrawler first —
+  // resume on a running crawler is a no-op by design.
   srv.on('resumeCrawler', async (req: Request) => {
-    const config = loadCrawlerConfigFromEnv();
+    let config: CrawlerConfig;
+    try {
+      config = loadCrawlerConfigFromEnv();
+    } catch (err) {
+      // e.g. ConfigError: enabled but no start block — a config problem is the
+      // caller's 400, not a raw 500 from an escaping throw
+      return rejectInvalid(req, 'resumeCrawler', err instanceof Error ? err.message : String(err));
+    }
     if (!config.enabled) {
-      return req.reject(400, 'Crawler is not enabled — set cds.requires.odatano-core.crawler.enabled (or CRAWLER_ENABLED=true) with a start block before resuming.');
+      return rejectInvalid(req, 'resumeCrawler', 'Crawler is not enabled — set cds.requires.odatano-core.crawler.enabled (or CRAWLER_ENABLED=true) with a start block before resuming.');
     }
     return handleRequest(req, async () => {
       const client = getCardanoClient();

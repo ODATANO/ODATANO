@@ -100,14 +100,27 @@ describe('CardanoIndexerService.pauseCrawler', () => {
 });
 
 describe('CardanoIndexerService.resumeCrawler', () => {
-  it('rejects with 400 and does NOT start when the crawler is not enabled', async () => {
+  it('rejects with 400 (rejectInvalid → BackendError) and does NOT start when the crawler is not enabled', async () => {
     serverMock.loadCrawlerConfigFromEnv.mockReturnValue({ enabled: false, source: 'auto' });
-    const reject = jest.fn();
     const handlers = boot();
 
-    await handlers.resumeCrawler({ reject });
+    await expect(handlers.resumeCrawler({})).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not enabled'),
+    });
+    expect(crawlerMock.startCrawler).not.toHaveBeenCalled();
+  });
 
-    expect(reject).toHaveBeenCalledWith(400, expect.stringContaining('not enabled'));
+  it('maps a ConfigError from the loader to a clean 400 instead of an escaping 500', async () => {
+    serverMock.loadCrawlerConfigFromEnv.mockImplementation(() => {
+      throw new Error('Crawler is enabled but no start block is configured — set crawler.startSlot + crawler.startBlockHash.');
+    });
+    const handlers = boot();
+
+    await expect(handlers.resumeCrawler({})).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('no start block'),
+    });
     expect(crawlerMock.startCrawler).not.toHaveBeenCalled();
   });
 
