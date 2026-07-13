@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
+import { safeJSON } from '@cardano-ogmios/client';
 import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
 import type { AnyV3CostModel } from '@harmoniclabs/cardano-costmodels-ts/dist/v3/AnyV3CostModel';
 
@@ -551,7 +552,10 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
       id: numericId,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
-      payload: lbl.json !== undefined ? JSON.stringify(lbl.json) : null,
+      // Ogmios' parser deliberately exposes numeric metadata as native bigint.
+      // Its matching serializer writes those values as exact JSON number tokens;
+      // native JSON.stringify would throw, while Number coercion would truncate.
+      payload: lbl.json !== undefined ? safeJSON.stringify(lbl.json) : null,
     });
   }
   return rows;

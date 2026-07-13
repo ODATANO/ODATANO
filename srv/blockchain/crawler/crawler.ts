@@ -12,6 +12,10 @@ import {
   TransactionInputAssets,
   TransactionOutputs,
   TransactionOutputAssets,
+  AddressTransactions,
+  AddressUTxOs,
+  UTxOAssets,
+  AssetHistory_ as AssetHistory,
   // the entity name is already plural-ish, so the typer's plural (array) class
   // carries a trailing underscore — that's the CQL-target class, like Blocks/Transactions
   TransactionMetadata_ as TransactionMetadata,
@@ -24,6 +28,10 @@ import {
   resetCursorTo,
   setSyncStatus,
   recordError,
+  tryAcquireCrawlerLease,
+  renewCrawlerLease,
+  releaseCrawlerLease,
+  CRAWLER_LEASE_TTL_MS,
   MAX_CONSECUTIVE_ERRORS,
   type CrawlPoint,
   type CrawlSyncStatusValue,
@@ -31,6 +39,16 @@ import {
 
 const { SELECT, DELETE, INSERT } = cds.ql;
 const logger = cds.log('CardanoCrawler');
+
+const CHAIN_POINT_MISMATCH_PREFIX = 'CHAIN_POINT_MISMATCH:';
+
+class CrawlerStoppedError extends Error {
+  constructor() { super('Crawler stopped'); this.name = 'CrawlerStoppedError'; }
+}
+
+class CrawlerLeaseLostError extends Error {
+  constructor() { super('Crawler DB lease lost'); this.name = 'CrawlerLeaseLostError'; }
+}
 
 /** Runtime configuration for the chain crawler (loaded from cds.requires by the server). */
 export interface CrawlerConfig {
@@ -76,12 +94,23 @@ export class CardanoCrawler {
   private pipeline: Promise<void> | null = null;
   /** Resolver that cancels a pending poll sleep (set while sleeping). */
   private wake: (() => void) | null = null;
+  /** Cancellers for backend waits, so shutdown is not held hostage by their timeout. */
+  private readonly callCancels = new Set<() => void>();
+  /** Chain-sync callback promises outlive openChainSync(); stop() explicitly drains them. */
+  private readonly inFlightCallbacks = new Set<Promise<unknown>>();
+  private haltPromise: Promise<void> | null = null;
+  private finalStatus: CrawlSyncStatusValue = 'stopped';
+  private leaseHeld = false;
+  private leaseHeartbeat: Promise<void> | null = null;
+  private leaseWake: (() => void) | null = null;
 
   constructor(
     private readonly client: CardanoClient,
     private readonly indexer: CardanoIndexer,
     private readonly network: string,
     private readonly config: CrawlerConfig,
+    /** Present for production instances created by index.ts; omitted in engine unit tests. */
+    private readonly leaseOwner?: string,
   ) {}
 
   isRunning(): boolean {
@@ -95,26 +124,43 @@ export class CardanoCrawler {
    */
   async start(): Promise<void> {
     if (this.running) return;
-    this.running = true;
+    if (this.haltPromise) await this.haltPromise;
 
     const start: CrawlPoint | undefined =
       this.config.startSlot != null && this.config.startBlockHash
         ? { slot: this.config.startSlot, hash: this.config.startBlockHash, height: this.config.startHeight }
         : undefined;
+    // Keep running=false until every DB guard succeeds. A cursor read/config error
+    // must never leave a healthy-looking crawler behind.
     const cursor = await cds.tx((tx) => ensureSyncStateSingleton(tx, this.network, start));
 
     if (!cursor.lastBlockHash && !start) {
       logger.error('Crawler start refused: no start block configured and no existing cursor — set crawler.startSlot + crawler.startBlockHash.');
-      this.running = false;
       return;
     }
+
+    if (this.leaseOwner) {
+      const leaseOwner = this.leaseOwner;
+      this.leaseHeld = await cds.tx((tx) => tryAcquireCrawlerLease(tx, leaseOwner));
+      if (!this.leaseHeld) {
+        logger.info('Crawler start skipped: another instance owns the DB lease or the cluster is paused.');
+        return;
+      }
+    }
+
+    this.running = true;
+    this.startLeaseHeartbeat();
 
     // A pipeline crash (e.g. chain-sync intersection not found after downtime) must
     // surface on the cursor — otherwise the crawler looks healthy while doing nothing.
     this.pipeline = this.runIngestPipeline().catch(async (err) => {
+      if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) {
+        await this.halt('stopped');
+        return;
+      }
       logger.error('Ingest pipeline crashed:', err);
-      await cds.tx((tx) => recordError(tx, err)).catch(() => 0);
-      await this.halt('error');
+      const streak = await this.recordCrawlerError(err);
+      await this.halt(streak < 0 ? 'stopped' : 'error');
     });
   }
 
@@ -125,10 +171,9 @@ export class CardanoCrawler {
    * can safely tear down backends/DB afterwards.
    */
   async stop(finalStatus: CrawlSyncStatusValue = 'stopped'): Promise<void> {
-    await this.halt(finalStatus);
-    const pipeline = this.pipeline;
+    this.beginHalt(finalStatus);
+    if (this.haltPromise) await this.haltPromise;
     this.pipeline = null;
-    if (pipeline) await pipeline; // exits promptly: loops re-check running, sleeps are woken
   }
 
   /**
@@ -137,14 +182,47 @@ export class CardanoCrawler {
    * would deadlock.
    */
   private async halt(finalStatus: CrawlSyncStatusValue = 'stopped'): Promise<void> {
-    if (!this.running && !this.chainSyncHandle) return;
+    this.beginHalt(finalStatus);
+  }
+
+  /**
+   * Start teardown without awaiting it. Internal callers can therefore halt from
+   * inside a tracked callback/pipeline without waiting on their own promise.
+   */
+  private beginHalt(finalStatus: CrawlSyncStatusValue): void {
+    // Once a real failure was observed, a concurrent shutdown must not hide it.
+    if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
-    if (this.chainSyncHandle) {
-      try { await this.chainSyncHandle.close(); } catch (e) { logger.warn('chain-sync close failed:', e); }
+    this.leaseWake?.();
+    for (const cancel of [...this.callCancels]) cancel();
+    if (this.haltPromise) return;
+
+    this.haltPromise = Promise.resolve().then(async () => {
+      const handle = this.chainSyncHandle;
       this.chainSyncHandle = null;
-    }
-    try { await cds.tx((tx) => setSyncStatus(tx, finalStatus)); } catch { /* best effort */ }
+      if (handle) {
+        try { await handle.close(); } catch (e) { logger.warn('chain-sync close failed:', e); }
+      }
+
+      // Pagination work lives in pipeline; streamed work lives in callback promises.
+      // Drain both before releasing the lease or reporting the terminal state.
+      const pipeline = this.pipeline;
+      if (pipeline) await pipeline.catch(() => undefined);
+      while (this.inFlightCallbacks.size) {
+        await Promise.allSettled([...this.inFlightCallbacks]);
+      }
+      if (this.leaseHeartbeat) await this.leaseHeartbeat.catch(() => undefined);
+
+      try {
+        if (this.leaseOwner && this.leaseHeld) {
+          await cds.tx((tx) => releaseCrawlerLease(tx, this.leaseOwner!, this.finalStatus));
+          this.leaseHeld = false;
+        } else if (!this.leaseOwner) {
+          await cds.tx((tx) => setSyncStatus(tx, this.finalStatus));
+        }
+      } catch { /* best effort during teardown */ }
+    });
   }
 
   private async runIngestPipeline(): Promise<void> {
@@ -166,14 +244,26 @@ export class CardanoCrawler {
   /** Bound a direct backend call — these bypass the client's timeout/breaker layer. */
   private withTimeout<T>(p: Promise<T>, label: string, ms = CardanoCrawler.CALL_TIMEOUT_MS): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new ProviderUnavailableError(`${label} timed out`, 'crawler', ms)),
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      let cancel: () => void;
+      const finish = (cb: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.callCancels.delete(cancel);
+        cb();
+      };
+      timer = setTimeout(
+        () => finish(() => reject(new ProviderUnavailableError(`${label} timed out`, 'crawler', ms))),
         ms,
       );
       timer.unref?.(); // never keep the process alive for a watchdog timer
+      cancel = () => finish(() => reject(new CrawlerStoppedError()));
+      this.callCancels.add(cancel);
       p.then(
-        (v) => { clearTimeout(timer); resolve(v); },
-        (e) => { clearTimeout(timer); reject(e); },
+        (v) => finish(() => resolve(v)),
+        (e) => finish(() => reject(e)),
       );
     });
   }
@@ -197,11 +287,11 @@ export class CardanoCrawler {
     }
 
     const handle = await backend.openChainSync(from, {
-      rollForward: async (block, txs, tip) => {
+      rollForward: (block, txs, tip) => this.trackCallback(async () => {
         if (!this.running) return;
         await this.persistBlock(block, txs, tip);
-      },
-      rollBackward: async (point) => {
+      }),
+      rollBackward: (point) => this.trackCallback(async () => {
         if (!this.running) return;
         // Ogmios ALWAYS opens the stream with a rollBackward to the intersection
         // point — that is the protocol handshake, not a reorg. Only roll back when
@@ -212,14 +302,15 @@ export class CardanoCrawler {
           return;
         }
         await this.handleReorg(point);
-      },
-      onError: async (err) => {
+      }),
+      onError: (err) => this.trackCallback(async () => {
+        if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) return;
         // The stream is stalled (mapping/callback failure) — record and halt cleanly
         // so the cursor status shows 'error' instead of a healthy-looking hang.
-        await cds.tx((tx) => recordError(tx, err)).catch(() => 0);
+        const streak = await this.recordCrawlerError(err);
         logger.error('Chain-sync stream error — stopping crawler:', err);
-        await this.halt('error');
-      },
+        await this.halt(streak < 0 ? 'stopped' : 'error');
+      }),
     });
 
     // stop() may have raced the async open — close the fresh socket instead of leaking it.
@@ -229,6 +320,17 @@ export class CardanoCrawler {
     }
     this.chainSyncHandle = handle;
     logger.info(`Crawler running (chain-sync) from ${from.hash}`);
+  }
+
+  /** Track streamed callbacks because closing a socket does not imply DB callbacks finished. */
+  private trackCallback<T>(callback: () => Promise<T>): Promise<T> {
+    const promise = Promise.resolve().then(callback);
+    this.inFlightCallbacks.add(promise);
+    void promise.then(
+      () => this.inFlightCallbacks.delete(promise),
+      () => this.inFlightCallbacks.delete(promise),
+    );
+    return promise;
   }
 
   // ---------------------------------------------------------------------------
@@ -271,7 +373,12 @@ export class CardanoCrawler {
           : undefined;
 
         if (cursor.lastHeight >= target) {
-          await cds.tx((tx) => setSyncStatus(tx, 'synced'));
+          const statusWritten = await cds.tx(async (tx) => {
+            if (this.leaseOwner && !(await renewCrawlerLease(tx, this.leaseOwner))) return false;
+            await setSyncStatus(tx, 'synced');
+            return true;
+          });
+          if (!statusWritten) { await this.halt('stopped'); return; }
           await this.sleep(this.config.pollIntervalMs);
           continue;
         }
@@ -292,11 +399,19 @@ export class CardanoCrawler {
           if (!ok) return; // persistBlock already recorded + halted
         }
       } catch (err) {
-        // A failure walking forward from lastBlockHash may mean it was orphaned (reorg).
-        const recovered = await this.tryReorgRecovery(backend).catch(() => false);
-        if (recovered) continue;
+        if (!this.running || err instanceof CrawlerStoppedError) return;
 
-        const streak = await cds.tx((tx) => recordError(tx, err)).catch(() => 0);
+        // Only the backend's explicit anchor/hash mismatch proves that our cursor may
+        // be orphaned. Provider outages and partial tx responses must back off instead
+        // of launching up to 100 additional provider calls.
+        if (err instanceof Error && err.message.startsWith(CHAIN_POINT_MISMATCH_PREFIX)) {
+          const recovered = await this.tryReorgRecovery(backend).catch(() => false);
+          if (recovered) continue;
+          if (!this.running) return;
+        }
+
+        const streak = await this.recordCrawlerError(err);
+        if (streak < 0) { await this.halt('stopped'); return; }
         logger.error(`pagination round failed (error streak ${streak}):`, err);
         if (streak >= MAX_CONSECUTIVE_ERRORS) { await this.halt('error'); return; }
         await this.sleep(this.config.pollIntervalMs);
@@ -310,18 +425,23 @@ export class CardanoCrawler {
    * block still matches on-chain, there is no reorg (returns false → treat as transient).
    */
   private async tryReorgRecovery(backend: PaginatingBackend): Promise<boolean> {
+    if (!this.running) return false;
     const cursor = await cds.tx((tx) => readCursor(tx));
     if (!cursor || !cursor.lastBlockHash) return false;
 
     const MAX_DEPTH = 100;
     const floor = Math.max(0, cursor.lastHeight - MAX_DEPTH);
     for (let h = cursor.lastHeight; h > floor; h--) {
+      if (!this.running) return false;
       let onChain: BlockData;
       try {
         onChain = await this.withTimeout(backend.getBlockByHeight(h), `getBlockByHeight(${h})`);
       } catch {
-        continue; // height not resolvable right now — keep scanning
+        // One unavailable height means the provider cannot currently prove a fork.
+        // Abort this recovery round instead of multiplying a provider outage by 100.
+        return false;
       }
+      if (!this.running) return false;
       const ours = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).where({ height: h }))) as { hash?: string } | undefined;
       if (ours?.hash && onChain.hash === ours.hash) {
         if (h === cursor.lastHeight) return false; // tip still matches → not a reorg
@@ -344,6 +464,12 @@ export class CardanoCrawler {
    * @returns true when the block was persisted, false when the crawler was stopped
    */
   private async persistBlock(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<boolean> {
+    if (txs.length !== block.txCount) {
+      throw new ProviderUnavailableError(
+        `Incomplete block ${block.hash}: backend returned ${txs.length}/${block.txCount} transactions`,
+        'crawler',
+      );
+    }
     const isAtTip = tip != null && block.slot != null && block.slot >= tip.slot;
 
     // Epoch enrichment needs a backend round-trip on epoch boundaries — do it BEFORE
@@ -356,6 +482,10 @@ export class CardanoCrawler {
       if (!this.running) return false;
       try {
         await cds.tx(async (tx) => {
+          if (this.leaseOwner) {
+            const renewed = await renewCrawlerLease(tx, this.leaseOwner);
+            if (!renewed) throw new CrawlerLeaseLostError();
+          }
           await this.indexer.indexBlockFull(tx, block, txs);
           await advanceCursor(
             tx,
@@ -366,7 +496,16 @@ export class CardanoCrawler {
         });
         return true;
       } catch (err) {
-        const streak = await cds.tx((tx) => recordError(tx, err)).catch(() => 0);
+        if (err instanceof CrawlerLeaseLostError) {
+          logger.warn('Crawler write fenced because its DB lease is no longer valid.');
+          await this.halt('stopped');
+          return false;
+        }
+        const streak = await this.recordCrawlerError(err);
+        if (streak < 0) {
+          await this.halt('stopped');
+          return false;
+        }
         if (attempt < CardanoCrawler.PERSIST_RETRIES && streak < MAX_CONSECUTIVE_ERRORS) {
           logger.warn(`persistBlock ${block.hash} failed (attempt ${attempt}/${CardanoCrawler.PERSIST_RETRIES}, streak ${streak}) — retrying:`, err);
           await this.sleep(1000 * attempt);
@@ -394,7 +533,12 @@ export class CardanoCrawler {
     let blocksRolledBack = 0;
     let txsRolledBack = 0;
 
-    await cds.tx(async (tx) => {
+    try {
+      await cds.tx(async (tx) => {
+      if (this.leaseOwner) {
+        const renewed = await renewCrawlerLease(tx, this.leaseOwner);
+        if (!renewed) throw new CrawlerLeaseLostError();
+      }
       // Fork height is metrics/cursor info only — NEVER a delete axis.
       let forkHeight = point === 'origin' ? 0 : point.height;
       if (forkHeight == null && point !== 'origin') {
@@ -420,6 +564,12 @@ export class CardanoCrawler {
         txsRolledBack += txHashes.length;
 
         for (const txChunk of chunk(txHashes, IN_CHUNK)) {
+          // These denormalized/lazy indexes have no generated FK cascades. Remove
+          // them before their parent tx/output rows so orphan data cannot leak via OData.
+          await tx.run(DELETE.from(UTxOAssets).where({ utxo_hash: { in: txChunk } }));
+          await tx.run(DELETE.from(AddressUTxOs).where({ hash: { in: txChunk } }));
+          await tx.run(DELETE.from(AddressTransactions).where({ tx_hash: { in: txChunk } }));
+          await tx.run(DELETE.from(AssetHistory).where({ txHash: { in: txChunk } }));
           await tx.run(DELETE.from(TransactionInputAssets).where({ input_tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(TransactionOutputAssets).where({ output_tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(TransactionInputs).where({ tx_hash: { in: txChunk } }));
@@ -434,7 +584,7 @@ export class CardanoCrawler {
         ? { slot: forkSlot, hash: this.config.startBlockHash ?? '', height: 0 }
         : { slot: point.slot, hash: point.hash, height: forkHeight ?? 0 });
 
-      await tx.run(INSERT.into(CardanoReorgLog).entries({
+        await tx.run(INSERT.into(CardanoReorgLog).entries({
         ID: cds.utils.uuid(),
         detectedAt: new Date().toISOString(),
         forkSlot,
@@ -443,10 +593,58 @@ export class CardanoCrawler {
         newTipHash: point === 'origin' ? null : point.hash,
         blocksRolledBack,
         status: 'completed',
-      }));
-    });
+        }));
+      });
+    } catch (err) {
+      if (err instanceof CrawlerLeaseLostError) {
+        await this.halt('stopped');
+        throw new CrawlerStoppedError();
+      }
+      throw err;
+    }
 
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
+  }
+
+  /** Renew the lease while an Ogmios stream is idle; block writes renew it transactionally. */
+  private startLeaseHeartbeat(): void {
+    if (!this.leaseOwner || this.leaseHeartbeat) return;
+    const intervalMs = Math.max(1_000, Math.floor(CRAWLER_LEASE_TTL_MS / 3));
+    this.leaseHeartbeat = (async () => {
+      while (this.running) {
+        await this.leaseSleep(intervalMs);
+        if (!this.running) return;
+        try {
+          const renewed = await cds.tx((tx) => renewCrawlerLease(tx, this.leaseOwner!));
+          if (!renewed) {
+            logger.warn('Crawler heartbeat lost the DB lease or observed a cluster pause.');
+            await this.halt('stopped');
+            return;
+          }
+        } catch (err) {
+          logger.error('Crawler lease heartbeat failed:', err);
+          const streak = await this.recordCrawlerError(err);
+          await this.halt(streak < 0 ? 'stopped' : 'error');
+          return;
+        }
+      }
+    })();
+  }
+
+  /** Record state only while this instance still owns the lease. */
+  private async recordCrawlerError(err: unknown): Promise<number> {
+    if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) {
+      return -1;
+    }
+    return await cds.tx((tx) => recordError(tx, err, this.leaseOwner)).catch(() => 0);
+  }
+
+  private leaseSleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.leaseWake = null; resolve(); }, ms);
+      timer.unref?.();
+      this.leaseWake = () => { clearTimeout(timer); this.leaseWake = null; resolve(); };
+    });
   }
 
   /** Cancellable, unref'd delay — halt() wakes it so shutdown never waits out a poll. */

@@ -172,8 +172,13 @@ describe('KoiosBackend pagination (forward iteration)', () => {
     ]);
   });
 
-  it('getNextBlocks skips the hash→height resolution when the caller supplies the anchor height', async () => {
-    // NOTE: no /block_info nock for the anchor — the hint must make that call unnecessary
+  it('getNextBlocks validates a supplied height against the canonical anchor without resolving the hash via /block_info', async () => {
+    const afterHash = 'a'.repeat(64);
+    // The hint avoids /block_info, but still requires a canonical hash check at H.
+    nock(KOIOS_BASE)
+      .get('/api/v1/blocks')
+      .query({ block_height: 'eq.100', limit: '1' })
+      .reply(200, [{ hash: afterHash }]);
     nock(KOIOS_BASE)
       .get('/api/v1/blocks')
       .query({ block_height: 'gt.100', order: 'block_height.asc', limit: '1' })
@@ -182,8 +187,23 @@ describe('KoiosBackend pagination (forward iteration)', () => {
       .post('/api/v1/block_info')
       .reply(200, [koiosBlockInfo({ hash: 'd'.repeat(64), block_height: 101 })]);
 
-    const blocks = await backend.getNextBlocks('a'.repeat(64), 1, 100);
+    const blocks = await backend.getNextBlocks(afterHash, 1, 100);
     expect(blocks.map(b => b.height)).toEqual([101]);
+  });
+
+  it('getNextBlocks raises the stable reorg marker when the hinted cursor hash is no longer canonical', async () => {
+    const orphanHash = 'a'.repeat(64);
+    const canonicalHash = 'f'.repeat(64);
+    nock(KOIOS_BASE)
+      .get('/api/v1/blocks')
+      .query({ block_height: 'eq.100', limit: '1' })
+      .reply(200, [{ hash: canonicalHash }]);
+
+    await expect(backend.getNextBlocks(orphanHash, 2, 100)).rejects.toMatchObject({
+      name: 'ProviderUnavailableError',
+      statusCode: 503,
+      message: expect.stringMatching(/^CHAIN_POINT_MISMATCH:/),
+    });
   });
 
   it('getBlockTransactions maps the flattened /block_txs shape through the /tx_info batch', async () => {
@@ -211,6 +231,23 @@ describe('KoiosBackend pagination (forward iteration)', () => {
 
     const txs = await backend.getBlockTransactions('blk'.padEnd(64, '0'));
     expect(txs.map(t => t.hash)).toEqual(['t3'.padEnd(64, '0')]);
+  });
+
+  it('getBlockTransactions rejects a partial /tx_info batch instead of advancing the block', async () => {
+    const tx1 = 't1'.padEnd(64, '0');
+    const tx2 = 't2'.padEnd(64, '0');
+    nock(KOIOS_BASE)
+      .post('/api/v1/block_txs')
+      .reply(200, [{ tx_hash: tx1 }, { tx_hash: tx2 }]);
+    jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+      [tx1, { hash: tx1 } as never],
+    ]));
+
+    await expect(backend.getBlockTransactions('blk'.padEnd(64, '0'))).rejects.toMatchObject({
+      name: 'ProviderUnavailableError',
+      statusCode: 503,
+      message: expect.stringContaining('1/2 transaction(s) missing'),
+    });
   });
 });
 

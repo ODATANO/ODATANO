@@ -127,7 +127,11 @@ describe('CardanoIndexer.indexBlockFull — bulk persistence', () => {
 });
 
 describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
-  it('fetches an epoch once and reuses it for subsequent blocks of the same epoch', async () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('reuses the network snapshot but UPSERTs it in every block transaction', async () => {
     const getEpoch = jest.fn().mockResolvedValue({
       epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
       block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
@@ -138,9 +142,46 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
 
     expect(getEpoch).toHaveBeenCalledTimes(1); // memoized — NOT one HTTP call per block
+    expect(upsertsFor('Epoch')).toHaveLength(2); // rollback-safe: no uncommitted JS flag
   });
 
-  it('re-fetches when the epoch changes', async () => {
+  it('final-refreshes the previous epoch when the epoch changes', async () => {
+    const getEpoch = jest.fn(async (epoch: number) => ({
+      epoch, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: epoch === 7 ? 99 : 2,
+      block_count: epoch === 7 ? 99 : 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
+    }));
+    const { indexer } = makeIndexer(getEpoch);
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 8 }), []);
+
+    expect(getEpoch.mock.calls.map(([epoch]) => epoch)).toEqual([7, 7, 8]);
+    const persisted = upsertsFor('Epoch').at(-1)!.entries as Array<Record<string, unknown>>;
+    expect(persisted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ epoch: 7, blockCount: 99, lastBlockTime: 99 }),
+      expect.objectContaining({ epoch: 8 }),
+    ]));
+  });
+
+  it('backs off a failing epoch fetch briefly, then retries it', async () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const getEpoch = jest.fn().mockRejectedValue(new Error('ogmios: only current epoch'));
+    const { indexer } = makeIndexer(getEpoch);
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
+
+    expect(getEpoch).toHaveBeenCalledTimes(1); // immediate retry is suppressed
+    now += 30_001;
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk3'.padEnd(64, '9') }), []);
+    expect(getEpoch).toHaveBeenCalledTimes(2);
+    expect(upsertsFor('Block')).toHaveLength(3); // enrichment failure never blocks persist
+  });
+
+  it('refreshes a live epoch after the refresh interval', async () => {
+    let now = 1_000_000;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
     const getEpoch = jest.fn().mockResolvedValue({
       epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
       block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
@@ -148,20 +189,34 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     const { indexer } = makeIndexer(getEpoch);
 
     await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 8 }), []);
+    now += 5 * 60 * 1000 + 1;
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
 
     expect(getEpoch).toHaveBeenCalledTimes(2);
   });
 
-  it('negative-caches a failing epoch fetch (no retry per block, block still persisted)', async () => {
-    const getEpoch = jest.fn().mockRejectedValue(new Error('ogmios: only current epoch'));
+  it('retries the Epoch UPSERT after a later write rolls the transaction back', async () => {
+    const getEpoch = jest.fn().mockResolvedValue({
+      epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
+      block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
+    });
     const { indexer } = makeIndexer(getEpoch);
+    const failedWrites: Q[] = [];
+    const failingTx = {
+      run: jest.fn(async (q: Q) => {
+        failedWrites.push(q);
+        if (q._op === 'UPSERT' && q.entity === 'Block') throw new Error('rollback');
+        return undefined;
+      }),
+    };
 
+    await expect(indexer.indexBlockFull(failingTx as never, blockData({ epoch: 7 }), []))
+      .rejects.toThrow('rollback');
     await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
 
-    expect(getEpoch).toHaveBeenCalledTimes(1); // miss cached too
-    expect(upsertsFor('Block')).toHaveLength(2); // enrichment failure never blocks persist
+    expect(failedWrites.filter(q => q._op === 'UPSERT' && q.entity === 'Epoch')).toHaveLength(1);
+    expect(upsertsFor('Epoch')).toHaveLength(1);
+    expect(upsertsFor('Block')).toHaveLength(1);
   });
 });
 

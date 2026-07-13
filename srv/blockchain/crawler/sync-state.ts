@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
 import { CardanoSyncState } from '#cds-models/odatano/cardano';
+import { ConfigError } from '../../utils/errors';
 
 const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoCrawler');
@@ -21,6 +22,9 @@ export const SINGLETON_ID = 'SINGLETON';
 
 /** Circuit-breaker threshold: pause crawling after this many back-to-back failures. */
 export const MAX_CONSECUTIVE_ERRORS = 10;
+
+/** A short, renewable DB lease prevents two app instances from advancing one cursor. */
+export const CRAWLER_LEASE_TTL_MS = 15_000;
 
 export type CrawlSyncStatusValue = 'stopped' | 'syncing' | 'synced' | 'error';
 
@@ -43,34 +47,56 @@ export interface SyncCursor {
   tipHeight: number | null;
   syncStatus: CrawlSyncStatusValue;
   consecutiveErrors: number;
+  desiredRunning: boolean;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
 }
 
 /**
  * Coerce a CAP-10 numeric-as-string (or number/bigint/null) into a JS number.
- * Overloaded so the return type tracks the fallback — a numeric fallback guarantees
- * a number (no `as number` casts at the call sites).
+ * Separate optional/required helpers avoid overload declarations (and the
+ * no-redeclare lint false-positive they caused).
  */
-function num(v: unknown): number | null;
-function num(v: unknown, fallback: number): number;
-function num(v: unknown, fallback: number | null = null): number | null {
-  if (v === null || v === undefined || v === '') return fallback;
+function optionalNum(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
-  return Number.isNaN(n) ? fallback : n;
+  return Number.isNaN(n) ? null : n;
+}
+
+function requiredNum(v: unknown, fallback = 0): number {
+  return optionalNum(v) ?? fallback;
+}
+
+function timestamp(v: unknown): string | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) return v.toISOString();
+  return String(v);
+}
+
+function leaseDeadlineReached(cursor: SyncCursor | null, owner: string, expectedMs: number): boolean {
+  if (cursor?.desiredRunning !== true || cursor.leaseOwner !== owner || !cursor.leaseUntil) return false;
+  const actualMs = Date.parse(cursor.leaseUntil);
+  // Some adapters normalize Timestamp precision/format. One second tolerance covers
+  // that representation change without accepting an old lease interval.
+  return Number.isFinite(actualMs) && actualMs >= expectedMs - 1_000;
 }
 
 /** Map a raw DB row into the normalized numeric cursor. */
 function toCursor(row: Record<string, unknown>): SyncCursor {
   return {
     network: (row.network as string) ?? null,
-    startSlot: num(row.startSlot),
+    startSlot: optionalNum(row.startSlot),
     startBlockHash: (row.startBlockHash as string) ?? null,
-    lastSlot: num(row.lastSlot, 0),
+    lastSlot: requiredNum(row.lastSlot),
     lastBlockHash: (row.lastBlockHash as string) ?? null,
-    lastHeight: num(row.lastHeight, 0),
-    tipSlot: num(row.tipSlot),
-    tipHeight: num(row.tipHeight),
+    lastHeight: requiredNum(row.lastHeight),
+    tipSlot: optionalNum(row.tipSlot),
+    tipHeight: optionalNum(row.tipHeight),
     syncStatus: ((row.syncStatus as CrawlSyncStatusValue) ?? 'stopped'),
-    consecutiveErrors: num(row.consecutiveErrors, 0),
+    consecutiveErrors: requiredNum(row.consecutiveErrors),
+    desiredRunning: row.desiredRunning !== false,
+    leaseOwner: (row.leaseOwner as string) ?? null,
+    leaseUntil: timestamp(row.leaseUntil),
   };
 }
 
@@ -86,7 +112,15 @@ export async function ensureSyncStateSingleton(
   start?: CrawlPoint,
 ): Promise<SyncCursor> {
   const existing = await db.run(SELECT.one.from(CardanoSyncState).where({ ID: SINGLETON_ID }));
-  if (existing) return toCursor(existing as Record<string, unknown>);
+  if (existing) {
+    const cursor = toCursor(existing as Record<string, unknown>);
+    if (cursor.network !== network) {
+      throw new ConfigError(
+        `Crawler cursor network mismatch: persisted cursor tracks ${cursor.network ?? 'an unknown network'}, configured client is ${network}.`,
+      );
+    }
+    return cursor;
+  }
 
   const row = {
     ID: SINGLETON_ID,
@@ -100,6 +134,9 @@ export async function ensureSyncStateSingleton(
     tipHeight: null,
     syncStatus: 'stopped' as CrawlSyncStatusValue,
     consecutiveErrors: 0,
+    desiredRunning: true,
+    leaseOwner: null,
+    leaseUntil: null,
   };
   await db.run(INSERT.into(CardanoSyncState).entries(row));
   logger.info(`Sync cursor initialized (network=${network}, start=${start ? `${start.slot}/${start.hash}` : 'none'})`);
@@ -110,6 +147,90 @@ export async function ensureSyncStateSingleton(
 export async function readCursor(db: CapTransaction): Promise<SyncCursor | null> {
   const row = await db.run(SELECT.one.from(CardanoSyncState).where({ ID: SINGLETON_ID }));
   return row ? toCursor(row as Record<string, unknown>) : null;
+}
+
+/** Whether the shared lease currently represents a live cluster-wide crawler. */
+export function isCrawlerLeaseActive(cursor: SyncCursor | null, now = new Date()): boolean {
+  if (!cursor?.desiredRunning || !cursor.leaseOwner || !cursor.leaseUntil) return false;
+  const deadline = Date.parse(cursor.leaseUntil);
+  return Number.isFinite(deadline) && deadline > now.getTime();
+}
+
+/**
+ * Atomically acquire an expired/unowned lease with compare-and-swap semantics.
+ * The post-update read is intentional: CAP adapters consistently return the row
+ * for SELECT, whereas affected-row return shapes differ between SQLite and HANA.
+ */
+export async function tryAcquireCrawlerLease(
+  db: CapTransaction,
+  owner: string,
+  now = new Date(),
+  ttlMs = CRAWLER_LEASE_TTL_MS,
+): Promise<boolean> {
+  const raw = await db.run(SELECT.one.from(CardanoSyncState).where({ ID: SINGLETON_ID })) as Record<string, unknown> | undefined;
+  if (!raw) return false;
+  const current = toCursor(raw);
+  if (!current.desiredRunning) return false;
+
+  const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
+  if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
+
+  // Compare every observed lease component. If two instances race, at most one
+  // UPDATE can still match after the first writer changes owner/expiry.
+  const where: Record<string, unknown> = {
+    ID: SINGLETON_ID,
+    leaseOwner: raw.leaseOwner ?? null,
+    leaseUntil: raw.leaseUntil ?? null,
+  };
+  if (Object.prototype.hasOwnProperty.call(raw, 'desiredRunning')) {
+    where.desiredRunning = raw.desiredRunning;
+  }
+  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  await db.run(UPDATE.entity(CardanoSyncState).set({ leaseOwner: owner, leaseUntil }).where(where));
+
+  const verified = await readCursor(db);
+  return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
+}
+
+/**
+ * Renew/fence a lease. Call this inside the same transaction as every crawler write:
+ * the conditional UPDATE serializes a former leader against a newly elected one.
+ */
+export async function renewCrawlerLease(
+  db: CapTransaction,
+  owner: string,
+  now = new Date(),
+  ttlMs = CRAWLER_LEASE_TTL_MS,
+): Promise<boolean> {
+  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  await db.run(UPDATE.entity(CardanoSyncState).set({ leaseUntil }).where({
+    ID: SINGLETON_ID,
+    leaseOwner: owner,
+    desiredRunning: true,
+  }));
+  const verified = await readCursor(db);
+  return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
+}
+
+/** Release only the caller's lease; a stale process can never clear a successor. */
+export async function releaseCrawlerLease(
+  db: CapTransaction,
+  owner: string,
+  status: CrawlSyncStatusValue,
+): Promise<void> {
+  await db.run(UPDATE.entity(CardanoSyncState).set({
+    leaseOwner: null,
+    leaseUntil: null,
+    syncStatus: status,
+    ...(status === 'error' ? { desiredRunning: false } : {}),
+  }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
+}
+
+/** Persist the pause/resume intent shared by every app instance. */
+export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunning: boolean): Promise<void> {
+  const set: Record<string, unknown> = { desiredRunning };
+  if (!desiredRunning) set.syncStatus = 'stopped';
+  await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
 }
 
 /**
@@ -160,7 +281,8 @@ export async function setSyncStatus(db: CapTransaction, status: CrawlSyncStatusV
  * to 'error' once the circuit-breaker threshold is reached. Returns the new streak
  * length so the caller can decide whether to back off / stop.
  */
-export async function recordError(db: CapTransaction, err: unknown): Promise<number> {
+export async function recordError(db: CapTransaction, err: unknown, leaseOwner?: string): Promise<number> {
+  if (leaseOwner && !(await renewCrawlerLease(db, leaseOwner))) return -1;
   const current = await readCursor(db);
   const streak = (current?.consecutiveErrors ?? 0) + 1;
   const message = err instanceof Error ? err.message : String(err);

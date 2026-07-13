@@ -9,7 +9,7 @@ using {odatano.cardano as db} from '../db/schema';
  *
  * Security note: see CardanoODataService (cardano-service.cds) for the rationale on
  * service-level auth. pause/resume are operational actions — gate behind a dedicated
- * admin role in the consumer app if finer control is required.
+ * Admin scope. Read-only status and audit data remain available to authenticated users.
  */
 @requires: 'authenticated-user'
 service CardanoIndexerService @(impl: './cardano-indexer-service') {
@@ -42,9 +42,11 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     @title      : 'Pause Crawler'
     @description: 'Stop the crawler (closes the chain-sync stream). Resume continues from the cursor.'
+    @requires   : 'Admin'
     action   pauseCrawler()  returns Boolean;
 
     @title      : 'Resume Crawler'
     @description: 'Start/restart the crawler from the persisted cursor using the configured source.'
+    @requires   : 'Admin'
     action   resumeCrawler() returns Boolean;
 }

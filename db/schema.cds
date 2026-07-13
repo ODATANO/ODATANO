@@ -1417,6 +1417,18 @@ entity CardanoSyncState {
         @title      : 'Consecutive Errors'
         @description: 'Count of back-to-back failures; trips the circuit breaker past its threshold'
         consecutiveErrors : Integer default 0;
+
+        @title      : 'Crawler Desired Running State'
+        @description: 'Cluster-wide operator intent. False fences every crawler instance before its next write.'
+        desiredRunning    : Boolean default true;
+
+        @title      : 'Crawler Lease Owner'
+        @description: 'Opaque process identifier of the single crawler instance currently allowed to write'
+        leaseOwner        : String(128);
+
+        @title      : 'Crawler Lease Expiry'
+        @description: 'Lease deadline renewed by the active crawler; another instance may take over only after this time'
+        leaseUntil        : Timestamp;
 }
 
 @title      : 'Cardano Reorg Log'

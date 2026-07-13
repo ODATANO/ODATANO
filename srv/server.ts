@@ -16,6 +16,35 @@ const logger = cds.log('ODATANO');
 const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
 const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios'];
 
+const CRAWLER_LIMITS = {
+  batchSize: { min: 1, max: 100 },
+  confirmationDepth: { min: 0, max: 2160 },
+  pollIntervalMs: { min: 1000, max: 3_600_000 },
+} as const;
+
+/** Parse an integer without allowing JavaScript's lossy/implicit coercions. */
+function crawlerInteger(
+  raw: unknown,
+  name: string,
+  min: number,
+  max: number,
+  defaultValue?: number,
+): number | undefined {
+  if (raw == null) return defaultValue;
+  if (
+    (typeof raw !== 'number' && typeof raw !== 'string')
+    || (typeof raw === 'string' && raw.trim() === '')
+  ) {
+    throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be an integer between ${min} and ${max}.`);
+  }
+
+  const parsed = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be an integer between ${min} and ${max}.`);
+  }
+  return parsed;
+}
+
 /**
  * Application context holding initialized blockchain components
  * These are created once during CAP bootstrap and shared across services
@@ -375,14 +404,55 @@ export function loadCrawlerConfigFromEnv(): CrawlerConfig {
   const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
   const c = cdsConfig.crawler ?? {};
 
-  const enabled = c.enabled === true || env.CRAWLER_ENABLED === 'true';
-  const startSlot = c.startSlot ?? (env.CRAWLER_START_SLOT ? Number(env.CRAWLER_START_SLOT) : undefined);
-  const startBlockHash = c.startBlockHash ?? env.CRAWLER_START_HASH ?? undefined;
-  const startHeight = c.startHeight ?? (env.CRAWLER_START_HEIGHT ? Number(env.CRAWLER_START_HEIGHT) : undefined);
+  // A CDS value, including explicit `false`, wins over the environment.
+  const enabledRaw = c.enabled !== undefined ? c.enabled : env.CRAWLER_ENABLED;
+  let enabled = false;
+  if (enabledRaw === true || enabledRaw === 'true') {
+    enabled = true;
+  } else if (enabledRaw !== undefined && enabledRaw !== false && enabledRaw !== 'false') {
+    throw new ConfigError(`Invalid CRAWLER_ENABLED "${String(enabledRaw)}". Must be true or false.`);
+  }
+
+  const startSlot = crawlerInteger(
+    c.startSlot ?? env.CRAWLER_START_SLOT,
+    'CRAWLER_START_SLOT',
+    0,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const startHeight = crawlerInteger(
+    c.startHeight ?? env.CRAWLER_START_HEIGHT,
+    'CRAWLER_START_HEIGHT',
+    0,
+    Number.MAX_SAFE_INTEGER,
+  );
+
+  const startBlockHashRaw = c.startBlockHash ?? env.CRAWLER_START_HASH;
+  if (startBlockHashRaw != null && (typeof startBlockHashRaw !== 'string' || !/^[0-9a-f]{64}$/i.test(startBlockHashRaw.trim()))) {
+    throw new ConfigError('Invalid CRAWLER_START_HASH. Must be exactly 64 hexadecimal characters.');
+  }
+  const startBlockHash = startBlockHashRaw?.trim() || undefined;
   const source = (c.source ?? env.CRAWLER_SOURCE ?? 'auto') as CrawlerConfig['source'];
-  const batchSize = Number(c.batchSize ?? env.CRAWLER_BATCH_SIZE) || 20;
-  const confirmationDepth = Number(c.confirmationDepth ?? env.CRAWLER_CONFIRMATION_DEPTH ?? 3);
-  const pollIntervalMs = Number(c.pollIntervalMs ?? env.CRAWLER_POLL_INTERVAL_MS) || 20000;
+  const batchSize = crawlerInteger(
+    c.batchSize ?? env.CRAWLER_BATCH_SIZE,
+    'CRAWLER_BATCH_SIZE',
+    CRAWLER_LIMITS.batchSize.min,
+    CRAWLER_LIMITS.batchSize.max,
+    20,
+  )!;
+  const confirmationDepth = crawlerInteger(
+    c.confirmationDepth ?? env.CRAWLER_CONFIRMATION_DEPTH,
+    'CRAWLER_CONFIRMATION_DEPTH',
+    CRAWLER_LIMITS.confirmationDepth.min,
+    CRAWLER_LIMITS.confirmationDepth.max,
+    3,
+  )!;
+  const pollIntervalMs = crawlerInteger(
+    c.pollIntervalMs ?? env.CRAWLER_POLL_INTERVAL_MS,
+    'CRAWLER_POLL_INTERVAL_MS',
+    CRAWLER_LIMITS.pollIntervalMs.min,
+    CRAWLER_LIMITS.pollIntervalMs.max,
+    20_000,
+  )!;
 
   if (enabled && (startSlot == null || Number.isNaN(startSlot) || !startBlockHash)) {
     throw new ConfigError(

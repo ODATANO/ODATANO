@@ -291,6 +291,16 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
   });
 
+  it('preserves original Conway auxiliary-data CBOR through the runtime patch', () => {
+    // Key 0 is deliberately encoded non-canonically as 0x18 0x00. The parser must
+    // retain the original SubCborRef so a parse/toCbor round trip does not silently
+    // canonicalize and therefore change the auxiliary-data hash.
+    const originalHex = 'd90103a11800a0';
+    const auxiliaryData = AuxiliaryData.fromCbor(Buffer.from(originalHex, 'hex'));
+
+    expect(Buffer.from(auxiliaryData.toCbor()).toString('hex')).toBe(originalHex);
+  });
+
   it('counts vkey witnesses on a signed-style CBOR', () => {
     const vkey = new Hash32('3'.repeat(64));
     const signature = new Signature('4'.repeat(128)); // Ed25519 signature: 64 bytes / 128 hex

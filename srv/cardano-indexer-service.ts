@@ -1,8 +1,8 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid } from './utils/errors';
-import { isCrawlerRunning, startCrawler, stopCrawler } from './blockchain/crawler';
-import { readCursor } from './blockchain/crawler/sync-state';
+import { isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
+import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 
@@ -24,7 +24,7 @@ module.exports = (srv: cds.Service) => {
       const progress = tipHeight > 0 ? Math.min(100, (lastHeight / tipHeight) * 100) : 0;
 
       return {
-        running: isCrawlerRunning(),
+        running: isCrawlerLeaseActive(cursor),
         syncStatus: cursor?.syncStatus ?? 'stopped',
         lastSlot: String(cursor?.lastSlot ?? 0),
         lastHeight: String(lastHeight),
@@ -38,7 +38,7 @@ module.exports = (srv: cds.Service) => {
   // pauseCrawler — stop the stream; the cursor is preserved so resume continues.
   srv.on('pauseCrawler', async (req: Request) => {
     return handleRequest(req, async () => {
-      await stopCrawler();
+      await stopCrawler(true);
       logger.info('Crawler paused via control action');
       return true;
     });
@@ -68,9 +68,9 @@ module.exports = (srv: cds.Service) => {
         indexer: getCardanoIndexer(),
         network: client.network,
         config,
-      });
+      }, true);
       logger.info('Crawler resumed via control action');
-      return isCrawlerRunning();
+      return isCrawlerRunningInCluster();
     });
   });
 };

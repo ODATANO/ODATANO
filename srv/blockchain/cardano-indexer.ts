@@ -102,14 +102,27 @@ export class CardanoIndexer {
   private client: CardanoClient;
   private txBuilder: CardanoTransactionBuilder;
   private lastParamsFetchTime = 0;
+
+  private static readonly CRAWL_EPOCH_REFRESH_MS = 5 * 60 * 1000;
+  private static readonly CRAWL_EPOCH_RETRY_MS = 30 * 1000;
+
   /**
-   * Crawler epoch memo: epochs change once per ~5 days, but indexBlockFull runs per
-   * block — without this, every crawled block paid one client.getEpoch() HTTP call
-   * (and on Ogmios-only deployments a guaranteed failing round-trip).
-   * `row: undefined` is a cached negative so a failing epoch isn't retried per block;
-   * `persisted` tracks the one-time Epoch UPSERT inside the block transaction.
+   * Crawler epoch memo. Network reads are refreshed periodically while an epoch is
+   * live and once more when the next epoch starts, so counters such as block_count,
+   * fees and lastBlockTime do not remain frozen at their first observed value.
+   *
+   * At most the current and immediately previous epoch are retained. The rows are
+   * intentionally UPSERTed in every block transaction: the caller owns that
+   * transaction, so an in-memory "persisted" bit cannot know whether its commit later
+   * succeeded. Repeating one local UPSERT is cheap and remains correct after rollback.
    */
-  private crawlEpochCache: { epoch: number; row?: Epoch; persisted: boolean } | null = null;
+  private crawlEpochCache = new Map<number, {
+    row?: Epoch;
+    nextRefreshAt: number;
+    finalized: boolean;
+  }>();
+  private crawlEpochCurrent: number | null = null;
+  private crawlEpochPrevious: number | null = null;
 
   /**
    * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block
@@ -117,16 +130,59 @@ export class CardanoIndexer {
    * lock is held (indexBlockFull then serves the epoch from this memo). Never throws.
    */
   async prefetchCrawlEpoch(epochNumber: number): Promise<void> {
-    if (this.crawlEpochCache?.epoch === epochNumber) return;
-    let row: Epoch | undefined;
-    try {
-      row = mapEpoch(await this.client.getEpoch(epochNumber));
-    } catch {
-      // epoch data may be unavailable (e.g. Koios drops in-progress/old epochs;
-      // Ogmios only serves the current epoch) — cache the miss too
-      row = undefined;
+    const previousEpoch = this.crawlEpochCurrent;
+    const enteringNewEpoch = previousEpoch !== null && previousEpoch !== epochNumber;
+
+    // At an epoch boundary, refresh the completed epoch one last time. A failed
+    // final refresh is retried with a short backoff on subsequent blocks.
+    if (enteringNewEpoch && previousEpoch !== null) {
+      await this.refreshCrawlEpoch(previousEpoch, true, true);
+      this.crawlEpochPrevious = previousEpoch;
+    } else {
+      for (const [cachedEpoch, entry] of this.crawlEpochCache) {
+        if (cachedEpoch !== epochNumber && !entry.finalized) {
+          await this.refreshCrawlEpoch(cachedEpoch, false, true);
+        }
+      }
     }
-    this.crawlEpochCache = { epoch: epochNumber, row, persisted: false };
+
+    await this.refreshCrawlEpoch(epochNumber, false, false);
+    this.crawlEpochCurrent = epochNumber;
+
+    // Keep only the live epoch and its predecessor/final snapshot.
+    for (const cachedEpoch of this.crawlEpochCache.keys()) {
+      if (cachedEpoch !== epochNumber && cachedEpoch !== this.crawlEpochPrevious) {
+        this.crawlEpochCache.delete(cachedEpoch);
+      }
+    }
+  }
+
+  private async refreshCrawlEpoch(
+    epochNumber: number,
+    force: boolean,
+    finalized: boolean,
+  ): Promise<void> {
+    const now = Date.now();
+    const existing = this.crawlEpochCache.get(epochNumber);
+    if (existing?.finalized && finalized) return;
+    if (!force && existing && now < existing.nextRefreshAt) return;
+
+    try {
+      const row = mapEpoch(await this.client.getEpoch(epochNumber));
+      this.crawlEpochCache.set(epochNumber, {
+        row,
+        nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_REFRESH_MS,
+        finalized,
+      });
+    } catch {
+      // Keep the last good snapshot, but retry transient/negative results soon rather
+      // than suppressing enrichment for the rest of the five-day epoch.
+      this.crawlEpochCache.set(epochNumber, {
+        row: existing?.row,
+        nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_RETRY_MS,
+        finalized: false,
+      });
+    }
   }
 
   /**
@@ -579,14 +635,13 @@ export class CardanoIndexer {
     // if the caller skipped it, resolve now (memoized) and accept the in-tx fetch.
     let epoch: Epoch | undefined;
     if (blockData.epoch != null) {
-      if (this.crawlEpochCache?.epoch !== blockData.epoch) {
-        await this.prefetchCrawlEpoch(blockData.epoch);
-      }
-      epoch = this.crawlEpochCache?.row;
-      if (epoch && this.crawlEpochCache && !this.crawlEpochCache.persisted) {
-        await tx.run(UPSERT.into(Epoch).entries([epoch]));
-        this.crawlEpochCache.persisted = true;
-      }
+      await this.prefetchCrawlEpoch(blockData.epoch);
+      epoch = this.crawlEpochCache.get(blockData.epoch)?.row;
+
+      const epochRows = [...this.crawlEpochCache.values()]
+        .map((entry) => entry.row)
+        .filter((row): row is Epoch => row !== undefined);
+      if (epochRows.length) await tx.run(UPSERT.into(Epoch).entries(epochRows));
     }
     await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
 

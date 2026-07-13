@@ -35,6 +35,10 @@ jest.mock('#cds-models/odatano/cardano', () => ({
   TransactionInputAssets: 'odatano.cardano.TransactionInputAssets',
   TransactionOutputs: 'odatano.cardano.TransactionOutputs',
   TransactionOutputAssets: 'odatano.cardano.TransactionOutputAssets',
+  AddressTransactions: 'odatano.cardano.AddressTransactions',
+  AddressUTxOs: 'odatano.cardano.AddressUTxOs',
+  UTxOAssets: 'odatano.cardano.UTxOAssets',
+  AssetHistory_: 'odatano.cardano.AssetHistory',
   TransactionMetadata_: 'odatano.cardano.TransactionMetadata',
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
@@ -81,6 +85,7 @@ describe('CardanoCrawler.handleReorg', () => {
     expect(deletes).toEqual(expect.arrayContaining([
       'TransactionInputAssets', 'TransactionOutputAssets',
       'TransactionInputs', 'TransactionOutputs', 'TransactionMetadata',
+      'AddressTransactions', 'AddressUTxOs', 'UTxOAssets', 'AssetHistory',
       'Transactions', 'Blocks',
     ]));
 

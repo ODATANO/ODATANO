@@ -131,8 +131,13 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
  */
 interface OgmiosChainSyncTx {
   id: string;
+  /** Which input/output partition was applied by the ledger (phase-2 validity). */
+  spends: 'inputs' | 'collaterals';
   inputs: { transaction: { id: string }; index: number }[];
+  references?: { transaction: { id: string }; index: number }[];
+  collaterals?: { transaction: { id: string }; index: number }[];
   outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string }[];
+  collateralReturn?: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string };
   fee?: { ada: { lovelace: number | bigint } };
   metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
 }
@@ -249,13 +254,37 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
     // Keep this SHORT: the orchestrator retries init a few times within the
     // integration suite's 20s cds.test() hook, so each attempt must be brief.
     // Still bounds a genuinely hung connect in production.
-    const ms = Math.min(this.timeoutMs, 4000);
+    const ms = Math.max(1, Math.min(this.timeoutMs, 4000));
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<T>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`Ogmios init timeout after ${ms}ms (${label})`)), ms);
       timer.unref?.();
     });
     return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Force-release an Ogmios interaction socket after a failed/expired open or
+   * close step. The runtime uses `ws` (and therefore supports `terminate`), but
+   * the close fallback keeps the helper compatible with the public structural
+   * InteractionContext type and lightweight test doubles.
+   */
+  private forceCloseContext(context: Awaited<ReturnType<typeof createInteractionContext>>): void {
+    const socket = context.socket as unknown as {
+      terminate?: () => void;
+      close?: () => void;
+      readyState?: number;
+      CLOSED?: number;
+    };
+    try {
+      if (typeof socket.terminate === 'function') {
+        socket.terminate();
+      } else if (typeof socket.close === 'function' && socket.readyState !== (socket.CLOSED ?? 3)) {
+        socket.close();
+      }
+    } catch {
+      // Best effort only: the socket may already have completed its close event.
+    }
   }
 
   /**
@@ -843,19 +872,56 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
       tls: url.protocol === 'wss:'
     };
 
-    const context = await createInteractionContext(
-      /* c8 ignore next */
-      (err) => logger.error(`[OgmiosBackend] chain-sync context error: ${err.message}`),
-      () => { if (!this.isShutdown) logger.warn('[OgmiosBackend] chain-sync socket closed'); },
+    let intentionalClose = false;
+    let terminalErrorReported = false;
+
+    // Context callbacks are synchronous, while the crawler callback is async.
+    // Start it without leaving an unhandled rejection and suppress the common
+    // error+close double notification for a single broken socket.
+    const reportStreamError = async (err: unknown): Promise<void> => {
+      if (intentionalClose || this.isShutdown || terminalErrorReported) return;
+      terminalErrorReported = true;
+      try {
+        await callbacks.onError?.(err);
+      } catch (callbackError) {
+        logger.error('[OgmiosBackend] chain-sync onError callback failed:', callbackError);
+      }
+    };
+    const contextPromise = createInteractionContext(
+      (err) => {
+        logger.error(`[OgmiosBackend] chain-sync context error: ${err.message}`);
+        void reportStreamError(err);
+      },
+      (code, reason) => {
+        if (intentionalClose || this.isShutdown) return;
+        const detail = reason?.toString() || 'no reason supplied';
+        const err = new ProviderUnavailableError(
+          `Ogmios chain-sync socket closed unexpectedly (code ${code}: ${detail})`,
+          this.name
+        );
+        logger.warn(`[OgmiosBackend] ${err.message}`);
+        void reportStreamError(err);
+      },
       { connection }
     );
+
+    let context: Awaited<ReturnType<typeof createInteractionContext>>;
+    try {
+      context = await this.withInitTimeout(contextPromise, 'chainSync/createInteractionContext');
+    } catch (err) {
+      // A timeout rejects our race but cannot cancel the library's health probe /
+      // handshake. If it resolves later, close that late socket as well.
+      intentionalClose = true;
+      void contextPromise.then(lateContext => this.forceCloseContext(lateContext)).catch(() => undefined);
+      throw err;
+    }
 
     // Both handlers are fully try/caught: the ogmios client lib awaits them with NO
     // catch of its own, and with sequential+inFlight:1 a throw before nextBlock()
     // stalls the stream forever. On error we deliberately do NOT call nextBlock()
     // (stopping deterministically instead of skipping a block) and surface the error
     // via callbacks.onError so the consumer can record it and close/restart.
-    const client = await createChainSynchronizationClient(context, {
+    const handlers: Parameters<typeof createChainSynchronizationClient>[1] = {
       rollForward: async ({ block, tip }, nextBlock) => {
         try {
           const b = block as unknown as OgmiosPraosBlock;
@@ -870,7 +936,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
           nextBlock();
         } catch (err) {
           logger.error('[OgmiosBackend] chain-sync rollForward failed — stream halted:', err);
-          await callbacks.onError?.(err);
+          await reportStreamError(err);
         }
       },
       rollBackward: async ({ point }, nextBlock) => {
@@ -880,15 +946,53 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
           nextBlock();
         } catch (err) {
           logger.error('[OgmiosBackend] chain-sync rollBackward failed — stream halted:', err);
-          await callbacks.onError?.(err);
+          await reportStreamError(err);
         }
       },
-    }, { sequential: true });
+    };
 
-    const points = from === 'origin' ? ['origin'] : [{ slot: from.slot, id: from.hash }];
-    await client.resume(points as Parameters<typeof client.resume>[0], 1);
+    let client: Awaited<ReturnType<typeof createChainSynchronizationClient>> | undefined;
+    try {
+      client = await this.withInitTimeout(
+        createChainSynchronizationClient(context, handlers, { sequential: true }),
+        'chainSync/createClient'
+      );
+      const points = from === 'origin' ? ['origin'] : [{ slot: from.slot, id: from.hash }];
+      await this.withInitTimeout(
+        client.resume(points as Parameters<typeof client.resume>[0], 1),
+        'chainSync/resume'
+      );
+    } catch (err) {
+      intentionalClose = true;
+      if (client) {
+        try {
+          await this.withInitTimeout(client.shutdown(), 'chainSync/failedOpenShutdown');
+        } catch {
+          // forceCloseContext below is the final cleanup path
+        }
+      }
+      this.forceCloseContext(context);
+      throw err;
+    }
 
-    return { close: async () => { await client.shutdown(); } };
+    let closePromise: Promise<void> | null = null;
+    return {
+      close: () => {
+        // Idempotency matters when an operator stop races an onError-triggered halt.
+        if (!closePromise) {
+          intentionalClose = true;
+          closePromise = (async () => {
+            try {
+              await this.withInitTimeout(client.shutdown(), 'chainSync/shutdown');
+            } finally {
+              // Also handles a shutdown timeout or an already-closed socket.
+              this.forceCloseContext(context);
+            }
+          })();
+        }
+        return closePromise;
+      }
+    };
   }
 
   /**
@@ -924,26 +1028,51 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
   /**
    * Map a single Ogmios chain-sync transaction into our Transaction. Outputs, fee
    * and metadata are mapped fully; inputs are kept as bare references (address/amount
-   * resolved downstream by the indexer). See openChainSync KNOWN LIMITATIONS.
+   * resolved downstream by the indexer). `spends` selects the ledger-applied
+   * partition: a phase-2-invalid transaction consumes collaterals and creates only
+   * its collateral-return output, never its declared regular inputs/outputs.
    */
   private mapOgmiosTx(tx: OgmiosChainSyncTx, block: OgmiosPraosBlock, index: number): Transaction {
-    const inputs: TxInputLine[] = (tx.inputs ?? []).map(i => ({
+    const mapInput = (
+      input: { transaction: { id: string }; index: number },
+      flags: Pick<TxInputLine, 'isCollateral' | 'isReference'> = {}
+    ): TxInputLine => ({
       address: '',
       amount: [] as Amount[],
-      txHash: i.transaction.id,
-      outputIndex: i.index,
-    }));
+      txHash: input.transaction.id,
+      outputIndex: input.index,
+      ...flags,
+    });
 
-    const outputs: TxOutputLine[] = (tx.outputs ?? []).map((o, i) => ({
-      address: o.address,
-      amount: this.convertOgmiosValue(o.value),
+    const spendsCollaterals = tx.spends === 'collaterals';
+    const inputs: TxInputLine[] = [
+      ...(spendsCollaterals ? [] : (tx.inputs ?? []).map(input => mapInput(input))),
+      ...(tx.collaterals ?? []).map(input => mapInput(input, { isCollateral: true })),
+      ...(tx.references ?? []).map(input => mapInput(input, { isReference: true })),
+    ];
+
+    const mapOutput = (
+      output: OgmiosChainSyncTx['outputs'][number],
+      outputIndex: number,
+      isCollateral: boolean
+    ): TxOutputLine => ({
+      address: output.address,
+      amount: this.convertOgmiosValue(output.value),
       txHash: tx.id,
-      outputIndex: i,
-      dataHash: o.datumHash ?? null,
-      inlineDatum: o.datum ?? null,
-      isCollateral: false,
+      outputIndex,
+      dataHash: output.datumHash ?? null,
+      inlineDatum: output.datum ?? null,
+      isCollateral,
       referenceScriptHash: null,
-    }));
+    });
+
+    const outputs: TxOutputLine[] = spendsCollaterals
+      ? (tx.collateralReturn
+          // The ledger assigns collateral return the index immediately after the
+          // declared regular outputs, even though those outputs are not produced.
+          ? [mapOutput(tx.collateralReturn, tx.outputs?.length ?? 0, true)]
+          : [])
+      : (tx.outputs ?? []).map((output, outputIndex) => mapOutput(output, outputIndex, false));
 
     const metadataEntries: MetadataLabelTx[] = tx.metadata?.labels
       ? Object.entries(tx.metadata.labels).map(([label, v]) => ({

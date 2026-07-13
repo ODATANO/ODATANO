@@ -16,6 +16,7 @@ jest.mock('../../srv/utils/backend-request-handler', () => ({
 
 const crawlerMock = {
   isCrawlerRunning: jest.fn(() => true),
+  isCrawlerRunningInCluster: jest.fn(async () => true),
   startCrawler: jest.fn(async () => undefined),
   stopCrawler: jest.fn(async () => undefined),
 };
@@ -24,6 +25,8 @@ jest.mock('../../srv/blockchain/crawler', () => crawlerMock);
 const readCursorMock = jest.fn();
 jest.mock('../../srv/blockchain/crawler/sync-state', () => ({
   readCursor: (db: unknown) => readCursorMock(db),
+  isCrawlerLeaseActive: (cursor: { desiredRunning?: boolean; leaseOwner?: string; leaseUntil?: string } | null) =>
+    Boolean(cursor?.desiredRunning && cursor.leaseOwner && cursor.leaseUntil && Date.parse(cursor.leaseUntil) > Date.now()),
 }));
 
 const serverMock = {
@@ -54,6 +57,7 @@ describe('CardanoIndexerService.getStatus', () => {
   it('returns run state and progress with numeric fields as strings (CAP-10 aligned)', async () => {
     readCursorMock.mockResolvedValue({
       lastSlot: 4000, lastHeight: 50, tipHeight: 200, syncStatus: 'syncing', consecutiveErrors: 2,
+      desiredRunning: true, leaseOwner: 'leader', leaseUntil: '2999-01-01T00:00:00.000Z',
     });
     const handlers = boot();
 
@@ -94,7 +98,7 @@ describe('CardanoIndexerService.pauseCrawler', () => {
   it('stops the crawler and returns true', async () => {
     const handlers = boot();
     const result = await handlers.pauseCrawler({});
-    expect(crawlerMock.stopCrawler).toHaveBeenCalledTimes(1);
+    expect(crawlerMock.stopCrawler).toHaveBeenCalledWith(true);
     expect(result).toBe(true);
   });
 });
@@ -127,6 +131,9 @@ describe('CardanoIndexerService.resumeCrawler', () => {
   it('starts the crawler with client/indexer/network/config when enabled', async () => {
     const config = { enabled: true, startSlot: 1, startBlockHash: 'h', source: 'auto' };
     serverMock.loadCrawlerConfigFromEnv.mockReturnValue(config);
+    readCursorMock.mockResolvedValue({
+      desiredRunning: true, leaseOwner: 'leader', leaseUntil: '2999-01-01T00:00:00.000Z',
+    });
     const handlers = boot();
 
     const result = await handlers.resumeCrawler({ reject: jest.fn() });
@@ -136,7 +143,7 @@ describe('CardanoIndexerService.resumeCrawler', () => {
       indexer: { indexer: true },
       network: 'preview',
       config,
-    });
+    }, true);
     expect(result).toBe(true); // isCrawlerRunning
   });
 });

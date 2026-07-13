@@ -1,5 +1,6 @@
 import cds from '@sap/cds';
 import type { EventEmitter } from 'events';
+import path from 'path';
 
 // At runtime `cds` is an EventEmitter, but its public TS type doesn't expose
 // `listeners`/`emit`/`removeAllListeners`. Cast once for use in this suite.
@@ -30,6 +31,45 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
     cdsBus.removeAllListeners('served');
     cdsBus.removeAllListeners('shutdown');
     cdsBus.removeAllListeners('loaded');
+  });
+
+  it('builds package artifacts during prepare without duplicate pack hooks', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const packageJson = require('../../package.json');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const routerPackageJson = require('../../app/router/package.json');
+
+    expect(packageJson.scripts.prepare).toBe('npm run build:package');
+    expect(packageJson.scripts.prepack).toBeUndefined();
+    expect(packageJson.dependencies['@harmoniclabs/cardano-ledger-ts']).toBe('0.5.1');
+    expect(packageJson.overrides.esbuild).toBe('0.28.1');
+    expect(packageJson.overrides.ws).toBe('7.5.11');
+    expect(routerPackageJson.dependencies['@sap/approuter']).toBe('22.0.3');
+    expect(routerPackageJson.dependencies['@odatano/core']).toBe('file:../..');
+    expect(routerPackageJson.dependencies.odatano).toBeUndefined();
+    expect(routerPackageJson.overrides['form-data']).toBe('4.0.6');
+    expect(routerPackageJson.overrides.ws).toBe('7.5.11');
+  });
+
+  it('gates crawler control actions with the XSUAA Admin scope', async () => {
+    const model = await cds.load(path.resolve(__dirname, '../../srv/cardano-indexer-service.cds'));
+    const definitions = model.definitions as Record<string, any>;
+    const pause = definitions['CardanoIndexerService.pauseCrawler'];
+    const resume = definitions['CardanoIndexerService.resumeCrawler'];
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const security = require('../../xs-security.json');
+
+    expect(pause['@requires']).toBe('Admin');
+    expect(resume['@requires']).toBe('Admin');
+    expect(security.scopes).toContainEqual(expect.objectContaining({ name: '$XSAPPNAME.Admin' }));
+    expect(security['role-templates']).toContainEqual(expect.objectContaining({
+      name: 'CardanoAdmin',
+      'scope-references': expect.arrayContaining(['$XSAPPNAME.Admin']),
+    }));
+    expect(security['role-templates']).toContainEqual(expect.objectContaining({
+      name: 'CardanoUser',
+      'scope-references': expect.arrayContaining(['$XSAPPNAME.Admin']),
+    }));
   });
 
   afterEach(() => {

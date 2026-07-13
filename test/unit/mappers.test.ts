@@ -4,6 +4,7 @@
 
 import {
   mapTransaction,
+  mapTransactionMetadata,
   mapTransactionInputs,
   mapTransactionInputAssets,
   mapTransactionOutputAssets,
@@ -211,6 +212,22 @@ describe('mappers', () => {
       expect(result.hasInputs).toBe(false);
       expect(result.hasOutputs).toBe(false);
       expect(result.hasMetadata).toBe(false);
+    });
+  });
+
+  describe('mapTransactionMetadata', () => {
+    it('serializes nested Ogmios bigint metadata without precision loss', () => {
+      const huge = 9_007_199_254_740_993_123_456_789n;
+      const [row] = mapTransactionMetadata([{
+        txHash: 'abc123',
+        label: '721',
+        json: { int: huge, nested: [1n, { negative: -huge }] } as never,
+      }]);
+
+      expect(row.payload).toBe(
+        `{"int":${huge},"nested":[1,{"negative":${-huge}}]}`
+      );
+      expect(row.payload).not.toContain(`"${huge}"`);
     });
   });
 

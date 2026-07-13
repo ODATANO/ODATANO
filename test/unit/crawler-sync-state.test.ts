@@ -29,6 +29,11 @@ import {
   recordError,
   SINGLETON_ID,
   MAX_CONSECUTIVE_ERRORS,
+  tryAcquireCrawlerLease,
+  renewCrawlerLease,
+  releaseCrawlerLease,
+  setCrawlerDesiredRunning,
+  isCrawlerLeaseActive,
 } from '../../srv/blockchain/crawler/sync-state';
 
 type FakeDb = { run: jest.Mock };
@@ -60,13 +65,78 @@ describe('sync-state: ensureSyncStateSingleton', () => {
 
   it('returns the existing cursor without INSERT when the singleton is present', async () => {
     const db = makeDb();
-    db.run.mockResolvedValueOnce({ ID: SINGLETON_ID, lastSlot: '55', lastBlockHash: 'bb', lastHeight: '3', syncStatus: 'syncing' });
+    db.run.mockResolvedValueOnce({ ID: SINGLETON_ID, network: 'preview', lastSlot: '55', lastBlockHash: 'bb', lastHeight: '3', syncStatus: 'syncing' });
 
     const cursor = await ensureSyncStateSingleton(db as never, 'preview');
 
     expect(db.run.mock.calls.some(c => (c[0] as { _op?: string })?._op === 'INSERT')).toBe(false);
     expect(cursor.lastSlot).toBe(55);
     expect(cursor.lastBlockHash).toBe('bb');
+  });
+
+  it('rejects an existing cursor from a different network', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ ID: SINGLETON_ID, network: 'mainnet' });
+
+    await expect(ensureSyncStateSingleton(db as never, 'preview')).rejects.toThrow(/network mismatch/i);
+  });
+});
+
+describe('sync-state: cluster lease', () => {
+  function stateDb(initial: Record<string, unknown>) {
+    const state = { ...initial };
+    const db = makeDb();
+    db.run.mockImplementation(async (query: { _op: string; set?: Record<string, unknown>; where?: Record<string, unknown> }) => {
+      if (query._op === 'SELECT.one') return { ...state };
+      if (query._op === 'UPDATE') {
+        const matches = Object.entries(query.where ?? {}).every(([key, value]) => (state[key] ?? null) === value);
+        if (!matches) return { affectedRows: 0 };
+        const set = { ...(query.set ?? {}) };
+        if (typeof set.leaseUntil === 'string') {
+          // Simulate an adapter normalizing Timestamp precision and string format.
+          set.leaseUntil = new Date(Math.floor(Date.parse(set.leaseUntil) / 1000) * 1000).toISOString();
+        }
+        Object.assign(state, set);
+        return { affectedRows: 1 };
+      }
+      return undefined;
+    });
+    return { db, state };
+  }
+
+  const base = {
+    ID: SINGLETON_ID, network: 'preview', desiredRunning: true,
+    leaseOwner: null, leaseUntil: null, syncStatus: 'stopped',
+  };
+
+  it('elects one owner and rejects a second owner while the normalized lease is live', async () => {
+    const { db } = stateDb(base);
+    const now = new Date('2026-01-01T00:00:00.500Z');
+
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', now, 15_000)).resolves.toBe(true);
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-b', now, 15_000)).resolves.toBe(false);
+  });
+
+  it('allows failover after expiry and fences renewal/release by owner', async () => {
+    const { db, state } = stateDb({
+      ...base, leaseOwner: 'dead-owner', leaseUntil: '2025-12-31T23:59:00.000Z',
+    });
+    const now = new Date('2026-01-01T00:00:00.500Z');
+
+    await expect(tryAcquireCrawlerLease(db as never, 'new-owner', now, 15_000)).resolves.toBe(true);
+    await expect(renewCrawlerLease(db as never, 'dead-owner', now, 15_000)).resolves.toBe(false);
+    await releaseCrawlerLease(db as never, 'dead-owner', 'error');
+
+    expect(state.leaseOwner).toBe('new-owner');
+    expect(isCrawlerLeaseActive(await readCursor(db as never), now)).toBe(true);
+  });
+
+  it('shared pause prevents acquisition immediately', async () => {
+    const { db, state } = stateDb(base);
+    await setCrawlerDesiredRunning(db as never, false);
+
+    await expect(tryAcquireCrawlerLease(db as never, 'owner', new Date(), 15_000)).resolves.toBe(false);
+    expect(state).toMatchObject({ desiredRunning: false, syncStatus: 'stopped' });
   });
 });
 

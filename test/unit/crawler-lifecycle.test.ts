@@ -34,6 +34,10 @@ jest.mock('#cds-models/odatano/cardano', () => ({
   TransactionInputAssets: 'odatano.cardano.TransactionInputAssets',
   TransactionOutputs: 'odatano.cardano.TransactionOutputs',
   TransactionOutputAssets: 'odatano.cardano.TransactionOutputAssets',
+  AddressTransactions: 'odatano.cardano.AddressTransactions',
+  AddressUTxOs: 'odatano.cardano.AddressUTxOs',
+  UTxOAssets: 'odatano.cardano.UTxOAssets',
+  AssetHistory_: 'odatano.cardano.AssetHistory',
   TransactionMetadata_: 'odatano.cardano.TransactionMetadata',
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
@@ -51,7 +55,8 @@ const CONFIG: CrawlerConfig = {
 
 const CURSOR_ROW = {
   ID: 'SINGLETON', lastSlot: '4000', lastBlockHash: 'cursor'.padEnd(64, '0'), lastHeight: '40',
-  syncStatus: 'syncing', consecutiveErrors: '0',
+  network: 'preview', syncStatus: 'syncing', consecutiveErrors: '0', desiredRunning: true,
+  leaseOwner: null, leaseUntil: null,
 };
 
 const block = (over: Partial<BlockData> = {}): BlockData => ({
@@ -65,8 +70,13 @@ const updatesWith = (pred: (set: Record<string, unknown>) => boolean) =>
 
 /** Default db behavior: the cursor row exists. */
 function cursorExists() {
+  const state: Record<string, unknown> = { ...CURSOR_ROW };
   dbRun.mockImplementation(async (q) => {
-    if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW };
+    if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...state };
+    if (q._op === 'UPDATE' && q.entity.endsWith('CardanoSyncState')) {
+      Object.assign(state, q.set as Record<string, unknown>);
+      return 1;
+    }
     return undefined;
   });
 }
@@ -93,6 +103,22 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('CardanoCrawler.start', () => {
+  it('keeps running=false when the initial cursor read fails', async () => {
+    dbRun.mockRejectedValueOnce(new Error('database unavailable'));
+    const crawler = makeCrawler({ getChainSyncBackend: jest.fn(), getPaginatingBackend: jest.fn() });
+
+    await expect(crawler.start()).rejects.toThrow('database unavailable');
+    expect(crawler.isRunning()).toBe(false);
+  });
+
+  it('rejects a persisted cursor from another Cardano network', async () => {
+    dbRun.mockResolvedValueOnce({ ...CURSOR_ROW, network: 'mainnet' });
+    const crawler = makeCrawler({ getChainSyncBackend: jest.fn(), getPaginatingBackend: jest.fn() });
+
+    await expect(crawler.start()).rejects.toThrow(/network mismatch/i);
+    expect(crawler.isRunning()).toBe(false);
+  });
+
   it('refuses to start without a configured start block AND without an existing cursor', async () => {
     dbRun.mockImplementation(async (q) => {
       // fresh DB: ensureSyncStateSingleton finds nothing, INSERTs a row without lastBlockHash
@@ -220,6 +246,7 @@ describe('CardanoCrawler chain-sync path', () => {
 
     await crawler.start();
     await settle(() => !crawler.isRunning());
+    await settle(() => updatesWith(s => s.syncStatus === 'error').length > 0);
 
     expect(crawler.isRunning()).toBe(false); // NOT a healthy-looking zombie
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
@@ -234,6 +261,7 @@ describe('CardanoCrawler chain-sync path', () => {
     await settle(() => openChainSync.mock.calls.length > 0);
 
     await cbs().onError!(new Error('stream died'));
+    await settle(() => updatesWith(s => s.syncStatus === 'error').length > 0);
 
     expect(crawler.isRunning()).toBe(false);
     expect(close).toHaveBeenCalled(); // stream closed on stop
@@ -257,6 +285,29 @@ describe('CardanoCrawler chain-sync path', () => {
     await stopP;                  // stop returns only after the pipeline closed the socket
 
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an in-flight chain-sync DB persist before stop resolves', async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = chainSyncClient();
+    let releasePersist!: () => void;
+    const persistGate = new Promise<void>((resolve) => { releasePersist = resolve; });
+    const indexBlockFull = jest.fn(async () => persistGate);
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    const callback = cbs().rollForward(block(), []);
+    await settle(() => indexBlockFull.mock.calls.length > 0);
+    let stopped = false;
+    const stopping = crawler.stop().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    releasePersist();
+    await callback;
+    await stopping;
+    expect(stopped).toBe(true);
   });
 });
 
@@ -286,6 +337,7 @@ describe('CardanoCrawler pagination path', () => {
     const crawler = makeCrawler(client);
     await crawler.start();
     await settle(() => !crawler.isRunning());
+    await settle(() => updatesWith(s => s.syncStatus === 'error').length > 0);
 
     expect(crawler.isRunning()).toBe(false);
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
@@ -357,7 +409,7 @@ describe('CardanoCrawler pagination path', () => {
       }
       return undefined;
     });
-    const { client } = paginationSetup();
+    const { client, backend } = paginationSetup();
     (client.getLatestBlock as jest.Mock).mockRejectedValue(new Error('backend down'));
     const crawler = makeCrawler(client);
 
@@ -366,7 +418,26 @@ describe('CardanoCrawler pagination path', () => {
 
     expect(crawler.isRunning()).toBe(false);
     expect(streak).toBeGreaterThanOrEqual(10); // MAX_CONSECUTIVE_ERRORS
+    expect(backend.getBlockByHeight).not.toHaveBeenCalled(); // provider outage is not a reorg signal
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+  });
+
+  it('runs fork recovery only for the explicit chain-point mismatch marker', async () => {
+    cursorExists();
+    const { client } = paginationSetup({
+      getNextBlocks: jest.fn().mockRejectedValue(new Error('CHAIN_POINT_MISMATCH: orphaned cursor')),
+    });
+    const crawler = makeCrawler(client);
+    const recovery = jest.spyOn(
+      crawler as unknown as { tryReorgRecovery: (backend: unknown) => Promise<boolean> },
+      'tryReorgRecovery',
+    ).mockResolvedValue(false);
+    (crawler as unknown as { sleep: jest.Mock }).sleep.mockImplementation(async () => { void crawler.stop(); });
+
+    await crawler.start();
+    await settle(() => !crawler.isRunning(), 1000);
+
+    expect(recovery).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -375,6 +446,18 @@ describe('CardanoCrawler pagination path', () => {
 // ---------------------------------------------------------------------------
 
 describe('CardanoCrawler.persistBlock', () => {
+  it('rejects a partial backend transaction list without advancing the cursor', async () => {
+    cursorExists();
+    const indexBlockFull = jest.fn();
+    const crawler = makeCrawler({}, CONFIG, { indexBlockFull, prefetchCrawlEpoch: jest.fn() });
+    (crawler as unknown as { running: boolean }).running = true;
+
+    await expect((crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })
+      .persistBlock(block({ txCount: 2 }), [{}])).rejects.toThrow('returned 1/2 transactions');
+
+    expect(indexBlockFull).not.toHaveBeenCalled();
+    expect(updatesWith(s => s.lastBlockHash != null)).toHaveLength(0);
+  });
   it('retries a transient failure and succeeds without stopping', async () => {
     cursorExists();
     const indexBlockFull = jest.fn()
@@ -412,6 +495,33 @@ describe('CardanoCrawler.persistBlock', () => {
 // ---------------------------------------------------------------------------
 
 describe('CardanoCrawler.tryReorgRecovery', () => {
+  it('aborts the fork scan after the first unavailable height', async () => {
+    cursorExists();
+    const backend = { getBlockByHeight: jest.fn().mockRejectedValue(new Error('provider down')) };
+    const crawler = makeCrawler({});
+    (crawler as unknown as { running: boolean }).running = true;
+
+    const recovered = await (crawler as unknown as { tryReorgRecovery: (b: unknown) => Promise<boolean> })
+      .tryReorgRecovery(backend);
+
+    expect(recovered).toBe(false);
+    expect(backend.getBlockByHeight).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a hanging fork-scan request when stopped', async () => {
+    cursorExists();
+    const backend = { getBlockByHeight: jest.fn(() => new Promise<BlockData>(() => undefined)) };
+    const crawler = makeCrawler({});
+    (crawler as unknown as { running: boolean }).running = true;
+
+    const recovery = (crawler as unknown as { tryReorgRecovery: (b: unknown) => Promise<boolean> })
+      .tryReorgRecovery(backend);
+    await settle(() => backend.getBlockByHeight.mock.calls.length > 0);
+    await crawler.stop();
+
+    await expect(recovery).resolves.toBe(false);
+  });
+
   it('returns false (transient) when the stored tip still matches on-chain', async () => {
     dbRun.mockImplementation(async (q) => {
       if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW, lastHeight: '40' };
@@ -420,6 +530,7 @@ describe('CardanoCrawler.tryReorgRecovery', () => {
     });
     const backend = { getBlockByHeight: jest.fn().mockResolvedValue(block({ height: 40, hash: 'match'.padEnd(64, '4') })) };
     const crawler = makeCrawler({});
+    (crawler as unknown as { running: boolean }).running = true;
 
     const recovered = await (crawler as unknown as { tryReorgRecovery: (b: unknown) => Promise<boolean> })
       .tryReorgRecovery(backend);
@@ -442,6 +553,7 @@ describe('CardanoCrawler.tryReorgRecovery', () => {
         block({ height: h, hash: h === 39 ? 'agree'.padEnd(64, '5') : 'chain'.padEnd(64, '7'), slot: h * 100 })),
     };
     const crawler = makeCrawler({});
+    (crawler as unknown as { running: boolean }).running = true;
     const handleReorg = jest.spyOn(crawler as unknown as { handleReorg: (p: unknown) => Promise<void> }, 'handleReorg')
       .mockResolvedValue(undefined);
 
@@ -480,5 +592,31 @@ describe('crawler singleton lifecycle', () => {
     await stopCrawler();
     expect(isCrawlerRunning()).toBe(false);
     expect(getCrawler()).toBeNull();
+  });
+
+  it('does not restart from a standby timer callback invalidated by stopCrawler', async () => {
+    jest.useFakeTimers();
+    try {
+      cursorExists();
+      const openChainSync = jest.fn(async (): Promise<ChainSyncHandle> => ({ close: jest.fn() }));
+      const deps = {
+        client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: jest.fn() },
+        indexer: { indexBlockFull: jest.fn() },
+        network: 'preview',
+        config: CONFIG,
+      };
+      await startCrawler(deps as never);
+      await settle(() => openChainSync.mock.calls.length > 0);
+
+      jest.advanceTimersByTime(5_000); // callback has queued an acquire attempt
+      await stopCrawler();            // invalidates it before the queued operation runs
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(openChainSync).toHaveBeenCalledTimes(1);
+      expect(getCrawler()).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -1,6 +1,8 @@
 import { env } from 'process';
+import cds from '@sap/cds';
 import {
   loadConfigFromEnv,
+  loadCrawlerConfigFromEnv,
   loadHsmConfigFromEnv,
   initializeFromConfig,
   getAppContext,
@@ -151,6 +153,135 @@ describe('server.ts', () => {
       const config = loadConfigFromEnv();
       expect(config.backends).toEqual(['ogmios']);
       expect(config.ogmiosUrl).toBe('');
+    });
+  });
+
+  // ============================================================================
+  // loadCrawlerConfigFromEnv
+  // ============================================================================
+  describe('loadCrawlerConfigFromEnv', () => {
+    const crawlerEnvKeys = [
+      'CRAWLER_ENABLED',
+      'CRAWLER_START_SLOT',
+      'CRAWLER_START_HASH',
+      'CRAWLER_START_HEIGHT',
+      'CRAWLER_SOURCE',
+      'CRAWLER_BATCH_SIZE',
+      'CRAWLER_CONFIRMATION_DEPTH',
+      'CRAWLER_POLL_INTERVAL_MS',
+    ];
+    const originalEnv: Record<string, string | undefined> = {};
+    let previousCoreConfig: unknown;
+
+    function setCdsCrawlerConfig(crawler: Record<string, unknown>): void {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      requires['odatano-core'] = { crawler };
+    }
+
+    beforeEach(() => {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      previousCoreConfig = requires['odatano-core'];
+      delete requires['odatano-core'];
+      for (const key of crawlerEnvKeys) {
+        originalEnv[key] = env[key];
+        delete env[key];
+      }
+    });
+
+    afterEach(() => {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      if (previousCoreConfig === undefined) delete requires['odatano-core'];
+      else requires['odatano-core'] = previousCoreConfig;
+      for (const key of crawlerEnvKeys) {
+        const value = originalEnv[key];
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+    });
+
+    it('returns safe defaults when the crawler is not configured', () => {
+      expect(loadCrawlerConfigFromEnv()).toEqual({
+        enabled: false,
+        startSlot: undefined,
+        startBlockHash: undefined,
+        startHeight: undefined,
+        source: 'auto',
+        batchSize: 20,
+        confirmationDepth: 3,
+        pollIntervalMs: 20_000,
+      });
+    });
+
+    it('parses valid environment values including numeric boundaries', () => {
+      env.CRAWLER_ENABLED = 'true';
+      env.CRAWLER_START_SLOT = '0';
+      env.CRAWLER_START_HASH = 'a'.repeat(64);
+      env.CRAWLER_START_HEIGHT = String(Number.MAX_SAFE_INTEGER);
+      env.CRAWLER_SOURCE = 'pagination';
+      env.CRAWLER_BATCH_SIZE = '100';
+      env.CRAWLER_CONFIRMATION_DEPTH = '0';
+      env.CRAWLER_POLL_INTERVAL_MS = '1000';
+
+      expect(loadCrawlerConfigFromEnv()).toEqual({
+        enabled: true,
+        startSlot: 0,
+        startBlockHash: 'a'.repeat(64),
+        startHeight: Number.MAX_SAFE_INTEGER,
+        source: 'pagination',
+        batchSize: 100,
+        confirmationDepth: 0,
+        pollIntervalMs: 1000,
+      });
+    });
+
+    it('lets an explicit CDS false override CRAWLER_ENABLED=true', () => {
+      env.CRAWLER_ENABLED = 'true';
+      setCdsCrawlerConfig({ enabled: false });
+
+      expect(loadCrawlerConfigFromEnv().enabled).toBe(false);
+    });
+
+    it('rejects non-boolean enabled values', () => {
+      env.CRAWLER_ENABLED = 'yes';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow('Invalid CRAWLER_ENABLED');
+    });
+
+    it('requires a complete start point when enabled', () => {
+      env.CRAWLER_ENABLED = 'true';
+      env.CRAWLER_START_SLOT = '1';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow('no start block is configured');
+    });
+
+    it.each(['', 'abc', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+      'rejects invalid block hash %p',
+      (value) => {
+        setCdsCrawlerConfig({ startBlockHash: value });
+        expect(() => loadCrawlerConfigFromEnv()).toThrow('exactly 64 hexadecimal characters');
+      },
+    );
+
+    it.each([
+      ['CRAWLER_START_SLOT', '-1'],
+      ['CRAWLER_START_SLOT', '1.5'],
+      ['CRAWLER_START_SLOT', 'Infinity'],
+      ['CRAWLER_START_SLOT', String(Number.MAX_SAFE_INTEGER + 1)],
+      ['CRAWLER_START_HEIGHT', '-1'],
+      ['CRAWLER_START_HEIGHT', 'NaN'],
+      ['CRAWLER_BATCH_SIZE', '0'],
+      ['CRAWLER_BATCH_SIZE', '101'],
+      ['CRAWLER_BATCH_SIZE', '1.5'],
+      ['CRAWLER_CONFIRMATION_DEPTH', '-1'],
+      ['CRAWLER_CONFIRMATION_DEPTH', '2161'],
+      ['CRAWLER_CONFIRMATION_DEPTH', 'Infinity'],
+      ['CRAWLER_POLL_INTERVAL_MS', '999'],
+      ['CRAWLER_POLL_INTERVAL_MS', '3600001'],
+      ['CRAWLER_POLL_INTERVAL_MS', '1.5'],
+    ])('rejects invalid %s=%s', (key, value) => {
+      env[key] = value;
+      expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);
     });
   });
 
