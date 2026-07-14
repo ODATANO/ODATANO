@@ -4,6 +4,8 @@
 
 import { getLovelace, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
+import { TransactionValidationError, InsufficientFundsError } from '../../srv/utils/errors';
+import { ERROR_CODES } from '../../srv/utils/error-codes';
 import { DataI, DataB, DataConstr, DataList } from '@harmoniclabs/plutus-data';
 import { Cbor, CborBytes, CborArray, CborMap, CborUInt, CborTag } from '@harmoniclabs/cbor';
 import { Address } from '@harmoniclabs/cardano-ledger-ts';
@@ -113,11 +115,9 @@ describe('tx-build-helper utilities', () => {
     });
 
     it('should throw a typed 400 (TX_PARSE_FAILED) for valid hex that is not a transaction', () => {
-      const { TransactionValidationError } = require('../../srv/utils/errors');
-      const { ERROR_CODES } = require('../../srv/utils/error-codes');
       try {
         getTxHashFromCbor('deadbeef'); // parses as CBOR garbage, not a tx array
-        fail('expected throw');
+        expect.unreachable('expected throw');
       } catch (err: any) {
         // previously a plain Error → surfaced as 500 to the consumer
         expect(err).toBeInstanceOf(TransactionValidationError);
@@ -209,7 +209,6 @@ describe('tx-build-helper utilities', () => {
     });
 
     it('throws a typed 400 for CBOR that is not a transaction', () => {
-      const { TransactionValidationError } = require('../../srv/utils/errors');
       expect(() => extractTxCacheTargets('deadbeef')).toThrow(TransactionValidationError);
     });
   });
@@ -512,12 +511,11 @@ describe('tx-build-helper utilities', () => {
     });
 
     it('should pass already-typed errors through unchanged (payload preserved)', () => {
-      const { InsufficientFundsError, TransactionValidationError } = require('../../srv/utils/errors');
       // a typed InsufficientFundsError with REAL amounts — re-wrapping would zero them
       const typedFunds = new InsufficientFundsError('lovelace', 5_000_000n, 2_000_000n);
       try {
         mapBuilderError(typedFunds);
-        fail('expected throw');
+        expect.unreachable('expected throw');
       } catch (err) {
         expect(err).toBe(typedFunds); // same instance, not a re-wrapped copy
       }
@@ -526,7 +524,7 @@ describe('tx-build-helper utilities', () => {
       const typedValidation = new TransactionValidationError('script consumed full balance budget');
       try {
         mapBuilderError(typedValidation);
-        fail('expected throw');
+        expect.unreachable('expected throw');
       } catch (err) {
         expect(err).toBe(typedValidation);
       }

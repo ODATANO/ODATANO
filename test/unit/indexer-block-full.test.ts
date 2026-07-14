@@ -8,7 +8,7 @@
 type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
 const runs: Q[] = [];
 const mockTx = {
-  run: jest.fn(async (q: Q) => {
+  run: vi.fn(async (q: Q) => {
     runs.push(q);
     if (q._op === 'SELECT.many' && q.entity === 'TransactionOutputs') {
       // prior-block output for input resolution: prevTx#0 belongs to addrPrev
@@ -21,8 +21,9 @@ const mockTx = {
   }),
 };
 
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() })),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
   ql: {
     UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
@@ -36,9 +37,11 @@ jest.mock('@sap/cds', () => ({
       }),
     },
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
-jest.mock('#cds-models/CardanoODataService', () => ({
+vi.mock('#cds-models/CardanoODataService', () => ({
   Addresses: 'Addresses', Transaction: 'Transaction', AddressAssets: 'AddressAssets',
   AddressUTxOs: 'AddressUTxOs', Transactions: 'Transactions',
   TransactionInputs: 'TransactionInputs', TransactionInputAssets: 'TransactionInputAssets',
@@ -48,20 +51,21 @@ jest.mock('#cds-models/CardanoODataService', () => ({
   Pools: 'Pools', Dreps: 'Dreps', Assets: 'Assets', AssetHistory: 'AssetHistory',
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
-}), { virtual: true });
+}));
 
-jest.mock('#cds-models/CardanoTransactionService', () => ({
+vi.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionBuild: 'TransactionBuild', TransactionBuilds: 'TransactionBuilds',
   TransactionBuildInputs: 'TransactionBuildInputs', TransactionBuildOutputs: 'TransactionBuildOutputs',
   TransactionSubmission: 'TransactionSubmission', TransactionSubmissions: 'TransactionSubmissions',
   AddressTransactionBuilds: 'AddressTransactionBuilds',
-}), { virtual: true });
+}));
 
-jest.mock('#cds-models/CardanoSignService', () => ({
+vi.mock('#cds-models/CardanoSignService', () => ({
   SigningRequests: 'SigningRequests', SignatureVerifications: 'SignatureVerifications',
   AddressSigningRequests: 'AddressSigningRequests',
-}), { virtual: true });
+}));
 
+import type { Mock } from 'vitest';
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
@@ -78,7 +82,7 @@ const tx = (hash: string, over: Partial<Transaction> = {}): Transaction => ({
 
 const upsertsFor = (entity: string) => runs.filter(q => q._op === 'UPSERT' && q.entity === entity);
 
-function makeIndexer(getEpoch: jest.Mock = jest.fn().mockRejectedValue(new Error('no epoch backend'))) {
+function makeIndexer(getEpoch: Mock = vi.fn().mockRejectedValue(new Error('no epoch backend'))) {
   const client = { getEpoch, max_age_ms: 60000, network: 'preview' };
   return { indexer: new CardanoIndexer(client as never, {} as never), getEpoch };
 }
@@ -128,11 +132,11 @@ describe('CardanoIndexer.indexBlockFull — bulk persistence', () => {
 
 describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('reuses the network snapshot but UPSERTs it in every block transaction', async () => {
-    const getEpoch = jest.fn().mockResolvedValue({
+    const getEpoch = vi.fn().mockResolvedValue({
       epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
       block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
     });
@@ -146,7 +150,7 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
   });
 
   it('final-refreshes the previous epoch when the epoch changes', async () => {
-    const getEpoch = jest.fn(async (epoch: number) => ({
+    const getEpoch = vi.fn(async (epoch: number) => ({
       epoch, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: epoch === 7 ? 99 : 2,
       block_count: epoch === 7 ? 99 : 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
     }));
@@ -165,8 +169,8 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
 
   it('backs off a failing epoch fetch briefly, then retries it', async () => {
     let now = 1_000_000;
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
-    const getEpoch = jest.fn().mockRejectedValue(new Error('ogmios: only current epoch'));
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const getEpoch = vi.fn().mockRejectedValue(new Error('ogmios: only current epoch'));
     const { indexer } = makeIndexer(getEpoch);
 
     await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
@@ -181,8 +185,8 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
 
   it('refreshes a live epoch after the refresh interval', async () => {
     let now = 1_000_000;
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
-    const getEpoch = jest.fn().mockResolvedValue({
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const getEpoch = vi.fn().mockResolvedValue({
       epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
       block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
     });
@@ -196,14 +200,14 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
   });
 
   it('retries the Epoch UPSERT after a later write rolls the transaction back', async () => {
-    const getEpoch = jest.fn().mockResolvedValue({
+    const getEpoch = vi.fn().mockResolvedValue({
       epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
       block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
     });
     const { indexer } = makeIndexer(getEpoch);
     const failedWrites: Q[] = [];
     const failingTx = {
-      run: jest.fn(async (q: Q) => {
+      run: vi.fn(async (q: Q) => {
         failedWrites.push(q);
         if (q._op === 'UPSERT' && q.entity === 'Block') throw new Error('rollback');
         return undefined;

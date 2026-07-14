@@ -18,6 +18,8 @@ export {
   loadHsmConfigFromEnv,
   loadCrawlerConfigFromEnv,
   startCrawlerIfConfigured,
+  loadWalletWorkerConfigFromEnv,
+  startWalletWorkerIfConfigured,
   shutdownAppContext,
 } from '../srv/server';
 
@@ -57,8 +59,11 @@ export async function initialize(): Promise<void> {
   }
 
   // Start the pre-sync crawler if configured (plugin mode). Non-fatal.
-  const { startCrawlerIfConfigured } = await import('../srv/server');
+  const { startCrawlerIfConfigured, startWalletWorkerIfConfigured } = await import('../srv/server');
   await startCrawlerIfConfigured();
+
+  // Start the wallet worker if configured (plugin mode). Non-fatal.
+  await startWalletWorkerIfConfigured();
 }
 
 /**

@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import { TEST_FIXTURES } from './test-fixtures';
 import { simpleRequestBody } from './test-fixtures';
 
-jest.setTimeout(20000);
+vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 });
 
 /**
  * Ogmios Backend Integration Tests
@@ -39,11 +39,14 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(response.data).to.have.property('error');
     });
 
+    // First COLD UTxO query of the suite: full Ogmios ledger-state UTxO scan by
+    // address plus WS warm-up — routinely takes 20s+ against a live preview
+    // node, so it gets its own headroom (later identical queries hit the cache).
     it('POST /GetUTxOsByAddress - read UTxOs for given address', async () => {
       const { status, data } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
       expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
       expect(status).to.be.equal(200);
-    });
+    }, 90000);
 
     it('POST /GetAddressByBech32 - unsupported on Ogmios (delegate to Blockfrost/Koios)', async () => {
       // Ogmios can't aggregate address detail (type/script/stake) → getAddress is in

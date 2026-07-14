@@ -210,7 +210,7 @@ describe('Error Path Tests', () => {
         (b: any) => b.name === 'blockfrost'
       );
       expect(blockfrostBackend?.name).toBe('blockfrost');
-      const blockfrostSpy = jest.spyOn(blockfrostBackend, 'getNetworkInformation');
+      const blockfrostSpy = vi.spyOn(blockfrostBackend, 'getNetworkInformation');
 
       // First two calls: blockfrost fails, koios succeeds (circuit records 2 failures → opens)
       await client.getNetworkInformation();

@@ -3,18 +3,19 @@
  * capability getters. Blockfrost via SDK mock, Koios via nock (repo conventions);
  * asserts the calls, BlockData mapping, block ordering and init-aware getter selection.
  */
+import type { Mock } from 'vitest';
 import nock from 'nock';
 
-jest.mock('@blockfrost/blockfrost-js', () => ({
-  BlockFrostAPI: jest.fn().mockImplementation(() => ({
-    blocks: jest.fn(),
-    blocksNext: jest.fn(),
-    blocksTxsAll: jest.fn(),
-    txs: jest.fn(),
-    txsUtxos: jest.fn(),
-    txsMetadata: jest.fn(),
+vi.mock('@blockfrost/blockfrost-js', () => ({
+  BlockFrostAPI: vi.fn().mockImplementation(function () { return {
+    blocks: vi.fn(),
+    blocksNext: vi.fn(),
+    blocksTxsAll: vi.fn(),
+    txs: vi.fn(),
+    txsUtxos: vi.fn(),
+    txsMetadata: vi.fn(),
     options: { requestTimeout: 0 },
-  })),
+  }; }),
 }));
 
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
@@ -28,11 +29,11 @@ const blockSummary = (over: Partial<Record<string, unknown>> = {}) => ({
 
 describe('BlockfrostBackend.getBlockByHeight', () => {
   let backend: BlockfrostBackend;
-  let api: { blocks: jest.Mock };
+  let api: { blocks: Mock };
 
   beforeEach(() => {
     backend = new BlockfrostBackend(NETWORK, 5000, 'test-key');
-    api = (backend as unknown as { api: { blocks: jest.Mock } }).api;
+    api = (backend as unknown as { api: { blocks: Mock } }).api;
   });
 
   it('queries the SDK by height and maps to BlockData', async () => {
@@ -48,11 +49,11 @@ describe('BlockfrostBackend.getBlockByHeight', () => {
 
 describe('BlockfrostBackend.getNextBlocks', () => {
   let backend: BlockfrostBackend;
-  let api: { blocksNext: jest.Mock };
+  let api: { blocksNext: Mock };
 
   beforeEach(() => {
     backend = new BlockfrostBackend(NETWORK, 5000, 'test-key');
-    api = (backend as unknown as { api: { blocksNext: jest.Mock } }).api;
+    api = (backend as unknown as { api: { blocksNext: Mock } }).api;
   });
 
   it('passes the count and maps each returned block in order', async () => {
@@ -74,16 +75,16 @@ describe('BlockfrostBackend.getNextBlocks', () => {
 
 describe('BlockfrostBackend.getBlockTransactions', () => {
   let backend: BlockfrostBackend;
-  let api: { blocksTxsAll: jest.Mock };
+  let api: { blocksTxsAll: Mock };
 
   beforeEach(() => {
     backend = new BlockfrostBackend(NETWORK, 5000, 'test-key');
-    api = (backend as unknown as { api: { blocksTxsAll: jest.Mock } }).api;
+    api = (backend as unknown as { api: { blocksTxsAll: Mock } }).api;
   });
 
   it('resolves tx hashes to full transactions preserving block order', async () => {
     api.blocksTxsAll.mockResolvedValue(['tx1', 'tx2']);
-    jest.spyOn(backend, 'getTransaction').mockImplementation(async (h: string) => ({ hash: h } as never));
+    vi.spyOn(backend, 'getTransaction').mockImplementation(async (h: string) => ({ hash: h } as never));
 
     const txs = await backend.getBlockTransactions('blk');
     expect(api.blocksTxsAll).toHaveBeenCalledWith('blk');
@@ -92,7 +93,7 @@ describe('BlockfrostBackend.getBlockTransactions', () => {
 
   it('drops hashes the batch could not resolve', async () => {
     api.blocksTxsAll.mockResolvedValue(['tx1', 'missing']);
-    jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
+    vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
       new Map([['tx1', { hash: 'tx1' } as never]]),
     );
     const txs = await backend.getBlockTransactions('blk');
@@ -210,7 +211,7 @@ describe('KoiosBackend pagination (forward iteration)', () => {
     nock(KOIOS_BASE)
       .post('/api/v1/block_txs')
       .reply(200, [{ tx_hash: 't1'.padEnd(64, '0') }, { tx_hash: 't2'.padEnd(64, '0') }]);
-    const batch = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+    const batch = vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
       ['t1'.padEnd(64, '0'), { hash: 't1'.padEnd(64, '0') } as never],
       ['t2'.padEnd(64, '0'), { hash: 't2'.padEnd(64, '0') } as never],
     ]));
@@ -225,7 +226,7 @@ describe('KoiosBackend pagination (forward iteration)', () => {
     nock(KOIOS_BASE)
       .post('/api/v1/block_txs')
       .reply(200, [{ block_hash: 'blk', tx_hashes: ['t3'.padEnd(64, '0')] }]);
-    jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+    vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
       ['t3'.padEnd(64, '0'), { hash: 't3'.padEnd(64, '0') } as never],
     ]));
 
@@ -239,7 +240,7 @@ describe('KoiosBackend pagination (forward iteration)', () => {
     nock(KOIOS_BASE)
       .post('/api/v1/block_txs')
       .reply(200, [{ tx_hash: tx1 }, { tx_hash: tx2 }]);
-    jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+    vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
       [tx1, { hash: tx1 } as never],
     ]));
 

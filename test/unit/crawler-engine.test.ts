@@ -6,11 +6,16 @@
  */
 
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };
-const dbRun = jest.fn<Promise<unknown>, [Q]>();
-const fakeDb = { run: dbRun };
+// vi.mock factories are hoisted above all statements — anything they capture
+// must be hoisted too.
+const { dbRun, fakeDb } = vi.hoisted(() => {
+  const dbRun = vi.fn<(q: Q) => Promise<unknown>>();
+  return { dbRun, fakeDb: { run: dbRun } };
+});
 
-jest.mock('@sap/cds', () => ({
-  log: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   utils: { uuid: () => 'reorg-uuid' },
   tx: (fn: (db: typeof fakeDb) => unknown) => fn(fakeDb),
   ql: {
@@ -25,10 +30,12 @@ jest.mock('@sap/cds', () => ({
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
     UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: () => ({ _op: 'UPDATE', entity, set }) }) }) },
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 // The typed entity proxies need the real cds runtime — stub them with plain names.
-jest.mock('#cds-models/odatano/cardano', () => ({
+vi.mock('#cds-models/odatano/cardano', () => ({
   Blocks: 'odatano.cardano.Blocks',
   Transactions: 'odatano.cardano.Transactions',
   TransactionInputs: 'odatano.cardano.TransactionInputs',
@@ -58,7 +65,7 @@ const opsFor = (op: string) => dbRun.mock.calls.map(c => c[0]).filter(q => q._op
 const shortName = (entity: string) => entity.split('.').pop();
 
 describe('CardanoCrawler.handleReorg', () => {
-  beforeEach(() => dbRun.mockReset());
+  beforeEach(() => { dbRun.mockReset(); });
 
   it('cuts blocks on the slot axis, deletes only their txs via blockHash join, resets the cursor and logs the reorg', async () => {
     dbRun.mockImplementation(async (q) => {
@@ -147,13 +154,13 @@ describe('CardanoCrawler.handleReorg', () => {
 });
 
 describe('CardanoCrawler source semantics', () => {
-  beforeEach(() => dbRun.mockReset());
+  beforeEach(() => { dbRun.mockReset(); });
 
   it("source 'ogmios' does NOT fall back to pagination when no chain-sync backend exists", async () => {
     dbRun.mockResolvedValue(undefined);
     const client = {
       getChainSyncBackend: () => null,
-      getPaginatingBackend: jest.fn(() => { throw new Error('pagination must not be reached'); }),
+      getPaginatingBackend: vi.fn(() => { throw new Error('pagination must not be reached'); }),
     };
     const crawler = makeCrawler({ ...CONFIG, source: 'ogmios' }, client);
     // in the real flow start() flips this before launching the pipeline

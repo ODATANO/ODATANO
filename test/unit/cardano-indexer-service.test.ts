@@ -5,41 +5,56 @@
  * handleRequest wrapper is passed through to the callback with a fake db.
  */
 
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() })),
+// vi.mock factories are hoisted above all statements — every mock object they
+// capture must be created inside vi.hoisted.
+const { fakeDb, crawlerMock, readCursorMock, serverMock } = vi.hoisted(() => ({
+  fakeDb: { run: vi.fn() },
+  crawlerMock: {
+    isCrawlerRunning: vi.fn(() => true),
+    isCrawlerRunningInCluster: vi.fn(async () => true),
+    startCrawler: vi.fn(async () => undefined),
+    stopCrawler: vi.fn(async () => undefined),
+  },
+  readCursorMock: vi.fn(),
+  serverMock: {
+    getCardanoClient: vi.fn(() => ({ network: 'preview' })),
+    getCardanoIndexer: vi.fn(() => ({ indexer: true })),
+    loadCrawlerConfigFromEnv: vi.fn(),
+  },
 }));
 
-const fakeDb = { run: jest.fn() };
-jest.mock('../../srv/utils/backend-request-handler', () => ({
-  handleRequest: jest.fn((_req: unknown, cb: (db: unknown) => unknown) => cb(fakeDb)),
-}));
-
-const crawlerMock = {
-  isCrawlerRunning: jest.fn(() => true),
-  isCrawlerRunningInCluster: jest.fn(async () => true),
-  startCrawler: jest.fn(async () => undefined),
-  stopCrawler: jest.fn(async () => undefined),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
 };
-jest.mock('../../srv/blockchain/crawler', () => crawlerMock);
+  return { default: cdsMock, ...cdsMock };
+});
 
-const readCursorMock = jest.fn();
-jest.mock('../../srv/blockchain/crawler/sync-state', () => ({
+vi.mock('../../srv/utils/backend-request-handler', () => ({
+  handleRequest: vi.fn((_req: unknown, cb: (db: unknown) => unknown) => cb(fakeDb)),
+}));
+
+vi.mock('../../srv/blockchain/crawler', () => crawlerMock);
+
+vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   readCursor: (db: unknown) => readCursorMock(db),
   isCrawlerLeaseActive: (cursor: { desiredRunning?: boolean; leaseOwner?: string; leaseUntil?: string } | null) =>
     Boolean(cursor?.desiredRunning && cursor.leaseOwner && cursor.leaseUntil && Date.parse(cursor.leaseUntil) > Date.now()),
 }));
 
-const serverMock = {
-  getCardanoClient: jest.fn(() => ({ network: 'preview' })),
-  getCardanoIndexer: jest.fn(() => ({ indexer: true })),
-  loadCrawlerConfigFromEnv: jest.fn(),
-};
-jest.mock('../../srv/server', () => serverMock);
+vi.mock('../../srv/server', () => serverMock);
 
-// the impl registers handlers via module.exports = (srv) => {...}
-const registerHandlers = require('../../srv/cardano-indexer-service');
-
+// the impl registers handlers via module.exports = (srv) => {...}; the dynamic
+// import goes through vitest's module graph so the mocks above apply, and the
+// CJS export surfaces as `.default`. (beforeAll instead of top-level await —
+// tsconfig compiles CommonJS, which forbids TLA.)
 type Handler = (req: Record<string, unknown>) => Promise<unknown>;
+
+let registerHandlers: (srv: unknown) => void;
+beforeAll(async () => {
+  const serviceModule: any = await import('../../srv/cardano-indexer-service');
+  registerHandlers = serviceModule.default ?? serviceModule;
+});
 
 function boot(): Record<string, Handler> {
   const handlers: Record<string, Handler> = {};
@@ -49,7 +64,7 @@ function boot(): Record<string, Handler> {
 }
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  vi.clearAllMocks();
   crawlerMock.isCrawlerRunning.mockReturnValue(true);
 });
 
@@ -136,7 +151,7 @@ describe('CardanoIndexerService.resumeCrawler', () => {
     });
     const handlers = boot();
 
-    const result = await handlers.resumeCrawler({ reject: jest.fn() });
+    const result = await handlers.resumeCrawler({ reject: vi.fn() });
 
     expect(crawlerMock.startCrawler).toHaveBeenCalledWith({
       client: { network: 'preview' },

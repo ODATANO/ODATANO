@@ -17,7 +17,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
     // 200s — covers slow live-network reads (Koios pool/account lookups can take 10-30s).
     // Set inside the describe so the value is snapshotted when these tests are registered;
     // the sibling error-handling suite reverts to a tighter 20s for its own tests.
-    jest.setTimeout(200000);
+    vi.setConfig({ testTimeout: 200000, hookTimeout: 200000 });
 
     // cds.test() starts server which triggers cds.on('served') → creates AppContext automatically
     const test = cds.test(__dirname + '/../../');

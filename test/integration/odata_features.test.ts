@@ -1,7 +1,9 @@
 import cds from '@sap/cds';
-import { shutdownAppContext } from '../../srv/server';
+// Native require: shuts down the app context of the cds.test()-booted server
+// (an ESM import would target a second, never-initialized module instance).
+const { shutdownAppContext } = require('../../srv/server') as typeof import('../../srv/server');
 
-jest.setTimeout(20000);
+vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 });
 
 // Configure environment BEFORE cds.test() - server uses these via cds.on('served')
 process.env.BACKENDS = 'koios';

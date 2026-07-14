@@ -6,20 +6,24 @@
  */
 
 // UPDATE/INSERT builders echo their payload so tests can inspect what would be written.
-jest.mock('@sap/cds', () => ({
-  log: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   ql: {
     SELECT: { one: { from: () => ({ where: () => ({ _op: 'SELECT.one' }) }) } },
     INSERT: { into: () => ({ entries: (rows: unknown) => ({ _op: 'INSERT', entries: rows }) }) },
     UPDATE: { entity: () => ({ set: (s: unknown) => ({ where: (w: unknown) => ({ _op: 'UPDATE', set: s, where: w }) }) }) },
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 // The typed entity proxies need the real cds runtime — stub them with plain names.
-jest.mock('#cds-models/odatano/cardano', () => ({
+vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
 }));
 
+import type { Mock } from 'vitest';
 import {
   ensureSyncStateSingleton,
   readCursor,
@@ -36,8 +40,8 @@ import {
   isCrawlerLeaseActive,
 } from '../../srv/blockchain/crawler/sync-state';
 
-type FakeDb = { run: jest.Mock };
-const makeDb = (): FakeDb => ({ run: jest.fn() });
+type FakeDb = { run: Mock };
+const makeDb = (): FakeDb => ({ run: vi.fn() });
 
 describe('sync-state: ensureSyncStateSingleton', () => {
   it('INSERTs a new singleton with the configured start point when none exists', async () => {

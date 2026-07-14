@@ -15,7 +15,7 @@
     "forceConsistentCasingInFileNames": true,
     "sourceMap": true,
     "allowJs": true,
-    "types": ["node", "jest"],
+    "types": ["node", "vitest/globals"],
     "baseUrl": ".",
     "paths": {
       "@sap/cds": [
@@ -34,7 +34,8 @@
     "@cds-models/**/*.ts",
     "types/**/*.d.ts",
     "test/**/*.ts",
-    "config/config.ts"
+    "config/config.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "node_modules",

@@ -25,7 +25,7 @@ describe('RequestCoalescer', () => {
         const coalescer = new RequestCoalescer<string>();
         let firstAttempt = true;
 
-        const flakyFetcher = jest.fn(async () => {
+        const flakyFetcher = vi.fn(async () => {
             if (firstAttempt) {
                 firstAttempt = false;
                 throw new Error('temporary failure');

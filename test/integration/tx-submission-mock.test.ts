@@ -2,9 +2,12 @@ import cds from '@sap/cds';
 
 import { TEST_FIXTURES } from './test-fixtures';
 import { setupKoiosMocks, nock } from './mock-helpers';
-import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
+// Native require: must share the module graph of the cds.test()-booted CAP
+// server, or the handlers never see the app context set by createTestContext.
+const { createTestContext, resetAppContext, shutdownAppContext } =
+  require('../../srv/server') as typeof import('../../srv/server');
 
-jest.setTimeout(60000);
+vi.setConfig({ testTimeout: 60000, hookTimeout: 60000 });
 
 // Skip server auto-init - mock tests create their own context after setting up nock mocks
 process.env.SKIP_AUTO_INIT = 'true';

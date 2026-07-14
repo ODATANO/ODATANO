@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -1466,4 +1466,150 @@ entity CardanoReorgLog {
         @title      : 'Status'
         @description: 'Lifecycle of the reorg handling (detected | rolling_back | reindexing | completed)'
         status           : ReorgStatus;
+}
+
+// -----------------------------------------------------
+// Wallet Worker / Job Engine (v2.1)
+// -----------------------------------------------------
+
+@title      : 'Cardano Worker Wallets'
+@description: 'Operator-registered server-side wallets the wallet worker executes jobs from. No key material is ever stored here.'
+entity CardanoWorkerWallets {
+
+        @title      : 'Wallet Id (Key)'
+        @description: 'Stable operator-chosen handle used in job requests'
+    key walletId      : String(50);
+
+        @title      : 'Signer Type'
+        @description: 'How this wallet signs (hsm | software)'
+        signerType    : WorkerSignerType;
+
+        @title      : 'Address'
+        @description: 'Bech32 address derived from the signing key at worker init (informational)'
+        address       : Bech32;
+
+        @title      : 'Public Key Hash'
+        @description: 'Blake2b-224 hash of the wallet verification key'
+        publicKeyHash : Blake2b224;
+
+        @title      : 'Enabled'
+        @description: 'Disabled wallets accept no new jobs and are skipped by the dispatch loop'
+        enabled       : Boolean default true;
+
+        @title      : 'Wallet Lease Owner'
+        @description: 'Opaque process identifier of the single worker instance currently allowed to execute jobs for this wallet'
+        leaseOwner    : String(128);
+
+        @title      : 'Wallet Lease Expiry'
+        @description: 'Lease deadline renewed by the executing worker; another instance may take over only after this time'
+        leaseUntil    : Timestamp;
+
+        @title      : 'Last Job At'
+        @description: 'Timestamp of the most recent job execution for this wallet'
+        lastJobAt     : Timestamp;
+
+        @title      : 'Jobs Confirmed'
+        @description: 'Rolling count of jobs that reached confirmed state'
+        jobsConfirmed : Integer64 default 0;
+
+        @title      : 'Jobs Failed'
+        @description: 'Rolling count of jobs that reached failed state'
+        jobsFailed    : Integer64 default 0;
+}
+
+@title      : 'Cardano Wallet Jobs'
+@description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
+entity CardanoWalletJobs {
+
+        @title      : 'Job Id (Key)'
+        @description: 'Unique identifier of the job, returned by SubmitWalletJob'
+    key ID             : UUID;
+
+        @title      : 'Wallet Id'
+        @description: 'The worker wallet this job executes from'
+        walletId       : String(50);
+
+        @title      : 'Job Kind'
+        @description: 'Transaction kind (simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned)'
+        kind           : WalletJobKind;
+
+        @title      : 'Status'
+        @description: 'Job lifecycle state (pending | building | submitted | confirmed | failed | cancelled)'
+        status         : WalletJobStatus default 'pending';
+
+        @title      : 'Idempotency Key'
+        @description: 'Optional caller-supplied dedup key — a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
+        idempotencyKey : String(100);
+
+        @title      : 'Request'
+        @description: 'The build-action payload as JSON, verbatim (validated before insert; never contains key material)'
+        request        : LargeString;
+
+        @title      : 'Priority'
+        @description: 'Dispatch order within a wallet queue — lower runs sooner (default 100)'
+        priority       : Integer default 100;
+
+        @title      : 'Not Before'
+        @description: 'Optional earliest execution time (one-shot scheduling)'
+        notBefore      : Timestamp;
+
+        @title      : 'Attempt'
+        @description: 'Number of execution attempts made so far'
+        attempt        : Integer default 0;
+
+        @title      : 'Max Attempts'
+        @description: 'Bound for transient-failure retries (build/submit); deterministic rejections fail immediately'
+        maxAttempts    : Integer default 3;
+
+        @title      : 'Transaction Hash'
+        @description: 'Hash of the submitted transaction (set when the job reaches submitted)'
+        txHash         : Blake2b256;
+
+        @title      : 'Unsigned Transaction CBOR'
+        @description: 'The built unsigned transaction, kept for diagnosis until the job confirms'
+        unsignedTxCbor : LargeString;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The signed transaction as submitted — reused verbatim for rollback re-submission (never rebuilt)'
+        signedTxCbor   : LargeString;
+
+        @title      : 'Fee'
+        @description: 'Transaction fee in lovelace, from the build result'
+        fee            : Lovelace;
+
+        @title      : 'Submitted At'
+        @description: 'Timestamp of mempool acceptance'
+        submittedAt    : Timestamp;
+
+        @title      : 'Confirmed At'
+        @description: 'Timestamp when the configured confirmation depth was reached'
+        confirmedAt    : Timestamp;
+
+        @title      : 'Confirmed Slot'
+        @description: 'Absolute slot of the block containing the transaction — used for reorg checks'
+        confirmedSlot  : Integer64;
+
+        @title      : 'Confirmed Height'
+        @description: 'Block height of the block containing the transaction — used for depth calculation'
+        confirmedHeight : Integer64;
+
+        @title      : 'Error Code'
+        @description: 'Machine-readable code of the terminal failure (null while healthy)'
+        errorCode      : String(50);
+
+        @title      : 'Error Message'
+        @description: 'Human-readable message of the terminal failure'
+        errorMessage   : String(500);
+
+        @title      : 'Created At'
+        @description: 'Timestamp the job was accepted'
+        createdAt      : Timestamp;
+
+        @title      : 'Created By'
+        @description: 'User id of the caller that submitted the job'
+        createdBy      : String(100);
+
+        @title      : 'Finished At'
+        @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled)'
+        finishedAt     : Timestamp;
 }

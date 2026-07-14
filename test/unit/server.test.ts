@@ -106,10 +106,9 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Must be a number');
     });
 
-    it('should reject a CDS-config numeric 0 timeout instead of silently defaulting', () => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const cds = require('@sap/cds');
-      const reqs = (cds.env.requires ??= {});
+    it('should reject a CDS-config numeric 0 timeout instead of silently defaulting', async () => {
+      const cds = await import('@sap/cds');
+      const reqs = (cds.env.requires ??= {} as any);
       const prev = reqs['odatano-core'];
       reqs['odatano-core'] = { backends: ['koios'], primaryTimeoutMs: 0 };
       try {
@@ -497,7 +496,7 @@ describe('server.ts', () => {
     } as any;
 
     afterEach(async () => {
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
       await shutdownAppContext();
       resetAppContext(null);
       setHsmSigner(null);
@@ -505,7 +504,7 @@ describe('server.ts', () => {
     });
 
     it('should initialize from pre-built config', async () => {
-      const txBuilderInitSpy = jest
+      const txBuilderInitSpy = vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
 
@@ -516,10 +515,10 @@ describe('server.ts', () => {
     });
 
     it('should initialize HSM signer when hsm config is enabled', async () => {
-      jest
+      vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
-      const hsmInitSpy = jest
+      const hsmInitSpy = vi
         .spyOn(HsmSigner.prototype, 'init')
         .mockResolvedValue(undefined);
 
@@ -535,10 +534,10 @@ describe('server.ts', () => {
     });
 
     it('should not fail app init when HSM init throws', async () => {
-      jest
+      vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
-      const hsmInitSpy = jest
+      const hsmInitSpy = vi
         .spyOn(HsmSigner.prototype, 'init')
         .mockRejectedValue(new Error('hsm unavailable'));
 
@@ -564,7 +563,7 @@ describe('server.ts', () => {
     });
 
     it('should shutdown client and clear context', async () => {
-      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      const mockShutdown = vi.fn().mockResolvedValue(undefined);
       resetAppContext({
         cardanoClient: { shutdown: mockShutdown } as any,
         cardanoIndexer: {} as any,
@@ -578,15 +577,15 @@ describe('server.ts', () => {
     });
 
     it('should shutdown HSM signer if active', async () => {
-      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      const mockShutdown = vi.fn().mockResolvedValue(undefined);
       resetAppContext({
         cardanoClient: { shutdown: mockShutdown } as any,
         cardanoIndexer: {} as any,
         cardanoTxBuilder: {} as any,
       });
 
-      const mockHsmShutdown = jest.fn();
-      setHsmSigner({ shutdown: mockHsmShutdown, getStatus: jest.fn() } as any);
+      const mockHsmShutdown = vi.fn();
+      setHsmSigner({ shutdown: mockHsmShutdown, getStatus: vi.fn() } as any);
 
       await shutdownAppContext();
 

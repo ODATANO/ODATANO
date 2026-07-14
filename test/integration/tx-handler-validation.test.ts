@@ -4,13 +4,16 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
+// Native require: must share the module graph of the cds.test()-booted CAP
+// server, or the handlers never see the app context set by createTestContext.
+const { createTestContext, resetAppContext, shutdownAppContext } =
+  require('../../srv/server') as typeof import('../../srv/server');
 import { TEST_FIXTURES, plutusSpendRequestBody, mockScriptTxInfo, mockUtxosWithAssets } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupTxResponseMock, teardownKoiosMocks, nock } from './mock-helpers';
 
 const { INSERT } = cds.ql;
 
-jest.setTimeout(30000);
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';

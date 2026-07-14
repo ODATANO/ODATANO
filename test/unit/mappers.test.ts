@@ -14,6 +14,7 @@ import {
   mapAddressUtxos,
   mapAsset,
   mapAssetHistory,
+  mapBlock,
   mapBuildResult,
   mapPool,
   mapDrep,
@@ -22,17 +23,20 @@ import {
 } from '../../srv/utils/mappers';
 
 // Mock cds logger + utils
-jest.mock('@sap/cds', () => ({
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
   log: () => ({
-    info: jest.fn(),
-    debug: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
   utils: {
-    uuid: jest.fn(() => 'test-uuid-1234'),
+    uuid: vi.fn(() => 'test-uuid-1234'),
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 describe('mappers', () => {
 
@@ -406,8 +410,6 @@ describe('mappers', () => {
   // mapBlock
   // ==========================================================================
   describe('mapBlock', () => {
-    const { mapBlock } = require('../../srv/utils/mappers');
-
     it('persists a real null slotLeader (not the string "null")', () => {
       const row = mapBlock({ time: 1700000000, height: 1, hash: 'h', slotLeader: null, epoch: 5, epochSlot: 1, size: 1, txCount: 0, fees: '0' } as any);
       expect(row.slotLeader).toBeNull();

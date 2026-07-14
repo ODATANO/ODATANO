@@ -1,6 +1,8 @@
 import cds from '@sap/cds';
 import { TestConfiguration, configureBackendForTest } from './test-fixtures';
-import { shutdownAppContext } from '../../srv/server';
+// Native require: shuts down the app context of the cds.test()-booted server
+// (an ESM import would target a second, never-initialized module instance).
+const { shutdownAppContext } = require('../../srv/server') as typeof import('../../srv/server');
 
 export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 	// Configure environment BEFORE cds.test() - server uses these via cds.on('served')
@@ -8,7 +10,7 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 	configureBackendForTest(backendConfig, originalBlockfrostKey);
 
 	describe(`Error Handling – Backend-Specific [${backendConfig.backendName.toUpperCase()}]`, () => {
-		// Note: do NOT call jest.setTimeout here. jest.setTimeout is file-scoped (not
+		// Note: do NOT call vi.setConfig({ testTimeout }) here. It is file-scoped (not
 		// describe-scoped), so calling it inside this describe overrode the sibling
 		// createBackendTestSuite's 200s — the longer-running Koios reads (e.g. POST
 		// /GetPoolById cold-action) hit the 20s limit and timed out. Error-handling

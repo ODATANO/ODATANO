@@ -5,14 +5,19 @@
  * mapping, ordering (nextBlock), tip propagation, skip- and error-paths.
  */
 
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({ info: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() })),
-}));
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() })),
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 type Handlers = {
   rollForward: (r: { block: unknown; tip: unknown }, next: () => void) => Promise<void>;
   rollBackward: (r: { point: unknown; tip?: unknown }, next: () => void) => Promise<void>;
 };
+// Captured by the vi.mock factory below, which is hoisted above all
+// statements — so the object itself must be hoisted too.
 const captured: {
   handlers?: Handlers;
   opts?: { sequential?: boolean };
@@ -20,17 +25,17 @@ const captured: {
   inFlight?: number;
   contextError?: (err: Error) => void;
   contextClose?: (code: number, reason: Buffer) => void;
-  socket: { readyState: number; OPEN: number; CLOSED: number; terminate: jest.Mock; close: jest.Mock };
-  resume: jest.Mock;
-  shutdown: jest.Mock;
-} = {
-  socket: { readyState: 1, OPEN: 1, CLOSED: 3, terminate: jest.fn(), close: jest.fn() },
-  resume: jest.fn(),
-  shutdown: jest.fn(),
-};
+  socket: { readyState: number; OPEN: number; CLOSED: number; terminate: Mock; close: Mock };
+  resume: Mock;
+  shutdown: Mock;
+} = vi.hoisted(() => ({
+  socket: { readyState: 1, OPEN: 1, CLOSED: 3, terminate: vi.fn(), close: vi.fn() },
+  resume: vi.fn(),
+  shutdown: vi.fn(),
+}));
 
-jest.mock('@cardano-ogmios/client', () => ({
-  createInteractionContext: jest.fn(async (
+vi.mock('@cardano-ogmios/client', () => ({
+  createInteractionContext: vi.fn(async (
     onError: (err: Error) => void,
     onClose: (code: number, reason: Buffer) => void,
   ) => {
@@ -38,9 +43,9 @@ jest.mock('@cardano-ogmios/client', () => ({
     captured.contextClose = onClose;
     return { socket: captured.socket };
   }),
-  createLedgerStateQueryClient: jest.fn(),
-  createTransactionSubmissionClient: jest.fn(),
-  createChainSynchronizationClient: jest.fn(async (_ctx: unknown, handlers: Handlers, opts: { sequential?: boolean }) => {
+  createLedgerStateQueryClient: vi.fn(),
+  createTransactionSubmissionClient: vi.fn(),
+  createChainSynchronizationClient: vi.fn(async (_ctx: unknown, handlers: Handlers, opts: { sequential?: boolean }) => {
     captured.handlers = handlers;
     captured.opts = opts;
     return {
@@ -50,6 +55,7 @@ jest.mock('@cardano-ogmios/client', () => ({
   }),
 }));
 
+import type { Mock } from 'vitest';
 import { createChainSynchronizationClient } from '@cardano-ogmios/client';
 import { OgmiosBackend } from '../../srv/blockchain/backends/ogmios-backend';
 import type { ChainSyncCallbacks, ChainPoint } from '../../srv/blockchain/backends/cardano-backend';
@@ -121,7 +127,7 @@ describe('OgmiosBackend.openChainSync', () => {
       captured.inFlight = inFlight;
     });
     captured.shutdown.mockReset().mockResolvedValue(undefined);
-    jest.mocked(createChainSynchronizationClient).mockClear();
+    vi.mocked(createChainSynchronizationClient).mockClear();
   });
 
   it('resumes sequentially from the given intersection point with inFlight=1', async () => {
@@ -139,7 +145,7 @@ describe('OgmiosBackend.openChainSync', () => {
 
   it('maps a praos block to BlockData + Transactions and requests the next block', async () => {
     const { rolled } = await openStream();
-    const next = jest.fn();
+    const next = vi.fn();
     await captured.handlers!.rollForward({ block: praosBlock(), tip: { slot: 6000, id: 'f'.repeat(64), height: 120 } }, next);
 
     expect(next).toHaveBeenCalledTimes(1);
@@ -189,7 +195,7 @@ describe('OgmiosBackend.openChainSync', () => {
     const { rolled } = await openStream();
     const block = praosBlock();
     delete (block.transactions as Array<Record<string, unknown>>)[0].metadata;
-    await captured.handlers!.rollForward({ block, tip: 'origin' }, jest.fn());
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
     expect(rolled[0].txs[0].metadata).toBeUndefined();
   });
 
@@ -204,7 +210,7 @@ describe('OgmiosBackend.openChainSync', () => {
       value: { ada: { lovelace: 1_000_000n } },
     };
 
-    await captured.handlers!.rollForward({ block, tip: 'origin' }, jest.fn());
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
 
     expect(rolled[0].txs[0].inputs).toEqual([
       { address: '', amount: [], txHash: 'd'.repeat(64), outputIndex: 1 },
@@ -228,7 +234,7 @@ describe('OgmiosBackend.openChainSync', () => {
       datumHash: '3'.repeat(64),
     };
 
-    await captured.handlers!.rollForward({ block, tip: 'origin' }, jest.fn());
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
 
     const mapped = rolled[0].txs[0];
     // The declared regular input/output are phantom ledger effects on phase-2 failure.
@@ -248,13 +254,13 @@ describe('OgmiosBackend.openChainSync', () => {
 
   it('passes tip=undefined when the node reports an origin tip', async () => {
     const { rolled } = await openStream();
-    await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, jest.fn());
+    await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, vi.fn());
     expect(rolled[0].tip).toBeUndefined();
   });
 
   it('skips non-praos (byron ebb/bft) blocks but still requests the next block', async () => {
     const { rolled } = await openStream();
-    const next = jest.fn();
+    const next = vi.fn();
     await captured.handlers!.rollForward({ block: praosBlock({ type: 'ebb', transactions: undefined }), tip: 'origin' }, next);
     expect(rolled).toHaveLength(0);
     expect(next).toHaveBeenCalledTimes(1);
@@ -262,7 +268,7 @@ describe('OgmiosBackend.openChainSync', () => {
 
   it('maps rollBackward points and forwards origin as-is', async () => {
     const { rolledBack } = await openStream();
-    const next = jest.fn();
+    const next = vi.fn();
     await captured.handlers!.rollBackward({ point: { slot: 4321, id: '9'.repeat(64) } }, next);
     await captured.handlers!.rollBackward({ point: 'origin' }, next);
     expect(rolledBack).toEqual([{ slot: 4321, hash: '9'.repeat(64) }, 'origin']);
@@ -273,7 +279,7 @@ describe('OgmiosBackend.openChainSync', () => {
     const { errors } = await openStream({
       rollForward: async () => { throw new Error('persist failed'); },
     });
-    const next = jest.fn();
+    const next = vi.fn();
     await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, next);
     expect(errors).toHaveLength(1);
     expect((errors[0] as Error).message).toBe('persist failed');
@@ -284,7 +290,7 @@ describe('OgmiosBackend.openChainSync', () => {
     const { errors } = await openStream({
       rollBackward: async () => { throw new Error('reorg failed'); },
     });
-    const next = jest.fn();
+    const next = vi.fn();
     await captured.handlers!.rollBackward({ point: 'origin' }, next);
     expect(errors).toHaveLength(1);
     expect(next).not.toHaveBeenCalled();
@@ -314,7 +320,7 @@ describe('OgmiosBackend.openChainSync', () => {
   });
 
   it('cleans up the context when chain-sync client creation fails', async () => {
-    jest.mocked(createChainSynchronizationClient).mockRejectedValueOnce(new Error('client open failed'));
+    vi.mocked(createChainSynchronizationClient).mockRejectedValueOnce(new Error('client open failed'));
 
     await expect(openStream()).rejects.toThrow('client open failed');
     expect(captured.socket.terminate).toHaveBeenCalledTimes(1);

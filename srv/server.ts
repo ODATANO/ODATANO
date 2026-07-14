@@ -8,6 +8,9 @@ import { ConfigError, ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
+import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
+import type { WalletWorkerConfig } from './blockchain/wallet-worker';
+import type { WorkerWalletConfig } from './blockchain/wallet-worker/signers';
 
 import { env } from 'process';
 
@@ -234,7 +237,14 @@ export async function createTestContext(
  * Closes all backend connections to allow process to exit cleanly
  */
 export async function shutdownAppContext(): Promise<void> {
-  // Stop the crawler first so its in-flight block writes don't hit a torn-down client.
+  // Stop the wallet worker first — its in-flight submit must not hit a torn-down client.
+  try {
+    await stopWalletWorker();
+  } catch (err) {
+    logger.warn('Wallet worker shutdown failed (continuing):', err);
+  }
+
+  // Stop the crawler so its in-flight block writes don't hit a torn-down client.
   try {
     await stopCrawler();
   } catch (err) {
@@ -496,6 +506,153 @@ export async function startCrawlerIfConfigured(): Promise<void> {
   }
 }
 
+const WALLET_WORKER_LIMITS = {
+  maxConcurrentWallets: { min: 1, max: 64 },
+  confirmationDepth: { min: 1, max: 2160 },
+  confirmationTimeoutMs: { min: 30_000, max: 86_400_000 },
+  pollIntervalMs: { min: 500, max: 3_600_000 },
+  maxAttempts: { min: 1, max: 10 },
+} as const;
+
+/**
+ * Load the wallet-worker configuration from CDS config or environment variables.
+ * Returns { enabled:false } when the worker is not switched on (the default).
+ *
+ * Plugin mode: cds.requires.odatano-core.walletWorker.{enabled,wallets,...}
+ * Env mode:    WALLET_WORKER_ENABLED / WALLET_WORKER_WALLETS (JSON) / ...
+ */
+export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
+  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
+  const w = cdsConfig.walletWorker ?? {};
+
+  const enabledRaw = w.enabled !== undefined ? w.enabled : env.WALLET_WORKER_ENABLED;
+  let enabled = false;
+  if (enabledRaw === true || enabledRaw === 'true') {
+    enabled = true;
+  } else if (enabledRaw !== undefined && enabledRaw !== false && enabledRaw !== 'false') {
+    throw new ConfigError(`Invalid WALLET_WORKER_ENABLED "${String(enabledRaw)}". Must be true or false.`);
+  }
+
+  let walletsRaw: unknown = w.wallets ?? undefined;
+  if (walletsRaw === undefined && env.WALLET_WORKER_WALLETS) {
+    try {
+      walletsRaw = JSON.parse(env.WALLET_WORKER_WALLETS);
+    } catch {
+      throw new ConfigError('Invalid WALLET_WORKER_WALLETS — must be a JSON array of { walletId, signerType, keyEnv? }.');
+    }
+  }
+  const wallets: WorkerWalletConfig[] = [];
+  if (walletsRaw !== undefined) {
+    if (!Array.isArray(walletsRaw)) {
+      throw new ConfigError('Invalid walletWorker.wallets — must be an array of { walletId, signerType, keyEnv? }.');
+    }
+    for (const entry of walletsRaw) {
+      const walletId = typeof entry?.walletId === 'string' ? entry.walletId.trim() : '';
+      const signerType = entry?.signerType;
+      if (!walletId || (signerType !== 'hsm' && signerType !== 'software')) {
+        throw new ConfigError(`Invalid wallet entry ${JSON.stringify(entry)} — walletId and signerType (hsm|software) are required.`);
+      }
+      if (signerType === 'software' && (typeof entry.keyEnv !== 'string' || !entry.keyEnv.trim())) {
+        throw new ConfigError(`Wallet "${walletId}" is signerType=software but has no keyEnv (name of the env var holding the signing key).`);
+      }
+      if (wallets.some((existing) => existing.walletId === walletId)) {
+        throw new ConfigError(`Duplicate walletId "${walletId}" in walletWorker.wallets.`);
+      }
+      wallets.push({ walletId, signerType, keyEnv: entry.keyEnv });
+    }
+  }
+
+  const maxConcurrentWallets = crawlerInteger(
+    w.maxConcurrentWallets ?? env.WALLET_WORKER_MAX_CONCURRENT,
+    'WALLET_WORKER_MAX_CONCURRENT',
+    WALLET_WORKER_LIMITS.maxConcurrentWallets.min,
+    WALLET_WORKER_LIMITS.maxConcurrentWallets.max,
+    4,
+  )!;
+  const confirmationDepth = crawlerInteger(
+    w.confirmationDepth ?? env.WALLET_WORKER_CONFIRMATION_DEPTH,
+    'WALLET_WORKER_CONFIRMATION_DEPTH',
+    WALLET_WORKER_LIMITS.confirmationDepth.min,
+    WALLET_WORKER_LIMITS.confirmationDepth.max,
+    3,
+  )!;
+  const confirmationTimeoutMs = crawlerInteger(
+    w.confirmationTimeoutMs ?? env.WALLET_WORKER_CONFIRMATION_TIMEOUT_MS,
+    'WALLET_WORKER_CONFIRMATION_TIMEOUT_MS',
+    WALLET_WORKER_LIMITS.confirmationTimeoutMs.min,
+    WALLET_WORKER_LIMITS.confirmationTimeoutMs.max,
+    600_000,
+  )!;
+  const pollIntervalMs = crawlerInteger(
+    w.pollIntervalMs ?? env.WALLET_WORKER_POLL_INTERVAL_MS,
+    'WALLET_WORKER_POLL_INTERVAL_MS',
+    WALLET_WORKER_LIMITS.pollIntervalMs.min,
+    WALLET_WORKER_LIMITS.pollIntervalMs.max,
+    2_000,
+  )!;
+  const defaultMaxAttempts = crawlerInteger(
+    w.defaultMaxAttempts ?? env.WALLET_WORKER_MAX_ATTEMPTS,
+    'WALLET_WORKER_MAX_ATTEMPTS',
+    WALLET_WORKER_LIMITS.maxAttempts.min,
+    WALLET_WORKER_LIMITS.maxAttempts.max,
+    3,
+  )!;
+
+  const resubmitRaw = w.resubmitOnRollback !== undefined ? w.resubmitOnRollback : env.WALLET_WORKER_RESUBMIT_ON_ROLLBACK;
+  let resubmitOnRollback = true;
+  if (resubmitRaw === false || resubmitRaw === 'false') {
+    resubmitOnRollback = false;
+  } else if (resubmitRaw !== undefined && resubmitRaw !== true && resubmitRaw !== 'true') {
+    throw new ConfigError(`Invalid WALLET_WORKER_RESUBMIT_ON_ROLLBACK "${String(resubmitRaw)}". Must be true or false.`);
+  }
+
+  if (enabled && wallets.length === 0) {
+    throw new ConfigError(
+      'Wallet worker is enabled but no wallets are configured — set walletWorker.wallets (or WALLET_WORKER_WALLETS).',
+    );
+  }
+
+  return {
+    enabled,
+    wallets,
+    maxConcurrentWallets,
+    confirmationDepth,
+    confirmationTimeoutMs,
+    pollIntervalMs,
+    defaultMaxAttempts,
+    resubmitOnRollback,
+  };
+}
+
+/**
+ * Start the wallet worker if it is enabled and the app context is ready. Never
+ * throws (worker failure must not affect request serving) — errors are logged.
+ * Idempotent: startWalletWorker() is a no-op when one is already running.
+ */
+export async function startWalletWorkerIfConfigured(): Promise<void> {
+  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  let config: WalletWorkerConfig;
+  try {
+    config = loadWalletWorkerConfigFromEnv();
+  } catch (err) {
+    logger.error('Invalid wallet-worker configuration — worker not started:', err);
+    return;
+  }
+  if (!config.enabled) return;
+
+  try {
+    await startWalletWorker({
+      client: appContext.cardanoClient,
+      indexer: appContext.cardanoIndexer,
+      network: appContext.cardanoClient.network,
+      config,
+    });
+    logger.info(`Wallet worker started (wallets=${config.wallets.map((w2) => w2.walletId).join(',')})`);
+  } catch (err) {
+    logger.error('Failed to start wallet worker (non-fatal):', err);
+  }
+}
+
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
   // Skip if already initialized by plugin (src/plugin.ts runs first)
@@ -525,7 +682,7 @@ cds.on('served', async () => {
     // instead of the raw "Application not initialized" Error landing as a generic 500.
     bootstrapError = err instanceof Error ? err : new Error(String(err));
     // Write to stderr directly so the cause stays visible even when test runners
-    // suppress console.error (jest.setup.ts in this repo silences it).
+    // suppress console.error (vitest.setup.ts in this repo silences it).
     const where = config ? `backends={${config.backends.join(',')}} network=${config.network}` : 'config load';
     const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err);
     process.stderr.write(`[ODATANO] Failed to initialize blockchain components — ${where}\n${msg}\n`);
@@ -534,6 +691,9 @@ cds.on('served', async () => {
 
   // Start the pre-sync crawler if configured (standalone mode). Non-fatal.
   await startCrawlerIfConfigured();
+
+  // Start the wallet worker if configured (standalone mode). Non-fatal.
+  await startWalletWorkerIfConfigured();
 });
 
 // Shutdown hook - runs when CAP server is shutting down (e.g., cds.shutdown() in tests)

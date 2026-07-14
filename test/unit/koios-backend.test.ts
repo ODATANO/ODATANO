@@ -1,13 +1,16 @@
 import nock from 'nock';
 
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({
-    info: jest.fn(),
-    error: jest.fn(),
-    warn: jest.fn(),
-    debug: jest.fn(),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
   })),
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';
 import { CARDANO_DEFAULTS } from '../../srv/utils/const';
@@ -206,7 +209,7 @@ describe('KoiosBackend', () => {
           { tx_hash: 'b'.repeat(64), block_height: 200 },
         ]);
 
-      const batchSpy = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+      const batchSpy = vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
         ['c'.repeat(64), { hash: 'c'.repeat(64) } as any],
         ['b'.repeat(64), { hash: 'b'.repeat(64) } as any],
       ]));
@@ -292,7 +295,7 @@ describe('KoiosBackend', () => {
         active_stake: '2000',
       };
 
-      const epochSpy = jest.spyOn(backend, 'getEpoch')
+      const epochSpy = vi.spyOn(backend, 'getEpoch')
         .mockRejectedValueOnce(new Error('current epoch not indexed yet'))
         .mockResolvedValueOnce(epoch99 as any);
 

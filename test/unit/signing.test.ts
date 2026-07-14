@@ -31,17 +31,20 @@ import { TransactionValidationError } from '../../srv/utils/errors';
 import * as cbor from 'cbor';
 
 // Mock only the logger to reduce noise in tests
-jest.mock('@sap/cds', () => ({
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
   log: () => ({
-    info: jest.fn(),
-    debug: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
   utils: {
-    uuid: jest.fn(() => 'test-uuid-1234'),
+    uuid: vi.fn(() => 'test-uuid-1234'),
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 // Valid test transaction CBORs from actual Cardano testnet
 // These are real Cardano testnet transactions used as fixtures

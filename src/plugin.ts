@@ -27,7 +27,8 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
     '@odatano/core/srv/cardano-service',
     '@odatano/core/srv/cardano-tx-service',
     '@odatano/core/srv/cardano-sign-service',
-    '@odatano/core/srv/cardano-indexer-service'
+    '@odatano/core/srv/cardano-indexer-service',
+    '@odatano/core/srv/cardano-worker-service'
   ]
 };
 
@@ -41,7 +42,8 @@ if (req) {
     '@odatano/core/srv/cardano-service',
     '@odatano/core/srv/cardano-tx-service',
     '@odatano/core/srv/cardano-sign-service',
-    '@odatano/core/srv/cardano-indexer-service'
+    '@odatano/core/srv/cardano-indexer-service',
+    '@odatano/core/srv/cardano-worker-service'
   ];
 }
 
@@ -66,6 +68,8 @@ cds.on('loaded', (model) => {
       def['@impl'] = '@odatano/core/srv/cardano-sign-service';
     } else if (def['@impl'] === 'srv/cardano-indexer-service') {
       def['@impl'] = '@odatano/core/srv/cardano-indexer-service';
+    } else if (def['@impl'] === 'srv/cardano-worker-service') {
+      def['@impl'] = '@odatano/core/srv/cardano-worker-service';
     }
   }
 });

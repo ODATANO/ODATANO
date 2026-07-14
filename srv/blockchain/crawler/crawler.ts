@@ -5,6 +5,7 @@ import type { ChainSyncBackend, ChainSyncHandle, ChainPoint, PaginatingBackend }
 import type { BlockData, Transaction } from '../../utils/types';
 import { ProviderUnavailableError } from '../../utils/errors';
 import { chunk, IN_CHUNK } from '../../utils/collections';
+import { emitBlockIndexed, emitReorg } from './hooks';
 import {
   Blocks,
   Transactions,
@@ -494,6 +495,16 @@ export class CardanoCrawler {
             isAtTip ? 'synced' : 'syncing',
           );
         });
+        // Notify observers (wallet-worker confirmation tracker) AFTER the commit —
+        // listener failures are swallowed inside emitBlockIndexed.
+        emitBlockIndexed({
+          hash: block.hash,
+          slot: block.slot ?? null,
+          height: block.height ?? null,
+          txHashes: txs.map((t) => t.hash),
+          tipSlot: tip?.slot ?? null,
+          tipHeight: tip?.height ?? null,
+        });
         return true;
       } catch (err) {
         if (err instanceof CrawlerLeaseLostError) {
@@ -603,6 +614,8 @@ export class CardanoCrawler {
       throw err;
     }
 
+    // Notify observers (wallet-worker confirmation tracker) AFTER the rollback commit.
+    emitReorg({ forkSlot });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }
 

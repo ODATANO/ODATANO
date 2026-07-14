@@ -75,7 +75,7 @@ export default [
   },
 
   
-  // Jest test globals
+  // Vitest test globals (vitest.config.ts: test.globals = true)
   {
     files: [
       'test/**/*.{ts,js}',
@@ -92,8 +92,7 @@ export default [
         afterAll: 'readonly',
         beforeEach: 'readonly',
         afterEach: 'readonly',
-        jest: 'readonly',
-        fail: 'readonly',
+        vi: 'readonly',
       },
     },
     rules: {

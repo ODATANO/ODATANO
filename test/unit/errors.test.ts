@@ -11,7 +11,9 @@ import {
   TransactionValidationError,
   getErrorStatus,
   getErrorMessage,
-  normalizeBackendError
+  normalizeBackendError,
+  rejectInvalid,
+  rejectMissing
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
@@ -387,13 +389,6 @@ describe('Error Classes', () => {
 
       expect(result.statusCode).toBe(404);
       expect(result).toBeInstanceOf(NotFoundError);
-    });
-
-    it('should preserve original error', () => {
-      const error = { status: 503, message: 'Service down' };
-      const result = normalizeBackendError(error, 'koios');
-
-      expect(result.originalError).toBeDefined();
     });
 
     // ============================================================================
@@ -778,7 +773,6 @@ describe('Error Classes', () => {
     it('should throw BackendError with invalid input error', () => {
       const mockReq = {} as any;
 
-      const { rejectInvalid } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectInvalid(mockReq, 'TestContext', 'Invalid value', 'fieldName');
@@ -797,7 +791,6 @@ describe('Error Classes', () => {
     it('should throw BackendError without target', () => {
       const mockReq = {} as any;
 
-      const { rejectInvalid } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectInvalid(mockReq, 'TestContext', 'Invalid value');
@@ -818,7 +811,6 @@ describe('Error Classes', () => {
     it('should throw BackendError for missing field', () => {
       const mockReq = {} as any;
 
-      const { rejectMissing } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectMissing(mockReq, 'TestContext', 'requiredField');

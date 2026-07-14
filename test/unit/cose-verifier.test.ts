@@ -16,9 +16,12 @@ import { bech32 } from 'bech32';
 import { verifyDataSignature } from '../../srv/blockchain/signing/cose-verifier';
 
 // Mock only the logger (cose-verifier calls cds.log)
-jest.mock('@sap/cds', () => ({
-  log: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }),
-}));
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers — build a real CIP-30 signData result for a given key + payload
