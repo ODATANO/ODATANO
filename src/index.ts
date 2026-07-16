@@ -59,11 +59,14 @@ export async function initialize(): Promise<void> {
   }
 
   // Start the pre-sync crawler if configured (plugin mode). Non-fatal.
-  const { startCrawlerIfConfigured, startWalletWorkerIfConfigured } = await import('../srv/server');
+  const { startCrawlerIfConfigured, startWalletWorkerIfConfigured, redriveInterruptedSubmissionsIfConfigured } = await import('../srv/server');
   await startCrawlerIfConfigured();
 
   // Start the wallet worker if configured (plugin mode). Non-fatal.
   await startWalletWorkerIfConfigured();
+
+  // Re-drive deferred submissions interrupted by a restart (plugin mode). Non-fatal.
+  await redriveInterruptedSubmissionsIfConfigured();
 }
 
 /**

@@ -149,15 +149,9 @@ function toWalletRow(row: Record<string, unknown>): WorkerWalletRow {
   };
 }
 
-/**
- * Run `fn` with `cds.context` cleared, so any `db.run(...)` inside it gets a fresh
- * short-lived transaction instead of joining a long-lived ambient one. Under
- * @cap-js/sqlite (pool.max=1) this is what keeps the single pooled connection free
- * during the long awaits of job execution (NIGHTGATE lesson 2).
- */
-export function runWithoutAmbientTx<T>(fn: () => Promise<T>): Promise<T> {
-  return (cds as unknown as { _with: <R>(store: undefined, fn: () => Promise<R>) => Promise<R> })._with(undefined, fn);
-}
+// Moved to srv/utils/tx-utils.ts (shared with the sign-service's deadlock
+// guard); re-exported here so existing imports keep working.
+export { runWithoutAmbientTx } from '../../utils/tx-utils';
 
 // ---- Job creation ------------------------------------------------------------
 

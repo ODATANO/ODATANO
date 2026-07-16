@@ -653,6 +653,24 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
   }
 }
 
+/**
+ * Re-drive deferred submissions that were claimed (status 'submitting' with
+ * persisted signedTxCbor) but whose detached submit never ran because the
+ * process died first (KNOWN_ISSUES #11, Layer 2). Idempotent — an already
+ * submitted tx finalizes via the TransactionAlreadySubmittedError path.
+ * Non-fatal, mirrors startCrawlerIfConfigured/startWalletWorkerIfConfigured.
+ */
+export async function redriveInterruptedSubmissionsIfConfigured(): Promise<void> {
+  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  try {
+    const { redriveInterruptedSubmissions } = await import('./blockchain/signing/submission-finalizer');
+    const attempted = await redriveInterruptedSubmissions();
+    if (attempted > 0) logger.info(`Re-drove ${attempted} interrupted deferred submission(s)`);
+  } catch (err) {
+    logger.error('Failed to re-drive interrupted submissions (non-fatal):', err);
+  }
+}
+
 // Bootstrap hook - runs when CAP server has loaded all services
 cds.on('served', async () => {
   // Skip if already initialized by plugin (src/plugin.ts runs first)
@@ -694,6 +712,9 @@ cds.on('served', async () => {
 
   // Start the wallet worker if configured (standalone mode). Non-fatal.
   await startWalletWorkerIfConfigured();
+
+  // Re-drive deferred submissions interrupted by a restart (standalone mode). Non-fatal.
+  await redriveInterruptedSubmissionsIfConfigured();
 });
 
 // Shutdown hook - runs when CAP server is shutting down (e.g., cds.shutdown() in tests)

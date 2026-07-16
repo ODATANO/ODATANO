@@ -83,6 +83,16 @@ export const ERROR_CODES = {
    * Indicates HSM signing was requested but HSM is not configured
    */
   HSM_NOT_CONFIGURED: 'ODATANO_HSM_NOT_CONFIGURED',
+
+  /**
+   * 503 – Detached transaction could not begin in time
+   * The sign-service could not acquire a pooled DB connection for one of its
+   * detached bookkeeping transactions. Most common cause: an in-process
+   * consumer awaits SubmitVerifiedTransaction/SignAndSubmitWithHsm while its
+   * own request transaction holds the (single) pooled sqlite connection —
+   * see docs/KNOWN_ISSUES.md issue 11.
+   */
+  NESTED_TX_TIMEOUT: 'ODATANO_NESTED_TX_TIMEOUT',
 } as const;
 
 /** 

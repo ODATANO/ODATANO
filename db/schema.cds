@@ -1279,6 +1279,10 @@ entity SigningRequests {
         @description: 'Transaction CBOR for browser wallet signing (CIP-30)'
         cip30TxCbor      : LargeString;
 
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The full signed transaction CBOR, persisted at claim time on the deferred-submit path so an interrupted submission can be re-driven after a restart (see SUBMIT_DETACH_DESIGN.md)'
+        signedTxCbor     : LargeString;
+
         @title      : 'Signer Type'
         @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
         signerType       : String(20);
