@@ -81,7 +81,10 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                      signerInfo: String(100),
                                      @title: 'Sender Address'
                                      @description: 'Optional sender address for ownership verification. When provided, verifies the signing request belongs to this address.'
-                                     address: Bech32)         returns TransactionSubmissions;
+                                     address: Bech32,
+                                     @title: 'Defer Submit'
+                                     @description: 'When true, verify + claim run on the caller''s transaction and the network submit happens detached AFTER the caller''s commit. Returns immediately with the tx hash (= tx body hash) and status ''pending''. Designed for in-process CAP consumers whose request transaction would otherwise deadlock the pooled sqlite connection (KNOWN_ISSUES #11). Track the outcome via the signing request / submission status.'
+                                     deferSubmit: Boolean)    returns TransactionSubmissions;
 
 
     // ---------------------------------------------------------------------------
@@ -159,7 +162,10 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                 buildId: UUID,
                                 @title: 'Sender Address'
                                 @description: 'Optional sender address for ownership verification. When provided, verifies the build belongs to this address.'
-                                address: Bech32)        returns TransactionSubmissions;
+                                address: Bech32,
+                                @title: 'Defer Submit'
+                                @description: 'When true, sign + verify + claim run on the caller''s transaction and the network submit happens detached AFTER the caller''s commit (see SubmitVerifiedTransaction.deferSubmit).'
+                                deferSubmit: Boolean)   returns TransactionSubmissions;
 
     @title      : 'Get HSM Status'
     @description: 'Check the current status of the HSM connection and key availability.'

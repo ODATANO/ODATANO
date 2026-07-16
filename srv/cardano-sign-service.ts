@@ -1,15 +1,16 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest} from './utils/backend-request-handler';
-import { rejectInvalid, throwIfValidationErrors,rejectMissing, TransactionAlreadySubmittedError } from './utils/errors';
+import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { mapError } from './utils/mappers';
 import { validateTransactionInputs, isValidBech32Address, extractPaymentCredential } from './utils/validators';
 import { parseTransaction } from './cbor';
-import { getCardanoIndexer, getCardanoClient, getHsmConfig } from './server';
+import { getCardanoIndexer, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { verifyDataSignature } from './blockchain/signing/cose-verifier';
 import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
-import { extractTxCacheTargets } from './utils/tx-build-helper';
+import { detachedTx } from './utils/tx-utils';
+import { submitAndFinalize, scheduleDeferredSubmit } from './blockchain/signing/submission-finalizer';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoSignService');
@@ -102,84 +103,8 @@ async function resolveRequiredSigners(
   return signers.size > 0 ? [...signers] : undefined;
 }
 
-/** Shape persisted by indexVerifiedTransactionSubmission. */
-interface FinalizeParams {
-  signingRequestId: string;
-  buildId: string;
-  fullSignedTxCbor: string;
-  txHash: string;
-  verificationResult: {
-    txBodyHash: string;
-    witnessCount: number;
-    signerKeyHashes: string[];
-    warnings: string[];
-  };
-  signerType?: string;
-  signerInfo?: string;
-}
-
-/**
- * Submit a verified+claimed signing request to the blockchain and persist the
- * outcome — DELIBERATELY outside the caller's request transaction.
- *
- * The caller must already have durably committed `status:'submitting'` (the
- * claim). This function then:
- *   1. submits with NO DB write-lock held (the lock was the reason concurrent
- *      submits serialized and the SQLite busy-timeout could fire mid-network),
- *   2. on submit failure: marks the request 'failed' in its own committed tx
- *      and rethrows (NOT rolled back to a pre-submit status — losing the
- *      attempt would hide a tx the node may have accepted),
- *   3. on success: persists the submission + 'submitted' status in a committed
- *      transaction.
- *
- * Crash window: a process death between (1) and (3) leaves the request durably
- * at 'submitting' — the operator/poller checks the chain — instead of silently
- * reverting to 'pending'/'verified' with no on-chain trace.
- */
-async function submitAndFinalize(
-  SigningRequests: unknown,
-  params: FinalizeParams,
-  afterFinalize?: (db: cds.Transaction) => Promise<void>
-): Promise<unknown> {
-  // Persist the submission + 'submitted' status in its own committed transaction.
-  const finalizeSubmitted = () => cds.tx(async (db: cds.Transaction) => {
-    const submission = await getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
-    if (afterFinalize) await afterFinalize(db);
-    // Invalidate stale UTxO cache (spent inputs + output addresses) — best-effort,
-    // must never roll back the durable submission record.
-    try {
-      await getCardanoIndexer().invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.fullSignedTxCbor));
-    } catch (invalidateErr: unknown) {
-      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
-    }
-    return submission;
-  });
-
-  try {
-    await getCardanoClient().submitTransaction(params.fullSignedTxCbor);
-  } catch (submitErr: unknown) {
-    // Already-submitted means the tx reached the mempool — e.g. the first backend accepted
-    // it but its response was lost and a fallback observed the duplicate. That is SUCCESS,
-    // not failure: finalize it as 'submitted' (same as the happy path) instead of durably
-    // recording a spurious 'failed' for a tx the node already holds.
-    if (submitErr instanceof TransactionAlreadySubmittedError) {
-      logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
-        'Submit reported already-submitted — finalizing as submitted (tx already in mempool)');
-      return finalizeSubmitted();
-    }
-    try {
-      await cds.tx((db: cds.Transaction) => db.run(
-        UPDATE.entity(SigningRequests as never).set({ status: 'failed' }).where({ id: params.signingRequestId })
-      ));
-    } catch (markErr: unknown) {
-      logger.error({ err: markErr, signingRequestId: params.signingRequestId },
-        'Could not durably mark signing request failed after submit error');
-    }
-    throw submitErr;
-  }
-
-  return finalizeSubmitted();
-}
+// submitAndFinalize + FinalizeParams moved to blockchain/signing/submission-finalizer.ts
+// (shared with the boot-time redrive of interrupted deferred submissions).
 
 /**
  * Enforce HSM role check if hsm.requiresRole is configured.
@@ -396,6 +321,7 @@ module.exports = (srv: cds.Service) => {
   srv.on('SubmitVerifiedTransaction', async (req: Request) => {
     logger.debug('SubmitVerifiedTransaction Action handler called');
     const { signingRequestId, signedTxCbor, signerType, signerInfo, address } = req.data;
+    const deferSubmit = req.data.deferSubmit === true;
 
     const errors = validateTransactionInputs(
       { signingRequestId, signedTxCbor },
@@ -407,32 +333,27 @@ module.exports = (srv: cds.Service) => {
     // Three committed phases instead of one request-long transaction (see
     // submitAndFinalize): the network submit must NOT run inside an open DB
     // transaction. Errors are mapped the same way handleRequest would.
+    //
+    // deferSubmit (KNOWN_ISSUES #11, Layer 2): phase 1 instead JOINS the
+    // caller's transaction (claim + signed CBOR commit with the caller), the
+    // response returns immediately with the tx hash (= body hash), and the
+    // network submit runs detached after the caller's commit.
     try {
-      // PHASE 1 (committed): atomically claim → 'submitting' and fully verify.
-      // A reject/verification failure here rolls the claim back, so a bad
-      // signature never strands the request in 'submitting'.
-      const prep = await cds.tx(async (db: cds.Transaction) => {
+      // PHASE 1 (committed): fully verify, then atomically claim → 'submitting'.
+      // The claim is deliberately the LAST statement: on the deferred path
+      // these statements run on the CALLER's transaction, and a verification
+      // failure whose error the caller swallows (and then commits) must not
+      // leave a stranded 'submitting' claim behind — everything before the
+      // claim is read-only. The guarded UPDATE (status still pending/verified)
+      // remains the atomic gate against concurrent submits on both paths.
+      const phase1 = async (db: cds.Transaction) => {
         const now = new Date().toISOString();
-        const claimed = await db.run(
-          UPDATE.entity(SigningRequests)
-            .set({ status: 'submitting' })
-            .where({
-              id: signingRequestId,
-              status: { in: ['pending', 'verified'] },
-              expiresAt: { '>': now },
-            })
-        );
-
-        if (claimed === 0) {
-          // Claim failed — fetch to provide a specific error message
-          const existing = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
-          if (!existing) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
-          if (existing.expiresAt <= now) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
-          rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${existing.status}', expected 'pending' or 'verified'`, 'signingRequestId');
-        }
-
-        // Re-fetch the full record (now with status='submitting')
         const signingRequest = await db.run(SELECT.one.from(SigningRequests).where({ id: signingRequestId }));
+        if (!signingRequest) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request not found', 'signingRequestId');
+        if (signingRequest.expiresAt <= now) rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request has expired', 'signingRequestId');
+        if (!['pending', 'verified'].includes(signingRequest.status)) {
+          rejectInvalid(req, 'SubmitVerifiedTransaction', `Signing request status is '${signingRequest.status}', expected 'pending' or 'verified'`, 'signingRequestId');
+        }
 
         // Ownership check: verify address matches build owner (defense-in-depth)
         if (address && signingRequest.build_id) {
@@ -454,13 +375,29 @@ module.exports = (srv: cds.Service) => {
         const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);
         const verificationResult = getExternalSignerModule().verifyOrThrow(fullSignedTxCbor, signingRequest.txBodyHash, { requiredSigners });
 
+        // Atomic claim — last statement, see above. Deferred path: persist the
+        // signed CBOR + signer metadata with the claim, so an interrupted
+        // submission can be re-driven after a restart.
+        const claimed = await db.run(
+          UPDATE.entity(SigningRequests)
+            .set({
+              status: 'submitting',
+              ...(deferSubmit ? { signedTxCbor: fullSignedTxCbor, signerType, signerInfo } : {}),
+            })
+            .where({
+              id: signingRequestId,
+              status: { in: ['pending', 'verified'] },
+              expiresAt: { '>': now },
+            })
+        );
+        if (claimed === 0) {
+          rejectInvalid(req, 'SubmitVerifiedTransaction', 'Signing request was claimed by a concurrent submission', 'signingRequestId');
+        }
+
         return { buildId: signingRequest.build_id as string, txHash: signingRequest.txBodyHash as string, fullSignedTxCbor, verificationResult };
-      });
+      };
 
-      logger.info({ signingRequestId, witnessCount: prep.verificationResult.witnessCount }, 'Signature verified, proceeding with submission');
-
-      // PHASES 2+3: submit outside any DB tx, then finalize in its own tx
-      const submissionRecord = await submitAndFinalize(SigningRequests, {
+      const finalizeParams = (prep: Awaited<ReturnType<typeof phase1>>) => ({
         signingRequestId,
         buildId: prep.buildId,
         fullSignedTxCbor: prep.fullSignedTxCbor,
@@ -469,6 +406,30 @@ module.exports = (srv: cds.Service) => {
         signerType,
         signerInfo,
       });
+
+      if (deferSubmit) {
+        // Phase 1 on the CALLER's transaction: joins its pooled connection (no
+        // deadlock), commits together with the caller. Validation errors stay
+        // synchronous; the submit is scheduled for after the commit.
+        const prep = await phase1(cds.tx(req) as cds.Transaction);
+        scheduleDeferredSubmit(req, SigningRequests, finalizeParams(prep));
+        logger.info({ signingRequestId, txHash: prep.txHash }, 'Verified and claimed — submit deferred until after the caller commits');
+        return {
+          id: null,
+          build_id: prep.buildId,
+          txHash: prep.txHash,
+          signedTxCbor: prep.fullSignedTxCbor,
+          status: 'pending',
+          submittedAt: null,
+        };
+      }
+
+      const prep = await detachedTx('claim + verify signing request', phase1);
+
+      logger.info({ signingRequestId, witnessCount: prep.verificationResult.witnessCount }, 'Signature verified, proceeding with submission');
+
+      // PHASES 2+3: submit outside any DB tx, then finalize in its own tx
+      const submissionRecord = await submitAndFinalize(SigningRequests, finalizeParams(prep));
 
       logger.info({ signingRequestId, txHash: prep.txHash }, 'Transaction submitted and all records updated');
       return submissionRecord;
@@ -619,6 +580,7 @@ module.exports = (srv: cds.Service) => {
     logger.debug('SignAndSubmitWithHsm Action handler called');
     enforceHsmRole(req, 'SignAndSubmitWithHsm');
     const { buildId, address } = req.data;
+    const deferSubmit = req.data.deferSubmit === true;
 
     // Validate input
     const errors = validateTransactionInputs({ buildId }, ['buildId']);
@@ -633,8 +595,10 @@ module.exports = (srv: cds.Service) => {
 
     try {
       // PHASE 1 (committed): fetch build, sign with HSM, verify. A failure
-      // here rolls back the freshly-created signing request.
-      const prep = await cds.tx(async (db: cds.Transaction) => {
+      // here rolls back the freshly-created signing request. (Deferred path:
+      // the INSERT runs on the caller's tx; a swallowed failure leaves a
+      // 'pending' row that expires via its TTL — harmless.)
+      const phase1 = async (db: cds.Transaction) => {
         // 1. Fetch the build (with ownership check)
         const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignAndSubmitWithHsm');
 
@@ -664,11 +628,46 @@ module.exports = (srv: cds.Service) => {
           rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
         }
 
-        // Claim the request as 'submitting' in this same committed phase
-        await db.run(UPDATE.entity(SigningRequests).set({ status: 'submitting', hsmKeyId: hsmKeyIdentifier }).where({ id: signingRequestRecord.id }));
+        // Claim the request as 'submitting' in this same committed phase.
+        // Deferred path: also persist the signed CBOR + signer metadata for
+        // the boot-time redrive of interrupted submissions.
+        await db.run(UPDATE.entity(SigningRequests).set({
+          status: 'submitting',
+          hsmKeyId: hsmKeyIdentifier,
+          ...(deferSubmit ? { signedTxCbor, signerType: 'hsm', signerInfo: `HSM key: ${hsmKeyIdentifier}` } : {}),
+        }).where({ id: signingRequestRecord.id }));
 
         return { signingRequestId: signingRequestRecord.id as string, signedTxCbor, txHash: build.txBodyHash as string, verificationResult, hsmKeyIdentifier };
+      };
+
+      const finalizeParams = (prep: Awaited<ReturnType<typeof phase1>>) => ({
+        signingRequestId: prep.signingRequestId,
+        buildId,
+        fullSignedTxCbor: prep.signedTxCbor,
+        txHash: prep.txHash,
+        verificationResult: prep.verificationResult,
+        signerType: 'hsm',
+        signerInfo: `HSM key: ${prep.hsmKeyIdentifier}`,
       });
+
+      if (deferSubmit) {
+        // Phase 1 on the CALLER's transaction (KNOWN_ISSUES #11, Layer 2):
+        // sign + verify + claim commit with the caller; submit runs after its
+        // commit. See SubmitVerifiedTransaction for the full rationale.
+        const prep = await phase1(cds.tx(req) as cds.Transaction);
+        scheduleDeferredSubmit(req, SigningRequests, finalizeParams(prep));
+        logger.info({ signingRequestId: prep.signingRequestId, txHash: prep.txHash }, 'HSM-signed and claimed — submit deferred until after the caller commits');
+        return {
+          id: null,
+          build_id: buildId,
+          txHash: prep.txHash,
+          signedTxCbor: prep.signedTxCbor,
+          status: 'pending',
+          submittedAt: null,
+        };
+      }
+
+      const prep = await detachedTx('HSM sign + claim signing request', phase1);
 
       logger.info({ signingRequestId: prep.signingRequestId, witnessCount: prep.verificationResult.witnessCount, hsmKey: prep.hsmKeyIdentifier }, 'HSM signature verified, proceeding with submission');
 
@@ -676,15 +675,7 @@ module.exports = (srv: cds.Service) => {
       // which indexVerifiedTransactionSubmission does not touch)
       const submissionRecord = await submitAndFinalize(
         SigningRequests,
-        {
-          signingRequestId: prep.signingRequestId,
-          buildId,
-          fullSignedTxCbor: prep.signedTxCbor,
-          txHash: prep.txHash,
-          verificationResult: prep.verificationResult,
-          signerType: 'hsm',
-          signerInfo: `HSM key: ${prep.hsmKeyIdentifier}`,
-        },
+        finalizeParams(prep),
         (db) => db.run(UPDATE.entity(SigningRequests).set({ hsmKeyId: prep.hsmKeyIdentifier }).where({ id: prep.signingRequestId })).then(() => undefined)
       );
 

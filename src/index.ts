@@ -53,6 +53,10 @@ export async function initialize(): Promise<void> {
   if (!alreadyInitialized) {
     logger.info('ODATANO core initialized');
   }
+
+  // Re-drive deferred submissions interrupted by a restart (plugin mode). Non-fatal.
+  const { redriveInterruptedSubmissionsIfConfigured } = await import('../srv/server');
+  await redriveInterruptedSubmissionsIfConfigured();
 }
 
 /**
