@@ -1,3 +1,4 @@
+import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
@@ -440,7 +441,7 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     expect(result).toHaveProperty('maxTxSize', 16384);
   });
 
-  it('should normalize cost_models_raw arrays and pad V3 to 297 params', async () => {
+  it('should normalize cost_models_raw arrays and pad V3 to the current param count', async () => {
     const mockProtocolParams = {
       epoch: 500,
       min_utxo: '1000000',
@@ -490,8 +491,8 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     const costModels = JSON.parse(result.costModels);
 
     expect(Array.isArray(costModels.PlutusV3)).toBe(true);
-    // toCostModelArrV3 pads short arrays to 297 (Chang 2) with defaults
-    expect(costModels.PlutusV3.length).toBe(297);
+    // toCostModelArrV3 pads short arrays to N_COST_MODEL_PLUTUS_V3 (350 post-Plomin²) with defaults
+    expect(costModels.PlutusV3.length).toBe(N_COST_MODEL_PLUTUS_V3);
     expect(costModels.PlutusV3[0]).toBe(100);
     expect(costModels.PlutusV3[1]).toBe(200);
   });

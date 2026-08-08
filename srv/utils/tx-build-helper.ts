@@ -55,9 +55,8 @@ export function getTxHashFromCbor(txCbor: string): string {
 
   // Compute blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
   // subCborRef.toBuffer() returns the exact bytes as received — no re-serialization, so
-  // the hash matches what was signed. Working at the raw-CBOR level also sidesteps the
-  // @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data
-  // (we never instantiate the high-level Tx type).
+  // the hash matches what was signed. We stay at the raw-CBOR level (never instantiate
+  // the high-level Tx type) for that byte-exactness.
   try {
     const tx = Cbor.parse(fromHex(txCbor));
     if (!(tx instanceof CborArray) || tx.array.length < 1 || !tx.array[0].subCborRef) {
@@ -83,8 +82,7 @@ export interface TxCacheTargets {
  * Extract the consumed input refs and the output addresses from a transaction
  * CBOR (signed or unsigned) — the rows a successful submit makes stale in the
  * UTxO cache. Works at the raw-CBOR level for the same reason as
- * getTxHashFromCbor (the high-level Tx.fromCbor rejects its own tag-259
- * AuxiliaryData builds).
+ * getTxHashFromCbor (byte-exact, no high-level Tx round-trip).
  *
  * Outputs whose address bytes cannot be decoded (e.g. Byron bootstrap
  * addresses) are skipped — invalidation is best-effort per address.

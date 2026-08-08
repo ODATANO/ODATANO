@@ -246,14 +246,10 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(roundtrip.hash.toString()).toBe(script.hash.toString());
   });
 
-  // TODO: enable when @harmoniclabs/cardano-ledger-ts ships a fix for the
-  // AuxiliaryData.fromCborObj bug: the Conway decode path at
-  // dist/tx/AuxiliaryData/AuxiliaryData.js:199-203 requires all four optional
-  // script-collection fields (native, plutusV1/V2/V3) to be present as CborArrays,
-  // and throws "Invalid CBOR format for AuxiliaryData" on metadata-only aux_data.
-  // The handler itself (extractMetadataLabels) is correct — covered by integration
-  // tests against real on-chain CBOR that bypass AuxiliaryData.fromCbor.
-  it.skip('parses metadata labels from auxiliary data', () => {
+  // Re-enabled with @harmoniclabs/cardano-ledger-ts 0.5.6: AuxiliaryData.fromCborObj
+  // now treats all Conway script-collection fields as optional (our upstream PR),
+  // so metadata-only aux_data decodes instead of throwing.
+  it('parses metadata labels from auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),
       '674': new TxMetadatumInt(2n),
