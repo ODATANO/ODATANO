@@ -30,18 +30,27 @@ npm install @odatano/core @cap-js/sqlite
       "db": { "kind": "sqlite" },
       "odatano-core": {
         "network": "preview",
-        "backends": ["blockfrost"],
-        "blockfrostApiKey": "preview_your_api_key_here"
+        "backends": ["blockfrost"]
       }
     }
   }
 }
 ```
 
+Put your API key in a `.env` file in the project root (loaded automatically by `cds serve` / `cds watch`) — don't commit it to `package.json`:
+
+```bash
+# .env
+BLOCKFROST_API_KEY=preview_your_api_key_here
+```
+
 ```bash
 cds deploy --to sqlite 
 cds serve
 ```
+
+> Config in `cds.requires.odatano-core` takes precedence over environment
+> variables; a `blockfrostApiKey` set there would override the `.env` value.
 
 > **Self-hosted Blockfrost-compatible node?** (Dolos MiniBF, Demeter Self-Hosted)
 > Set `blockfrostCustomBackend` to the node's base URL (e.g. `http://localhost:3010/api/v0`).

@@ -16,6 +16,13 @@ permissions:
   contents: read
   packages: write
 
+# Never run two syncs at once (e.g. a manual dispatch overlapping the cron):
+# parallel runs would each cold-sync and race on the cache. The newer run
+# waits until the running one finishes instead of being cancelled.
+concurrency:
+  group: ogmios-sync
+  cancel-in-progress: false
+
 jobs:
   sync_and_cache:
     strategy:
