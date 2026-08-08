@@ -42,18 +42,23 @@ jobs:
       # ==========================================
       # Cardano Node DB Cache (Sync-Workflow)
       # ==========================================
+      # The sync workflow saves under a unique key per run
+      # (cardano-node-ogmios-preview-<run_id>), so we restore the newest one by
+      # prefix. NOTE: prefix matches set cache-hit=false (it is only true on an
+      # exact primary-key match) — gate on cache-matched-key instead.
       - name: Restore Cardano Node DB Cache
         id: cache-cardano
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/db-preview
-          key: cardano-node-ogmios-preview
+          key: cardano-node-ogmios-preview-${{ github.run_id }}
           restore-keys: |
+            cardano-node-ogmios-preview-
             cardano-node-ogmios-preview
 
       - name: Cache info
         run: |
-          if [ "${{ steps.cache-cardano.outputs.cache-hit }}" == "true" ]; then
+          if [ -n "${{ steps.cache-cardano.outputs.cache-matched-key }}" ]; then
             echo "✅ Cache found: ${{ steps.cache-cardano.outputs.cache-matched-key }}"
           else
             echo "⚠️ No cache found - will skip Ogmios tests"
@@ -78,7 +83,7 @@ jobs:
       # Start Cardano Node + Ogmios (if cache exists)
       # ==========================================
       - name: Start Cardano Node + Ogmios containers
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        if: steps.cache-cardano.outputs.cache-matched-key != ''
         run: |
           CONFDIR=${{ github.workspace }}/config/preview
           
@@ -109,7 +114,7 @@ jobs:
 
       - name: Wait for Ogmios sync
         id: ogmios-ready
-        if: steps.cache-cardano.outputs.cache-hit == 'true'
+        if: steps.cache-cardano.outputs.cache-matched-key != ''
         continue-on-error: true
         run: |
           echo "Waiting for Ogmios to connect + sync (max 25 minutes)..."
@@ -158,7 +163,7 @@ jobs:
 
       - name: Cache Status Info
         run: |
-          if [ "${{ steps.cache-cardano.outputs.cache-hit }}" != "true" ]; then
+          if [ -z "${{ steps.cache-cardano.outputs.cache-matched-key }}" ]; then
             echo "⚠️ No Cardano Node cache found - running tests with Koios + Blockfrost only"
             echo "💡 Run the 'Network Synchronization' workflow first to create a cache"
           elif [ "${{ steps.ogmios-ready.outputs.ready }}" == "true" ]; then
