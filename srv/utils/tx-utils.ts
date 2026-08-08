@@ -57,9 +57,11 @@ class DetachedTxAbortedError extends Error {
  * - On timeout, throws `BackendError` 503 `ODATANO_NESTED_TX_TIMEOUT` with a
  *   diagnosis pointing at KNOWN_ISSUES #11.
  * - A late connection grant (after the timeout already fired) performs NO
- *   work: the callback checks the abort flag as its first statement and rolls
- *   back immediately, so the caller never observes an error for work that
- *   then silently happened anyway.
+ *   work: the callback forces the acquire via an explicit `begin()` and
+ *   checks the abort flag right after it, so it rolls back immediately and
+ *   the caller never observes an error for work that then silently happened
+ *   anyway. (A flag check at callback ENTRY would run long before the lazy
+ *   acquire and miss the timeout.)
  */
 export async function detachedTx<T>(
   label: string,

@@ -271,11 +271,10 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
   });
 
-  // Enabled via the vendored runtime patch (srv/blockchain/transaction-building/
-  // auxiliary-data-patch.ts) for ledger-ts 0.5.1's broken Conway tag-259 decode —
-  // loaded through parseTransaction's module. Once an upstream release (> 0.5.1)
-  // contains the fix: bump the dep and delete the patch; this test keeps guarding
-  // the behavior either way.
+  // Works natively since @harmoniclabs/cardano-ledger-ts 0.5.6: AuxiliaryData.fromCborObj
+  // treats all Conway script-collection fields as optional (our upstream PR), so
+  // metadata-only aux_data decodes instead of throwing. (The vendored runtime patch
+  // that previously enabled this is deleted.)
   it('parses metadata labels from Conway tag-259 auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),

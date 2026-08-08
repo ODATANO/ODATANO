@@ -1,12 +1,12 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters, TxEvaluator, MintAction } from "../../utils/types";
+// Coin selection uses this.txBuilder.keepRelevant again since buildooor 0.2.9
+// ships the fixed implementation (our PR); the vendored keep-relevant.ts is gone.
 import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
-// Vendored coin selection (buildooor PR #12 fix) — NOT this.txBuilder.keepRelevant; see keep-relevant.ts
-import { keepRelevant } from "./keep-relevant";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
 import {
@@ -272,7 +272,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Coin selection on candidates only; forced inputs are prepended unconditionally
-      const selected = keepRelevant(outputValue, candidateInputs);
+      const selected = this.txBuilder.keepRelevant(outputValue, candidateInputs);
       const inputs = [...forcedInputs, ...selected];
       logger.debug(`Coin selection: ${selected.length}/${candidateInputs.length} UTxOs selected (${forcedInputs.length} forced) for ${label}`);
 
@@ -324,7 +324,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from thin air)
       const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
-      const selectedFunding = keepRelevant(requiredFundingValue, allFundingInputs);
+      const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       const inputs = [...forcedInputs, ...selectedFunding];
       logger.debug(`Coin selection: ${selectedFunding.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for mint`);
 
@@ -444,7 +444,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           );
         }
       }
-      const selectedFundingInputs = keepRelevant(requiredFundingValue, allFundingInputs);
+      const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for Plutus spend`);
 
       // FR-3: compute the final input order (replicates Buildooor's lex sort) and resolve any
@@ -800,16 +800,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   /**
    * Replace the redeemers' execution units and recompute scriptDataHash.
    *
-   * Not implemented via TxBuilder.overrideTxRedeemers: that method computes the script
-   * data hash from the OLD witness set (library bug), which would yield a phase-1
-   * rejection (PPViewHashesDontMatch). We rebuild the witness set first and hash it with
-   * the same exported getScriptDataHash the build itself uses.
-   *
-   * The hash is recomputed even when the target units already match: Buildooor's
-   * internal hash comes from the named-key cost models, which clamp the chain array
-   * to the parameter count the library release knows — wrong on networks whose cost
-   * model has grown past that (ScriptIntegrityHashMismatch at submit). This recompute
-   * with _languageViewCostModels (raw chain arrays) is where the hash becomes correct.
+   * Still not implemented via TxBuilder.overrideTxRedeemers, although buildooor
+   * 0.2.9 fixed its old-witness-set hashing (our PR): that method hashes with the
+   * builder's named-key cost models, which clamp the chain array to the parameter
+   * count the library release knows — wrong whenever the on-chain cost model has
+   * grown past that (ScriptIntegrityHashMismatch at submit). This recompute with
+   * _languageViewCostModels (raw chain arrays) stays governance-proof, so the hash
+   * is recomputed here even when the target units already match.
    */
   private _stampExecUnits(tx: LedgerTx, targets: ExUnitsBig[]): LedgerTx {
     const rdmrs = tx.witnesses.redeemers ?? [];

@@ -21,6 +21,7 @@ import {
   normalizeCostModels,
   scriptHashToEnterpriseAddress,
 } from '../../srv/utils/mappers';
+import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 
 // Mock cds logger + utils
 vi.mock('@sap/cds', () => {
@@ -108,11 +109,12 @@ describe('mappers', () => {
       expect(result.PlutusV1).toEqual([1, 2]);
     });
 
-    it('should handle V3 array format with padding to 297', () => {
-      // V3 arrays are padded to 297 by toCostModelArrV3
+    it('should handle V3 array format with padding to the current on-chain cardinality', () => {
+      // V3 arrays are padded by toCostModelArrV3 to N_COST_MODEL_PLUTUS_V3
+      // (350 since costmodels-ts 1.6 / post-Plomin²; was 297 on Chang-2)
       const raw = { PlutusV3: new Array(251).fill(100) };
       const result = normalizeCostModels(raw);
-      expect(result.PlutusV3.length).toBe(297);
+      expect(result.PlutusV3.length).toBe(N_COST_MODEL_PLUTUS_V3);
     });
 
     it('should handle V3 object format and convert to array', () => {
@@ -120,7 +122,7 @@ describe('mappers', () => {
       const raw = { PlutusV3: { 'addInteger-cpu-arguments-intercept': 100, 'addInteger-cpu-arguments-slope': 200 } };
       const result = normalizeCostModels(raw);
       expect(Array.isArray(result.PlutusV3)).toBe(true);
-      expect(result.PlutusV3.length).toBe(297);
+      expect(result.PlutusV3.length).toBe(N_COST_MODEL_PLUTUS_V3);
     });
 
     it('should skip non-array non-object values', () => {

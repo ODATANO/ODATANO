@@ -30,6 +30,14 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
+          # Heal the recurring `v.1.10.0` typo (leading dot after the v) and
+          # fail fast on anything that is still not a valid image tag, instead
+          # of dying later in buildx with "invalid reference format".
+          VERSION=${VERSION#.}
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag '${GITHUB_REF#refs/tags/}' does not yield a valid version (got '$VERSION'); use vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "git_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT

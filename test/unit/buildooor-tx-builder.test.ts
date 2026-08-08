@@ -1188,7 +1188,8 @@ describe('BuildooorTxBuilder', () => {
       const { getScriptDataHash, costModelsToLanguageViewCbor, defaultProtocolParameters } =
         require('@harmoniclabs/buildooor');
 
-      // Protocol-11 networks serve 350 V3 entries; costmodels-ts only knows 297.
+      // Simulate a chain serving MORE V3 entries than this costmodels-ts release
+      // knows (as protocol-11 did against the 297-entry Chang-2 releases).
       const v3Extended = [
         ...Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number),
         ...Array.from({ length: 53 }, (_, i) => 1_000_000 + i),
@@ -1200,12 +1201,12 @@ describe('BuildooorTxBuilder', () => {
       const result = await builder.buildUnsignedMintTransaction(mintReq(), ctx);
       const parsed = Tx.fromCbor(result.unsignedTxCbor!);
 
-      // The stamped hash must cover all 350 entries (raw array form passes through unclamped)…
+      // The stamped hash must cover ALL served entries (raw array form passes through unclamped)…
       const rawViews = costModelsToLanguageViewCbor({ PlutusScriptV3: v3Extended }, { mustHaveV3: true });
       expect(parsed.body.scriptDataHash?.toString())
         .toBe(getScriptDataHash(parsed.witnesses, rawViews)?.toString());
 
-      // …and must differ from the clamped named-key hash (297 entries), which the node
+      // …and must differ from the clamped named-key hash (library param count), which the node
       // rejects with ScriptIntegrityHashMismatch on protocol-11 networks.
       const clamped = (builder as any).txBuilder.protocolParamters.costModels;
       const clampedViews = costModelsToLanguageViewCbor(clamped, { mustHaveV3: true });
@@ -1526,12 +1527,13 @@ describe('BuildooorTxBuilder', () => {
     });
 
     it('keeps the raw chain arrays (unclamped) for language-view hashing', () => {
-      // Protocol-11 shape: the library's 297 known V3 params plus 53 newer entries.
+      // Chain-ahead-of-library shape: every V3 param this release knows plus 53 newer entries.
+      const libV3Count = Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).length;
       const v3Extended = [
         ...Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number),
         ...Array.from({ length: 53 }, (_, i) => 1_000_000 + i),
       ];
-      expect(v3Extended.length).toBe(350);
+      expect(v3Extended.length).toBe(libV3Count + 53);
       const mapped = mapParams({ costModels: JSON.stringify({ 'plutus:v3': v3Extended }) });
       // Named-key form for the TxBuilder/CEK machine stays clamped to the known params…
       expect(Array.isArray(mapped.costModels.PlutusScriptV3)).toBe(false);

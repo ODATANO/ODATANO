@@ -16,6 +16,13 @@ permissions:
   contents: read
   packages: write
 
+# Never run two syncs at once (e.g. a manual dispatch overlapping the cron):
+# parallel runs would each cold-sync and race on the cache. The newer run
+# waits until the running one finishes instead of being cancelled.
+concurrency:
+  group: ogmios-sync
+  cancel-in-progress: false
+
 jobs:
   sync_and_cache:
     strategy:
@@ -102,12 +109,20 @@ jobs:
     # schema and fails to start.
     # ---------------------------------------------------------------------------
 
+    # Caches are immutable per key, so we save under a UNIQUE key each run and
+    # restore the newest one via prefix match. The previous delete-then-save on
+    # a single fixed key was racy: cache-service reservations linger after a
+    # delete, the save then fails with "Unable to reserve cache ... another job
+    # may be creating this cache" — and because the old cache was already
+    # deleted BEFORE the save, the whole DB was lost and every subsequent run
+    # cold-synced from genesis (observed 2026-08-07/08).
     - name: Restore Cardano Node DB cache
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/db-${{ matrix.network }}
-        key: cardano-node-ogmios-${{ matrix.network }}
+        key: cardano-node-ogmios-${{ matrix.network }}-${{ github.run_id }}
         restore-keys: |
+          cardano-node-ogmios-${{ matrix.network }}-
           cardano-node-ogmios-${{ matrix.network }}
 
     - name: Start Cardano Node + Ogmios
@@ -246,14 +261,21 @@ jobs:
 
     # Save whatever progress we made (success() is implied -> only when the
     # sync step didn't hard-fail), so subsequent runs resume from here.
-    - name: Delete old cache
-      shell: bash
-      run: gh cache delete "cardano-node-ogmios-${{ matrix.network }}" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save Cardano Node DB cache
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/db-${{ matrix.network }}
-        key: cardano-node-ogmios-${{ matrix.network }}
+        key: cardano-node-ogmios-${{ matrix.network }}-${{ github.run_id }}
+
+    # Prune AFTER a successful save, keeping only the cache we just wrote.
+    # If the save above failed, the previous cache is still in place and the
+    # next run resumes from it instead of genesis.
+    - name: Prune older DB caches
+      shell: bash
+      run: |
+        gh cache list --key "cardano-node-ogmios-${{ matrix.network }}" --json id,key \
+          --jq '.[] | select(.key != "cardano-node-ogmios-${{ matrix.network }}-${{ github.run_id }}") | .id' \
+          | while read -r id; do gh cache delete "$id" || true; done
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}

@@ -1,4 +1,6 @@
-import { keepRelevant } from '../../srv/blockchain/transaction-building/keep-relevant';
+// DIST path on purpose: keepRelevant is not re-exported from the package root
+// (only as a TxBuilder method); the standalone function lives in dist.
+import { keepRelevant } from '@harmoniclabs/buildooor/dist/TxBuilder/keepRelevant';
 import { Address, UTxO, Value, TxOut, TxOutRef, Hash28 } from '@harmoniclabs/cardano-ledger-ts';
 import type { ITxBuildInput } from '@harmoniclabs/buildooor';
 
@@ -8,12 +10,13 @@ const ASSET_NAME = '546f6b656e4d';
 const ASSET_UNIT = POLICY_ID + ASSET_NAME;
 
 /**
- * Vendored keepRelevant (buildooor PR #12) — regression tests against the three
- * defects of the shipped 0.2.6 implementation: lovelace matching the asset
+ * Upstream keepRelevant (fixed in buildooor 0.2.9, our PR) — regression tests
+ * against the defects of the 0.2.6 implementation: lovelace matching the asset
  * filter (whole-set selection), tx-id-only dedup (sibling outputs collapse),
- * and number-based lovelace comparison (breaks above 2^53).
+ * and number-based lovelace comparison (breaks above 2^53). Kept to catch any
+ * upstream regression of the coin selection we depend on.
  */
-describe('keepRelevant (vendored coin selection)', () => {
+describe('keepRelevant (buildooor coin selection)', () => {
   const input = (txHash: string, index: number, lovelace: bigint, assetQty?: bigint): ITxBuildInput => {
     let value = Value.lovelaces(lovelace);
     if (assetQty !== undefined) {
@@ -111,7 +114,9 @@ describe('keepRelevant (vendored coin selection)', () => {
       input('aa'.repeat(32), 0, 2_000_000n, 5n),
       input('bb'.repeat(32), 0, 50_000_000n),
     ];
-    const selected = keepRelevant({ lovelace: 1_000_000, [ASSET_UNIT]: 1 }, pool);
+    // upstream's normalizeRequestedOutputSet accepts the record shape at runtime,
+    // but the published signature only declares Value | ValueUnits
+    const selected = keepRelevant({ lovelace: 1_000_000, [ASSET_UNIT]: 1 } as never, pool);
     expect(refStrs(selected)).toContain(`${'aa'.repeat(32)}#0`);
   });
 

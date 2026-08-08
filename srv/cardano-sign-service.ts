@@ -595,7 +595,9 @@ module.exports = (srv: cds.Service) => {
 
     try {
       // PHASE 1 (committed): fetch build, sign with HSM, verify. A failure
-      // here rolls back the freshly-created signing request.
+      // here rolls back the freshly-created signing request. (Deferred path:
+      // the INSERT runs on the caller's tx; a swallowed failure leaves a
+      // 'pending' row that expires via its TTL — harmless.)
       const phase1 = async (db: cds.Transaction) => {
         // 1. Fetch the build (with ownership check)
         const build = await verifyBuildOwnership(req, db, buildId, address, TransactionBuilds, 'SignAndSubmitWithHsm');

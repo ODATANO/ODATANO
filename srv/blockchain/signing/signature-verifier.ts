@@ -11,8 +11,9 @@ const logger = cds.log('SignatureVerifier');
 /**
  * blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
  * subCborRef preserves the exact received bytes, so the hash matches what was signed
- * and re-serialization can never drift it. Operating at the raw-CBOR level also avoids
- * the @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data.
+ * and re-serialization can never drift it. (Historically this also sidestepped the
+ * ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data — fixed in 0.5.6 —
+ * but byte-exactness remains the reason to stay at the raw-CBOR level.)
  */
 function computeBodyHash(txBytes: Uint8Array): string {
   const tx = Cbor.parse(txBytes);
@@ -82,9 +83,7 @@ export class SignatureVerifier {
 
     try {
       // Compute the body hash over the original CBOR body bytes (no re-serialization),
-      // matching exactly what was signed. Raw-CBOR parsing is immune to the
-      // @harmoniclabs/cardano-ledger-ts AuxiliaryData.fromCbor bug that rejects
-      // metadata-only Conway aux_data.
+      // matching exactly what was signed.
       const txBytes = fromHex(signedTxCbor);
       const computedHash = computeBodyHash(txBytes);
       result.txBodyHash = computedHash;
