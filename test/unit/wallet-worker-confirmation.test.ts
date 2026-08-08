@@ -186,7 +186,7 @@ describe('ConfirmationTracker: crawler hook path', () => {
     await flush();
     expect((await getJobById(db, jobId))!.confirmedSlot).toBe(500);
 
-    emitReorg({ forkSlot: 400 });
+    emitReorg({ forkSlot: 400, forkHeight: 80 });
     await flush();
 
     const job = (await getJobById(db, jobId))!;
@@ -207,7 +207,7 @@ describe('ConfirmationTracker: crawler hook path', () => {
     emitBlockIndexed({ hash: 'b1', slot: 500, height: 100, txHashes: [TX_HASH], tipSlot: 500, tipHeight: 100 });
     await flush();
 
-    emitReorg({ forkSlot: 400 });
+    emitReorg({ forkSlot: 400, forkHeight: 80 });
     await flush();
 
     expect((await getJobById(db, jobId))!.status).toBe('submitted'); // keeps watching, no crash
@@ -223,7 +223,7 @@ describe('ConfirmationTracker: crawler hook path', () => {
     emitBlockIndexed({ hash: 'b1', slot: 500, height: 100, txHashes: [TX_HASH], tipSlot: 500, tipHeight: 100 });
     await flush();
 
-    emitReorg({ forkSlot: 600 }); // fork after our slot — not affected
+    emitReorg({ forkSlot: 600, forkHeight: 120 }); // fork after our slot — not affected
     await flush();
 
     expect((await getJobById(db, jobId))!.confirmedSlot).toBe(500);

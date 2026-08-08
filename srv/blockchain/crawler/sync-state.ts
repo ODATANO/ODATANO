@@ -175,12 +175,18 @@ export async function tryAcquireCrawlerLease(
   const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
   if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
 
-  // Compare every observed lease component. If two instances race, at most one
-  // UPDATE can still match after the first writer changes owner/expiry.
+  // CAS on the observed OWNER only (a plain string that round-trips identically
+  // on every adapter). If two instances race, the first writer changes leaseOwner
+  // and the loser's UPDATE matches 0 rows → its read-back verification fails.
+  // Deliberately NOT comparing leaseUntil: HANA/driver timestamp normalization can
+  // make the read-back representation differ from what the WHERE serializes, so a
+  // timestamp-equality CAS may NEVER match again after a leader crash — the lease
+  // would be stuck until the row is cleared by hand. The residual race (the old
+  // owner renewing concurrently) resolves via fencing: its next renew no longer
+  // matches leaseOwner and it halts.
   const where: Record<string, unknown> = {
     ID: SINGLETON_ID,
     leaseOwner: raw.leaseOwner ?? null,
-    leaseUntil: raw.leaseUntil ?? null,
   };
   if (Object.prototype.hasOwnProperty.call(raw, 'desiredRunning')) {
     where.desiredRunning = raw.desiredRunning;

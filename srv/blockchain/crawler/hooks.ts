@@ -28,6 +28,11 @@ export interface BlockIndexedEvent {
 export interface ReorgEvent {
   /** Absolute slot of the fork point — everything after it was rolled back. */
   forkSlot: number;
+  /**
+   * Block height of the fork point, when known. Listeners tracking confirmation
+   * depth must clamp their tip to this — the pre-fork tip height no longer exists.
+   */
+  forkHeight: number | null;
 }
 
 export type BlockIndexedListener = (event: BlockIndexedEvent) => void;

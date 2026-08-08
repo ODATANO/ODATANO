@@ -1188,10 +1188,25 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
         );
         if (!rows.length) return [];
 
+        const requestedHashes: string[] = rows.map((r: { hash: string }) => r.hash);
         const infos = await this.fetchWithRetryOnEmpty(
-          () => this.api.post('/block_info', { _block_hashes: rows.map((r: { hash: string }) => r.hash) }),
+          () => this.api.post('/block_info', { _block_hashes: requestedHashes }),
           `getNextBlocks/info(${afterHash})`
         );
+        // Completeness guard: Koios' load-balanced instances can return a PARTIAL
+        // /block_info batch (fetchWithRetryOnEmpty only retries fully empty
+        // responses). Returning the subset would let the crawler advance its cursor
+        // past the missing block, leaving a permanent hole in the pre-synced range
+        // (crawled entities are non-temporal — nothing re-fetches them). Fail the
+        // round as transient instead; the next round retries the same anchor.
+        if (infos.length < requestedHashes.length) {
+          const returned = new Set(infos.map((d: { hash: string }) => d.hash));
+          const missing = requestedHashes.filter((h) => !returned.has(h));
+          throw new ProviderUnavailableError(
+            `Incomplete /block_info batch: ${infos.length}/${requestedHashes.length} blocks returned (missing: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''})`,
+            this.name
+          );
+        }
         return infos
           .map((d: Parameters<KoiosBackend['mapKoiosBlockInfo']>[0]) => this.mapKoiosBlockInfo(d))
           .sort((a: BlockData, b: BlockData) => (a.height ?? 0) - (b.height ?? 0));

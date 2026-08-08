@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 1.9.0
+version: 2.0.0
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
@@ -24,7 +24,10 @@ modules:
     properties:
       NETWORK: preview
       BACKENDS: blockfrost,koios
-      BLOCKFROST_API_KEY: your_blockfrost_api_key_here
+      # BLOCKFROST_API_KEY is intentionally NOT set here: a visible placeholder
+      # would deploy as a real (broken) value. Provide it at deploy time, e.g.
+      # `cf set-env odatano-srv BLOCKFROST_API_KEY <key>` or an mtaext file —
+      # startup logs a clear warning when blockfrost is configured without a key.
       TX_BUILDERS: buildooor
       HSM_ENABLED: false
     build-parameters:

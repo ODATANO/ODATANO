@@ -648,6 +648,59 @@ POST /odata/v4/cardano-indexer/resumeCrawler
 
 ---
 
+## Wallet Worker (v2.0, opt-in)
+
+The wallet worker executes transactions **asynchronously** on behalf of server-side wallets: you queue a job, the worker builds, signs (software key or HSM), submits, and tracks the transaction until it reaches the configured confirmation depth. Per wallet only ONE job is in flight at a time, so UTxO contention between your own transactions is impossible by construction.
+
+**Enable it** (plugin config or env `WALLET_WORKER_ENABLED` + `WALLET_WORKER_WALLETS`):
+
+```jsonc
+"cds": { "requires": { "odatano-core": {
+  "walletWorker": {
+    "enabled": true,
+    "wallets": [
+      { "walletId": "treasury", "signerType": "software", "keyEnv": "TREASURY_SIGNING_KEY" },
+      { "walletId": "minter",   "signerType": "hsm" }
+    ],
+    "confirmationDepth": 3,          // job is 'confirmed' at this depth
+    "confirmationTimeoutMs": 600000, // unseen past this → failed:TX_DROPPED (safe to retry)
+    "defaultMaxAttempts": 3          // transient build/submit failures retry with backoff
+  }
+}}}
+```
+
+Software wallets read their signing key from the env var named in `keyEnv` — the key never appears in config or DB. The worker wallet is **always** the sender/change target; callers cannot spend from foreign addresses through a worker wallet.
+
+**Queue and track jobs** via **CardanoWorkerService** at `/odata/v4/cardano-worker/`:
+
+```http
+POST /odata/v4/cardano-worker/SubmitWalletJob
+Content-Type: application/json
+
+{
+  "walletId": "treasury",
+  "kind": "simpleAda",                       // simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned
+  "requestJson": "{\"recipientAddress\":\"addr_test1...\",\"lovelaceAmount\":\"2000000\"}",
+  "idempotencyKey": "invoice-4711"           // optional: same key = same job (safe retries)
+}
+```
+
+`requestJson` carries the **same payload shape as the corresponding Build\* action** of the transaction service (e.g. `assetsJson`, `mintActionsJson`, `metadataJson`, the Plutus-spend fields); `senderAddress`/`changeAddress` are overridden with the wallet's address. The response returns a `jobId` immediately.
+
+```http
+POST /odata/v4/cardano-worker/GetJobStatus     # { "jobId": "..." } → status, txHash, fee, error
+POST /odata/v4/cardano-worker/CancelJob        # pending jobs only
+POST /odata/v4/cardano-worker/GetWorkerStatus  # running, wallets, executing, pendingJobs
+POST /odata/v4/cardano-worker/PauseWorker      # Admin scope
+POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
+```
+
+**Job lifecycle:** `pending → building → submitted → confirmed`, with `failed` (terminal, `errorCode` set) and `cancelled` branches. Transient failures (provider outage, rate limit, HSM hiccup) retry with exponential backoff up to `maxAttempts`; deterministic rejections (validation, insufficient funds) fail immediately. `failed` and `cancelled` jobs release their `idempotencyKey` for a retry. After a chain rollback the worker re-submits the **same signed CBOR** — never a rebuild — so a double payment cannot occur.
+
+**Operations:** job state lives in the DB (`CardanoWalletJobs`); multiple app instances coordinate via per-wallet leases, so rolling deployments are safe. Confirmation tracking uses the crawler's block feed when the crawler is enabled, and falls back to polling otherwise. `PauseWorker`/`ResumeWorker` and the crawler actions require the **CardanoAdmin** role (`$XSAPPNAME.Admin` scope).
+
+---
+
 ## Support & Resources
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)

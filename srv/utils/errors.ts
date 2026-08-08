@@ -272,6 +272,22 @@ export class AllBackendsFailedError extends BackendError {
 }
 
 /**
+ * True when the error proves the resource is absent on EVERY backend that was
+ * consulted: either a direct NotFoundError, or an AllBackendsFailedError whose
+ * collected per-backend errors are all 404s. CardanoClient's failover wraps
+ * per-backend errors (including 404s) into AllBackendsFailedError, so callers
+ * that need "definitively not found" (e.g. the wallet-worker's dropped-tx
+ * detection) must use this instead of `instanceof NotFoundError`. A mixed
+ * result (one backend 404, another 500) is NOT proof of absence.
+ */
+export function isNotFoundOnAllBackends(err: unknown): boolean {
+  if (err instanceof NotFoundError) return true;
+  return err instanceof AllBackendsFailedError
+    && err.errors.length > 0
+    && err.errors.every((e) => e instanceof NotFoundError || e.statusCode === 404);
+}
+
+/**
  *  HttpErrorLike - Simplified interface for HTTP errors from various libraries 
  */
 export interface HttpErrorLike {

@@ -99,7 +99,7 @@ import {
   type WalletWorkerConfig,
 } from '../../srv/blockchain/wallet-worker/wallet-worker';
 import {
-  insertJob, getJobById, upsertWalletRegistration,
+  insertJob, getJobById, upsertWalletRegistration, tryAcquireWalletLease,
   JOB_ERROR_CODES,
   type WalletJobRow,
 } from '../../srv/blockchain/wallet-worker/job-store';
@@ -170,6 +170,9 @@ function makeWorker(deps: ReturnType<typeof makeDeps>, config: WalletWorkerConfi
 
 async function seedJob(kind = 'simpleAda', request = '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}'): Promise<WalletJobRow> {
   await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+  // executeJob fences on a held lease (renewWalletLease before build) — tests
+  // driving executeJob directly must hold it, like the dispatch path would.
+  await tryAcquireWalletLease(db, 'w1', 'test-instance');
   const { jobId } = await insertJob(db, { walletId: 'w1', kind: kind as never, request });
   return (await getJobById(db, jobId))!;
 }
@@ -331,7 +334,7 @@ describe('engine: per-wallet serialization (design §6)', () => {
     const worker = makeWorker(deps);
     await seedJob(); // w1
     await upsertWalletRegistration(db, { walletId: 'w2', signerType: 'software', address: 'addr_test1_w2', publicKeyHash: 'e'.repeat(56) });
-    const { jobId: w2Job } = await insertJob(db, { walletId: 'w2', kind: 'simpleAda', request: '{}' });
+    const { jobId: w2Job } = await insertJob(db, { walletId: 'w2', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}' });
     (worker as unknown as { signers: Map<string, unknown> }).signers.set('w2', deps.signer);
 
     await runTick(worker);

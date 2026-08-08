@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import type { CardanoClient } from '../cardano-client';
+import type { CardanoClient, Network } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { TxBuildRequest } from '../../utils/types';
 import {
@@ -13,10 +13,12 @@ import {
 import { ERROR_CODES } from '../../utils/error-codes';
 import { getTxHashFromCbor } from '../../utils/tx-build-helper';
 import { ConfirmationTracker } from './confirmation-tracker';
+import { prepareWorkerBuildRequest } from './build-request';
 import { createWorkerSigner, type WorkerSigner, type WorkerWalletConfig } from './signers';
 import {
   JOB_ERROR_CODES,
   bumpWalletStats,
+  failOrphanedBuildingJobs,
   findDueJobs,
   markBuilding,
   markFailed,
@@ -29,13 +31,14 @@ import {
   tryAcquireWalletLease,
   upsertWalletRegistration,
   walletHasActiveJob,
+  type WalletJobKindValue,
   type WalletJobRow,
 } from './job-store';
 
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Wallet worker engine (v2.1, design §6).
+ * Wallet worker engine (v2.0, design §6).
  *
  * Dispatch loop over `CardanoWalletJobs`: per tick, for every configured wallet
  * with pending work and NO active job (building or submitted — the queue stays
@@ -246,6 +249,10 @@ export class CardanoWalletWorker {
       if (!signer) continue; // job for a wallet this instance cannot sign for
 
       const dispatched = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+        // Steady-state orphan cleanup: a building row whose wallet lease expired
+        // belongs to a dead executor — fail it here so the wallet unblocks without
+        // needing a reboot (boot recovery only covers restarts of THIS instance).
+        await failOrphanedBuildingJobs(tx, walletId);
         // DB truth serializes across restarts and instances: a building OR submitted
         // job blocks the wallet queue until the tracker finalizes it (design §6).
         if (await walletHasActiveJob(tx, walletId)) return false;
@@ -290,14 +297,25 @@ export class CardanoWalletWorker {
         signedTxCbor = request.signedTxCbor;
         txHash = await this.submitWithAlreadyKnownTolerance(signedTxCbor);
       } else {
-        const buildReq = JSON.parse(job.request ?? '{}') as TxBuildRequest;
+        const rawReq = JSON.parse(job.request ?? '{}') as Record<string, unknown>;
         // The worker wallet is ALWAYS the sender/change target — callers cannot
         // spend from foreign addresses through a worker wallet.
-        buildReq.network = this.deps.network as TxBuildRequest['network'];
-        buildReq.senderAddress = signer.getAddress();
-        if (!buildReq.changeAddress) buildReq.changeAddress = signer.getAddress();
+        rawReq.network = this.deps.network;
+        rawReq.senderAddress = signer.getAddress();
+        if (!rawReq.changeAddress) rawReq.changeAddress = signer.getAddress();
+        // The stored request has the documented Build*-action payload shape
+        // (assetsJson/mintActionsJson/… strings) — transform it into the
+        // TxBuildRequest shape the indexer build methods expect.
+        const buildReq = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, rawReq, this.deps.network as Network);
 
-        await runWithoutAmbientTx(() => cds.tx((tx) => renewWalletLease(tx, job.walletId, instanceId)));
+        // Fencing: if the lease was lost (instance stalled past the TTL, another
+        // instance may have taken over the wallet), abort BEFORE building/submitting
+        // — the orphan cleanup will fail the row once the lease is provably dead.
+        const renewed = await runWithoutAmbientTx(() => cds.tx((tx) => renewWalletLease(tx, job.walletId, instanceId)));
+        if (!renewed) {
+          logger.warn(`Job ${job.ID}: wallet lease for ${job.walletId} lost before build — aborting execution`);
+          return;
+        }
         const buildResult = await runWithoutAmbientTx(() => cds.tx((tx) => this.buildForKind(tx, job, buildReq)));
         unsignedTxCbor = buildResult.unsignedTxCbor as string;
         fee = (buildResult.fee as string | number | null) ?? null;

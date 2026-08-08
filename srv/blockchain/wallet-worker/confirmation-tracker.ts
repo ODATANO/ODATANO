@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import type { CardanoClient } from '../cardano-client';
-import { NotFoundError, TransactionAlreadySubmittedError } from '../../utils/errors';
+import { isNotFoundOnAllBackends, TransactionAlreadySubmittedError } from '../../utils/errors';
 import {
   registerBlockIndexedListener,
   unregisterBlockIndexedListener,
@@ -21,7 +21,7 @@ import {
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Confirmation tracker (v2.1, design §7).
+ * Confirmation tracker (v2.0, design §7).
  *
  * Watches `submitted` jobs until their tx sits at depth ≥ `confirmationDepth`:
  *  - Crawler hook (preferred, zero extra load): `blockIndexed` events match
@@ -139,6 +139,17 @@ export class ConfirmationTracker {
 
   private async onReorg(event: ReorgEvent): Promise<void> {
     if (!this.running) return;
+    // The pre-fork tip no longer exists — clamp (or drop) lastKnownTipHeight so
+    // confirmations are never counted against it. Without this, a tx re-included
+    // on the new chain would reach "depth" instantly via the stale tip height,
+    // defeating the confirmation-depth guarantee exactly in the rollback case.
+    if (event.forkHeight != null) {
+      if (this.lastKnownTipHeight != null && this.lastKnownTipHeight > event.forkHeight) {
+        this.lastKnownTipHeight = event.forkHeight;
+      }
+    } else {
+      this.lastKnownTipHeight = null; // unknown fork height → re-learn from the next block/poll
+    }
     for (const job of this.pending.values()) {
       if (job.foundSlot != null && job.foundSlot > event.forkSlot) {
         logger.warn(`Job ${job.jobId}: confirmation point (slot ${job.foundSlot}) rolled back past fork ${event.forkSlot} — re-watching`);
@@ -195,7 +206,10 @@ export class ConfirmationTracker {
           await cds.tx((t) => recordConfirmationPoint(t, job.jobId, { slot: job.foundSlot, height: job.foundHeight }));
           logger.info(`Job ${job.jobId}: tx ${job.txHash} found on-chain at height ${job.foundHeight} (polling)`);
         } catch (err) {
-          if (err instanceof NotFoundError) {
+          // The client's failover wraps per-backend 404s into AllBackendsFailedError,
+          // so a plain `instanceof NotFoundError` check never fires — the helper also
+          // accepts "every consulted backend said 404" as proof of absence.
+          if (isNotFoundOnAllBackends(err)) {
             // Not on-chain yet — check the mempool-TTL timeout.
             const age = Date.now() - Date.parse(job.submittedAt);
             if (age > this.deps.options.confirmationTimeoutMs) {

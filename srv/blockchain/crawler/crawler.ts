@@ -446,7 +446,12 @@ export class CardanoCrawler {
       const ours = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).where({ height: h }))) as { hash?: string } | undefined;
       if (ours?.hash && onChain.hash === ours.hash) {
         if (h === cursor.lastHeight) return false; // tip still matches → not a reorg
-        await this.handleReorg({ slot: onChain.slot ?? 0, hash: onChain.hash, height: h });
+        // handleReorg deletes everything with slot > forkSlot. A null provider slot
+        // (BlockData.slot is nullable) would make forkSlot 0 and wipe the ENTIRE
+        // crawled dataset — abort this round instead; the next round can retry with
+        // a healthy provider response. (Same guard philosophy as the height axis.)
+        if (onChain.slot == null) return false;
+        await this.handleReorg({ slot: onChain.slot, hash: onChain.hash, height: h });
         return true;
       }
     }
@@ -543,6 +548,7 @@ export class CardanoCrawler {
     const forkSlot = point === 'origin' ? (this.config.startSlot ?? 0) : point.slot;
     let blocksRolledBack = 0;
     let txsRolledBack = 0;
+    let emittedForkHeight: number | null = null;
 
     try {
       await cds.tx(async (tx) => {
@@ -556,6 +562,7 @@ export class CardanoCrawler {
         const fb = await tx.run(SELECT.one.from(Blocks).where({ hash: point.hash })) as { height?: number | string } | undefined;
         forkHeight = fb ? Number(fb.height) : undefined;
       }
+      emittedForkHeight = forkHeight ?? null;
 
       // Blocks strictly after the fork, cut on the absolute-slot axis. Rows without a
       // slot (pre-v2.0 lazily indexed blocks) are deliberately excluded.
@@ -615,7 +622,7 @@ export class CardanoCrawler {
     }
 
     // Notify observers (wallet-worker confirmation tracker) AFTER the rollback commit.
-    emitReorg({ forkSlot });
+    emitReorg({ forkSlot, forkHeight: emittedForkHeight });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }
 

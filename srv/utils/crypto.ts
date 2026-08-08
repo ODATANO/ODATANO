@@ -5,7 +5,7 @@ import cds from '@sap/cds';
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * AES-256-GCM utilities for secrets at rest (v2.1 wallet worker).
+ * AES-256-GCM utilities for secrets at rest (v2.0 wallet worker).
  *
  * Ported from NIGHTGATE's srv/utils/crypto.ts. Used to decrypt operator-provided
  * software signing keys (`iv:authTag:ciphertext`, all base64). Keys are derived

@@ -5,6 +5,46 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.0.0] - 08-08-2026: CAP 10, chain crawler / pre-sync, wallet worker
+
+### ⚠ Breaking
+
+- **SAP CAP 10** — peer dependency is now `@sap/cds >=10` (was `^9`). Consumer projects on CAP 9 must upgrade before adopting `@odatano/core@2`.
+- **Node.js >= 22.5** — required by `@cap-js/sqlite` v3 (`node:sqlite` floor).
+- **Numeric OData fields serialize as strings** — CAP 10 renders `Decimal`, `Int64` and `$count` values as JSON strings. API clients that parse these fields as JSON numbers must be adapted.
+- **XSUAA role separation** — the `$XSAPPNAME.Admin` scope (crawler/worker control) is no longer part of the `CardanoUser` role template or the app authorities; assign the new `CardanoAdmin` template explicitly. Existing `CardanoUser` role collections lose crawler/worker control on redeploy (intentional least-privilege fix).
+
+### Added
+
+- **Chain crawler / pre-sync (opt-in)** — `CRAWLER_ENABLED` / `cds.requires.odatano-core.crawler`: streams the chain forward from a configured start block into `Blocks`/`Transactions` (+inputs/outputs/assets/metadata) so queries hit local data instead of a backend per request. Ogmios chain-sync (native rollForward/rollBackward) with Blockfrost/Koios pagination fallback, parent-hash reorg recovery, cursor (`CardanoSyncState`) + audit log (`CardanoReorgLog`), cluster-safe via DB lease. New **CardanoIndexerService** (`/odata/v4/cardano-indexer/`): SyncState + ReorgLog (read-only), `getStatus` / `pauseCrawler` / `resumeCrawler` (Admin).
+- **Wallet worker (opt-in)** — `WALLET_WORKER_ENABLED` / `cds.requires.odatano-core.walletWorker`: asynchronous per-wallet transaction queue (build → sign → submit → confirm) with software/HSM signers, idempotency keys, exponential retry, per-wallet DB leases (multi-instance safe), and a confirmation tracker (crawler hook or polling) with rollback re-submit of the SAME signed CBOR. New **CardanoWorkerService** (`/odata/v4/cardano-worker/`): `SubmitWalletJob` / `CancelJob` / `GetJobStatus` / `GetWorkerStatus` / `PauseWorker` / `ResumeWorker`.
+- **KoiosBackend.getDrep** with the new Koios schema.
+
+### Changed
+
+- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`).
+- **HarmonicLabs stack bumped**: `buildooor` 0.2.9, `cardano-ledger-ts` ^0.5.6, `cardano-costmodels-ts` ~1.6.1 (Plutus V3 cost model at `N_COST_MODEL_PLUTUS_V3` = 350, post-Plomin²).
+- **Vendored patches removed** — upstream releases contain both fixes: `keep-relevant.ts` (buildooor keepRelevant) and `auxiliary-data-patch.ts` (ledger-ts Conway tag-259 AuxiliaryData decode).
+- Dependency security pass: `axios` ^1.17.1, `fast-uri` ^3.1.5, approuter `body-parser` override — `npm audit` clean (prod + dev).
+
+### Fixed
+
+- Hardening pass from the full-branch review: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
+
+## [v1.11.0] - 08-08-2026: Coin-selection + error-handling improvements
+
+### Changed
+
+- Enhanced coin-selection logic and error handling in the Buildooor transaction path; Plutus V3 cost-model handling updated to the current parameter count (`N_COST_MODEL_PLUTUS_V3`).
+- Vendored `keep-relevant.ts` removed — buildooor 0.2.9 ships the fixed `keepRelevant` upstream.
+
+## [v1.10.0] - 16-07-2026: Deadlock guard + deferred submit
+
+### Added
+
+- **Deferred submit** for in-process consumers: `SubmitVerifiedTransaction`/HSM flows can persist the signed tx and hand the network submit to a detached transaction, with restart re-drive (`redriveInterruptedSubmissions`).
+- **Nested-transaction deadlock guard** (`srv/utils/tx-utils.ts`): `detachedTx` with pool-timeout diagnosis and abort fencing; `runWithoutAmbientTx` for CAP ambient-tx isolation.
+
 ## [v1.9.2] - 26-06-2026: Typed script-parameter application
 
 ### Added

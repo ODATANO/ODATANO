@@ -39,7 +39,7 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
   it('builds package artifacts during prepare without duplicate pack hooks', () => {
     expect(packageJson.scripts.prepare).toBe('npm run build:package');
     expect((packageJson.scripts as Record<string, string | undefined>).prepack).toBeUndefined();
-    expect(packageJson.dependencies['@harmoniclabs/cardano-ledger-ts']).toBe('0.5.1');
+    expect(packageJson.dependencies['@harmoniclabs/cardano-ledger-ts']).toBe('^0.5.6');
     expect(packageJson.overrides.esbuild).toBe('0.28.1');
     expect(packageJson.overrides.ws).toBe('7.5.11');
     expect(routerPackageJson.dependencies['@sap/approuter']).toBe('22.0.3');
@@ -62,10 +62,13 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
       name: 'CardanoAdmin',
       'scope-references': expect.arrayContaining(['$XSAPPNAME.Admin']),
     }));
-    expect(security['role-templates']).toContainEqual(expect.objectContaining({
-      name: 'CardanoUser',
-      'scope-references': expect.arrayContaining(['$XSAPPNAME.Admin']),
-    }));
+    // Least privilege (review 2026-08-08): CardanoUser must NOT carry the Admin
+    // scope — operational control (crawler/worker) is CardanoAdmin-only.
+    const cardanoUser = (security['role-templates'] as Array<{ name: string; 'scope-references': string[] }>)
+      .find((t) => t.name === 'CardanoUser');
+    expect(cardanoUser).toBeDefined();
+    expect(cardanoUser!['scope-references']).not.toContain('$XSAPPNAME.Admin');
+    expect(security.authorities).not.toContain('$XSAPPNAME.Admin');
   });
 
   afterEach(() => {

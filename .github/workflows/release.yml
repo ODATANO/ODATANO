@@ -6,12 +6,39 @@ on:
       - 'v*'
 
 jobs:
+  # Gate 1: full test pipeline (cds:types, typecheck, lint, unit/integration
+  # suites) — reuses the same workflow that guards main.
+  verify:
+    uses: ./.github/workflows/test.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+
+  # Gate 2: the npm package itself must build and be clean — `npm ci` runs the
+  # `prepare` build (catches TS5058-class packaging breaks), the production
+  # audit blocks known-vulnerable releases, and pack --dry-run validates the
+  # files allowlist. Publishing to npm stays a MANUAL step by policy.
+  package-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm pack --dry-run
+
   build-and-release:
+    needs: [verify, package-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

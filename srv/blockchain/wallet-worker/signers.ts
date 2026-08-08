@@ -11,7 +11,7 @@ import type { WorkerSignerTypeValue } from './job-store';
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Wallet-worker signers (v2.1).
+ * Wallet-worker signers (v2.0).
  *
  * `WorkerSigner` is the signer-agnostic surface the worker engine executes against:
  *  - `hsm` (production): thin wrapper around the already-initialized `HsmSigner`

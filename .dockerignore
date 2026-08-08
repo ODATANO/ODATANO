@@ -1,5 +1,6 @@
-# Node modules
-node_modules/
+# Node modules — recursive: nested installs (app/router, app/wallet, …) would
+# otherwise bloat the build context and break on .bin symlinks under Windows.
+**/node_modules
 npm-debug.log
 yarn-error.log
 

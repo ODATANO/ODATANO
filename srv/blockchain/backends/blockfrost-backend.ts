@@ -1,7 +1,7 @@
 import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
@@ -748,7 +748,24 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   async getNextBlocks(afterHash: string, count: number): Promise<BlockData[]> {
     return handleBackendRequest(
       async () => {
-        const blocks = await this.api.blocksNext(afterHash, { count });
+        let blocks;
+        try {
+          blocks = await this.api.blocksNext(afterHash, { count });
+        } catch (err: unknown) {
+          // Blockfrost only knows canonical blocks — a 404 on the anchor means the
+          // cursor block was orphaned by a reorg. Emit the crawler's explicit
+          // mismatch signal (same contract as KoiosBackend.getNextBlocks); a plain
+          // NotFoundError would be treated as transient and the crawler would halt
+          // with an error streak instead of entering reorg recovery.
+          const normalized = normalizeBackendError(err, this.name);
+          if (normalized.statusCode === 404) {
+            throw new ProviderUnavailableError(
+              `CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to ${this.name} — likely orphaned by a reorg`,
+              this.name
+            );
+          }
+          throw err;
+        }
         return blocks.map(b => this.toBlockData(b));
       },
       this.name

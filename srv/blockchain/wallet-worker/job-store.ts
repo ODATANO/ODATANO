@@ -7,7 +7,7 @@ const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Wallet-worker job store (v2.1).
+ * Wallet-worker job store (v2.0).
  *
  * Persistence layer for `CardanoWalletJobs` + `CardanoWorkerWallets`. Ports the two
  * hard-won CAP lessons from NIGHTGATE's background-job runner:
@@ -176,9 +176,11 @@ export interface InsertJobResult {
 
 /**
  * Insert a job row ON THE CALLER'S transaction (NIGHTGATE lesson 1 — see module
- * docs). Idempotency: a non-failed row with the same (walletId, kind,
- * idempotencyKey) is returned instead of creating a duplicate; failed rows do NOT
- * block a retry.
+ * docs). Idempotency: an active-or-successful row with the same (walletId, kind,
+ * idempotencyKey) is returned instead of creating a duplicate. `failed` AND
+ * `cancelled` rows do NOT block a retry — both are terminal states in which the
+ * intended work never reached the chain, so re-using the key must be able to
+ * actually execute it (a cancelled job would otherwise burn its key forever).
  */
 export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promise<InsertJobResult> {
   if (args.idempotencyKey) {
@@ -187,7 +189,8 @@ export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promis
         .where({ walletId: args.walletId, kind: args.kind, idempotencyKey: args.idempotencyKey })
         .orderBy('createdAt desc'),
     );
-    if (existing && (existing as { status: string }).status !== 'failed') {
+    const status = (existing as { status: string } | undefined)?.status;
+    if (existing && status !== 'failed' && status !== 'cancelled') {
       const row = toJobRow(existing as Record<string, unknown>);
       return { jobId: row.ID, status: row.status, deduplicated: true };
     }
@@ -369,35 +372,78 @@ export interface RecoveryResult {
   submittedToReconcile: WalletJobRow[];
 }
 
+/** True when the wallet's lease is currently held (unexpired) by SOME instance. */
+function walletLeaseHeld(wallet: WorkerWalletRow | null, now: Date): boolean {
+  if (!wallet?.leaseOwner || !wallet.leaseUntil) return false;
+  const deadline = Date.parse(wallet.leaseUntil);
+  return Number.isFinite(deadline) && deadline > now.getTime();
+}
+
+/**
+ * Fail one wallet's orphaned `building` row(s) — but ONLY when the wallet's lease
+ * is expired/unowned, i.e. no live instance is executing them. Rows whose wallet
+ * lease is held belong to a running executor (possibly on another instance) and
+ * must not be touched: it may already have submitted, and failing its row would
+ * un-block the idempotencyKey and invite a duplicate payment.
+ */
+export async function failOrphanedBuildingJobs(
+  db: CapTransaction,
+  walletId: string,
+  now = new Date(),
+): Promise<number> {
+  const wallet = await readWallet(db, walletId);
+  if (walletLeaseHeld(wallet, now)) return 0;
+  const building = await db.run(
+    SELECT.from(CardanoWalletJobs).columns('ID').where({ walletId, status: 'building' }),
+  ) as Array<{ ID: string }>;
+  if (!building?.length) return 0;
+  await db.run(
+    UPDATE.entity(CardanoWalletJobs)
+      .set({
+        status: 'failed',
+        errorCode: JOB_ERROR_CODES.PROCESS_RESTART,
+        errorMessage: 'Job was interrupted before submission (executor died or lost its wallet lease).',
+        finishedAt: now.toISOString(),
+      })
+      .where({ walletId, status: 'building' }),
+  );
+  logger.warn(`Wallet ${walletId}: failed ${building.length} orphaned building job(s) as failed:PROCESS_RESTART`);
+  return building.length;
+}
+
 /**
  * Boot-time recovery (design §8): `building` rows cannot have been submitted —
  * submit and txHash persist happen in one transition — so they fail safely with
  * PROCESS_RESTART (caller retries via idempotencyKey). `submitted` rows are NOT
  * failed: they are returned for the confirmation tracker to reconcile against the
  * chain, because blindly failing them would invite a duplicate payment.
+ *
+ * Multi-instance safety: a `building` row is only failed when its wallet's lease
+ * is expired/unowned. A held lease means ANOTHER live instance is executing that
+ * job right now (rolling deploy) — failing it here while its submit succeeds
+ * would leave a failed row for an on-chain tx, and since failed rows don't block
+ * idempotency dedup, the caller's documented retry would pay twice. Rows skipped
+ * here are cleaned up later by failOrphanedBuildingJobs once the lease expires.
  */
-export async function recoverInterruptedJobs(db: CapTransaction): Promise<RecoveryResult> {
+export async function recoverInterruptedJobs(db: CapTransaction, now = new Date()): Promise<RecoveryResult> {
   const building = await db.run(
-    SELECT.from(CardanoWalletJobs).columns('ID').where({ status: 'building' }),
-  ) as Array<{ ID: string }>;
-  if (building?.length) {
-    await db.run(
-      UPDATE.entity(CardanoWalletJobs)
-        .set({
-          status: 'failed',
-          errorCode: JOB_ERROR_CODES.PROCESS_RESTART,
-          errorMessage: 'Job was interrupted by a server restart before submission.',
-          finishedAt: new Date().toISOString(),
-        })
-        .where({ status: 'building' }),
-    );
-    logger.warn(`Recovered ${building.length} interrupted building job(s) as failed:PROCESS_RESTART`);
+    SELECT.from(CardanoWalletJobs).columns('ID', 'walletId').where({ status: 'building' }),
+  ) as Array<{ ID: string; walletId: string }>;
+  let failedBuilding = 0;
+  const skippedWallets: string[] = [];
+  for (const walletId of new Set((building ?? []).map((row) => row.walletId))) {
+    const failed = await failOrphanedBuildingJobs(db, walletId, now);
+    if (failed > 0) failedBuilding += failed;
+    else skippedWallets.push(walletId);
+  }
+  if (skippedWallets.length) {
+    logger.info(`Recovery skipped building job(s) for wallet(s) ${skippedWallets.join(', ')} — lease still held by a live instance`);
   }
   const submitted = await findSubmittedJobs(db);
   if (submitted.length) {
     logger.info(`${submitted.length} submitted job(s) pending chain reconciliation after restart`);
   }
-  return { failedBuilding: building?.length ?? 0, submittedToReconcile: submitted };
+  return { failedBuilding, submittedToReconcile: submitted };
 }
 
 // ---- Worker wallets --------------------------------------------------------------
@@ -465,10 +511,11 @@ export async function tryAcquireWalletLease(
   if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
 
   const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  // CAS on the observed owner only — timestamp equality is adapter-fragile and
+  // could make an expired lease permanently untakeable (see tryAcquireCrawlerLease).
   await db.run(UPDATE.entity(CardanoWorkerWallets).set({ leaseOwner: owner, leaseUntil }).where({
     walletId,
     leaseOwner: raw.leaseOwner ?? null,
-    leaseUntil: raw.leaseUntil ?? null,
   }));
   const verified = await readWallet(db, walletId);
   return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
