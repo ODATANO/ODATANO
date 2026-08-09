@@ -9,6 +9,10 @@
  * deterministic, terminal job failure.
  */
 
+// Imported above the vi.mock block only so `vi` is declared before it is read;
+// vitest hoists vi.mock above all imports regardless, so the order is cosmetic.
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+
 // Mock cds logger (validators/mappers/tx-build-helper import cds)
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -18,7 +22,6 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { prepareWorkerBuildRequest } from '../../srv/blockchain/wallet-worker/build-request';
 import { applyScriptParameters } from '../../srv/utils/tx-build-helper';

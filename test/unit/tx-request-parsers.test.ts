@@ -6,6 +6,10 @@
  * exercised here once instead of through two service layers.
  */
 
+// Imported above the vi.mock block only so `vi` is declared before it is read;
+// vitest hoists vi.mock above all imports regardless, so the order is cosmetic.
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+
 // Mock cds logger (validators.ts imports cds)
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -15,7 +19,6 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import {
   parseUtxoRefArray,
   parseRequiredSigners,
