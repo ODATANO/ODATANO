@@ -79,4 +79,40 @@ describe('LeaseHeartbeat', () => {
     expect(await heartbeat.fence()).toBe(true);
     expect(renew).toHaveBeenCalledTimes(1);
   });
+
+  it('start twice keeps a single interval, and stop is safe to repeat', async () => {
+    const renew = vi.fn().mockResolvedValue(true);
+    const heartbeat = new LeaseHeartbeat(renew, 'wallet w1');
+
+    heartbeat.start();
+    heartbeat.start(); // no second timer
+
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS * 2);
+    expect(renew).toHaveBeenCalledTimes(2);
+
+    heartbeat.stop();
+    heartbeat.stop();
+    await vi.advanceTimersByTimeAsync(LEASE_HEARTBEAT_INTERVAL_MS * 2);
+    expect(renew).toHaveBeenCalledTimes(2);
+  });
+
+  it('a lost lease short-circuits fence without another renewal attempt', async () => {
+    const renew = vi.fn().mockResolvedValue(false);
+    const heartbeat = new LeaseHeartbeat(renew, 'wallet w1');
+
+    expect(await heartbeat.fence()).toBe(false); // one attempt, definitive
+    expect(await heartbeat.fence()).toBe(false); // no further attempts
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(heartbeat.isLost()).toBe(true);
+  });
+
+  it('honours a custom interval', async () => {
+    const renew = vi.fn().mockResolvedValue(true);
+    const heartbeat = new LeaseHeartbeat(renew, 'wallet w1', 1_000);
+    heartbeat.start();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(renew).toHaveBeenCalledTimes(3);
+    heartbeat.stop();
+  });
 });

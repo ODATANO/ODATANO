@@ -12,6 +12,13 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
+// Defaults to "no HSM" so the guardrail tests below keep their meaning; the
+// HsmWorkerSigner suite overrides it with a connected module.
+const { getHsmSignerMock } = vi.hoisted(() => ({ getHsmSignerMock: vi.fn(() => undefined as unknown) }));
+vi.mock('../../srv/blockchain/signing/hsm-signer', () => ({
+  getHsmSigner: () => getHsmSignerMock(),
+}));
+
 import { Cbor, CborArray, CborMap, CborBytes, CborUInt } from '@harmoniclabs/cbor';
 import { toHex, fromHex } from '@harmoniclabs/uint8array-utils';
 import { verifyEd25519Signature_sync, deriveEd25519PublicKey_sync } from '@harmoniclabs/crypto';
@@ -129,6 +136,48 @@ describe('createWorkerSigner', () => {
 
   it('rejects an hsm wallet when no HSM is connected', () => {
     expect(() => createWorkerSigner({ walletId: 'w1', signerType: 'hsm' }, 'preview')).toThrow(ConfigError);
+  });
+
+  it('rejects an unknown signerType', () => {
+    expect(() => createWorkerSigner({ walletId: 'w1', signerType: 'magic' as never }, 'preview')).toThrow(ConfigError);
+  });
+});
+
+describe('HsmWorkerSigner', () => {
+  const hsm = {
+    isConnected: vi.fn(() => true),
+    getAddress: vi.fn(() => 'addr_test1_hsm'),
+    getPublicKeyHash: vi.fn(() => 'ab'.repeat(28)),
+    signTransaction: vi.fn(() => 'signed-by-hsm'),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hsm.isConnected.mockReturnValue(true);
+    getHsmSignerMock.mockReturnValue(hsm);
+  });
+  afterEach(() => getHsmSignerMock.mockReturnValue(undefined));
+
+  it('delegates address, key hash and signing to the process-wide HSM signer', () => {
+    const signer = createWorkerSigner({ walletId: 'minter', signerType: 'hsm' }, 'preview');
+
+    expect(signer.type).toBe('hsm');
+    expect(signer.getAddress()).toBe('addr_test1_hsm');
+    expect(signer.getPublicKeyHash()).toBe('ab'.repeat(28));
+    expect(signer.signTransaction('dead', 'ab'.repeat(32))).toBe('signed-by-hsm');
+    expect(hsm.signTransaction).toHaveBeenCalledWith('dead', 'ab'.repeat(32));
+  });
+
+  it('fails fast at worker start when the HSM is present but disconnected', () => {
+    hsm.isConnected.mockReturnValue(false);
+    expect(() => createWorkerSigner({ walletId: 'minter', signerType: 'hsm' }, 'preview')).toThrow(ConfigError);
+  });
+
+  it('refuses to sign once the HSM session drops after start', () => {
+    const signer = createWorkerSigner({ walletId: 'minter', signerType: 'hsm' }, 'preview');
+    hsm.isConnected.mockReturnValue(false);
+
+    expect(() => signer.signTransaction('dead', 'ab'.repeat(32))).toThrow(ConfigError);
   });
 });
 

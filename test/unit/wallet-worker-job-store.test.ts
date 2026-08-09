@@ -42,6 +42,8 @@ import {
   findSubmittedJobs,
   walletHasActiveJob,
   findOrphanedSubmittingJob,
+  listWallets,
+  releaseDedupClaim,
   markBuilding,
   markSubmitting,
   markSubmitted,
@@ -192,6 +194,24 @@ describe('job-store: insertJob + idempotency', () => {
     // The claim moves to the row's own ID; the caller-visible key stays for audit.
     expect(row().dedupKey).toBe(jobId);
     expect(row().idempotencyKey).toBe('k1');
+  });
+
+  it('releaseDedupClaim frees a key without touching the rest of the row', async () => {
+    const db = makeStore();
+    const { jobId } = await insertJob(db as never, {
+      walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1',
+    });
+
+    await releaseDedupClaim(db as never, jobId);
+
+    const row = db.tables.get(JOBS)!.find(r => r.ID === jobId)!;
+    expect(row.dedupKey).toBe(jobId);
+    expect(row).toMatchObject({ status: 'pending', idempotencyKey: 'k1' });
+    // The key is reusable immediately — a fresh job can claim it.
+    const next = await insertJob(db as never, {
+      walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1',
+    });
+    expect(next.deduplicated).toBe(false);
   });
 
   it('keyless jobs never contend for the constraint', async () => {
@@ -465,6 +485,32 @@ describe('job-store: per-wallet lease', () => {
     await seedWallet(db);
     db.tables.get(WALLETS)![0].enabled = false;
     expect(await tryAcquireWalletLease(db as never, 'w1', 'owner-A')).toBe(false);
+  });
+
+  it('listWallets returns every registered wallet, normalized', async () => {
+    const db = makeStore();
+    await seedWallet(db);
+    await upsertWalletRegistration(db as never, {
+      walletId: 'w2', signerType: 'hsm', address: 'addr_test1y', publicKeyHash: 'e'.repeat(56),
+    });
+
+    const wallets = await listWallets(db as never);
+
+    expect(wallets.map(w => w.walletId)).toEqual(['w1', 'w2']);
+    expect(wallets[1]).toMatchObject({ signerType: 'hsm', enabled: true, jobsConfirmed: 0, jobsFailed: 0 });
+  });
+
+  it('upsertWalletRegistration refreshes an existing row instead of duplicating it', async () => {
+    const db = makeStore();
+    await seedWallet(db);
+    await upsertWalletRegistration(db as never, {
+      walletId: 'w1', signerType: 'hsm', address: 'addr_test1_rotated', publicKeyHash: 'd'.repeat(56),
+    });
+
+    expect(db.tables.get(WALLETS)).toHaveLength(1);
+    expect(await readWallet(db as never, 'w1')).toMatchObject({
+      signerType: 'hsm', address: 'addr_test1_rotated',
+    });
   });
 
   it('bumpWalletStats increments the matching counter', async () => {

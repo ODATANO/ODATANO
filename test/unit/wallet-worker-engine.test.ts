@@ -101,7 +101,7 @@ import {
 } from '../../srv/blockchain/wallet-worker/wallet-worker';
 import {
   insertJob, getJobById, upsertWalletRegistration, tryAcquireWalletLease, releaseWalletLease,
-  markBuilding, markSubmitting,
+  markBuilding, markSubmitting, markSubmitted,
   JOB_ERROR_CODES, WORKER_LEASE_TTL_MS,
   type WalletJobRow,
 } from '../../srv/blockchain/wallet-worker/job-store';
@@ -345,6 +345,134 @@ describe('engine: executeJob', () => {
   });
 });
 
+describe('engine: start / stop', () => {
+  // start() builds REAL signers via createWorkerSigner, so the configured keyEnv
+  // vars must hold usable Ed25519 key material.
+  const TEST_KEY = '9'.repeat(64);
+  beforeEach(() => { process.env.X = TEST_KEY; process.env.WORKER_KEY = TEST_KEY; });
+  afterEach(() => { delete process.env.X; delete process.env.WORKER_KEY; });
+
+  /** A worker built the normal way — start() must install the signers itself. */
+  function rawWorker(deps: ReturnType<typeof makeDeps>, config: WalletWorkerConfig = CONFIG) {
+    return new CardanoWalletWorker({
+      client: deps.client as never,
+      indexer: deps.indexer as never,
+      network: 'preview',
+      config,
+      instanceId: 'test-instance',
+    });
+  }
+
+  it('registers each wallet, starts dispatching and reports itself running', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps);
+
+    await worker.start();
+    try {
+      expect(worker.isRunning()).toBe(true);
+      expect(worker.getWalletIds()).toEqual(['w1']);
+      expect(worker.getSigner('w1')).toBeDefined();
+      const wallet = tables.get('odatano.cardano.CardanoWorkerWallets')!.find(w => w.walletId === 'w1')!;
+      expect(wallet).toMatchObject({ signerType: 'software', enabled: true });
+      expect(String(wallet.address)).toMatch(/^addr_test1/); // derived from the key, not supplied
+      expect(String(wallet.publicKeyHash)).toMatch(/^[0-9a-f]{56}$/);
+      expect(worker.getStatusSummary()).toMatchObject({ running: true, wallets: ['w1'], executing: [] });
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('refuses to start without configured wallets', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps, { ...CONFIG, wallets: [] });
+
+    await worker.start();
+
+    expect(worker.isRunning()).toBe(false);
+    expect(worker.getStatusSummary()).toMatchObject({ running: false, wallets: [], awaitingConfirmation: 0 });
+  });
+
+  it('skips a wallet whose signer cannot be built, but starts for the healthy ones', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps, {
+      ...CONFIG,
+      wallets: [
+        { walletId: 'broken', signerType: 'software', keyEnv: 'MISSING_ENV_VAR' },
+        { walletId: 'w1', signerType: 'software', keyEnv: 'WORKER_KEY' },
+      ],
+    });
+
+    await worker.start();
+    try {
+      expect(worker.isRunning()).toBe(true);
+      expect(worker.getWalletIds()).toEqual(['w1']);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('does not start when no signer at all can be initialized', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps, {
+      ...CONFIG,
+      wallets: [{ walletId: 'broken', signerType: 'software', keyEnv: 'MISSING_ENV_VAR' }],
+    });
+
+    await worker.start();
+
+    expect(worker.isRunning()).toBe(false);
+    expect(worker.getWalletIds()).toEqual([]);
+  });
+
+  it('re-watches submitted jobs found at boot instead of failing them', async () => {
+    const deps = makeDeps();
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    const { jobId } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{}' });
+    await markBuilding(db, jobId, 1);
+    await markSubmitting(db, jobId, { txHash: TX_HASH, unsignedTxCbor: 'dead', signedTxCbor: 'beef', fee: '170000' });
+    await markSubmitted(db, jobId, TX_HASH);
+    const worker = rawWorker(deps);
+
+    await worker.start();
+    try {
+      expect(worker.getStatusSummary().awaitingConfirmation).toBe(1);
+      expect((await getJobById(db, jobId))!.status).toBe('submitted');
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('start is idempotent and stop releases this instance leases only', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps);
+    await worker.start();
+    await worker.start(); // no-op
+
+    await tryAcquireWalletLease(db, 'w1', 'test-instance');
+    await worker.stop();
+
+    expect(worker.isRunning()).toBe(false);
+    const wallet = tables.get('odatano.cardano.CardanoWorkerWallets')!.find(w => w.walletId === 'w1')!;
+    expect(wallet.leaseOwner).toBeNull();
+    await worker.stop(); // second stop is a no-op
+  });
+
+  it('a dispatch tick that throws is swallowed and does not stop the worker', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps);
+    await worker.start();
+    try {
+      const failing = worker as unknown as { tick: () => Promise<void>; tickSafe: () => Promise<void> };
+      failing.tick = () => Promise.reject(new Error('db exploded'));
+
+      await expect(failing.tickSafe()).resolves.toBeUndefined();
+      expect(worker.isRunning()).toBe(true);
+    } finally {
+      await worker.stop();
+    }
+  });
+});
+
 describe('engine: wallet lease fencing during execution', () => {
   const WALLETS_TABLE = 'odatano.cardano.CardanoWorkerWallets';
 
@@ -495,6 +623,36 @@ describe('engine: reconciling an interrupted submit', () => {
     expect(Number(tables.get('odatano.cardano.CardanoWorkerWallets')![0].jobsFailed)).toBe(1);
   });
 
+  it('keeps the job submitting when the chain lookup itself is inconclusive', async () => {
+    const deps = makeDeps();
+    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('BadInputsUTxO', undefined));
+    deps.client.getTransaction.mockRejectedValue(new ProviderUnavailableError('backend down', 'koios'));
+    const worker = makeWorker(deps);
+    const job = await seedInterruptedSubmit();
+
+    await reconcile(worker, job);
+
+    // Absence was never proven, so the key stays claimed and nothing is failed.
+    expect((await getJobById(db, job.ID))!.status).toBe('submitting');
+  });
+
+  it('fails a submitting row that has no signed transaction rather than blocking the wallet', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedInterruptedSubmit();
+    // Corrupt/legacy row: submitting without the artifacts markSubmitting writes.
+    const row = tables.get('odatano.cardano.CardanoWalletJobs')!.find(r => r.ID === job.ID)!;
+    row.signedTxCbor = null;
+    row.txHash = null;
+
+    await reconcile(worker, (await getJobById(db, job.ID))!);
+
+    expect(deps.client.submitTransaction).not.toHaveBeenCalled();
+    const failed = (await getJobById(db, job.ID))!;
+    expect(failed.status).toBe('failed');
+    expect(failed.errorCode).toBe(JOB_ERROR_CODES.PROCESS_RESTART);
+  });
+
   it('a tick picks up an orphaned submitting row even with no pending jobs', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
@@ -518,6 +676,72 @@ describe('engine: reconciling an interrupted submit', () => {
 
     expect(deps.client.submitTransaction).not.toHaveBeenCalled();
     expect((await getJobById(db, job.ID))!.status).toBe('submitting');
+  });
+});
+
+describe('engine: dispatch mapping and failure classification', () => {
+  it('routes every job kind to its indexer build method and rejects unknown kinds', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const buildForKind = (kind: string) =>
+      (worker as unknown as { buildForKind: (tx: unknown, job: unknown, req: unknown) => Promise<unknown> })
+        .buildForKind(db, { kind } as never, {} as never);
+
+    await buildForKind('simpleAda');
+    await buildForKind('metadata');
+    await buildForKind('multiAsset');
+    await buildForKind('mint');
+    await buildForKind('plutusSpend');
+
+    expect(deps.indexer.indexSimpleBuildResult).toHaveBeenCalled();
+    expect(deps.indexer.indexMetadataBuildResult).toHaveBeenCalled();
+    expect(deps.indexer.indexMultiAssetBuildResult).toHaveBeenCalled();
+    expect(deps.indexer.indexMintBuildResult).toHaveBeenCalled();
+    expect(deps.indexer.indexPlutusSpendBuildResult).toHaveBeenCalled();
+    expect(() => buildForKind('teleport')).toThrow(/Unsupported job kind/);
+  });
+
+  it('labels a non-BackendError failure EXECUTION_FAILED', async () => {
+    const deps = makeDeps();
+    deps.indexer.indexSimpleBuildResult.mockRejectedValue(new Error('kaboom'));
+    const worker = makeWorker(deps);
+    const job = await seedJob();
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    const row = (await getJobById(db, job.ID))!;
+    expect(row.status).toBe('failed');
+    expect(row.errorCode).toBe('EXECUTION_FAILED');
+    expect(row.errorMessage).toContain('kaboom');
+  });
+
+  it('does not submit when a takeover already failed the row mid-signing', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob();
+    // Another instance's orphan cleanup wins the race while we are signing.
+    deps.signer.signTransaction.mockImplementation(() => {
+      const row = tables.get('odatano.cardano.CardanoWalletJobs')!.find(r => r.ID === job.ID)!;
+      row.status = 'failed';
+      return 'beef';
+    });
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    expect(deps.client.submitTransaction).not.toHaveBeenCalled();
+    expect((await getJobById(db, job.ID))!.status).toBe('failed');
+  });
+
+  it('respects the concurrency cap without dispatching or reconciling', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps, { ...CONFIG, maxConcurrentWallets: 0 });
+    await seedJob();
+
+    await (worker as unknown as { tick: () => Promise<void> }).tick();
+    await Promise.allSettled([...(worker as unknown as { executionPromises: Set<Promise<void>> }).executionPromises]);
+
+    expect(deps.indexer.indexSimpleBuildResult).not.toHaveBeenCalled();
+    expect(deps.client.submitTransaction).not.toHaveBeenCalled();
   });
 });
 
