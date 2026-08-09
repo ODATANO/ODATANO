@@ -41,7 +41,9 @@ import {
   findDueJobs,
   findSubmittedJobs,
   walletHasActiveJob,
+  findOrphanedSubmittingJob,
   markBuilding,
+  markSubmitting,
   markSubmitted,
   markConfirmed,
   markFailed,
@@ -98,6 +100,19 @@ function makeStore() {
         }
         case 'INSERT': {
           const entries = Array.isArray(q.entries) ? q.entries : [q.entries!];
+          for (const e of entries) {
+            // Mirror the deployed `dedup` UNIQUE constraint on the jobs table
+            // (verified against the generated DDL: SQLite table constraint /
+            // HANA unique inverted index) so the store is tested against the
+            // same guarantee production has.
+            if (q.entity === 'odatano.cardano.CardanoWalletJobs'
+              && rows.some(r => r.walletId === e.walletId && r.kind === e.kind && r.dedupKey === e.dedupKey)) {
+              throw Object.assign(
+                new Error('UNIQUE constraint failed: odatano_cardano_CardanoWalletJobs.walletId, odatano_cardano_CardanoWalletJobs.kind, odatano_cardano_CardanoWalletJobs.dedupKey'),
+                { code: 'SQLITE_CONSTRAINT_UNIQUE' },
+              );
+            }
+          }
           rows.push(...entries.map(e => ({ ...e })));
           return entries.length;
         }
@@ -155,6 +170,81 @@ describe('job-store: insertJob + idempotency', () => {
     expect(second.deduplicated).toBe(false);
     expect(second.jobId).not.toBe(first.jobId);
   });
+
+  it('does NOT dedupe against cancelled rows (the key is freed, not burned)', async () => {
+    const db = makeStore();
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1' });
+    await markCancelled(db as never, first.jobId);
+
+    const second = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1' });
+    expect(second.deduplicated).toBe(false);
+    expect(second.jobId).not.toBe(first.jobId);
+  });
+
+  it('claims the key while active and hands it back on a terminal state', async () => {
+    const db = makeStore();
+    const { jobId } = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1' });
+    const row = () => db.tables.get(JOBS)!.find(r => r.ID === jobId)!;
+
+    expect(row().dedupKey).toBe('k1');
+    await markBuilding(db as never, jobId, 1);
+    await markFailed(db as never, jobId, 'X', new Error('boom'));
+    // The claim moves to the row's own ID; the caller-visible key stays for audit.
+    expect(row().dedupKey).toBe(jobId);
+    expect(row().idempotencyKey).toBe('k1');
+  });
+
+  it('keyless jobs never contend for the constraint', async () => {
+    const db = makeStore();
+    const a = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}' });
+    const b = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}' });
+
+    expect(b.deduplicated).toBe(false);
+    expect(b.jobId).not.toBe(a.jobId);
+    expect(db.tables.get(JOBS)).toHaveLength(2);
+    // dedupKey falls back to the row's own ID, which is unique by construction.
+    expect(db.tables.get(JOBS)!.map(r => r.dedupKey)).toEqual([a.jobId, b.jobId]);
+  });
+
+  it('returns the winner when a concurrent transaction claims the key first', async () => {
+    const db = makeStore();
+    const inner = db.run;
+    let raced = false;
+    // Simulate the real race: our lookup sees nothing, then the other transaction
+    // commits its job before our INSERT reaches the database.
+    db.run = vi.fn(async (query: never) => {
+      const result = await inner(query);
+      const op = ((query as { _q?: { _op?: string } })._q ?? query as { _op?: string })._op;
+      if (!raced && op === 'SELECT.one') {
+        raced = true;
+        await inner({
+          _op: 'INSERT', entity: JOBS,
+          entries: { ID: 'winner-job', walletId: 'w1', kind: 'mint', status: 'pending', idempotencyKey: 'k1', dedupKey: 'k1' },
+        } as never);
+      }
+      return result;
+    }) as typeof db.run;
+
+    const result = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1' });
+
+    // One job, one payment — the loser adopts the winner instead of inserting.
+    expect(result).toEqual({ jobId: 'winner-job', status: 'pending', deduplicated: true });
+    expect(db.tables.get(JOBS)).toHaveLength(1);
+  });
+
+  it('propagates a non-uniqueness insert failure instead of reporting a dedup', async () => {
+    const db = makeStore();
+    const inner = db.run;
+    db.run = vi.fn(async (query: never) => {
+      const op = ((query as { _q?: { _op?: string } })._q ?? query as { _op?: string })._op;
+      if (op === 'INSERT') throw new Error('database is locked');
+      return inner(query);
+    }) as typeof db.run;
+
+    await expect(insertJob(db as never, {
+      walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'k1',
+    })).rejects.toThrow('database is locked');
+  });
 });
 
 describe('job-store: state machine transitions', () => {
@@ -163,20 +253,27 @@ describe('job-store: state machine transitions', () => {
     return jobId;
   }
 
-  it('walks the happy path pending → building → submitted → confirmed', async () => {
+  it('walks the happy path pending → building → submitting → submitted → confirmed', async () => {
     const db = makeStore();
     const jobId = await seedPending(db);
 
     expect(await markBuilding(db as never, jobId, 1)).toBe(true);
     expect((await getJobById(db as never, jobId))!.attempt).toBe(1);
 
-    expect(await markSubmitted(db as never, jobId, {
+    expect(await markSubmitting(db as never, jobId, {
       txHash: 'a'.repeat(64), unsignedTxCbor: 'dead', signedTxCbor: 'beef', fee: '170000',
     })).toBe(true);
-    const submitted = (await getJobById(db as never, jobId))!;
-    expect(submitted.status).toBe('submitted');
-    expect(submitted.txHash).toBe('a'.repeat(64));
-    expect(submitted.signedTxCbor).toBe('beef');
+    // The signed artifacts are durable BEFORE the tx is sent — that is the point.
+    const submitting = (await getJobById(db as never, jobId))!;
+    expect(submitting.status).toBe('submitting');
+    expect(submitting.txHash).toBe('a'.repeat(64));
+    expect(submitting.signedTxCbor).toBe('beef');
+    expect(submitting.unsignedTxCbor).toBe('dead');
+    expect(submitting.fee).toBe(170000);
+    expect(submitting.submittedAt).toBeTruthy();
+
+    expect(await markSubmitted(db as never, jobId, 'a'.repeat(64))).toBe(true);
+    expect((await getJobById(db as never, jobId))!.status).toBe('submitted');
 
     expect(await markConfirmed(db as never, jobId)).toBe(true);
     const confirmed = (await getJobById(db as never, jobId))!;
@@ -188,8 +285,10 @@ describe('job-store: state machine transitions', () => {
     const db = makeStore();
     const jobId = await seedPending(db);
 
-    // submitted requires building
-    expect(await markSubmitted(db as never, jobId, { txHash: 'x', unsignedTxCbor: null, signedTxCbor: 'y', fee: null })).toBe(false);
+    // submitting requires building
+    expect(await markSubmitting(db as never, jobId, { txHash: 'x', unsignedTxCbor: null, signedTxCbor: 'y', fee: null })).toBe(false);
+    // submitted requires submitting
+    expect(await markSubmitted(db as never, jobId, 'x')).toBe(false);
     // confirmed requires submitted
     expect(await markConfirmed(db as never, jobId)).toBe(false);
     // cancel works from pending only
@@ -212,6 +311,18 @@ describe('job-store: state machine transitions', () => {
     expect(row.errorMessage).toContain('provider down');
   });
 
+  it('refuses to re-queue a submitting job — a stored tx is never rebuilt', async () => {
+    const db = makeStore();
+    const jobId = await seedPending(db);
+    await markBuilding(db as never, jobId, 1);
+    await markSubmitting(db as never, jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'beef', fee: null });
+
+    expect(await requeueForRetry(db as never, jobId, new Error('submit timed out'))).toBe(false);
+    const row = (await getJobById(db as never, jobId))!;
+    expect(row.status).toBe('submitting');
+    expect(row.signedTxCbor).toBe('beef');
+  });
+
   it('findDueJobs filters notBefore in the future and orders by priority', async () => {
     const db = makeStore();
     const later = new Date(Date.now() + 60_000).toISOString();
@@ -222,16 +333,31 @@ describe('job-store: state machine transitions', () => {
     expect(due.map(j => j.ID)).toEqual([dueNow]);
   });
 
-  it('walletHasActiveJob covers building AND submitted', async () => {
+  it('walletHasActiveJob covers building, submitting AND submitted', async () => {
     const db = makeStore();
     const jobId = await seedPending(db);
     expect(await walletHasActiveJob(db as never, 'w1')).toBe(false);
     await markBuilding(db as never, jobId, 1);
     expect(await walletHasActiveJob(db as never, 'w1')).toBe(true);
-    await markSubmitted(db as never, jobId, { txHash: 'x', unsignedTxCbor: null, signedTxCbor: 'y', fee: null });
+    await markSubmitting(db as never, jobId, { txHash: 'x', unsignedTxCbor: null, signedTxCbor: 'y', fee: null });
+    expect(await walletHasActiveJob(db as never, 'w1')).toBe(true);
+    await markSubmitted(db as never, jobId, 'x');
     expect(await walletHasActiveJob(db as never, 'w1')).toBe(true);
     await markConfirmed(db as never, jobId);
     expect(await walletHasActiveJob(db as never, 'w1')).toBe(false);
+  });
+
+  it('a submitting job still holds its idempotency key (no duplicate payment on retry)', async () => {
+    const db = makeStore();
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', idempotencyKey: 'invoice-1' });
+    await markBuilding(db as never, first.jobId, 1);
+    await markSubmitting(db as never, first.jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'beef', fee: null });
+
+    const retry = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', idempotencyKey: 'invoice-1' });
+
+    expect(retry.deduplicated).toBe(true);
+    expect(retry.jobId).toBe(first.jobId);
+    expect(db.tables.get(JOBS)).toHaveLength(1);
   });
 });
 
@@ -242,7 +368,8 @@ describe('job-store: crash recovery (design §8)', () => {
     await markBuilding(db as never, interrupted, 1);
     const { jobId: inChain } = await insertJob(db as never, { walletId: 'w2', kind: 'mint', request: '{}' });
     await markBuilding(db as never, inChain, 1);
-    await markSubmitted(db as never, inChain, { txHash: 'b'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'cc', fee: null });
+    await markSubmitting(db as never, inChain, { txHash: 'b'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'cc', fee: null });
+    await markSubmitted(db as never, inChain, 'b'.repeat(64));
 
     const result = await recoverInterruptedJobs(db as never);
 
@@ -253,6 +380,50 @@ describe('job-store: crash recovery (design §8)', () => {
     expect(failed.errorCode).toBe(JOB_ERROR_CODES.PROCESS_RESTART);
     // The submitted job is NOT failed — the chain decides.
     expect((await getJobById(db as never, inChain))!.status).toBe('submitted');
+  });
+
+  it('never fails a job interrupted around submit — it is returned for reconciliation', async () => {
+    const db = makeStore();
+    const { jobId } = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', idempotencyKey: 'k1' });
+    await markBuilding(db as never, jobId, 1);
+    await markSubmitting(db as never, jobId, { txHash: 'd'.repeat(64), unsignedTxCbor: 'dead', signedTxCbor: 'beef', fee: '170000' });
+
+    const result = await recoverInterruptedJobs(db as never);
+
+    expect(result.failedBuilding).toBe(0);
+    expect(result.submittingToReconcile.map(j => j.ID)).toEqual([jobId]);
+    const row = (await getJobById(db as never, jobId))!;
+    expect(row.status).toBe('submitting');
+    expect(row.signedTxCbor).toBe('beef'); // the exact bytes that may be on-chain
+  });
+});
+
+describe('job-store: findOrphanedSubmittingJob', () => {
+  async function seedSubmitting(db: ReturnType<typeof makeStore>): Promise<string> {
+    await upsertWalletRegistration(db as never, {
+      walletId: 'w1', signerType: 'software', address: 'addr_test1x', publicKeyHash: 'f'.repeat(56),
+    });
+    const { jobId } = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}' });
+    await markBuilding(db as never, jobId, 1);
+    await markSubmitting(db as never, jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'beef', fee: null });
+    return jobId;
+  }
+
+  it('returns the stuck row when no live executor holds the wallet lease', async () => {
+    const db = makeStore();
+    const jobId = await seedSubmitting(db);
+    expect((await findOrphanedSubmittingJob(db as never, 'w1'))!.ID).toBe(jobId);
+  });
+
+  it('leaves the row alone while the wallet lease is held (executor still working)', async () => {
+    const db = makeStore();
+    await seedSubmitting(db);
+    await tryAcquireWalletLease(db as never, 'w1', 'other-instance');
+
+    expect(await findOrphanedSubmittingJob(db as never, 'w1')).toBeNull();
+    // …and it becomes claimable again once that lease expires.
+    const afterTtl = new Date(Date.now() + 60_000);
+    expect(await findOrphanedSubmittingJob(db as never, 'w1', afterTtl)).not.toBeNull();
   });
 });
 
@@ -314,7 +485,8 @@ describe('job-store: findSubmittedJobs', () => {
     const { jobId } = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}' });
     await insertJob(db as never, { walletId: 'w2', kind: 'mint', request: '{}' });
     await markBuilding(db as never, jobId, 1);
-    await markSubmitted(db as never, jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'ff', fee: null });
+    await markSubmitting(db as never, jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'ff', fee: null });
+    await markSubmitted(db as never, jobId, 'a'.repeat(64));
 
     const submitted = await findSubmittedJobs(db as never);
     expect(submitted).toHaveLength(1);

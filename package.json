@@ -34,7 +34,7 @@
     "@harmoniclabs/crypto": "^0.3.0",
     "@harmoniclabs/uint8array-utils": "^1.0.4",
     "@sap/xssec": "^4",
-    "axios": "^1.17.1",
+    "axios": "^1.18.0",
     "bech32": "^2.0.0",
     "blake2b": "^2.1.4"
   },
@@ -42,7 +42,7 @@
     "pkcs11js": "^2.1.6"
   },
   "overrides": {
-    "axios": "^1.17.1",
+    "axios": "^1.18.0",
     "esbuild": "0.28.1",
     "form-data": "^4.0.6",
     "fast-uri": "^3.1.5",

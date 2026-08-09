@@ -1,6 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid } from './utils/errors';
+import { BackendError, rejectInvalid } from './utils/errors';
+import { ERROR_CODES } from './utils/error-codes';
 import { validateJsonWithLimits } from './utils/validators';
 import {
   getWalletWorker,
@@ -18,7 +19,7 @@ import {
   type WalletJobKindValue,
   type WalletJobRow,
 } from './blockchain/wallet-worker/job-store';
-import { getCardanoClient, getCardanoIndexer, loadWalletWorkerConfigFromEnv } from './server';
+import { getCardanoClient, getCardanoIndexer, getHsmConfig, loadWalletWorkerConfigFromEnv } from './server';
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 
 const logger = cds.log('CardanoWorkerService');
@@ -34,6 +35,20 @@ const logger = cds.log('CardanoWorkerService');
 
 function isAdmin(req: Request): boolean {
   return req.user?.is?.('Admin') ?? false;
+}
+
+/**
+ * A job on an HSM-backed wallet spends the same server-held key as the synchronous
+ * SignWithHsm path, so it inherits that path's role gate (enforceHsmRole in
+ * cardano-sign-service.ts) — 'authenticated-user' alone must not reach the HSM.
+ * Returns the role the caller is missing, or null when the wallet is not HSM-backed,
+ * no role is configured, or the caller holds it.
+ */
+function missingHsmRole(req: Request, signerType: string | undefined): string | null {
+  if (signerType !== 'hsm') return null;
+  const requiresRole = getHsmConfig()?.requiresRole;
+  if (!requiresRole || req.user?.is(requiresRole)) return null;
+  return requiresRole;
 }
 
 function toJobStatus(job: WalletJobRow) {
@@ -91,10 +106,24 @@ module.exports = (srv: cds.Service) => {
         'Wallet worker is not enabled — set cds.requires.odatano-core.walletWorker.enabled (or WALLET_WORKER_ENABLED=true) with configured wallets.');
     }
 
+    // Role gate on this instance's config, mirroring the sign service's 403.
+    const configuredRole = missingHsmRole(req, config.wallets.find((w) => w.walletId === walletId)?.signerType);
+    if (configuredRole) {
+      return req.reject(403, `SubmitWalletJob on HSM-backed wallet "${walletId}" requires role '${configuredRole}'`);
+    }
+
     return handleRequest(req, async (db) => {
       const wallet = await readWallet(db, walletId);
       if (!wallet) return rejectInvalid(req, 'SubmitWalletJob', `Unknown wallet "${walletId}" — configured wallets are registered at worker start`, 'walletId');
       if (!wallet.enabled) return rejectInvalid(req, 'SubmitWalletJob', `Wallet "${walletId}" is disabled`, 'walletId');
+      // Registered row too: another instance may run the HSM wallet this one has no config for.
+      const registeredRole = missingHsmRole(req, wallet.signerType);
+      if (registeredRole) {
+        throw new BackendError(
+          `Wallet "${walletId}" is HSM-backed and requires role '${registeredRole}'`,
+          403, ERROR_CODES.FORBIDDEN, undefined, undefined, 'walletId'
+        );
+      }
 
       const result = await insertJob(db, {
         walletId,

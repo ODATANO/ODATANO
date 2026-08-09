@@ -9,10 +9,12 @@ import {
   AllBackendsFailedError,
   HsmError,
   TransactionAlreadySubmittedError,
+  isNotFoundOnAllBackends,
 } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { getTxHashFromCbor } from '../../utils/tx-build-helper';
 import { ConfirmationTracker } from './confirmation-tracker';
+import { LeaseHeartbeat } from './lease-heartbeat';
 import { prepareWorkerBuildRequest } from './build-request';
 import { createWorkerSigner, type WorkerSigner, type WorkerWalletConfig } from './signers';
 import {
@@ -20,9 +22,12 @@ import {
   bumpWalletStats,
   failOrphanedBuildingJobs,
   findDueJobs,
+  findOrphanedSubmittingJob,
+  getJobById,
   markBuilding,
   markFailed,
   markSubmitted,
+  markSubmitting,
   recoverInterruptedJobs,
   releaseWalletLease,
   renewWalletLease,
@@ -45,15 +50,21 @@ const logger = cds.log('CardanoWalletWorker');
  * blocked until the previous job CONFIRMS, which makes per-wallet UTxO contention
  * impossible by construction), acquire the per-wallet DB lease and execute:
  *
- *   building → CardanoIndexer.index<Kind>BuildResult (build + TransactionBuilds row)
- *            → signer.signTransaction → client.submitTransaction
- *   submitted → hand to the ConfirmationTracker (crawler hook or polling)
+ *   building   → CardanoIndexer.index<Kind>BuildResult (build + TransactionBuilds row)
+ *              → signer.signTransaction
+ *   submitting → signed CBOR + hash committed, THEN client.submitTransaction
+ *   submitted  → hand to the ConfirmationTracker (crawler hook or polling)
  *
- * Transient failures (provider outages, rate limits, HSM hiccups) re-queue the
- * job with exponential backoff up to `maxAttempts`; deterministic rejections
- * (validation, insufficient funds) fail immediately. After a successful submit
- * a rebuilt tx is NEVER auto-re-submitted — only the tracker may re-send the
- * same signed CBOR after a rollback.
+ * The `submitting` commit is what makes the submit boundary crash-safe: the exact
+ * bytes that may be on-chain are durable before the network call, and the row stays
+ * non-terminal, so it keeps holding its idempotency key. Anything that goes wrong
+ * from there on is reconciled against the chain (`reconcileSubmitting`) — the same
+ * transaction is re-submitted, never a rebuild.
+ *
+ * Transient failures BEFORE the signed tx exists (provider outages, rate limits,
+ * HSM hiccups during build/sign) re-queue the job with exponential backoff up to
+ * `maxAttempts`; deterministic rejections (validation, insufficient funds) fail
+ * immediately.
  *
  * All DB access runs in short fresh transactions (ambient context cleared —
  * NIGHTGATE lesson 2) so the single pooled SQLite connection is never held
@@ -177,8 +188,13 @@ export class CardanoWalletWorker {
       return;
     }
 
-    // 2. Crash recovery: fail interrupted builds, re-watch submitted jobs.
+    // 2. Crash recovery: fail interrupted builds, re-watch submitted jobs. Rows
+    //    interrupted around the submit call stay `submitting` — the first tick
+    //    reconciles them against the chain (reconcileOrphanedSubmissions).
     const recovery = await cds.tx((tx) => recoverInterruptedJobs(tx));
+    if (recovery.submittingToReconcile.length) {
+      logger.warn(`${recovery.submittingToReconcile.length} job(s) with an unresolved submit will be reconciled on the next dispatch tick`);
+    }
     for (const job of recovery.submittedToReconcile) {
       if (!job.txHash) continue; // defensive: submitted implies txHash
       this.tracker.track({
@@ -232,6 +248,10 @@ export class CardanoWalletWorker {
   }
 
   private async tick(): Promise<void> {
+    // Interrupted submits first: a stuck `submitting` row blocks its wallet queue
+    // and may be the only work there is (no pending job would ever surface it).
+    await this.reconcileOrphanedSubmissions();
+
     const due = await runWithoutAmbientTx(() => cds.tx((tx) => findDueJobs(tx)));
     if (!due.length) return;
 
@@ -260,21 +280,65 @@ export class CardanoWalletWorker {
       }));
       if (!dispatched) continue;
 
-      this.executing.add(walletId);
-      const execution = this.executeJob(job, signer)
-        .catch((err) => logger.error(`Job ${job.ID}: unhandled execution error:`, err))
-        .finally(() => {
-          this.executing.delete(walletId);
-          this.executionPromises.delete(execution);
-        });
-      this.executionPromises.add(execution);
+      this.spawn(walletId, () => this.executeJob(job, signer));
     }
   }
 
   /**
-   * Execute one job: building → (build → sign) → submit → submitted, then hand to
-   * the tracker. The wallet lease is held for the duration and released afterwards
-   * (queue serialization continues via the submitted row, not the lease).
+   * Adopt `submitting` rows left behind by a dead executor (this process before a
+   * restart, or another instance whose lease expired) and resolve them against the
+   * chain. Runs per wallet under the same lease the executor would hold.
+   */
+  private async reconcileOrphanedSubmissions(): Promise<void> {
+    const { instanceId } = this.deps;
+    for (const walletId of this.getWalletIds()) {
+      if (!this.running) return;
+      if (this.executing.size >= this.deps.config.maxConcurrentWallets) return;
+      if (this.executing.has(walletId)) continue;
+
+      const orphan = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+        const stuck = await findOrphanedSubmittingJob(tx, walletId);
+        if (!stuck) return null;
+        return (await tryAcquireWalletLease(tx, walletId, instanceId)) ? stuck : null;
+      }));
+      if (!orphan) continue;
+
+      this.spawn(walletId, () => this.reconcileSubmitting(orphan));
+    }
+  }
+
+  /** Run one wallet's work in the background, tracked for concurrency + shutdown. */
+  private spawn(walletId: string, work: () => Promise<void>): void {
+    this.executing.add(walletId);
+    const execution = work()
+      .catch((err) => logger.error(`Wallet ${walletId}: unhandled execution error:`, err))
+      .finally(() => {
+        this.executing.delete(walletId);
+        this.executionPromises.delete(execution);
+      });
+    this.executionPromises.add(execution);
+  }
+
+  /** A heartbeat that keeps this instance's lease on `walletId` alive while it works. */
+  private leaseHeartbeat(walletId: string): LeaseHeartbeat {
+    const { instanceId } = this.deps;
+    const heartbeat = new LeaseHeartbeat(
+      async () => await runWithoutAmbientTx(() => cds.tx((tx) => renewWalletLease(tx, walletId, instanceId))),
+      `wallet ${walletId}`,
+    );
+    heartbeat.start();
+    return heartbeat;
+  }
+
+  /**
+   * Execute one job: building → (build → sign) → submitting → submit → submitted,
+   * then hand to the tracker. The wallet lease is held for the duration — renewed by
+   * a heartbeat, because build+sign can outlast its TTL — and released afterwards
+   * (queue serialization continues via the job row, not the lease).
+   *
+   * Everything up to and including the `submitting` commit may fail freely — nothing
+   * has been sent, so the job re-queues or fails normally. Past that commit the job
+   * belongs to `reconcileSubmitting`.
    */
   private async executeJob(job: WalletJobRow, signer: WorkerSigner): Promise<void> {
     const { instanceId } = this.deps;
@@ -283,11 +347,12 @@ export class CardanoWalletWorker {
     const claimed = await runWithoutAmbientTx(() => cds.tx((tx) => markBuilding(tx, job.ID, attempt)));
     if (!claimed) return; // cancelled or claimed elsewhere
 
+    const heartbeat = this.leaseHeartbeat(job.walletId);
     try {
-      let txHash: string;
       let unsignedTxCbor: string | null = null;
       let signedTxCbor: string;
       let fee: string | number | null = null;
+      let buildId: string | null = null;
 
       if (job.kind === 'submitSigned') {
         const request = JSON.parse(job.request ?? '{}') as { signedTxCbor?: string };
@@ -295,7 +360,6 @@ export class CardanoWalletWorker {
           throw new BackendError('submitSigned job has no signedTxCbor in its request', 400, ERROR_CODES.INVALID_INPUT);
         }
         signedTxCbor = request.signedTxCbor;
-        txHash = await this.submitWithAlreadyKnownTolerance(signedTxCbor);
       } else {
         const rawReq = JSON.parse(job.request ?? '{}') as Record<string, unknown>;
         // The worker wallet is ALWAYS the sender/change target — callers cannot
@@ -309,48 +373,190 @@ export class CardanoWalletWorker {
         const buildReq = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, rawReq, this.deps.network as Network);
 
         // Fencing: if the lease was lost (instance stalled past the TTL, another
-        // instance may have taken over the wallet), abort BEFORE building/submitting
-        // — the orphan cleanup will fail the row once the lease is provably dead.
-        const renewed = await runWithoutAmbientTx(() => cds.tx((tx) => renewWalletLease(tx, job.walletId, instanceId)));
-        if (!renewed) {
+        // instance may have taken over the wallet), abort BEFORE building — the
+        // orphan cleanup will fail the row once the lease is provably dead.
+        if (!(await heartbeat.fence())) {
           logger.warn(`Job ${job.ID}: wallet lease for ${job.walletId} lost before build — aborting execution`);
           return;
         }
         const buildResult = await runWithoutAmbientTx(() => cds.tx((tx) => this.buildForKind(tx, job, buildReq)));
         unsignedTxCbor = buildResult.unsignedTxCbor as string;
         fee = (buildResult.fee as string | number | null) ?? null;
+        buildId = (buildResult.id as string) ?? null;
 
         signedTxCbor = signer.signTransaction(unsignedTxCbor, buildResult.txBodyHash as string);
-        txHash = await this.submitWithAlreadyKnownTolerance(signedTxCbor);
-
-        // Observability parity with the synchronous flow: record the submission row.
-        const buildId = (buildResult.id as string) ?? null;
-        await runWithoutAmbientTx(() => cds.tx((tx) =>
-          this.deps.indexer.persistTransactionSubmission(tx, { signedTxCbor, txHash, buildId }),
-        )).catch((err) => logger.warn(`Job ${job.ID}: submission bookkeeping failed (job continues):`, err));
       }
 
-      const submitted = await runWithoutAmbientTx(() => cds.tx((tx) =>
-        markSubmitted(tx, job.ID, { txHash, unsignedTxCbor, signedTxCbor, fee }),
+      // The hash comes from the signed bytes, not from the submit response, so the
+      // row can name the transaction before anyone has seen it.
+      const txHash = getTxHashFromCbor(signedTxCbor);
+
+      // Last fence before the irreversible part. Build+sign just consumed real time;
+      // if the wallet moved to another instance meanwhile, that instance is entitled
+      // to spend the same UTxOs — submitting now would race it. Nothing has been sent
+      // yet, so standing down here costs only a rebuild.
+      if (!(await heartbeat.fence())) {
+        logger.warn(`Job ${job.ID}: wallet lease for ${job.walletId} lost after signing — NOT submitting tx ${txHash}`);
+        return;
+      }
+
+      // Point of no return: commit the signed tx BEFORE it can reach a backend.
+      // A crash after this leaves a `submitting` row that reconciliation resolves;
+      // a crash before it leaves a `building` row that was provably never sent.
+      // The guard on `building` is also the second half of the fence: if a takeover
+      // already failed this row, the transition returns false and nothing is sent.
+      const stored = await runWithoutAmbientTx(() => cds.tx((tx) =>
+        markSubmitting(tx, job.ID, { txHash, unsignedTxCbor, signedTxCbor, fee }),
       ));
-      if (!submitted) {
-        logger.error(`Job ${job.ID}: submit succeeded (tx ${txHash}) but the submitted transition was fenced — tracker adopts the tx anyway`);
+      if (!stored) {
+        logger.warn(`Job ${job.ID}: submitting transition was fenced — not submitting (another executor owns this job)`);
+        return;
       }
-      logger.info(`Job ${job.ID} (wallet ${job.walletId}, kind ${job.kind}): submitted as ${txHash} (attempt ${attempt})`);
 
-      this.tracker.track({
-        jobId: job.ID,
-        walletId: job.walletId,
-        txHash,
-        signedTxCbor,
-        submittedAt: new Date().toISOString(),
-      });
+      await this.submitStoredTransaction(job, { txHash, signedTxCbor, buildId, attempt });
     } catch (err) {
       await this.handleExecutionFailure(job, attempt, err);
     } finally {
+      heartbeat.stop();
       await runWithoutAmbientTx(() => cds.tx((tx) => releaseWalletLease(tx, job.walletId, instanceId)))
         .catch(() => undefined);
     }
+  }
+
+  /**
+   * Send a transaction that is already durable in its `submitting` row and advance
+   * the job to `submitted`.
+   *
+   * A submit failure is NEVER propagated as a job failure here: a rejection from one
+   * backend does not prove the tx is absent from every mempool (failover, timeouts,
+   * a node that accepted before the connection dropped). The row simply stays
+   * `submitting` and the next tick reconciles it against the chain.
+   */
+  private async submitStoredTransaction(
+    job: WalletJobRow,
+    tx: { txHash: string; signedTxCbor: string; buildId: string | null; attempt: number },
+  ): Promise<void> {
+    let submittedHash: string;
+    try {
+      submittedHash = await this.submitWithAlreadyKnownTolerance(tx.signedTxCbor);
+    } catch (err) {
+      logger.error(`Job ${job.ID}: submit failed for tx ${tx.txHash} — job stays submitting for chain reconciliation:`, err);
+      return;
+    }
+
+    if (job.kind !== 'submitSigned') {
+      // Observability parity with the synchronous flow: record the submission row.
+      await runWithoutAmbientTx(() => cds.tx((t) =>
+        this.deps.indexer.persistTransactionSubmission(t, { signedTxCbor: tx.signedTxCbor, txHash: submittedHash, buildId: tx.buildId }),
+      )).catch((err) => logger.warn(`Job ${job.ID}: submission bookkeeping failed (job continues):`, err));
+    }
+
+    await this.adoptSubmitted(job, submittedHash, tx.signedTxCbor);
+    logger.info(`Job ${job.ID} (wallet ${job.walletId}, kind ${job.kind}): submitted as ${submittedHash} (attempt ${tx.attempt})`);
+  }
+
+  /** submitting → submitted + hand to the confirmation tracker. */
+  private async adoptSubmitted(job: WalletJobRow, txHash: string, signedTxCbor: string): Promise<void> {
+    const submitted = await runWithoutAmbientTx(() => cds.tx((tx) => markSubmitted(tx, job.ID, txHash)));
+    if (!submitted) {
+      logger.error(`Job ${job.ID}: tx ${txHash} is out there but the submitted transition was fenced — tracker adopts the tx anyway`);
+    }
+    this.tracker.track({
+      jobId: job.ID,
+      walletId: job.walletId,
+      txHash,
+      signedTxCbor,
+      submittedAt: job.submittedAt ?? new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Resolve a `submitting` job whose submit outcome is unknown (process died around
+   * the network call, or the call failed ambiguously). The stored transaction is the
+   * only one this job may ever have — it is re-submitted verbatim, never rebuilt.
+   *
+   * 1. Re-submit the same CBOR: mempool/ledger dedup makes this a no-op if it was
+   *    accepted before, so success (or "already known") simply promotes the job.
+   * 2. If that fails, ask the chain: found → the tx did make it, promote it.
+   * 3. Only when the chain proves absence AND the node rejects the tx for good (or
+   *    it has been absent past the confirmation timeout) is the job failed —
+   *    failing releases the idempotency key, so it needs that proof.
+   * Anything else leaves the row as-is; the next tick tries again.
+   *
+   * Runs under the same heartbeat-kept wallet lease as an execution: the chain
+   * lookups here are slow enough to outlive the raw TTL. Losing the lease mid-way
+   * is not dangerous (the re-submit is the same transaction, and every terminal
+   * transition is row-guarded), so it only stops further work.
+   */
+  private async reconcileSubmitting(job: WalletJobRow): Promise<void> {
+    const { instanceId } = this.deps;
+    const heartbeat = this.leaseHeartbeat(job.walletId);
+    try {
+      if (!job.signedTxCbor || !job.txHash) {
+        // Cannot happen via markSubmitting; treat as a never-sent job rather than
+        // leaving the wallet queue blocked forever.
+        logger.error(`Job ${job.ID}: submitting row without signed transaction — failing as PROCESS_RESTART`);
+        await this.failReconciled(job, JOB_ERROR_CODES.PROCESS_RESTART,
+          new Error('Job was interrupted before its signed transaction was stored.'));
+        return;
+      }
+
+      logger.warn(`Job ${job.ID}: reconciling interrupted submit of tx ${job.txHash}`);
+      let submitError: unknown;
+      try {
+        const txHash = await this.submitWithAlreadyKnownTolerance(job.signedTxCbor);
+        await this.adoptSubmitted(job, txHash, job.signedTxCbor);
+        logger.info(`Job ${job.ID}: re-submitted the original signed tx (${txHash}) — now awaiting confirmation`);
+        return;
+      } catch (err) {
+        submitError = err;
+      }
+
+      // The tx may have been rejected precisely BECAUSE it is already on-chain
+      // (its inputs are spent), so the chain — not the rejection — decides.
+      let onChain: boolean;
+      try {
+        await this.deps.client.getTransaction(job.txHash);
+        onChain = true;
+      } catch (lookupErr) {
+        if (!isNotFoundOnAllBackends(lookupErr)) {
+          logger.warn(`Job ${job.ID}: chain lookup for ${job.txHash} inconclusive — retrying next tick:`, lookupErr);
+          return;
+        }
+        onChain = false;
+      }
+
+      if (onChain) {
+        logger.info(`Job ${job.ID}: tx ${job.txHash} is on-chain despite the failed submit — awaiting confirmation`);
+        await this.adoptSubmitted(job, job.txHash, job.signedTxCbor);
+        return;
+      }
+
+      const ageMs = job.submittedAt ? Date.now() - Date.parse(job.submittedAt) : 0;
+      const expired = ageMs > this.deps.config.confirmationTimeoutMs;
+      if (isTransientJobError(submitError) && !expired) {
+        logger.warn(`Job ${job.ID}: re-submit failed transiently and tx is not on-chain — retrying next tick:`, submitError);
+        return;
+      }
+
+      // Proven absent + a rejection that will not change (or a tx that is past its
+      // mempool lifetime): no transaction of this job can reach the chain anymore,
+      // so releasing the idempotency key is safe.
+      const code = expired ? JOB_ERROR_CODES.TX_DROPPED : JOB_ERROR_CODES.SUBMIT_REJECTED;
+      logger.error(`Job ${job.ID}: tx ${job.txHash} is not on-chain and cannot be submitted (${code}) — failing:`, submitError);
+      await this.failReconciled(job, code, submitError);
+    } finally {
+      heartbeat.stop();
+      await runWithoutAmbientTx(() => cds.tx((tx) => releaseWalletLease(tx, job.walletId, instanceId)))
+        .catch(() => undefined);
+    }
+  }
+
+  private async failReconciled(job: WalletJobRow, code: string, err: unknown): Promise<void> {
+    await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+      const transitioned = await markFailed(tx, job.ID, code, err ?? new Error(code));
+      if (transitioned) await bumpWalletStats(tx, job.walletId, 'failed');
+    })).catch((persistErr) => logger.error(`Job ${job.ID}: failure persist failed:`, persistErr));
   }
 
   /** Dispatch the job kind to the matching indexer build method. */
@@ -386,6 +592,17 @@ export class CardanoWalletWorker {
   }
 
   private async handleExecutionFailure(job: WalletJobRow, attempt: number, err: unknown): Promise<void> {
+    // Only a pre-submit job may be re-queued (rebuild) or failed from here. Once the
+    // row is `submitting`, a signed tx exists that may be in a mempool: rebuilding it
+    // would double-pay and failing it would release the idempotency key on a
+    // transaction the chain has not ruled on. Those rows go to reconciliation.
+    const current = await runWithoutAmbientTx(() => cds.tx((tx) => getJobById(tx, job.ID)))
+      .catch(() => null);
+    if (current && current.status !== 'building') {
+      logger.error(`Job ${job.ID}: execution error while ${current.status} — leaving the outcome to reconciliation:`, err);
+      return;
+    }
+
     if (isTransientJobError(err) && attempt < job.maxAttempts) {
       const backoff = retryBackoffMs(attempt);
       logger.warn(`Job ${job.ID}: transient failure on attempt ${attempt}/${job.maxAttempts} — retrying in ${backoff}ms:`, err);

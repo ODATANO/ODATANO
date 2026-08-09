@@ -82,7 +82,7 @@ import cds from '@sap/cds';
 import { ConfirmationTracker } from '../../srv/blockchain/wallet-worker/confirmation-tracker';
 import { emitBlockIndexed, emitReorg } from '../../srv/blockchain/crawler/hooks';
 import {
-  insertJob, markBuilding, markSubmitted, getJobById, upsertWalletRegistration,
+  insertJob, markBuilding, markSubmitting, markSubmitted, getJobById, upsertWalletRegistration,
   JOB_ERROR_CODES,
 } from '../../srv/blockchain/wallet-worker/job-store';
 import { NotFoundError, TransactionAlreadySubmittedError } from '../../srv/utils/errors';
@@ -106,7 +106,8 @@ async function seedSubmittedJob(walletId = 'w1', txHash = TX_HASH, signedTxCbor 
   await upsertWalletRegistration(db, { walletId, signerType: 'software', address: 'addr_test1x', publicKeyHash: 'f'.repeat(56) });
   const { jobId } = await insertJob(db, { walletId, kind: 'simpleAda', request: '{}' });
   await markBuilding(db, jobId, 1);
-  await markSubmitted(db, jobId, { txHash, unsignedTxCbor: 'dead', signedTxCbor, fee: '170000' });
+  await markSubmitting(db, jobId, { txHash, unsignedTxCbor: 'dead', signedTxCbor, fee: '170000' });
+  await markSubmitted(db, jobId, txHash);
   return jobId;
 }
 

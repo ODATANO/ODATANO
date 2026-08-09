@@ -1523,6 +1523,16 @@ entity CardanoWorkerWallets {
 
 @title      : 'Cardano Wallet Jobs'
 @description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
+// Idempotency is enforced by the DATABASE, not by a read-before-insert check:
+// concurrent retries of the same key (two app instances, or two HANA sessions)
+// can both find no existing job and both insert. The unique constraint makes one
+// of them lose, and insertJob returns the winner's job to it. See `dedupKey`.
+// Generates a table UNIQUE constraint on SQLite and a UNIQUE INVERTED INDEX on HANA.
+@assert.unique.dedup: [
+    walletId,
+    kind,
+    dedupKey
+]
 entity CardanoWalletJobs {
 
         @title      : 'Job Id (Key)'
@@ -1538,12 +1548,16 @@ entity CardanoWalletJobs {
         kind           : WalletJobKind;
 
         @title      : 'Status'
-        @description: 'Job lifecycle state (pending | building | submitted | confirmed | failed | cancelled)'
+        @description: 'Job lifecycle state (pending | building | submitting | submitted | confirmed | failed | cancelled)'
         status         : WalletJobStatus default 'pending';
 
         @title      : 'Idempotency Key'
         @description: 'Optional caller-supplied dedup key — a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
         idempotencyKey : String(100);
+
+        @title      : 'Dedup Key (internal)'
+        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide — no reliance on NULL semantics, which differ across databases.'
+        dedupKey       : String(100);
 
         @title      : 'Request'
         @description: 'The build-action payload as JSON, verbatim (validated before insert; never contains key material)'
@@ -1566,7 +1580,7 @@ entity CardanoWalletJobs {
         maxAttempts    : Integer default 3;
 
         @title      : 'Transaction Hash'
-        @description: 'Hash of the submitted transaction (set when the job reaches submitted)'
+        @description: 'Hash of the signed transaction — persisted before the submit call (status submitting), so a crash mid-submit stays reconcilable'
         txHash         : Blake2b256;
 
         @title      : 'Unsigned Transaction CBOR'
@@ -1574,7 +1588,7 @@ entity CardanoWalletJobs {
         unsignedTxCbor : LargeString;
 
         @title      : 'Signed Transaction CBOR'
-        @description: 'The signed transaction as submitted — reused verbatim for rollback re-submission (never rebuilt)'
+        @description: 'The signed transaction, stored before submission — reused verbatim for crash reconciliation and rollback re-submission (never rebuilt)'
         signedTxCbor   : LargeString;
 
         @title      : 'Fee'
@@ -1582,7 +1596,7 @@ entity CardanoWalletJobs {
         fee            : Lovelace;
 
         @title      : 'Submitted At'
-        @description: 'Timestamp of mempool acceptance'
+        @description: 'Timestamp of the submission attempt (written with the signed tx, before it is sent) — the base for the confirmation timeout'
         submittedAt    : Timestamp;
 
         @title      : 'Confirmed At'

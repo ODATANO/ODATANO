@@ -133,7 +133,8 @@ type ReorgStatus      : String(12) enum {
 @description: 'Enum type for the wallet-worker job lifecycle'
 type WalletJobStatus  : String(12) enum {
     pending = 'pending'; // queued, waiting for the worker to pick it up
-    building = 'building'; // build + sign + submit in progress
+    building = 'building'; // build + sign in progress, nothing sent to the network yet
+    submitting = 'submitting'; // signed tx durably stored, submit in flight or its outcome unknown
     submitted = 'submitted'; // accepted into the mempool, awaiting confirmation
     confirmed = 'confirmed'; // on-chain at the configured confirmation depth
     failed = 'failed'; // terminal failure (see errorCode/errorMessage)

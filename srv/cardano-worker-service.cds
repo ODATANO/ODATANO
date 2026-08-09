@@ -1,7 +1,7 @@
 using {odatano.cardano as db} from '../db/schema';
 
 /**
- * Cardano Wallet Worker Service (v2.1)
+ * Cardano Wallet Worker Service (v2.0)
  *
  * Control + observability surface for the wallet worker / job engine:
  * - job submission (async build → sign → submit → confirm from server-side wallets)
@@ -11,7 +11,9 @@ using {odatano.cardano as db} from '../db/schema';
  *
  * Security note: SubmitWalletJob executes value transfers with server-held keys —
  * the service requires authentication throughout; control actions and foreign-job
- * visibility are gated behind the Admin role. Keys are NEVER accepted or exposed
+ * visibility are gated behind the Admin role. Jobs on HSM-backed wallets addition-
+ * ally require the configured hsm.requiresRole (HSM_REQUIRES_ROLE), the same gate
+ * the synchronous SignWithHsm path enforces. Keys are NEVER accepted or exposed
  * through this surface.
  */
 @requires: 'authenticated-user'
@@ -24,7 +26,8 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         { grant: 'READ', to: 'Admin' },
         { grant: 'READ', where: 'createdBy = $user' }
     ]
-    entity WalletJobs     as projection on db.CardanoWalletJobs;
+    // dedupKey is the internal backing column of the idempotency constraint.
+    entity WalletJobs     as projection on db.CardanoWalletJobs excluding { dedupKey };
 
     @readonly
     @title      : 'Worker Wallets'
