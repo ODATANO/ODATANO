@@ -77,7 +77,10 @@ payment.vkey
 
 mtx/
 app/router/default-env.json
-app/router/package-lock.json
+# app/router/package-lock.json is tracked on purpose: the module is built outside
+# the npm workspace (mbt), so its resolved tree — including the security overrides
+# that the root package.json cannot apply there — must be reproducible and visible
+# to dependency scanners, which otherwise resolve @sap/approuter's pinned versions.
 build-ubuntu.sh
 
 mta*
