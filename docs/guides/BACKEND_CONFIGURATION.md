@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ## Architecture Overview
 
@@ -99,7 +99,7 @@ If multiple historical backends are configured, they are tried in order with aut
 - If Ogmios is unavailable, historical backends handle live queries too
 - Historical backends failover: Blockfrost → Koios (in configured order)
 - If Blockfrost fails, falls back to Koios (if both configured)
-- Timeout settings: Primary 8s, Fallback 10s
+- Timeout settings: Primary 30s (`PRIMARY_TIMEOUT_MS`), Fallback 60s (`FALLBACK_TIMEOUT_MS`)
 
 ## Benefits
 

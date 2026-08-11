@@ -1,6 +1,6 @@
 # Transaction Workflow Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 This guide covers building, signing, and submitting Cardano transactions via the ODATANO API.
 
@@ -132,7 +132,13 @@ HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
 HSM_SLOT=0
 HSM_PIN=                      # Set via credential store in production
 HSM_KEY_LABEL=cardano-signing-key
+HSM_REQUIRES_ROLE=HsmSigner   # REQUIRED: startup fails without it
 ```
+
+`HSM_REQUIRES_ROLE` is mandatory whenever `HSM_ENABLED=true` — the server throws a
+`ConfigError` at startup if it is missing. It names the role a caller must hold to use
+any HSM signing path: `SignWithHsm`, `SignAndSubmitWithHsm`, and `SubmitWalletJob` for an
+HSM-backed worker wallet. Callers without it get **403 `ODATANO_FORBIDDEN`**.
 
 ### Example
 
@@ -183,7 +189,7 @@ For HSM security details, supported hardware, and SoftHSM dev setup, see [Securi
 ```
 
 ### Collateral Setup
-**Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. Returns 409 if collateral already exists, 400 if insufficient funds (< 6 ADA).
+**Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. When the address already has **at least two** UTxOs of >= 5 ADA, it returns **200** with `collateralAvailable: true` and builds nothing. Returns 400 if the address holds less than 6 ADA in total (5 ADA collateral + 1 ADA fee buffer).
 
 ---
 
@@ -271,7 +277,7 @@ Returns `scriptHash`, `scriptAddress` when applicable.
 |-----------|------|----------|-------------|
 | address | bech32 | Yes | Address to set up collateral for |
 
-Returns 200 (build), 409 (already available), or 400 (insufficient funds).
+Returns 200 — either an unsigned build, or `collateralAvailable: true` when two or more UTxOs of >= 5 ADA already exist. Returns 400 on insufficient funds (< 6 ADA total).
 
 ### SubmitTransaction
 
@@ -315,7 +321,7 @@ UTxOs not yet confirmed or spent in a pending transaction. Wait 1-2 minutes for 
 Wrong signing key or unsigned TX was modified. Verify key matches sender address, check `--testnet-magic` matches network. Re-build if needed.
 
 ### "No ADA-only UTxO available for collateral"
-Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender has at least one UTxO with >= 5 ADA.
+Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has **two or more** UTxOs of >= 5 ADA each — that is the condition under which `SetCollateral` reports `collateralAvailable: true`.
 
 ---
 

@@ -372,3 +372,93 @@ erDiagram
     Addresses ||--o{ AddressTransactions : "has"
     AddressTransactions }o--|| Transactions : "references"
 ```
+
+## v2.0 entities — chain crawler and wallet worker
+
+Four entities were added in 2.0. They are standalone: the crawler writes into the existing
+`Blocks`/`Transactions` graph above but keeps its own cursor, and the worker's tables reference
+wallets and jobs only, never the chain entities.
+
+```mermaid
+erDiagram
+    CardanoSyncState {
+        uuid ID PK "🔑 singleton"
+        string network
+        int64 startSlot
+        string startBlockHash
+        int64 lastSlot
+        string lastBlockHash
+        int64 lastHeight
+        int64 tipSlot
+        int64 tipHeight
+        string syncStatus "stopped|syncing|synced|error|reindexing|completed"
+        string lastError
+        int consecutiveErrors
+        boolean desiredRunning "cluster-wide pause/resume intent"
+        string leaseOwner "one crawler per deployment"
+        datetime leaseUntil
+        datetime lastIndexedAt
+    }
+
+    CardanoReorgLog {
+        uuid ID PK "🔑"
+        datetime detectedAt
+        int64 forkSlot
+        int64 forkHeight
+        string oldTipHash
+        string newTipHash
+        int blocksRolledBack
+        string status
+    }
+
+    CardanoWorkerWallets {
+        string walletId PK "🔑"
+        string signerType "hsm|software — key material NEVER stored here"
+        string address
+        string publicKeyHash
+        boolean enabled
+        string leaseOwner "one executor per wallet"
+        datetime leaseUntil
+        datetime lastJobAt
+        int64 jobsConfirmed
+        int64 jobsFailed
+    }
+
+    CardanoWalletJobs {
+        uuid ID PK "🔑"
+        string walletId FK "🔗"
+        string kind "simpleAda|metadata|multiAsset|mint|plutusSpend|submitSigned"
+        string status "pending|building|submitting|submitted|confirmed|failed|cancelled"
+        string idempotencyKey "caller-supplied, kept for audit"
+        string dedupKey "UNIQUE(walletId,kind,dedupKey) — the key while owned, else the job ID"
+        string request "Build* payload as JSON"
+        int priority
+        datetime notBefore
+        int attempt
+        int maxAttempts
+        string txHash "written BEFORE submit, with the signed CBOR"
+        string unsignedTxCbor
+        string signedTxCbor "re-sent verbatim on reorg/reconcile — never rebuilt"
+        decimal fee
+        datetime submittedAt
+        datetime confirmedAt
+        int64 confirmedSlot
+        int64 confirmedHeight
+        string errorCode
+        string errorMessage
+        datetime createdAt
+        string createdBy "req.user.id — row-level visibility"
+        datetime finishedAt
+    }
+
+    CardanoWorkerWallets ||--o{ CardanoWalletJobs : "executes"
+```
+
+Two constraints in this model carry the payment-safety guarantees and are easy to miss:
+
+- **`dedupKey` with `UNIQUE(walletId, kind, dedupKey)`** is what makes idempotency atomic. It holds
+  the caller's `idempotencyKey` while the job owns it, and the job's own ID otherwise — so keyless
+  jobs never contend and terminal jobs release the key without relying on NULL semantics.
+- **`status = submitting`** is the durable pre-submit state: `txHash` and `signedTxCbor` are written
+  before the transaction can reach a backend, and the row stays non-terminal so it keeps holding the
+  idempotency key. A crash there is reconciled against the chain, not failed.

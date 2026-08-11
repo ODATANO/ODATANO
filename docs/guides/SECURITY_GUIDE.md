@@ -1,6 +1,6 @@
 # ODATANO Security & Authentication Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ---
 
@@ -45,7 +45,9 @@ Layer 7: Audit Trail (SigningRequests + SignatureVerifications + TransactionSubm
 |---------|---------|--------------|
 | `CardanoODataService` | Read-only blockchain queries | Low — no state mutation |
 | `CardanoTransactionService` | Transaction building, signing, submission | Medium — involves funds movement preparation |
-| `CardanoSignService` | Transaction signing | High — involves private key operations |
+| `CardanoSignService` | Transaction signing | High — involves private key operations (HSM) |
+| `CardanoIndexerService` | Chain crawler control + read-only cursor/reorg audit | Low read, Medium control — `pauseCrawler`/`resumeCrawler` are Admin-gated |
+| `CardanoWorkerService` | Asynchronous wallet jobs (build → sign → submit) | **Highest** — spends server-held wallets autonomously; HSM wallets additionally require `hsm.requiresRole` |
 
 This enables independent security policies per service.
 
@@ -80,7 +82,8 @@ ODATANO uses SAP BTP's XSUAA for production authentication. In development, auth
   "scopes": [
     { "name": "$XSAPPNAME.Read", "description": "Read Cardano blockchain data" },
     { "name": "$XSAPPNAME.Transact", "description": "Build and submit Cardano transactions" },
-    { "name": "$XSAPPNAME.Sign", "description": "Sign transactions and manage HSM" }
+    { "name": "$XSAPPNAME.Sign", "description": "Sign transactions and manage HSM" },
+    { "name": "$XSAPPNAME.Admin", "description": "Operate the chain crawler and wallet worker" }
   ],
   "role-templates": [
     {
@@ -90,13 +93,24 @@ ODATANO uses SAP BTP's XSUAA for production authentication. In development, auth
     },
     {
       "name": "CardanoUser",
-      "description": "Full access to Cardano services",
+      "description": "Read, build/submit and sign Cardano transactions (no operational admin)",
       "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
+    },
+    {
+      "name": "CardanoAdmin",
+      "description": "Operate the ODATANO chain crawler and wallet worker",
+      "scope-references": ["$XSAPPNAME.Admin"]
     }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
 ```
+
+`Admin` is deliberately **outside** `CardanoUser` and outside `authorities`: the crawler/worker
+control actions are least-privilege by design, so an operator must be granted `CardanoAdmin`
+explicitly. Omitting the scope or the template — as earlier revisions of this guide did — leaves
+`pauseCrawler` / `resumeCrawler` / `PauseWorker` / `ResumeWorker` unassignable and therefore 403
+for everyone.
 
 ### Setup on BTP
 
@@ -113,7 +127,7 @@ SAP CAP provides declarative authorization via `@requires` annotations in CDS.
 
 ### CDS Annotations
 
-All four services (CardanoODataService, CardanoTransactionService, CardanoSignService, CardanoIndexerService) require an authenticated user at the service level — note the crawler control actions (pauseCrawler/resumeCrawler on CardanoIndexerService) are state-changing operational endpoints and belong in any role-gating review:
+All five services (CardanoODataService, CardanoTransactionService, CardanoSignService, CardanoIndexerService, CardanoWorkerService) require an authenticated user at the service level. The state-changing operational actions ARE role-gated: `pauseCrawler` / `resumeCrawler` and `PauseWorker` / `ResumeWorker` carry `@requires: 'Admin'`, and foreign-job visibility on `WalletJobs` is restricted to Admin. Two further gates worth knowing: `VerifyDataSignature` is deliberately `@requires: 'any'` (unauthenticated — it backs wallet login), and `SubmitWalletJob` against an HSM-backed wallet additionally requires the configured `hsm.requiresRole`:
 
 ```cds
 @requires: 'authenticated-user'
@@ -123,17 +137,56 @@ service CardanoODataService { ... }
 service CardanoTransactionService { ... }
 
 @requires: 'authenticated-user'
-service CardanoSignService { ... }
+service CardanoSignService {
+    // Deliberately public — backs CIP-8/COSE wallet login, which happens
+    // BEFORE a user has a session. The only unauthenticated endpoint.
+    @requires: 'any'
+    action VerifyDataSignature(...) returns SignatureVerificationResult;
+}
+
+@requires: 'authenticated-user'
+service CardanoIndexerService {
+    @readonly entity SyncState as projection on db.CardanoSyncState;
+    @readonly entity ReorgLog  as projection on db.CardanoReorgLog;
+
+    function getStatus() returns CrawlerStatus;          // read-only, any authenticated user
+
+    @requires: 'Admin'
+    action pauseCrawler()  returns Boolean;
+    @requires: 'Admin'
+    action resumeCrawler() returns Boolean;
+}
+
+@requires: 'authenticated-user'
+service CardanoWorkerService {
+    // Non-admins see their OWN jobs only; a foreign job answers 404, not 403,
+    // so the surface is not an existence oracle.
+    @readonly
+    @restrict: [
+        { grant: 'READ', to: 'Admin' },
+        { grant: 'READ', where: 'createdBy = $user' }
+    ]
+    entity WalletJobs as projection on db.CardanoWalletJobs excluding { dedupKey };
+
+    action SubmitWalletJob(...) returns JobSubmissionResult;   // + hsm.requiresRole for HSM wallets
+    action CancelJob(...)       returns Boolean;
+
+    @requires: 'Admin'
+    action PauseWorker()  returns Boolean;
+    @requires: 'Admin'
+    action ResumeWorker() returns Boolean;
+}
 ```
 
-The `@requires: 'authenticated-user'` annotation ensures that every request must carry a valid JWT. The scopes (`Read`, `Transact`, `Sign`) in `xs-security.json` can be used for AppRouter-level route protection if needed.
+The `@requires: 'authenticated-user'` annotation ensures that every request must carry a valid JWT. Beyond that, three gates are enforced **inside CDS/handlers**, not at the router: the `Admin` role on the four control actions, row-level `createdBy = $user` on `WalletJobs`, and the configured `hsm.requiresRole` on every HSM signing path — including `SubmitWalletJob` for an HSM-backed wallet, which returns **403 `ODATANO_FORBIDDEN`** without it. The `Read`/`Transact`/`Sign` scopes in `xs-security.json` may additionally be used for AppRouter-level route protection, but they are not what enforces the above.
 
 ### BTP Role Collections
 
 | Role Collection | Role Template | Intended Users |
 |-----------------|---------------|----------------|
 | ODATANO Reader | CardanoReader | Analysts, dashboards, monitoring |
-| ODATANO User | CardanoUser | Application backends, dApp frontends, operators |
+| ODATANO User | CardanoUser | Application backends, dApp frontends |
+| ODATANO Admin | CardanoAdmin | Operators who pause/resume the crawler and the wallet worker |
 
 Create role collections in the SAP BTP Cockpit and assign them to users.
 
@@ -218,7 +271,7 @@ Rotate keys every 90 days. With multi-backend failover, rotate without downtime:
 
 ## Transaction Signing Security
 
-This is the most critical security boundary. **Private keys NEVER touch the server.**
+This is the most critical security boundary. **For the external signing flow, private keys NEVER touch the server.** Two server-side signing paths exist by design and are opt-in: HSM signing (the key never leaves the PKCS#11 module) and the wallet worker's `software` signer (an operator-supplied Ed25519 key read from the env var named in `keyEnv`, held in memory only, never persisted and never exposed through OData).
 
 ### External Signing Architecture
 
@@ -248,6 +301,7 @@ HSM_PKCS11_MODULE=/usr/lib/pkcs11/yubihsm_pkcs11.so
 HSM_SLOT=0
 HSM_PIN=                      # Set via credential store in production
 HSM_KEY_LABEL=cardano-signing-key
+HSM_REQUIRES_ROLE=HsmSigner       # REQUIRED when HSM_ENABLED=true — startup throws ConfigError without it
 HSM_KEY_ID=0x0001
 ```
 **Security properties:** Key generated inside HSM with `CKA_EXTRACTABLE=false`, signing via `CKM_EDDSA` (Ed25519), PIN-based session auth. HSM failure is non-fatal — app starts without HSM, other signing methods still work.

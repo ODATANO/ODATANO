@@ -1,6 +1,6 @@
 # Lazy On-Demand Indexing (Architecture Concept)
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
 
@@ -44,6 +44,32 @@ Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by
 - **AddressSigningRequests / AddressTransactionBuilds / AddressTransactions** (M3): Address association entities
 
 See `db/schema.cds` for full entity definitions.
+
+## v2.0: pre-sync alongside lazy indexing
+
+Lazy indexing stays the default and is unchanged. v2.0 adds an **opt-in chain crawler** that fills
+the same tables *ahead* of the request instead of on a cache miss:
+
+| | Lazy indexing | Crawler pre-sync (v2.0) |
+|---|---|---|
+| Trigger | cache miss on a read | continuous, from a configured start block |
+| Scope | the single entity asked for | every block + its transactions, inputs/outputs/assets/metadata |
+| Freshness rule | TTL on temporal entities | none — the crawled range is **authoritative** |
+| Write path | `CardanoIndexer.index*` per entity | `CardanoIndexer.indexBlockFull` (one UPSERT per table per block, atomic) |
+
+The two coexist by design. Crawled entities (`Blocks`, `Transactions` and children) are
+**non-temporal**, so nothing expires them and the lazy path simply finds them present; gaps outside
+the crawled range are still filled on demand.
+
+**Cursor and reorgs.** `CardanoSyncState` is a singleton cursor (last slot/hash/height, tip,
+`syncStatus`, error streak) guarded by a DB lease, so exactly one instance crawls per deployment.
+A rollback deletes everything after the fork point in one transaction, rewinds the cursor and writes
+a `CardanoReorgLog` row. Two sources: Ogmios chain-sync (native `rollBackward`) and Blockfrost/Koios
+pagination (parent-hash comparison). Enable with `CRAWLER_ENABLED=true` plus a start point; see the
+[User Guide](../guides/USER_GUIDE.md).
+
+**Consequence for consumers:** within the pre-synced range, reads never touch a backend — that is
+the point of the feature, and the reason the range carries no TTL.
 
 ## Configuration
 

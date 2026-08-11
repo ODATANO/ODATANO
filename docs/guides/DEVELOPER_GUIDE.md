@@ -1,6 +1,6 @@
 # ODATANO Developer Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ---
 
@@ -28,16 +28,23 @@
 
 **13 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
 
-**8 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
+**9 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
+
+**Crawler control (CardanoIndexerService):** `getStatus` (function) + `pauseCrawler` / `resumeCrawler` (actions, Admin)
+
+**Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
+
+> OData **functions** (`getStatus`, `GetJobStatus`, `GetWorkerStatus`) are invoked with HTTP **GET** and their parameters in the URL — `GET .../GetJobStatus(jobId=<uuid>)`. POSTing to them returns 405.
 
 ### Layered Architecture
 
 ```
-HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts / cardano-sign-service.ts)
+HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts / cardano-sign-service.ts /
+                             cardano-indexer-service.ts / cardano-worker-service.ts)
     ↓
 App Context (server.ts: getCardanoIndexer(), getCardanoClient())
     ↓
-CardanoIndexer + CardanoTransactionBuilder
+CardanoIndexer + CardanoTransactionBuilder + CardanoCrawler (crawler/) + CardanoWalletWorker (wallet-worker/)
     ↓
 CardanoClient (Multi-Backend Orchestrator)
     ↓
@@ -78,7 +85,8 @@ cp .env.example .env
 # Development (TypeScript, live reload)
 npm run cds:watch
 
-# Production (compiles TypeScript → JavaScript)
+# Production (build first — `start` does NOT compile)
+npm run build
 npm start
 
 # Testing
@@ -89,7 +97,7 @@ npm run test:coverage # Coverage report
 **Development vs Production:**
 
 - **`npm run cds:watch`** - Development mode using `ts-node`, runs TypeScript directly, auto-reloads on changes
-- **`npm start`** - Production mode, compiles TypeScript to JavaScript (`.js` files gitignored), optimized for deployment
+- **`npm start`** - Runs `cds-serve` against the **already compiled** output. It does not compile: run `npm run build` (or `npm run build:plugin`) first; the emitted `.js` files are gitignored
 
 ### Key Files
 
@@ -102,6 +110,8 @@ srv/
   cardano-tx-service.ts         # Transaction handler implementations (build, submit)
   cardano-sign-service.cds      # Signing service definitions (signing requests, verification)
   cardano-sign-service.ts       # Signing handler implementations
+  cardano-indexer-service.{cds,ts}  # Crawler control surface (v2.0)
+  cardano-worker-service.{cds,ts}   # Wallet job control surface (v2.0)
   blockchain/
     cardano-client.ts           # Multi-backend orchestrator
     cardano-indexer.ts          # Lazy indexing & caching
@@ -116,17 +126,32 @@ srv/
     signing/                    # M3 External Signing
       external-signer.ts        # Signing request creation & workflow
       signature-verifier.ts     # Cryptographic signature verification
+      hsm-signer.ts             # PKCS#11 signing (key never leaves the module)
+      cose-verifier.ts          # CIP-8/COSE data signatures (wallet login)
+      submission-finalizer.ts   # Shared submit + bookkeeping, incl. deferred submit
+    crawler/                    # v2.0 chain crawler / pre-sync
+      crawler.ts                # Engine: chain-sync + pagination, reorg handling
+      sync-state.ts             # Cursor singleton + DB lease
+      hooks.ts                  # blockIndexed / reorg listeners
+    wallet-worker/              # v2.0 async wallet job engine
+      wallet-worker.ts          # Dispatch loop, build -> sign -> submit
+      job-store.ts              # Job state machine + idempotency + leases
+      signers.ts                # hsm / software WorkerSigner
+      lease-heartbeat.ts        # Keeps the per-wallet lease alive during execution
+      confirmation-tracker.ts   # Depth tracking + rollback re-submit
+      build-request.ts          # Job payload -> TxBuildRequest
   utils/
     validators.ts               # Input validation (10+ functions)
-    errors.ts                   # Error hierarchy (11 classes)
+    errors.ts                   # Error hierarchy (14 classes)
+    error-codes.ts              # ODATANO_* error-code contract
     mappers.ts                  # API → OData transformations
     tx-build-helper.ts          # Transaction utilities (M2)
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds                   # 33 entities with temporal support
+db/schema.cds                   # 35 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
-test/                           # 35 test suites (25 unit + 10 integration)
+test/                           # 43 unit + 12 integration test files (vitest)
 ```
 ---
 
@@ -144,7 +169,7 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 3. src/plugin.ts registers the 'odatano-core' service kind
 4. cds.on('served') → src/index.ts initialize() → srv/server.ts initializeFromConfig()
 5. CDS models from db/schema.cds and srv/*.cds are merged into the consumer's model
-6. Both OData services become available automatically
+6. All five OData services become available automatically
 ```
 
 ### Plugin File Structure
@@ -162,11 +187,15 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── cardano-tx-service.js    # Compiled handler
 │   ├── cardano-sign-service.cds # CardanoSignService definition
 │   ├── cardano-sign-service.js  # Compiled handler
+│   ├── cardano-indexer-service.cds # CardanoIndexerService definition (v2.0)
+│   ├── cardano-indexer-service.js  # Compiled handler
+│   ├── cardano-worker-service.cds  # CardanoWorkerService definition (v2.0)
+│   ├── cardano-worker-service.js   # Compiled handler
 │   ├── server.js                # AppContext, loadConfigFromEnv()
-│   ├── blockchain/              # Backends, indexer, tx builder, signing
+│   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
 │   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds               # 33 entities (namespace: odatano.cardano)
+│   └── schema.cds               # 35 entities (namespace: odatano.cardano)
 └── config/                      # Network genesis configurations
 ```
 
@@ -635,14 +664,14 @@ describe('CardanoODataService', () => {
         expect(data.fee).toBeDefined();
     });
 
+    // `fail()` is a Jest/Jasmine global and does NOT exist in vitest — assert on
+    // the rejection instead, which also keeps the failure message useful.
     test('GetTransactionByHash - invalid hash', async () => {
-        try {
-            await POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: 'invalid' });
-            fail('Should have thrown error');
-        } catch (error) {
-            expect(error.response.data.error.message).toContain('Invalid');
-            expect(error.response.status).toBe(400);
-        }
+        await expect(
+            POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: 'invalid' })
+        ).rejects.toMatchObject({
+            response: { status: 400, data: { error: { message: expect.stringContaining('Invalid') } } },
+        });
     });
 });
 ```

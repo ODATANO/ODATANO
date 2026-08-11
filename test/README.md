@@ -6,16 +6,16 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 1549 (1545 passed, 4 skipped)
-- **Total Test Suites**: 35 (25 unit + 10 integration)
-- **Statement Coverage**: 96.58%
+- **Total Tests**: see `npm run test:unit` / `test:integration` — the suite grew with the v2.0 crawler and wallet worker; per-file counts below are indicative, not authoritative
+- **Total Test Suites**: 55 test files (43 unit + 12 integration)
+- **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%
 - **Function Coverage**: 97.68%
 - **Line Coverage**: 97.26%
 - **Networks**: Cardano Preview testnet
 - **Backends**: Blockfrost, Koios, Ogmios
 - **TX Builder**: Buildooor (sole builder; CSL was removed in v1.8.0)
-- **Milestones Covered**: M1 (Read), M2 (Transaction Build), M3 (External Signing + Plutus Smart Contracts)
+- **Milestones Covered**: M1 (Read), M2 (Transaction Build), M3 (External Signing + Plutus Smart Contracts), v2.0 (chain crawler / pre-sync, wallet worker)
 
 ---
 
@@ -522,8 +522,8 @@ npm test -- test/integration/tx.buildooor.test.ts
 
 ## Prerequisites
 
-- **Node.js** 20+ (or 22+)
-- **SQLite** (automatically used by CAP/Jest)
+- **Node.js** >= 22.5 (engines floor; `node:sqlite` via @cap-js/sqlite v3)
+- **SQLite** (automatically used by CAP/vitest)
 - **For Blockfrost tests**: `BLOCKFROST_KEY` environment variable
 - **For Koios tests**: No additional variables needed (URL auto-configured)
 - **For Ogmios tests**: Running Ogmios instance at `OGMIOS_URL`
@@ -560,6 +560,6 @@ const FIXTURE = {
 Tests run automatically on:
 - Push to `main` branch
 - Pull requests
-- Node.js 20.x and 22.x matrix
+- Node.js 22.x and 24.x matrix
 
 See [.github/workflows/test.yaml](../.github/workflows/test.yaml) for configuration.

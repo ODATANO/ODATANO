@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ---
 
@@ -278,7 +278,7 @@ GET /Transactions?$expand=inputs,outputs
 {"error": {"code": "503", "message": "Provider service unavailable"}}
 ```
 
-**Fix:** Wait and retry (automatic failover to Koios after 8s timeout)
+**Fix:** Wait and retry (automatic failover after `PRIMARY_TIMEOUT_MS`, default 30s)
 
 ---
 
@@ -287,7 +287,7 @@ GET /Transactions?$expand=inputs,outputs
 ### Q: How long are results cached?
 
 **A:** 
-- **Temporal entities** (Addresses, Accounts): Configurable via `INDEX_TTL_MS` (default: 60s)
+- **Temporal entities** (Addresses, Accounts): Configurable via `INDEX_TTL_MS` (default: 3600000 ms = 1 hour)
 - **Non-temporal entities** (Transactions, Blocks): Permanent storage
 
 📚 See [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) for details
@@ -298,7 +298,7 @@ GET /Transactions?$expand=inputs,outputs
 - **Blockfrost:** Primary provider, faster (250-500 req/sec), requires API key
 - **Koios:** Fallback provider, free (10 req/sec), no API key needed
 
-Service tries Blockfrost first (8s timeout), then Koios (8s timeout)
+Service tries the first configured backend (`PRIMARY_TIMEOUT_MS`, default 30s), then the next (`FALLBACK_TIMEOUT_MS`, default 60s)
 
 ### Q: Can I query mainnet?
 
@@ -312,7 +312,7 @@ Supported: `mainnet`, `preview`, `preprod`
 1. **First request:** 1-5 seconds (fetches from blockchain)
 2. **Cached:** Instant (from database)
 3. **Temporal data expired:** Re-fetches (check `INDEX_TTL_MS`)
-4. **Provider timeout:** Up to 16s (8s per backend)
+4. **Provider timeout:** up to 30s primary + 60s fallback (`PRIMARY_TIMEOUT_MS` / `FALLBACK_TIMEOUT_MS`)
 
 **Note:** Transactions are cached permanently after first fetch
 
@@ -616,6 +616,23 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ---
 
+## Upgrading from 1.x to 2.0
+
+Three things are required, in this order:
+
+1. **CAP 10 and Node >= 22.5** — `@odatano/core@2` declares `@sap/cds >=10` as a peer dependency;
+   a CAP 9 host cannot load it.
+2. **Run `cds deploy`.** 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`,
+   `CardanoWorkerWallets`, `CardanoWalletJobs`) and a `dedupKey` column with a unique constraint.
+   Skip this and the new services answer `no such table`, while `getStatus` / `GetWorkerStatus`
+   return 500 — the pre-existing services keep working, so the omission is easy to miss.
+3. **Adapt numeric parsing.** CAP 10 serializes `Decimal`, `Int64` and `$count` as JSON **strings**.
+
+The crawler and the wallet worker are **off by default**; an upgraded deployment behaves exactly as
+before until you enable them.
+
+---
+
 ## Chain Crawler / Pre-Sync (v2.0, opt-in)
 
 By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2.0 adds an optional **crawler** that pre-syncs `Blocks` and `Transactions` (+ inputs/outputs/assets/metadata) forward from a configured start block, so subsequent queries hit local data instead of a backend per request.
@@ -639,7 +656,7 @@ The crawler starts automatically on server boot and resumes from its cursor afte
 ```http
 GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, tip, syncStatus, errors
 GET  /odata/v4/cardano-indexer/ReorgLog         # audit of handled rollbacks
-POST /odata/v4/cardano-indexer/getStatus        # live run state summary
+GET  /odata/v4/cardano-indexer/getStatus()      # live run state summary (function -> GET)
 POST /odata/v4/cardano-indexer/pauseCrawler
 POST /odata/v4/cardano-indexer/resumeCrawler
 ```
@@ -688,9 +705,9 @@ Content-Type: application/json
 `requestJson` carries the **same payload shape as the corresponding Build\* action** of the transaction service (e.g. `assetsJson`, `mintActionsJson`, `metadataJson`, the Plutus-spend fields); `senderAddress`/`changeAddress` are overridden with the wallet's address. The response returns a `jobId` immediately.
 
 ```http
-POST /odata/v4/cardano-worker/GetJobStatus     # { "jobId": "..." } → status, txHash, fee, error
+GET  /odata/v4/cardano-worker/GetJobStatus(jobId=<uuid>)   # function -> GET, param in the URL
 POST /odata/v4/cardano-worker/CancelJob        # pending jobs only
-POST /odata/v4/cardano-worker/GetWorkerStatus  # running, wallets, executing, pendingJobs
+GET  /odata/v4/cardano-worker/GetWorkerStatus()            # running, wallets, executing, awaitingConfirmation, pendingJobs
 POST /odata/v4/cardano-worker/PauseWorker      # Admin scope
 POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
 ```
@@ -712,7 +729,7 @@ POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 35 test suites (25 unit + 10 integration), 96.58% statement coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 43 unit + 12 integration test files (vitest)
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
