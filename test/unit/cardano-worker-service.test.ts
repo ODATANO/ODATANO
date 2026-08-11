@@ -246,10 +246,14 @@ describe('CardanoWorkerService job access control', () => {
   it('GetJobStatus hides a foreign job behind the same 404 as a missing one', async () => {
     const handlers = boot();
 
+    // Assert the STATUS, not the mechanism: these run inside handleRequest, whose
+    // catch remaps anything that is not a BackendError to 500 — which is exactly
+    // how the real 404 was broken before the integration test caught it.
     jobStoreMock.getJobById.mockResolvedValue({ ...OWN_JOB, createdBy: 'bob' });
-    const foreign = makeReq([], { jobId: 'job-1' });
-    await expect(handlers.GetJobStatus(foreign)).rejects.toThrow(/not found/);
-    expect(foreign.reject).toHaveBeenCalledWith(404, expect.stringContaining('job-1'));
+    await expect(handlers.GetJobStatus(makeReq([], { jobId: 'job-1' }))).rejects.toMatchObject({
+      statusCode: 404,
+      message: expect.stringContaining('job-1'),
+    });
 
     jobStoreMock.getJobById.mockResolvedValue(null);
     await expect(handlers.GetJobStatus(makeReq([], { jobId: 'job-1' }))).rejects.toThrow(/not found/);

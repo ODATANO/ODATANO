@@ -1,6 +1,6 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
-import { BackendError, rejectInvalid } from './utils/errors';
+import { BackendError, NotFoundError, rejectInvalid } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
 import { validateJsonWithLimits } from './utils/validators';
 import {
@@ -149,7 +149,10 @@ module.exports = (srv: cds.Service) => {
       const job = await getJobById(db, jobId);
       if (!job || (!isAdmin(req) && job.createdBy !== req.user?.id)) {
         // Same 404 for "not found" and "not yours" — no existence oracle.
-        return req.reject(404, `Job ${jobId} not found`);
+        // THROW, don't req.reject: we are inside handleRequest, whose catch would
+        // see a plain CAP error and remap it to 500 (mapError). A BackendError
+        // carries its status through.
+        throw new NotFoundError(`Job ${jobId}`);
       }
       const cancelled = await markCancelled(db, jobId);
       if (!cancelled) {
@@ -168,7 +171,7 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const job = await getJobById(db, jobId);
       if (!job || (!isAdmin(req) && job.createdBy !== req.user?.id)) {
-        return req.reject(404, `Job ${jobId} not found`);
+        throw new NotFoundError(`Job ${jobId}`); // see CancelJob: reject() here becomes a 500
       }
       return toJobStatus(job);
     });
