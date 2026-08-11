@@ -135,6 +135,38 @@ describe('sync-state: cluster lease', () => {
     expect(isCrawlerLeaseActive(await readCursor(db as never), now)).toBe(true);
   });
 
+  it('an errored release keeps the cluster runnable — a restart must resume', async () => {
+    // The regression this guards: a dropped chain-sync socket (node restart,
+    // provider blip) used to clear desiredRunning, which no restart undoes. The
+    // pre-sync then stayed silently down until someone called resumeCrawler.
+    const { db, state } = stateDb({ ...base, leaseOwner: 'owner-a', leaseUntil: '2099-01-01T00:00:00.000Z' });
+
+    await releaseCrawlerLease(db as never, 'owner-a', 'error');
+
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: true, leaseOwner: null });
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', new Date(), 15_000)).resolves.toBe(true);
+  });
+
+  it('latches the cluster only when the caller says the failure is unrecoverable', async () => {
+    const { db, state } = stateDb({ ...base, leaseOwner: 'owner-a', leaseUntil: '2099-01-01T00:00:00.000Z' });
+
+    await releaseCrawlerLease(db as never, 'owner-a', 'error', true);
+
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: false });
+    // …and stays down across restarts until an operator resumes.
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', new Date(), 15_000)).resolves.toBe(false);
+  });
+
+  it('setSyncStatus latches only on request (no lease held path)', async () => {
+    const { db, state } = stateDb(base);
+
+    await setSyncStatus(db as never, 'error');
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: true });
+
+    await setSyncStatus(db as never, 'error', true);
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: false });
+  });
+
   it('shared pause prevents acquisition immediately', async () => {
     const { db, state } = stateDb(base);
     await setCrawlerDesiredRunning(db as never, false);

@@ -107,7 +107,7 @@ async function openStream(cbOverrides: Partial<ChainSyncCallbacks> = {}, timeout
     onError: async (err) => { errors.push(err); },
     ...cbOverrides,
   };
-  const handle = await backend.openChainSync({ slot: 4000, hash: 'e'.repeat(64) }, callbacks);
+  const handle = await backend.openChainSync([{ slot: 4000, hash: 'e'.repeat(64) }], callbacks);
   return { backend, handle, rolled, rolledBack, errors };
 }
 
@@ -141,6 +141,23 @@ describe('OgmiosBackend.openChainSync', () => {
     const backend = new OgmiosBackend(NETWORK, 5000, OGMIOS_URL);
     await backend.openChainSync('origin', { rollForward: async () => {}, rollBackward: async () => {} });
     expect(captured.points).toEqual(['origin']);
+  });
+
+  it('forwards every candidate intersection point, newest first', async () => {
+    // The ladder is what lets the node intersect at the last common block after a
+    // reorg we slept through, instead of failing the stream outright.
+    const backend = new OgmiosBackend(NETWORK, 5000, OGMIOS_URL);
+    await backend.openChainSync([
+      { slot: 4000, hash: 'a'.repeat(64) },
+      { slot: 3999, hash: 'b'.repeat(64) },
+      { slot: 3996, hash: 'c'.repeat(64) },
+    ], { rollForward: async () => {}, rollBackward: async () => {} });
+
+    expect(captured.points).toEqual([
+      { slot: 4000, id: 'a'.repeat(64) },
+      { slot: 3999, id: 'b'.repeat(64) },
+      { slot: 3996, id: 'c'.repeat(64) },
+    ]);
   });
 
   it('maps a praos block to BlockData + Transactions and requests the next block', async () => {

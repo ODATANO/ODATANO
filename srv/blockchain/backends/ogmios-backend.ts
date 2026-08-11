@@ -863,7 +863,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
    *  - Per-tx `size` and `deposit` are not surfaced by chain-sync (set 0).
    *  - Output `referenceScriptHash` is not derived from the inline script yet.
    */
-  async openChainSync(from: ChainPoint | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle> {
+  async openChainSync(from: ChainPoint[] | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle> {
     OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
     const url = new URL(this.ogmiosUrl);
     const connection = {
@@ -957,7 +957,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
         createChainSynchronizationClient(context, handlers, { sequential: true }),
         'chainSync/createClient'
       );
-      const points = from === 'origin' ? ['origin'] : [{ slot: from.slot, id: from.hash }];
+      // Ogmios intersects at the FIRST of these still on its chain, so ancestors
+      // turn a fork we slept through into a rollBackward instead of a hard failure.
+      const points = from === 'origin' ? ['origin'] : from.map((p) => ({ slot: p.slot, id: p.hash }));
       await this.withInitTimeout(
         client.resume(points as Parameters<typeof client.resume>[0], 1),
         'chainSync/resume'

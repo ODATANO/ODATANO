@@ -101,6 +101,8 @@ export class CardanoCrawler {
   private readonly inFlightCallbacks = new Set<Promise<unknown>>();
   private haltPromise: Promise<void> | null = null;
   private finalStatus: CrawlSyncStatusValue = 'stopped';
+  /** Set only by an unrecoverable halt — clears desiredRunning so restarts stay down. */
+  private latchOnHalt = false;
   private leaseHeld = false;
   private leaseHeartbeat: Promise<void> | null = null;
   private leaseWake: (() => void) | null = null;
@@ -182,15 +184,23 @@ export class CardanoCrawler {
    * pipeline (persistBlock failure, stream onError), where awaiting the pipeline
    * would deadlock.
    */
-  private async halt(finalStatus: CrawlSyncStatusValue = 'stopped'): Promise<void> {
-    this.beginHalt(finalStatus);
+  /**
+   * @param latch clears `desiredRunning`, so NO restart brings the crawler back —
+   *   only an operator's resumeCrawler does. Reserved for failures a restart cannot
+   *   fix (misconfiguration, missing resume point). Runtime failures — a dropped
+   *   chain-sync socket, a provider outage, a node restart — must leave it false,
+   *   otherwise a routine node restart silently disables the pre-sync for good.
+   */
+  private async halt(finalStatus: CrawlSyncStatusValue = 'stopped', latch = false): Promise<void> {
+    this.beginHalt(finalStatus, latch);
   }
 
   /**
    * Start teardown without awaiting it. Internal callers can therefore halt from
    * inside a tracked callback/pipeline without waiting on their own promise.
    */
-  private beginHalt(finalStatus: CrawlSyncStatusValue): void {
+  private beginHalt(finalStatus: CrawlSyncStatusValue, latch = false): void {
+    if (latch) this.latchOnHalt = true;
     // Once a real failure was observed, a concurrent shutdown must not hide it.
     if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
@@ -217,10 +227,10 @@ export class CardanoCrawler {
 
       try {
         if (this.leaseOwner && this.leaseHeld) {
-          await cds.tx((tx) => releaseCrawlerLease(tx, this.leaseOwner!, this.finalStatus));
+          await cds.tx((tx) => releaseCrawlerLease(tx, this.leaseOwner!, this.finalStatus, this.latchOnHalt));
           this.leaseHeld = false;
         } else if (!this.leaseOwner) {
-          await cds.tx((tx) => setSyncStatus(tx, this.finalStatus));
+          await cds.tx((tx) => setSyncStatus(tx, this.finalStatus, this.latchOnHalt));
         }
       } catch { /* best effort during teardown */ }
     });
@@ -236,7 +246,7 @@ export class CardanoCrawler {
       // 'ogmios' means chain-sync ONLY — never silently degrade to the weaker
       // pagination reorg handling the operator explicitly opted out of.
       logger.error("Crawler source is 'ogmios' but no chain-sync backend is available — crawler not started (use source 'auto' to allow pagination fallback).");
-      await this.halt('error');
+      await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
     await this.runPagination();
@@ -275,19 +285,15 @@ export class CardanoCrawler {
 
   private async runChainSync(backend: ChainSyncBackend): Promise<void> {
     const cursor = await cds.tx((tx) => readCursor(tx));
-    const from: ChainPoint | 'origin' = cursor?.lastBlockHash
-      ? { slot: cursor.lastSlot, hash: cursor.lastBlockHash, height: cursor.lastHeight }
-      : (this.config.startBlockHash
-        ? { slot: this.config.startSlot ?? 0, hash: this.config.startBlockHash, height: this.config.startHeight }
-        : 'origin');
-    if (from === 'origin') {
+    const points = await this.buildIntersectionPoints(cursor);
+    if (!points.length) {
       // Defense in depth — start() already refuses this state.
       logger.error('Chain-sync refused: no resume point (configured start block or cursor) available.');
-      await this.halt('error');
+      await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
 
-    const handle = await backend.openChainSync(from, {
+    const handle = await backend.openChainSync(points, {
       rollForward: (block, txs, tip) => this.trackCallback(async () => {
         if (!this.running) return;
         await this.persistBlock(block, txs, tip);
@@ -320,7 +326,57 @@ export class CardanoCrawler {
       return;
     }
     this.chainSyncHandle = handle;
-    logger.info(`Crawler running (chain-sync) from ${from.hash}`);
+    logger.info(`Crawler running (chain-sync) from ${points[0].hash} (+${points.length - 1} fallback intersection point(s))`);
+  }
+
+  /**
+   * Candidate intersection points, NEWEST FIRST: the cursor, then an exponentially
+   * spaced ladder of our own already-crawled ancestors, then the configured start
+   * block as the deepest anchor.
+   *
+   * Why more than the cursor: if the cursor's block was orphaned while the crawler
+   * was down, a single-point intersection fails outright ("No intersection found")
+   * and the stream never opens. With ancestors on the list the node intersects at
+   * the last common block and reports it as a rollBackward — the ordinary reorg path
+   * that handleReorg already implements. Doubling offsets cover ~32k blocks with 16
+   * points; anything deeper is past any realistic rollback and should fail loudly.
+   */
+  private async buildIntersectionPoints(cursor: Awaited<ReturnType<typeof readCursor>>): Promise<ChainPoint[]> {
+    const points: ChainPoint[] = [];
+    const seen = new Set<string>();
+    const add = (p: ChainPoint | null | undefined) => {
+      if (!p?.hash || seen.has(p.hash)) return;
+      seen.add(p.hash);
+      points.push(p);
+    };
+
+    if (cursor?.lastBlockHash) {
+      add({ slot: cursor.lastSlot, hash: cursor.lastBlockHash, height: cursor.lastHeight });
+
+      // Dense over the last DENSE_DEPTH blocks, doubling after that. Real rollbacks
+      // are a handful of blocks deep, and those must intersect EXACTLY — a gap in
+      // the ladder is not wrong (rolling back too far only re-crawls), but it costs
+      // needless work on the common case. The doubling tail keeps the deep-reorg
+      // reach without sending hundreds of points.
+      const DENSE_DEPTH = 10;
+      const heights: number[] = [];
+      const pushHeight = (height: number) => { if (height > 0 && !heights.includes(height)) heights.push(height); };
+      for (let step = 1; step <= DENSE_DEPTH; step++) pushHeight(cursor.lastHeight - step);
+      for (let step = 16; step <= 1 << 14; step *= 2) pushHeight(cursor.lastHeight - step);
+      if (heights.length) {
+        const rows = await cds.tx((tx) => tx.run(
+          SELECT.from(Blocks).columns('height', 'slot', 'hash').where({ height: { in: heights } }),
+        )) as Array<{ height?: number; slot?: number; hash?: string }>;
+        for (const row of (rows ?? []).sort((a, b) => Number(b.height ?? 0) - Number(a.height ?? 0))) {
+          if (row.hash && row.slot != null) add({ slot: Number(row.slot), hash: row.hash, height: Number(row.height) });
+        }
+      }
+    }
+
+    if (this.config.startBlockHash && this.config.startSlot != null) {
+      add({ slot: this.config.startSlot, hash: this.config.startBlockHash, height: this.config.startHeight });
+    }
+    return points;
   }
 
   /** Track streamed callbacks because closing a socket does not imply DB callbacks finished. */
@@ -342,7 +398,7 @@ export class CardanoCrawler {
     const backend = this.client.getPaginatingBackend();
     if (!backend) {
       logger.error('No paginating backend available — cannot crawl without Ogmios or Blockfrost/Koios');
-      await this.halt('error');
+      await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
     logger.info('Crawler running (pagination)');
@@ -358,7 +414,7 @@ export class CardanoCrawler {
         const cursor = await cds.tx((tx) => readCursor(tx));
         if (!cursor?.lastBlockHash) {
           logger.error('Pagination refused: cursor has no resume block hash.');
-          await this.halt('error');
+          await this.halt('error', true); // broken precondition: a restart cannot fix it
           return;
         }
 

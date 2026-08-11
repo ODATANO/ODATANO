@@ -175,6 +175,71 @@ describe('CardanoCrawler source semantics', () => {
   });
 });
 
+describe('CardanoCrawler intersection points (reorg across a restart)', () => {
+  beforeEach(() => { dbRun.mockReset(); });
+
+  const cursor = { lastSlot: 5_000, lastBlockHash: 'c'.repeat(64), lastHeight: 1_000 };
+  /** Our own crawled ancestors, as the ladder query would find them. */
+  const ancestors = [
+    { height: 999, slot: 4_980, hash: 'a'.repeat(64) },
+    { height: 998, slot: 4_960, hash: 'b'.repeat(64) },
+    { height: 995, slot: 4_800, hash: 'd'.repeat(64) },
+  ];
+
+  const build = (config: CrawlerConfig = CONFIG) =>
+    (makeCrawler(config) as unknown as {
+      buildIntersectionPoints: (c: unknown) => Promise<Array<{ slot: number; hash: string; height?: number }>>;
+    }).buildIntersectionPoints(cursor);
+
+  it('offers the cursor first, then our own ancestors newest-first', async () => {
+    dbRun.mockImplementation(async (q) => (q._op === 'SELECT.many' ? [...ancestors].reverse() : undefined));
+
+    const points = await build();
+
+    expect(points[0]).toEqual({ slot: 5_000, hash: 'c'.repeat(64), height: 1_000 });
+    expect(points.slice(1, 4).map(p => p.height)).toEqual([999, 998, 995]);
+    // A single point is what used to make Ogmios answer "No intersection found"
+    // when the cursor block had been orphaned while the crawler was down.
+    expect(points.length).toBeGreaterThan(1);
+  });
+
+  it('queries an exponentially spaced ladder rather than every height', async () => {
+    dbRun.mockImplementation(async (q) => (q._op === 'SELECT.many' ? [] : undefined));
+
+    await build();
+
+    const query = opsFor('SELECT.many').find(q => shortName(q.entity) === 'Blocks');
+    const heights = (query?.where as { height: { in: number[] } }).height.in;
+    // Dense over the last 10 blocks so an ordinary shallow rollback intersects
+    // EXACTLY, then doubling for reach.
+    expect(heights.slice(0, 10)).toEqual([999, 998, 997, 996, 995, 994, 993, 992, 991, 990]);
+    expect(heights.slice(10, 13)).toEqual([984, 968, 936]);          // -16,-32,-64
+    expect(heights.length).toBeLessThanOrEqual(25);                  // ~16k blocks of reach
+    expect(Math.min(...heights)).toBeGreaterThan(0);                 // never below genesis
+    expect(new Set(heights).size).toBe(heights.length);              // no duplicates
+  });
+
+  it('keeps the configured start block as the deepest anchor, without duplicates', async () => {
+    dbRun.mockImplementation(async (q) => (q._op === 'SELECT.many' ? [ancestors[0]] : undefined));
+
+    const points = await build({ ...CONFIG, startSlot: 100, startBlockHash: 'start-hash' });
+
+    expect(points[points.length - 1]).toMatchObject({ slot: 100, hash: 'start-hash' });
+    expect(new Set(points.map(p => p.hash)).size).toBe(points.length);
+  });
+
+  it('falls back to the configured start block when there is no cursor yet', async () => {
+    dbRun.mockResolvedValue(undefined);
+    const crawler = makeCrawler({ ...CONFIG, startSlot: 42, startBlockHash: 'start-hash' });
+
+    const points = await (crawler as unknown as {
+      buildIntersectionPoints: (c: unknown) => Promise<Array<{ slot: number; hash: string }>>;
+    }).buildIntersectionPoints(null);
+
+    expect(points).toEqual([{ slot: 42, hash: 'start-hash', height: undefined }]);
+  });
+});
+
 describe('CardanoCrawler.isRunning', () => {
   it('is false before start', () => {
     expect(makeCrawler().isRunning()).toBe(false);

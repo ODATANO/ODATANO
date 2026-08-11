@@ -5,7 +5,11 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v2.0.0] - 08-08-2026: CAP 10, chain crawler / pre-sync, wallet worker
+## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
+
+> Shipping first as **v2.0.0-rc.1** on the npm dist-tag `next` (10-08-2026).
+> `latest` stays on 1.x, and `^2.0.0` does not match a pre-release — install it
+> explicitly with `npm i @odatano/core@next` to try it.
 
 ### ⚠ Breaking
 
@@ -13,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node.js >= 22.5** — required by `@cap-js/sqlite` v3 (`node:sqlite` floor).
 - **Numeric OData fields serialize as strings** — CAP 10 renders `Decimal`, `Int64` and `$count` values as JSON strings. API clients that parse these fields as JSON numbers must be adapted.
 - **XSUAA role separation** — the `$XSAPPNAME.Admin` scope (crawler/worker control) is no longer part of the `CardanoUser` role template or the app authorities; assign the new `CardanoAdmin` template explicitly. Existing `CardanoUser` role collections lose crawler/worker control on redeploy (intentional least-privilege fix).
+- **Database redeploy required** — 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`) plus a `dedupKey` column and its unique constraint on the jobs table. Consumers upgrading from 1.x must run `cds deploy`; without it the new services answer `no such table` and `getStatus`/`GetWorkerStatus` return 500. (Verified against a real 1.10 consumer project.)
 
 ### Added
 
@@ -30,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Hardening pass from the full-branch review: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
+
+#### Wallet worker — payment safety (pre-RC review)
+
+- **HSM-backed wallet jobs now require the configured signing role.** `SubmitWalletJob` was gated on `authenticated-user` only, so any authenticated account could queue a value transfer with an arbitrary recipient and amount that the server-held HSM key would sign — bypassing the `hsm.requiresRole` gate the synchronous `SignWithHsm` path enforces. The role is now checked against both the instance's wallet config and the registered wallet row (403, new `ODATANO_FORBIDDEN` code).
+- **A crash around submit can no longer cause a duplicate payment.** New durable pre-submit state **`submitting`**: the signed CBOR and its hash are committed *before* the transaction can reach a backend, and the row stays non-terminal so it keeps holding its idempotency key. Interrupted submits are reconciled against the chain — the exact stored bytes are re-submitted, never a rebuild — instead of being failed as `PROCESS_RESTART`, which released the key and let the documented caller retry build and pay a *second* transaction.
+- **The per-wallet lease survives long builds.** Only one renewal happened before the build, so a build+sign exceeding `WORKER_LEASE_TTL_MS` (15s — routine with a multi-backend build plus an HSM round-trip) let another instance adopt the wallet while the first kept working. A heartbeat now renews for the whole execution, and ownership is fenced again immediately before the irreversible submit.
+- **Idempotency is enforced by the database, not by a lookup.** Unique constraint `(walletId, kind, dedupKey)` via `@assert.unique.dedup` — two concurrent retries of the same key could both read "no such job" and both insert. The loser of the race now returns the winner's job. `dedupKey` carries the caller key while the job owns it and the job's own ID otherwise, so keyless jobs never contend and terminal jobs release the key without depending on per-database NULL semantics.
+
+#### Chain crawler — reorg across a restart
+
+- **Chain-sync recovers from a fork it slept through.** Only a single intersection point (the cursor) was offered to Ogmios, so a cursor orphaned while the crawler was down produced `No intersection found` and killed the ingest pipeline. The crawler now offers a ladder of its own crawled ancestors — dense over the last 10 blocks, doubling out to −16384 — so the node intersects at the last common block and reports an ordinary `rollBackward`, which the existing reorg handling resolves. The dense head keeps shallow rollbacks (the common case) exact instead of rolling back further than necessary.
+- **A crashed crawler no longer stays down across restarts.** Every terminal error cleared `desiredRunning`, which no restart undoes — a dropped chain-sync socket (a routine node restart) silently disabled the pre-sync until an operator called `resumeCrawler`. Only unrecoverable configuration failures latch the cluster now; runtime failures leave `syncStatus: error` with `desiredRunning: true` so coming back up resumes.
 
 ## [v1.11.0] - 08-08-2026: Coin-selection + error-handling improvements
 

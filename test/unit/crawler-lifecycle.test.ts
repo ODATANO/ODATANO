@@ -179,7 +179,11 @@ describe('CardanoCrawler chain-sync path', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
 
-    expect(openChainSync.mock.calls[0][0]).toEqual({ slot: 4000, hash: CURSOR_ROW.lastBlockHash, height: 40 });
+    // The cursor must be the FIRST candidate; the ancestors behind it are only the
+    // fallback that lets a reorg we slept through resolve to a rollBackward.
+    const points = openChainSync.mock.calls[0][0] as Array<{ slot: number; hash: string; height?: number }>;
+    expect(Array.isArray(points)).toBe(true);
+    expect(points[0]).toEqual({ slot: 4000, hash: CURSOR_ROW.lastBlockHash, height: 40 });
     await crawler.stop();
   });
 

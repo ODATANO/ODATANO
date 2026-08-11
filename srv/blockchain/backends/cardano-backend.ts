@@ -267,12 +267,17 @@ export interface ChainSyncHandle {
  */
 export interface ChainSyncBackend extends CardanoBackend {
   /**
-   * Open a chain-sync stream starting just after `from` (or from genesis).
-   * @param from     the last-indexed point to intersect on, or 'origin' for a fresh sync
+   * Open a chain-sync stream starting just after the first of `from` that is still
+   * on the node's chain (or from genesis).
+   * @param from     candidate intersection points, NEWEST FIRST, or 'origin' for a
+   *   fresh sync. Passing ancestors as well as the last-indexed point is what makes
+   *   a reorg that happened while we were disconnected resolvable: the node
+   *   intersects at the last common block and reports it via rollBackward, instead
+   *   of failing the whole stream with "No intersection found".
    * @param callbacks rollForward / rollBackward handlers
    * @returns a handle to close the stream
    */
-  openChainSync(from: ChainPoint | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle>;
+  openChainSync(from: ChainPoint[] | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle>;
 }
 
 /** Type guard: does this backend support streamed chain-sync? */

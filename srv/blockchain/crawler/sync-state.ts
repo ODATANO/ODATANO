@@ -218,17 +218,26 @@ export async function renewCrawlerLease(
   return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
 }
 
-/** Release only the caller's lease; a stale process can never clear a successor. */
+/**
+ * Release only the caller's lease; a stale process can never clear a successor.
+ *
+ * `pauseCluster` clears `desiredRunning`, which no restart undoes — every instance
+ * then refuses to start until an operator calls resumeCrawler. Reserve it for
+ * failures a restart genuinely cannot fix (misconfiguration, no resume point). A
+ * crashed stream, a provider outage or a node restart must NOT latch: those are
+ * exactly the cases where coming back up should resume the pre-sync by itself.
+ */
 export async function releaseCrawlerLease(
   db: CapTransaction,
   owner: string,
   status: CrawlSyncStatusValue,
+  pauseCluster = false,
 ): Promise<void> {
   await db.run(UPDATE.entity(CardanoSyncState).set({
     leaseOwner: null,
     leaseUntil: null,
     syncStatus: status,
-    ...(status === 'error' ? { desiredRunning: false } : {}),
+    ...(pauseCluster ? { desiredRunning: false } : {}),
   }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
 }
 
@@ -278,8 +287,15 @@ export async function resetCursorTo(db: CapTransaction, point: CrawlPoint): Prom
 }
 
 /** Set the crawler status (e.g. 'synced' when caught up, 'stopped' on shutdown). */
-export async function setSyncStatus(db: CapTransaction, status: CrawlSyncStatusValue): Promise<void> {
-  await db.run(UPDATE.entity(CardanoSyncState).set({ syncStatus: status }).where({ ID: SINGLETON_ID }));
+export async function setSyncStatus(
+  db: CapTransaction,
+  status: CrawlSyncStatusValue,
+  pauseCluster = false,
+): Promise<void> {
+  await db.run(UPDATE.entity(CardanoSyncState).set({
+    syncStatus: status,
+    ...(pauseCluster ? { desiredRunning: false } : {}),
+  }).where({ ID: SINGLETON_ID }));
 }
 
 /**
