@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chain crawler / pre-sync (opt-in)** — `CRAWLER_ENABLED` / `cds.requires.odatano-core.crawler`: streams the chain forward from a configured start block into `Blocks`/`Transactions` (+inputs/outputs/assets/metadata) so queries hit local data instead of a backend per request. Ogmios chain-sync (native rollForward/rollBackward) with Blockfrost/Koios pagination fallback, parent-hash reorg recovery, cursor (`CardanoSyncState`) + audit log (`CardanoReorgLog`), cluster-safe via DB lease. New **CardanoIndexerService** (`/odata/v4/cardano-indexer/`): SyncState + ReorgLog (read-only), `getStatus` / `pauseCrawler` / `resumeCrawler` (Admin).
 - **Wallet worker (opt-in)** — `WALLET_WORKER_ENABLED` / `cds.requires.odatano-core.walletWorker`: asynchronous per-wallet transaction queue (build → sign → submit → confirm) with software/HSM signers, idempotency keys, exponential retry, per-wallet DB leases (multi-instance safe), and a confirmation tracker (crawler hook or polling) with rollback re-submit of the SAME signed CBOR. New **CardanoWorkerService** (`/odata/v4/cardano-worker/`): `SubmitWalletJob` / `CancelJob` / `GetJobStatus` / `GetWorkerStatus` / `PauseWorker` / `ResumeWorker`.
+- **CAP events on both v2.0 services** — consumers can subscribe instead of polling.
+  `CardanoIndexerService` publishes `blockIndexed` (hash, slot, height, txHashes, tip) and `reorg`
+  (forkSlot, forkHeight, blocksRolledBack); `CardanoWorkerService` publishes the terminal
+  `jobConfirmed` and `jobFailed` (jobId, walletId, kind, txHash, + errorCode/errorMessage).
+  ODATANO runs in the consumer's process as a plugin, so this needs no broker and no
+  `cds.requires.messaging`; configuring one later routes the same emits through it. All emits
+  happen AFTER the corresponding commit, are fire-and-forget, and swallow subscriber failures so a
+  broken observer cannot stall the crawler or a wallet job. Events are absent from `$metadata`
+  (OData V4 has no event concept), so the change is additive for existing HTTP clients.
 - **KoiosBackend.getDrep** with the new Koios schema.
 
 ### Changed

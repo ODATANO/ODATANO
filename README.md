@@ -99,6 +99,14 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 | CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (v2.0, off by default) |
 | CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (v2.0, off by default) |
 
+Both v2.0 services also publish **CAP events**, so a consumer can subscribe instead of polling —
+in-process, no broker required:
+
+```js
+(await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
+(await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
+```
+
 ## Requirements
 
 - **Node.js >= 22.5** and **@sap/cds >= 10** (peer dependency). CAP 9 hosts cannot load `@odatano/core@2`.

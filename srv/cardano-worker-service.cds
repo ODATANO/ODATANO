@@ -66,6 +66,26 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         pendingJobs          : Integer;
     }
 
+    /**
+     * Terminal job outcomes. Subscribing removes the need for a GetJobStatus poll loop:
+     *   (await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
+     */
+    event jobConfirmed {
+        jobId    : UUID;
+        walletId : String(50);
+        kind     : String(12);
+        txHash   : String(64);
+    }
+
+    event jobFailed {
+        jobId        : UUID;
+        walletId     : String(50);
+        kind         : String(12);
+        txHash       : String(64);   // null when the job never reached the chain
+        errorCode    : String(50);
+        errorMessage : String(500);
+    }
+
     @title      : 'Submit Wallet Job'
     @description: 'Queue an asynchronous transaction job for a worker wallet. Returns immediately with a jobId; poll GetJobStatus for the outcome. The request JSON is the same payload shape as the corresponding Build* action; senderAddress is always overridden with the wallet address.'
     action SubmitWalletJob(

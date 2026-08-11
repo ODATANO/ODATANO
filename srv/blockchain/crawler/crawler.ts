@@ -677,8 +677,9 @@ export class CardanoCrawler {
       throw err;
     }
 
-    // Notify observers (wallet-worker confirmation tracker) AFTER the rollback commit.
-    emitReorg({ forkSlot, forkHeight: emittedForkHeight });
+    // Notify observers (wallet-worker confirmation tracker + CAP subscribers) AFTER
+    // the rollback commit.
+    emitReorg({ forkSlot, forkHeight: emittedForkHeight, blocksRolledBack });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }
 

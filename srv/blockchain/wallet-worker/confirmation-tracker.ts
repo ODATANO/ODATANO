@@ -42,6 +42,8 @@ const logger = cds.log('CardanoWalletWorker');
 export interface TrackedJob {
   jobId: string;
   walletId: string;
+  /** Job kind, carried so terminal events can name it without a DB read. */
+  kind: string | null;
   txHash: string;
   signedTxCbor: string | null;
   /** ISO timestamp of mempool acceptance (timeout base). */
@@ -61,7 +63,16 @@ export interface ConfirmationTrackerDeps {
   client: CardanoClient;
   options: ConfirmationTrackerOptions;
   /** Called exactly once per job when it reaches a terminal state. */
-  onFinal?: (job: { jobId: string; walletId: string; outcome: 'confirmed' | 'failed' }) => void;
+  onFinal?: (job: {
+    jobId: string;
+    walletId: string;
+    outcome: 'confirmed' | 'failed';
+    kind: string | null;
+    /** The tracked transaction — present even on failure (it was submitted). */
+    txHash: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }) => void;
 }
 
 export class ConfirmationTracker {
@@ -98,11 +109,12 @@ export class ConfirmationTracker {
   }
 
   /** Register a submitted job for confirmation watching. Idempotent per jobId. */
-  track(job: { jobId: string; walletId: string; txHash: string; signedTxCbor: string | null; submittedAt?: string | null; confirmedSlot?: number | null; confirmedHeight?: number | null }): void {
+  track(job: { jobId: string; walletId: string; kind?: string | null; txHash: string; signedTxCbor: string | null; submittedAt?: string | null; confirmedSlot?: number | null; confirmedHeight?: number | null }): void {
     if (this.pending.has(job.jobId)) return;
     this.pending.set(job.jobId, {
       jobId: job.jobId,
       walletId: job.walletId,
+      kind: job.kind ?? null,
       txHash: job.txHash,
       signedTxCbor: job.signedTxCbor,
       submittedAt: job.submittedAt ?? new Date().toISOString(),
@@ -259,6 +271,14 @@ export class ConfirmationTracker {
     }
     this.pending.delete(job.jobId);
     logger.info(`Job ${job.jobId}: ${outcome}${outcome === 'failed' ? ` (${errorCode})` : ''}`);
-    this.deps.onFinal?.({ jobId: job.jobId, walletId: job.walletId, outcome });
+    this.deps.onFinal?.({
+      jobId: job.jobId,
+      walletId: job.walletId,
+      outcome,
+      kind: job.kind,
+      txHash: job.txHash,
+      errorCode,
+      errorMessage: err instanceof Error ? err.message : err != null ? String(err) : undefined,
+    });
   }
 }

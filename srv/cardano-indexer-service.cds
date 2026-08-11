@@ -38,6 +38,27 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     @title      : 'Get Crawler Status'
     @description: 'Return the current crawler run state and sync progress'
+    /**
+     * Emitted AFTER each block is committed. Subscribe instead of polling:
+     *   (await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
+     * In-process (plugin mode) this needs no messaging service.
+     */
+    event blockIndexed {
+        hash     : String(64);
+        slot     : Integer64;
+        height   : Integer64;
+        txHashes : many String(64);
+        tipSlot  : Integer64;
+        tipHeight: Integer64;
+    }
+
+    /** Emitted AFTER a rollback is committed. Everything above `forkSlot` was removed. */
+    event reorg {
+        forkSlot         : Integer64;
+        forkHeight       : Integer64;
+        blocksRolledBack : Integer;
+    }
+
     function getStatus() returns CrawlerStatus;
 
     @title      : 'Pause Crawler'

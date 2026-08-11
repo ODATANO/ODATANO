@@ -51,6 +51,21 @@ Explore the whole API and select the OData actions you want to use in your workf
 
 ![SAP Build Action2](../assets/screenshots/setup_action2.png)
 
+## Reacting to on-chain events instead of polling
+
+The scenario below polls for a transaction's confirmation. Since v2.0 a CAP application embedding
+`@odatano/core` can subscribe instead:
+
+```js
+const worker = await cds.connect.to('CardanoWorkerService');
+worker.on('jobConfirmed', ({ data }) => { /* data.jobId, data.txHash — settle the business object */ });
+worker.on('jobFailed',    ({ data }) => { /* data.errorCode, data.errorMessage */ });
+```
+
+This removes the polling loop entirely for anything submitted through the wallet worker. For
+transactions submitted the synchronous way, `CardanoIndexerService`'s `blockIndexed` event carries
+the tx hashes of each crawled block (crawler enabled).
+
 ## Example SAP Build Automation Scenario - ADA Invoice Check
 
 A customer can send you a payment and submit the transaction hash to your workflow and you can use the transaction information to trigger further processing in your workflow.

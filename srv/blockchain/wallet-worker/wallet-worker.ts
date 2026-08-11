@@ -16,6 +16,7 @@ import { getTxHashFromCbor } from '../../utils/tx-build-helper';
 import { ConfirmationTracker } from './confirmation-tracker';
 import { LeaseHeartbeat } from './lease-heartbeat';
 import { prepareWorkerBuildRequest } from './build-request';
+import { emitServiceEvent } from '../../utils/service-events';
 import { createWorkerSigner, type WorkerSigner, type WorkerWalletConfig } from './signers';
 import {
   JOB_ERROR_CODES,
@@ -131,8 +132,17 @@ export class CardanoWalletWorker {
         pollIntervalMs: Math.max(deps.config.pollIntervalMs, 5_000),
         resubmitOnRollback: deps.config.resubmitOnRollback,
       },
-      onFinal: ({ walletId, outcome }) => {
+      onFinal: ({ jobId, walletId, outcome, kind, txHash, errorCode, errorMessage }) => {
         logger.debug(`Wallet ${walletId} unblocked (job ${outcome}) — next tick dispatches`);
+        // Fired only on a TERMINAL outcome, after the transition is committed, so a
+        // subscriber that reads the job row sees the state the event announces.
+        emitServiceEvent('CardanoWorkerService', outcome === 'confirmed' ? 'jobConfirmed' : 'jobFailed', {
+          jobId,
+          walletId,
+          kind,
+          txHash,
+          ...(outcome === 'failed' ? { errorCode: errorCode ?? null, errorMessage: errorMessage ?? null } : {}),
+        });
         void this.tickSafe();
       },
     });
@@ -200,6 +210,7 @@ export class CardanoWalletWorker {
       this.tracker.track({
         jobId: job.ID,
         walletId: job.walletId,
+        kind: job.kind,
         txHash: job.txHash,
         signedTxCbor: job.signedTxCbor,
         submittedAt: job.submittedAt,
@@ -464,6 +475,7 @@ export class CardanoWalletWorker {
     this.tracker.track({
       jobId: job.ID,
       walletId: job.walletId,
+      kind: job.kind,
       txHash,
       signedTxCbor,
       submittedAt: job.submittedAt ?? new Date().toISOString(),

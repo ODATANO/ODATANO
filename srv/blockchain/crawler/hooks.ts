@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import { emitServiceEvent } from '../../utils/service-events';
 
 const logger = cds.log('CardanoCrawler');
 
@@ -28,6 +29,8 @@ export interface BlockIndexedEvent {
 export interface ReorgEvent {
   /** Absolute slot of the fork point — everything after it was rolled back. */
   forkSlot: number;
+  /** How many blocks the rollback removed (0 when the fork was already the tip). */
+  blocksRolledBack?: number;
   /**
    * Block height of the fork point, when known. Listeners tracking confirmation
    * depth must clamp their tip to this — the pre-fork tip height no longer exists.
@@ -63,6 +66,9 @@ export function hasBlockIndexedListeners(): boolean {
 }
 
 export function emitBlockIndexed(event: BlockIndexedEvent): void {
+  // Mirrored onto the CAP service so external consumers can subscribe; the
+  // in-process registry below stays the fast path for our own subsystems.
+  emitServiceEvent('CardanoIndexerService', 'blockIndexed', { ...event });
   for (const listener of blockListeners) {
     try {
       listener(event);
@@ -73,6 +79,11 @@ export function emitBlockIndexed(event: BlockIndexedEvent): void {
 }
 
 export function emitReorg(event: ReorgEvent): void {
+  emitServiceEvent('CardanoIndexerService', 'reorg', {
+    forkSlot: event.forkSlot,
+    forkHeight: event.forkHeight,
+    blocksRolledBack: event.blocksRolledBack ?? 0,
+  });
   for (const listener of reorgListeners) {
     try {
       listener(event);

@@ -34,6 +34,8 @@
 
 **Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
 
+**Events:** `CardanoIndexerService` publishes `blockIndexed` / `reorg`, `CardanoWorkerService` the terminal `jobConfirmed` / `jobFailed`. They are emitted after the corresponding commit, fire-and-forget, and do not appear in `$metadata` (OData V4 has no event concept).
+
 > OData **functions** (`getStatus`, `GetJobStatus`, `GetWorkerStatus`) are invoked with HTTP **GET** and their parameters in the URL — `GET .../GetJobStatus(jobId=<uuid>)`. POSTing to them returns 405.
 
 ### Layered Architecture
@@ -144,6 +146,7 @@ srv/
     validators.ts               # Input validation (10+ functions)
     errors.ts                   # Error hierarchy (14 classes)
     error-codes.ts              # ODATANO_* error-code contract
+    service-events.ts           # Mirrors internal notifications onto CAP services (v2.0 events)
     mappers.ts                  # API → OData transformations
     tx-build-helper.ts          # Transaction utilities (M2)
     signing-helper.ts           # CIP-30 witness combination (M3)

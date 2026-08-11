@@ -180,6 +180,19 @@ service CardanoWorkerService {
 
 The `@requires: 'authenticated-user'` annotation ensures that every request must carry a valid JWT. Beyond that, three gates are enforced **inside CDS/handlers**, not at the router: the `Admin` role on the four control actions, row-level `createdBy = $user` on `WalletJobs`, and the configured `hsm.requiresRole` on every HSM signing path — including `SubmitWalletJob` for an HSM-backed wallet, which returns **403 `ODATANO_FORBIDDEN`** without it. The `Read`/`Transact`/`Sign` scopes in `xs-security.json` may additionally be used for AppRouter-level route protection, but they are not what enforces the above.
 
+### Events and the authorization boundary
+
+The v2.0 CAP events (`blockIndexed`, `reorg`, `jobConfirmed`, `jobFailed`) are delivered
+**in-process** to code running inside the same CAP application. They therefore sit *behind* the
+OData authorization layer: `@requires`, the `Admin` role and the row-level `createdBy = $user`
+restriction on `WalletJobs` apply to HTTP requests, **not** to an in-process subscriber. Any handler
+the host application registers sees every event, including jobs created by other users.
+
+That is the intended model — the subscriber is the host application itself, not a tenant — but two
+consequences are worth stating: do not treat an event payload as pre-filtered for the end user, and
+if you forward events outward (webhook, message broker, UI push), re-apply your own authorization
+at that boundary.
+
 ### BTP Role Collections
 
 | Role Collection | Role Template | Intended Users |

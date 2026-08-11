@@ -68,6 +68,14 @@ All five services auto-register:
 > HTTP GET and the parameters in the URL, e.g. `GET .../cardano-worker/GetWorkerStatus()`.
 > POSTing to a function returns 405.
 
+Both v2.0 services also publish **CAP events**, so a CAP consumer can subscribe rather than poll —
+in-process, so no message broker is involved:
+
+```js
+(await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)  // jobId, txHash
+(await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …) // hash, height, txHashes
+```
+
 ### 4) Verify
 
 ```bash

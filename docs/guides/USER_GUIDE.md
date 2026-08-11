@@ -724,6 +724,49 @@ POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
 
 ---
 
+## Events — subscribe instead of polling (v2.0)
+
+Both v2.0 subsystems publish CAP events. Because ODATANO ships as a **plugin**, a consumer
+runs in the same process, so subscribing needs **no message broker and no
+`cds.requires.messaging`** — connect to the service and listen:
+
+```js
+const indexer = await cds.connect.to('CardanoIndexerService');
+indexer.on('blockIndexed', ({ data }) => {
+  // data: { hash, slot, height, txHashes[], tipSlot, tipHeight }
+});
+indexer.on('reorg', ({ data }) => {
+  // data: { forkSlot, forkHeight, blocksRolledBack } — everything above forkSlot is gone
+});
+
+const worker = await cds.connect.to('CardanoWorkerService');
+worker.on('jobConfirmed', ({ data }) => {
+  // data: { jobId, walletId, kind, txHash }
+});
+worker.on('jobFailed', ({ data }) => {
+  // data: { jobId, walletId, kind, txHash, errorCode, errorMessage }
+});
+```
+
+`jobConfirmed` / `jobFailed` fire once per job, on the terminal outcome only — they replace a
+`GetJobStatus` poll loop. `blockIndexed` fires per crawled block, so treat it as a stream, not a
+notification.
+
+Three guarantees worth relying on:
+
+- **Emitted after commit.** When an event arrives, the data it names is already readable — the
+  job row shows `confirmed`, the block is queryable.
+- **Failures are yours alone.** A subscriber that throws or hangs is logged and ignored; it cannot
+  stall block ingestion or a wallet job.
+- **Fire-and-forget, in-process.** There is no retry and no persistence. If you need at-least-once
+  delivery across processes, configure a CAP messaging service — the same emits are then routed
+  through it (with the outbox) without a change on our side.
+
+Events do not appear in `$metadata`: OData V4 has no event concept, so this is additive and
+invisible to existing HTTP clients.
+
+---
+
 ## Support & Resources
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)

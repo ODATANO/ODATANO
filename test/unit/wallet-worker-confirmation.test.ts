@@ -151,7 +151,9 @@ describe('ConfirmationTracker: crawler hook path', () => {
 
     const job = (await getJobById(db, jobId))!;
     expect(job.status).toBe('confirmed');
-    expect(onFinal).toHaveBeenCalledWith({ jobId, walletId: 'w1', outcome: 'confirmed' });
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      jobId, walletId: 'w1', outcome: 'confirmed', txHash: TX_HASH,
+    }));
     expect(tracker.size()).toBe(0);
 
     // Wallet stats bumped
@@ -247,7 +249,9 @@ describe('ConfirmationTracker: polling path', () => {
 
     const job = (await getJobById(db, jobId))!;
     expect(job.status).toBe('confirmed');
-    expect(onFinal).toHaveBeenCalledWith({ jobId, walletId: 'w1', outcome: 'confirmed' });
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      jobId, walletId: 'w1', outcome: 'confirmed', txHash: TX_HASH,
+    }));
   });
 
   it('fails a tx unseen past the confirmation timeout as TX_DROPPED', async () => {
@@ -267,7 +271,12 @@ describe('ConfirmationTracker: polling path', () => {
     const job = (await getJobById(db, jobId))!;
     expect(job.status).toBe('failed');
     expect(job.errorCode).toBe(JOB_ERROR_CODES.TX_DROPPED);
-    expect(onFinal).toHaveBeenCalledWith({ jobId, walletId: 'w1', outcome: 'failed' });
+    // The failure payload carries what a jobFailed subscriber needs to act.
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
+      jobId, walletId: 'w1', outcome: 'failed', txHash: TX_HASH,
+      errorCode: JOB_ERROR_CODES.TX_DROPPED,
+      errorMessage: expect.stringContaining('not seen on-chain'),
+    }));
   });
 
   it('keeps waiting while the tx is unseen but within the timeout', async () => {
