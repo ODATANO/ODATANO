@@ -6,8 +6,8 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: see `npm run test:unit` / `test:integration` — the suite grew with the v2.0 crawler and wallet worker; per-file counts below are indicative, not authoritative
-- **Total Test Suites**: 55 test files (43 unit + 12 integration)
+- **Total Tests**: 1908 (full run with all backends reachable; the Ogmios-dependent suites skip otherwise). Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
+- **Total Test Suites**: 58 test files (44 unit + 14 integration)
 - **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%
 - **Function Coverage**: 97.68%
@@ -28,6 +28,9 @@ test/
 │   ├── core.blockfrost.test.ts            # Blockfrost backend test entry
 │   ├── core.koios.test.ts                 # Koios backend test entry
 │   ├── core-ogmios.test.ts                # Ogmios backend tests (27 tests)
+│   ├── blockfrost-custom-backend.test.ts  # Custom Blockfrost endpoint configuration
+│   ├── defer-submit.test.ts               # Deferred submit path (KNOWN_ISSUES #11)
+│   ├── nested-tx-guard.test.ts            # detachedTx deadlock guard (KNOWN_ISSUES #11)
 │   ├── error-handling-service.test.ts     # Service-level error validation (96 tests)
 │   ├── error-handling.backend.ts          # Backend-level error handling (11 tests)
 │   ├── odata_features.test.ts             # OData query feature tests (41 tests)
@@ -37,9 +40,12 @@ test/
 │   ├── tx-error-handling.builder.ts       # TX builder error scenarios (20 tests)
 │   ├── tx-handler-validation.test.ts      # Handler input validation (24 tests)
 │   ├── signing-services.test.ts           # External signing integration tests (33 tests)
+│   ├── wallet-worker.test.ts              # Wallet worker: deployed UNIQUE constraint, real
+│   │                                      #   transactions, OData layer (no network, no funds)
+│   ├── crawler.test.ts                    # Chain crawler over a real Ogmios: ingest, fork
+│   │                                      #   recovery, getStatus (self-skips without Ogmios)
 │   ├── test-fixtures.ts                   # Test constants, mock data, CBOR samples
-│   ├── mock-helpers.ts                    # Nock-based HTTP mocking for Koios
-│   └── backend-test-helper.ts             # Backend configuration helper
+│   └── mock-helpers.ts                    # Nock-based HTTP mocking for Koios
 ├── unit/                                  # Unit tests (isolated component testing)
 │   ├── validators.test.ts                 # Validator type guards and helpers (96 tests)
 │   ├── errors.test.ts                     # Error classes and utilities (74 tests)
@@ -65,7 +71,30 @@ test/
 │   ├── concurrency.test.ts                # Concurrency & race condition tests (5 tests)
 │   ├── request-coalescer.test.ts          # Request coalescing tests (3 tests)
 │   ├── cardano-indexer.test.ts            # Cardano indexer unit tests (19 tests)
-│   └── error-paths.test.ts                # Error path coverage tests (8 tests)
+│   ├── error-paths.test.ts                # Error path coverage tests (8 tests)
+│   ├── cose-verifier.test.ts              # CIP-8/COSE data-signature verification
+│   ├── tx-request-parsers.test.ts         # Shared Build*-payload parsers
+│   ├── indexer-block-full.test.ts         # Bulk block indexing (indexBlockFull)
+│   ├── keep-relevant.test.ts              # Coin-selection helper
+│   │
+│   │                                      # --- v2.0 chain crawler ---
+│   ├── crawler-engine.test.ts             # Reorg handling, intersection ladder, source semantics
+│   ├── crawler-lifecycle.test.ts          # Start/stop, cursor resume, chain-sync wiring
+│   ├── crawler-sync-state.test.ts         # Cursor, DB lease, latch semantics
+│   ├── crawler-backend-pagination.test.ts # Pagination source + parent-hash reorg detection
+│   ├── ogmios-chain-sync.test.ts          # Ogmios chain-sync mapping + intersection points
+│   ├── cardano-indexer-service.test.ts    # getStatus / pauseCrawler / resumeCrawler handlers
+│   │
+│   │                                      # --- v2.0 wallet worker ---
+│   ├── wallet-worker-engine.test.ts       # Dispatch, submitting state, reconciliation, fencing
+│   ├── wallet-worker-job-store.test.ts    # State machine, idempotency, recovery, leases
+│   ├── wallet-worker-lifecycle.test.ts    # Module singleton start/stop
+│   ├── wallet-worker-confirmation.test.ts # Confirmation depth, rollback re-submit, TX_DROPPED
+│   ├── wallet-worker-signers.test.ts      # Software/HSM signers, witness merge, key handling
+│   ├── wallet-worker-lease-heartbeat.test.ts # Lease renewal + strict pre-submit fence
+│   ├── wallet-worker-build-request.test.ts   # Job payload -> TxBuildRequest per kind
+│   ├── cardano-worker-service.test.ts     # Worker control surface + HSM role gate
+│   └── service-events.test.ts             # CAP event emission (never throws/blocks)
 └── README.md                              # This file
 ```
 
@@ -465,10 +494,6 @@ Nock-based HTTP mocking utilities for Koios backend:
 - `setupKoiosMocks()` / `teardownKoiosMocks()` / `resetKoiosMocks()`
 - `setupTxResponseMock()`, `setupUtxoMock()`, `setupTxInfoMock()`
 - Re-exports `nock` for direct test use
-
-### backend-test-helper.ts
-
-Backend configuration helper for integration test setup.
 
 ---
 

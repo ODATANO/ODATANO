@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`).
+- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1908 tests across 58 files (44 unit + 14 integration).
+- **Integration suites for both v2.0 subsystems** — `test/integration/wallet-worker.test.ts` (real CAP + real SQLite, backends stubbed: guards the deployed `UNIQUE(walletId, kind, dedupKey)`, real transactions and the OData layer; needs no network or funds) and `test/integration/crawler.test.ts` (real Ogmios: contiguous ingest, recovery from a fork staged while the crawler was down, `getStatus`; self-skips when Ogmios is unreachable or behind the tip, so it runs in both CI lanes).
 - **HarmonicLabs stack bumped**: `buildooor` 0.2.9, `cardano-ledger-ts` ^0.5.6, `cardano-costmodels-ts` ~1.6.1 (Plutus V3 cost model at `N_COST_MODEL_PLUTUS_V3` = 350, post-Plomin²).
 - **Vendored patches removed** — upstream releases contain both fixes: `keep-relevant.ts` (buildooor keepRelevant) and `auxiliary-data-patch.ts` (ledger-ts Conway tag-259 AuxiliaryData decode).
 - Dependency security pass: `axios` ^1.17.1, `fast-uri` ^3.1.5, approuter `body-parser` override — `npm audit` clean (prod + dev).
