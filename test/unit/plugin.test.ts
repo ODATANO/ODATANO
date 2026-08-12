@@ -43,7 +43,10 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
     expect(packageJson.overrides.esbuild).toBe('0.28.1');
     expect(packageJson.overrides.ws).toBe('7.5.11');
     expect(routerPackageJson.dependencies['@sap/approuter']).toBe('22.0.3');
-    expect(routerPackageJson.dependencies['@odatano/core']).toBe('file:../..');
+    // The router must NOT depend on the root package: a `file:../..` dependency
+    // makes the MTA production install run the root `prepare` build without
+    // devDependencies (cds-typer missing) — removed for 2.0.0.
+    expect((routerPackageJson.dependencies as Record<string, string | undefined>)['@odatano/core']).toBeUndefined();
     expect((routerPackageJson.dependencies as Record<string, string | undefined>).odatano).toBeUndefined();
     expect(routerPackageJson.overrides['form-data']).toBe('4.0.6');
     expect(routerPackageJson.overrides.ws).toBe('7.5.11');

@@ -36,10 +36,15 @@ RUN npm run db:deploy
 # Remove devDependencies to reduce image size and avoid plugin conflicts.
 # @cap-js/sqlite is a devDependency of the npm package (consumers pick their own
 # DB adapter), but THIS image serves from sqlite — re-add it after the prune,
-# otherwise cds-serve crashes at startup with MODULE_NOT_FOUND. --omit=dev on
-# the install is REQUIRED: without it, npm reconciles the full manifest and
-# silently reinstalls every devDependency (vitest, eslint, typescript, ...).
-RUN npm prune --omit=dev && npm install --no-save --ignore-scripts --omit=dev @cap-js/sqlite@^3
+# otherwise cds-serve crashes at startup with MODULE_NOT_FOUND.
+# `npm pkg delete devDependencies` is REQUIRED before the install: with the dev
+# block still in the manifest, a plain install reinstalls every devDependency
+# (vitest, eslint, typescript, ...), while `--omit=dev` drops the requested
+# sqlite package itself because it is classified as dev. Deleting the block
+# sidesteps both failure modes; the edited package.json only lives in the image.
+RUN npm prune --omit=dev \
+ && npm pkg delete devDependencies \
+ && npm install --no-save --ignore-scripts @cap-js/sqlite@^3
 
 # Add metadata labels
 LABEL org.opencontainers.image.version="${VERSION}" \

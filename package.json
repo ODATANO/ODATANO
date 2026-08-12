@@ -143,9 +143,6 @@
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
     "watch-wallet": "cds watch --open wallet/webapp/index.html"
   },
-  "workspaces": [
-    "app/router"
-  ],
   "sapux": [
     "app/odatano"
   ],
