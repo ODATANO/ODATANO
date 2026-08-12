@@ -1,7 +1,6 @@
 {
   "name": "approuter",
   "dependencies": {
-    "@odatano/core": "file:../..",
     "@sap/approuter": "22.0.3"
   },
   "overrides": {

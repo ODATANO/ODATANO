@@ -65,9 +65,30 @@ jobs:
             echo "::error::tag '${GITHUB_REF#refs/tags/}' does not yield a valid version (got '$VERSION'); use vMAJOR.MINOR.PATCH"
             exit 1
           fi
+          # A pre-release (2.0.0-rc.1, 1.9.0-beta.2, ...) must NOT overwrite the
+          # `latest` Docker tag and must be flagged as a GitHub pre-release.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "git_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+      - name: Verify tag matches package.json and mta.yaml
+        run: |
+          VERSION='${{ steps.version.outputs.version }}'
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::tag version '$VERSION' does not match package.json version '$PKG_VERSION' — retag the correct commit or bump package.json first"
+            exit 1
+          fi
+          MTA_VERSION=$(sed -n 's/^version:[[:space:]]*//p' mta.yaml | head -1)
+          if [ "$MTA_VERSION" != "$VERSION" ]; then
+            echo "::error::tag version '$VERSION' does not match mta.yaml version '$MTA_VERSION' — keep mta.yaml in sync with package.json"
+            exit 1
+          fi
       
       - name: Set repository owner to lowercase
         id: repo
@@ -79,9 +100,11 @@ jobs:
         with:
           context: .
           push: true
+          # `latest` only for stable releases — an RC must never replace the
+          # stable container tag (empty list entries are ignored by the action).
           tags: |
             ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
-            ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:latest
+            ${{ steps.version.outputs.prerelease == 'false' && format('ghcr.io/{0}/odatano:latest', steps.repo.outputs.repository_owner_lowercase) || '' }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
@@ -101,4 +124,4 @@ jobs:
           files: odatano-${{ steps.version.outputs.version }}.tar.gz
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
