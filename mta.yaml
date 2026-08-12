@@ -85,11 +85,16 @@ modules:
   - name: odatanoviewwallet
     type: html5
     path: app/wallet
+    # npm audit here reports one moderate advisory (GHSA-jfc7-64v2-mr8c,
+    # @sigstore/core) plus inherited flags: pinned by @ui5/cli's own
+    # npm-shrinkwrap.json, so not fixable via overrides. Accepted risk —
+    # build-time tooling only, nothing from that tree is shipped. Revisit
+    # when @ui5/cli > 4.0.61 updates its shrinkwrap.
     build-parameters:
       build-result: dist
       builder: custom
       commands:
-        - npm install
+        - npm ci
         - npm run build
       supported-platforms:
         []
