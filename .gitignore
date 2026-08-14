@@ -94,8 +94,9 @@ output
 upstream-bugs/
 review.md
 
-# Draft release notes (local only)
+# Draft release notes (local only, NIGHTGATE convention)
 RELEASE_NOTES_*.md
+docs/release-*.md
 
 # Local review/PR working files (upstream PR texts live in the fork PRs)
 REVIEW_PLAN.md
