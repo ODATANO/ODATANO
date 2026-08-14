@@ -6,17 +6,20 @@
  */
 
 // Mock cds logger + utils (mappers.ts / tx-build-helper.ts import cds)
-jest.mock('@sap/cds', () => ({
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
   log: () => ({
-    info: jest.fn(),
-    debug: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
   utils: {
-    uuid: jest.fn(() => 'test-uuid-1234'),
+    uuid: vi.fn(() => 'test-uuid-1234'),
   },
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { applyScriptParameters } from '../../srv/utils/tx-build-helper';

@@ -25,6 +25,7 @@ import {
 // use internally.
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
+import { Cbor, CborArray } from '@harmoniclabs/cbor';
 
 import { parseTransaction } from '../../srv/cbor';
 import { isValidTxCborHex } from '../../srv/utils/validators';
@@ -246,10 +247,35 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(roundtrip.hash.toString()).toBe(script.hash.toString());
   });
 
-  // Re-enabled with @harmoniclabs/cardano-ledger-ts 0.5.6: AuxiliaryData.fromCborObj
-  // now treats all Conway script-collection fields as optional (our upstream PR),
-  // so metadata-only aux_data decodes instead of throwing.
-  it('parses metadata labels from auxiliary data', () => {
+  // The legacy Shelley aux-data format (plain metadata CborMap — still valid on-chain
+  // CBOR) decodes fine in ledger-ts, so extractMetadataLabels is testable end-to-end
+  // through parseTransaction today: build the tx (serializes aux data as Conway
+  // tag-259), then surgically swap the aux-data slot (tx = [body, wits, isValid, aux])
+  // to the legacy metadata map before parsing.
+  it('parses metadata labels from auxiliary data (legacy Shelley format)', () => {
+    const metadata = new TxMetadata({
+      '721': new TxMetadatumInt(1n),
+      '674': new TxMetadatumInt(2n),
+    });
+    const tx = buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 2_000_000n)],
+      auxiliaryData: new AuxiliaryData({ metadata }),
+    });
+
+    const txCbor = Cbor.parse(Buffer.from(cborHex(tx), 'hex')) as CborArray;
+    txCbor.array[3] = metadata.toCborObj(); // tag-259 → plain metadata map (Shelley)
+    const legacyHex = Buffer.from(Cbor.encode(txCbor)).toString('hex');
+
+    const parsed = parseTransaction(legacyHex);
+
+    expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
+  });
+
+  // Works natively since @harmoniclabs/cardano-ledger-ts 0.5.6: AuxiliaryData.fromCborObj
+  // treats all Conway script-collection fields as optional (our upstream PR), so
+  // metadata-only aux_data decodes instead of throwing. (The vendored runtime patch
+  // that previously enabled this is deleted.)
+  it('parses metadata labels from Conway tag-259 auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),
       '674': new TxMetadatumInt(2n),
@@ -262,6 +288,16 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     const parsed = parseTransaction(cborHex(tx));
 
     expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
+  });
+
+  it('preserves original Conway auxiliary-data CBOR through the runtime patch', () => {
+    // Key 0 is deliberately encoded non-canonically as 0x18 0x00. The parser must
+    // retain the original SubCborRef so a parse/toCbor round trip does not silently
+    // canonicalize and therefore change the auxiliary-data hash.
+    const originalHex = 'd90103a11800a0';
+    const auxiliaryData = AuxiliaryData.fromCbor(Buffer.from(originalHex, 'hex'));
+
+    expect(Buffer.from(auxiliaryData.toCbor()).toString('hex')).toBe(originalHex);
   });
 
   it('counts vkey witnesses on a signed-style CBOR', () => {

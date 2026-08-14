@@ -10,15 +10,20 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } from '../../srv/server';
-import { TransactionAlreadySubmittedError, ProviderUnavailableError } from '../../srv/utils/errors';
-import { redriveInterruptedSubmissions } from '../../srv/blockchain/signing/submission-finalizer';
+// require() shares the native module graph with the booted CAP server
+// (see signing-services.test.ts for the rationale).
+const { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } =
+  require('../../srv/server') as typeof import('../../srv/server');
+const { TransactionAlreadySubmittedError, ProviderUnavailableError } =
+  require('../../srv/utils/errors') as typeof import('../../srv/utils/errors');
+const { redriveInterruptedSubmissions } =
+  require('../../srv/blockchain/signing/submission-finalizer') as typeof import('../../srv/blockchain/signing/submission-finalizer');
 import { TEST_FIXTURES } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
 
 const { INSERT, SELECT, UPDATE } = cds.ql;
 
-jest.setTimeout(30000);
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
@@ -77,7 +82,7 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
 
   afterEach(() => {
     resetKoiosMocks();
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
@@ -154,7 +159,7 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
     const signingRequestId = await createSigningRequest();
     const signSrv = await cds.connect.to('CardanoSignService');
 
-    jest.spyOn(getCardanoClient(), 'submitTransaction')
+    vi.spyOn(getCardanoClient(), 'submitTransaction')
       .mockRejectedValue(new ProviderUnavailableError('node down', 'koios'));
 
     const result = await cds.tx(async (tx: cds.Transaction) => {
@@ -168,31 +173,34 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
     expect(result?.status).to.equal('pending');   // action itself succeeded
 
     const status = await waitForStatus(signingRequestId, ['submitted', 'failed']);
-    expect(status).to.equal('failed');            // durable although the caller succeeded
+    expect(status).to.equal('failed');            // I2: durable although the caller succeeded
   });
 
   it('re-drives an interrupted deferred submission at boot (idempotent via already-submitted)', async () => {
     const signingRequestId = await createSigningRequest();
 
     // Simulate the crash window: claimed on the deferred path (signed CBOR
-    // persisted), process died before the detached submit ran. Produce the
-    // combined CBOR by running the normal defer flow with a failing submit,
-    // then reset the row to the interrupted state.
+    // persisted), process died before the detached submit ran.
     const signSrv = await cds.connect.to('CardanoSignService');
-    jest.spyOn(getCardanoClient(), 'submitTransaction')
-      .mockRejectedValue(new ProviderUnavailableError('crash-window sim', 'koios'));
-    await signSrv.send('SubmitVerifiedTransaction', {
-      signingRequestId,
-      signedTxCbor: TEST_FIXTURES.witnessSetCbor,
-      deferSubmit: true,
-    });
-    await waitForStatus(signingRequestId, ['failed']);
-    jest.restoreAllMocks();
-
-    const row = await cds.run(
-      SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId })
-    ) as { signedTxCbor?: string };
-    expect(row?.signedTxCbor ?? '').to.not.equal('');
+    const fullSignedTxCbor = await (async () => {
+      // Produce the combined CBOR the claim would have persisted by running
+      // the normal defer flow with a submit that never happens (spy throws a
+      // non-already-submitted error → row 'failed'), then reset the row.
+      vi.spyOn(getCardanoClient(), 'submitTransaction')
+        .mockRejectedValue(new ProviderUnavailableError('crash-window sim', 'koios'));
+      await signSrv.send('SubmitVerifiedTransaction', {
+        signingRequestId,
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+        deferSubmit: true,
+      });
+      await waitForStatus(signingRequestId, ['failed']);
+      vi.restoreAllMocks();
+      const row = await cds.run(
+        SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId })
+      ) as { signedTxCbor?: string };
+      return row?.signedTxCbor ?? '';
+    })();
+    expect(fullSignedTxCbor).to.not.equal('');
 
     // Reset to the interrupted state: 'submitting' with persisted CBOR
     await cds.run(
@@ -202,14 +210,14 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
     );
 
     // Boot sweep: the node already holds the tx → finalize as submitted.
-    jest.spyOn(getCardanoClient(), 'submitTransaction')
+    vi.spyOn(getCardanoClient(), 'submitTransaction')
       .mockRejectedValue(new TransactionAlreadySubmittedError(TEST_FIXTURES.txBodyHash));
     const attempted = await redriveInterruptedSubmissions();
     expect(attempted).to.equal(1);
 
-    const finalRow = await cds.run(
+    const row = await cds.run(
       SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId })
     ) as { status?: string };
-    expect(finalRow?.status).to.equal('submitted');
+    expect(row?.status).to.equal('submitted');
   });
 });

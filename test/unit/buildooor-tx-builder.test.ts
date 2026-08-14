@@ -376,7 +376,7 @@ describe('BuildooorTxBuilder', () => {
       initialisedBuilder = new BuildooorTxBuilder();
       // Inject a minimal txBuilder stub: returns a fixed min-ADA so we can drive the guard predictably.
       (initialisedBuilder as any).txBuilder = {
-        getMinimumOutputLovelaces: jest.fn(() => 1_500_000n),
+        getMinimumOutputLovelaces: vi.fn(() => 1_500_000n),
       };
     });
 
@@ -784,7 +784,7 @@ describe('BuildooorTxBuilder', () => {
 
     it('falls back to now-2min / now+1h defaults when bounds are absent (script mode)', () => {
       const frozen = 1700000000000;
-      const spy = jest.spyOn(Date, 'now').mockReturnValue(frozen);
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(frozen);
       try {
         const { invalidBefore, invalidAfter } = resolve({}, 'script');
         expect(invalidBefore).toBe(BigInt(fakePosixToSlot(frozen - 120_000)));

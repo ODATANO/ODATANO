@@ -465,7 +465,7 @@ describe('CardanoClient Configuration', () => {
       // koios still works. Mock ogmios to fail and koios to succeed.
       const failingLiveBackend = {
         name: 'ogmios',
-        init: jest.fn().mockRejectedValue(new Error('WebSocket connection refused')),
+        init: vi.fn().mockRejectedValue(new Error('WebSocket connection refused')),
       };
       (client as any).liveBackend = failingLiveBackend;
 
@@ -490,7 +490,7 @@ describe('CardanoClient Configuration', () => {
       // Ogmios fails
       const failingLiveBackend = {
         name: 'ogmios',
-        init: jest.fn().mockRejectedValue(new Error('WebSocket connection refused')),
+        init: vi.fn().mockRejectedValue(new Error('WebSocket connection refused')),
       };
       (client as any).liveBackend = failingLiveBackend;
 
@@ -509,10 +509,10 @@ describe('CardanoClient Configuration', () => {
       const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
       const backend = {
         name: 'koios',
-        init: jest.fn()
+        init: vi.fn()
           .mockRejectedValueOnce(new Error('transient outage'))
           .mockResolvedValue(true),
-        getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo),
+        getNetworkInformation: vi.fn().mockResolvedValue(mockNetworkInfo),
       };
       (client as any).historicalBackends = [backend];
 
@@ -561,8 +561,8 @@ describe('CardanoClient Configuration', () => {
 
       // Inject two mock historical backends and mark as initialized
       const mockNetworkInfo = { supply: { max: '1', total: '1', circulating: '1', locked: '0', treasury: '0', reserves: '0' }, stake: { live: '0', active: '0' } };
-      const primaryBackend = { name: 'blockfrost', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
-      const fallbackBackend = { name: 'koios', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      const primaryBackend = { name: 'blockfrost', getNetworkInformation: vi.fn().mockResolvedValue(mockNetworkInfo) };
+      const fallbackBackend = { name: 'koios', getNetworkInformation: vi.fn().mockResolvedValue(mockNetworkInfo) };
       (client as any).historicalBackends = [primaryBackend, fallbackBackend];
       (client as any).initialized = true;
 
@@ -584,7 +584,7 @@ describe('CardanoClient Configuration', () => {
       const client = new CardanoClient(config);
 
       // Inject mock backend and mark as initialized
-      const mockBackend = { name: 'koios', getNetworkInformation: jest.fn() };
+      const mockBackend = { name: 'koios', getNetworkInformation: vi.fn() };
       (client as any).historicalBackends = [mockBackend];
       (client as any).initialized = true;
 
@@ -606,9 +606,9 @@ describe('CardanoClient Configuration', () => {
       const live = {
         name: 'ogmios',
         unsupportedMethods: new Set(['getNetworkInformation']),
-        getNetworkInformation: jest.fn().mockResolvedValue({ fabricated: true }),
+        getNetworkInformation: vi.fn().mockResolvedValue({ fabricated: true }),
       };
-      const historical = { name: 'koios', getNetworkInformation: jest.fn().mockResolvedValue(mockNetworkInfo) };
+      const historical = { name: 'koios', getNetworkInformation: vi.fn().mockResolvedValue(mockNetworkInfo) };
       (client as any).liveBackend = live;
       (client as any).historicalBackends = [historical];
       (client as any).initialized = true;
@@ -622,13 +622,13 @@ describe('CardanoClient Configuration', () => {
     });
 
     it('keeps the circuit closed on 4xx client errors but opens it on 5xx', async () => {
-      const { TransactionValidationError, RateLimitError, ProviderUnavailableError } = require('../../srv/utils/errors');
+      const { TransactionValidationError, RateLimitError, ProviderUnavailableError } = await import('../../srv/utils/errors');
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
       const mockBackend = {
         name: 'koios',
-        getNetworkInformation: jest.fn().mockRejectedValue(new TransactionValidationError('bad input')), // 400
+        getNetworkInformation: vi.fn().mockRejectedValue(new TransactionValidationError('bad input')), // 400
       };
       (client as any).historicalBackends = [mockBackend];
       (client as any).initialized = true;
@@ -668,7 +668,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).initialized = true;
 
       const txs = [{ hash: 'a'.repeat(64) }, { hash: 'b'.repeat(64) }] as any;
-      jest.spyOn(client, 'getAddressTransactions').mockResolvedValue(txs);
+      vi.spyOn(client, 'getAddressTransactions').mockResolvedValue(txs);
 
       const result = await client.getAddressTransactionHashes('addr_test1x', 2);
       expect(result).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
@@ -684,7 +684,7 @@ describe('CardanoClient Configuration', () => {
 
       const txHash1 = 'a'.repeat(64);
       const txHash2 = 'b'.repeat(64);
-      const getTxSpy = jest.spyOn(client, 'getTransaction')
+      const getTxSpy = vi.spyOn(client, 'getTransaction')
         .mockResolvedValueOnce({ hash: txHash1 } as any)
         .mockResolvedValueOnce({ hash: txHash2 } as any);
 
@@ -713,7 +713,7 @@ describe('CardanoClient Configuration', () => {
       // Replace historical backends with mocks that have shutdown
       const mockBackend = {
         name: 'mock-historical',
-        shutdown: jest.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
       };
       (client as any).historicalBackends = [mockBackend as any];
 
@@ -735,7 +735,7 @@ describe('CardanoClient Configuration', () => {
       // Mock backend with failing shutdown
       const failingBackend = {
         name: 'failing-backend',
-        shutdown: jest.fn().mockRejectedValue(new Error('Shutdown failed')),
+        shutdown: vi.fn().mockRejectedValue(new Error('Shutdown failed')),
       };
       (client as any).historicalBackends = [failingBackend as any];
 
@@ -756,7 +756,7 @@ describe('CardanoClient Configuration', () => {
       // Add a mock live backend with shutdown
       const mockLiveBackend = {
         name: 'ogmios',
-        shutdown: jest.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
       };
       (client as any).liveBackend = mockLiveBackend;
 
@@ -776,7 +776,7 @@ describe('CardanoClient Configuration', () => {
 
       const failingLiveBackend = {
         name: 'ogmios',
-        shutdown: jest.fn().mockRejectedValue(new Error('live shutdown failed')),
+        shutdown: vi.fn().mockRejectedValue(new Error('live shutdown failed')),
       };
       (client as any).liveBackend = failingLiveBackend;
 
@@ -797,7 +797,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).initialized = true;
       (client as any).liveBackend = {
         name: 'ogmios',
-        evaluateTransaction: jest.fn().mockResolvedValue(evaluation),
+        evaluateTransaction: vi.fn().mockResolvedValue(evaluation),
       };
 
       const result = await client.evaluateTransaction('deadbeef');
@@ -812,7 +812,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).liveBackend = {
         name: 'ogmios',
         // hanging socket — previously blocked Plutus builds indefinitely
-        evaluateTransaction: jest.fn().mockReturnValue(new Promise(() => { /* never settles */ })),
+        evaluateTransaction: vi.fn().mockReturnValue(new Promise(() => { /* never settles */ })),
       };
 
       await expect(client.evaluateTransaction('deadbeef')).rejects.toThrow(/timeout/i);
@@ -825,7 +825,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).initialized = true;
       (client as any).liveBackend = {
         name: 'ogmios',
-        evaluateTransaction: jest.fn().mockResolvedValue([]),
+        evaluateTransaction: vi.fn().mockResolvedValue([]),
       };
       const cb = (client as any).circuitBreaker;
       for (let i = 0; i < 6; i++) cb.recordFailure('ogmios');
@@ -840,18 +840,18 @@ describe('CardanoClient Configuration', () => {
   // ============================================================================
   describe('batch methods - resilience', () => {
     it('fails over to the next batch-capable backend and records the failure', async () => {
-      const { ProviderUnavailableError } = require('../../srv/utils/errors');
+      const { ProviderUnavailableError } = await import('../../srv/utils/errors');
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
       const txMap = new Map([['a'.repeat(64), { hash: 'a'.repeat(64) } as any]]);
       const failing = {
         name: 'blockfrost',
-        getTransactionsBatch: jest.fn().mockRejectedValue(new ProviderUnavailableError('down', 'blockfrost')),
+        getTransactionsBatch: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'blockfrost')),
       };
       const healthy = {
         name: 'koios',
-        getTransactionsBatch: jest.fn().mockResolvedValue(txMap),
+        getTransactionsBatch: vi.fn().mockResolvedValue(txMap),
       };
       (client as any).historicalBackends = [failing, healthy];
       (client as any).initialized = true;
@@ -898,7 +898,7 @@ describe('CardanoClient Configuration', () => {
       const fakeUtxos = [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr1...', amount: [] }];
       const koiosBackend = {
         name: 'koios',
-        getCredentialUtxos: jest.fn().mockResolvedValue(fakeUtxos),
+        getCredentialUtxos: vi.fn().mockResolvedValue(fakeUtxos),
       };
       (client as any).historicalBackends = [koiosBackend];
 
@@ -945,7 +945,7 @@ describe('CardanoClient Configuration', () => {
       const client = new CardanoClient(config);
 
       let resolveBackend: (utxos: any[]) => void = () => {};
-      const backendCall = jest.fn(() => new Promise<any[]>(resolve => { resolveBackend = resolve; }));
+      const backendCall = vi.fn(() => new Promise<any[]>(resolve => { resolveBackend = resolve; }));
       (client as any).historicalBackends = [{
         name: 'koios',
         getCredentialUtxos: backendCall,
@@ -972,7 +972,7 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
-      const backendCall = jest.fn().mockResolvedValue([]);
+      const backendCall = vi.fn().mockResolvedValue([]);
       (client as any).historicalBackends = [{
         name: 'koios',
         getCredentialUtxos: backendCall,
@@ -995,8 +995,8 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
-      const liveSlot = jest.fn().mockResolvedValue(80_000_001);
-      const histSlot = jest.fn().mockResolvedValue(80_000_999);
+      const liveSlot = vi.fn().mockResolvedValue(80_000_001);
+      const histSlot = vi.fn().mockResolvedValue(80_000_999);
       (client as any).liveBackend = { name: 'ogmios', getCurrentSlot: liveSlot };
       (client as any).historicalBackends = [{ name: 'koios', getCurrentSlot: histSlot }];
       (client as any).initialized = true;
@@ -1010,8 +1010,8 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
-      const liveSlot = jest.fn().mockRejectedValue(new ProviderUnavailableError('down', 'ogmios'));
-      const histSlot = jest.fn().mockResolvedValue(80_000_999);
+      const liveSlot = vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'ogmios'));
+      const histSlot = vi.fn().mockResolvedValue(80_000_999);
       (client as any).liveBackend = { name: 'ogmios', getCurrentSlot: liveSlot };
       (client as any).historicalBackends = [{ name: 'koios', getCurrentSlot: histSlot }];
       (client as any).initialized = true;
@@ -1028,8 +1028,8 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
-      const liveCheck = jest.fn().mockResolvedValue(true);
-      const histCheck = jest.fn().mockResolvedValue(false);
+      const liveCheck = vi.fn().mockResolvedValue(true);
+      const histCheck = vi.fn().mockResolvedValue(false);
       (client as any).liveBackend = { name: 'ogmios', isUtxoUnspent: liveCheck };
       (client as any).historicalBackends = [{ name: 'koios', isUtxoUnspent: histCheck }];
       (client as any).initialized = true;
@@ -1043,8 +1043,8 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['koios'] });
       const client = new CardanoClient(config);
 
-      const liveCheck = jest.fn().mockRejectedValue(new ProviderUnavailableError('field missing', 'blockfrost'));
-      const histCheck = jest.fn().mockResolvedValue(true);
+      const liveCheck = vi.fn().mockRejectedValue(new ProviderUnavailableError('field missing', 'blockfrost'));
+      const histCheck = vi.fn().mockResolvedValue(true);
       (client as any).liveBackend = { name: 'ogmios', isUtxoUnspent: liveCheck };
       (client as any).historicalBackends = [{ name: 'koios', isUtxoUnspent: histCheck }];
       (client as any).initialized = true;

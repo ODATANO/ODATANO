@@ -16,6 +16,10 @@ export {
   getCardanoTxBuilder,
   loadConfigFromEnv,
   loadHsmConfigFromEnv,
+  loadCrawlerConfigFromEnv,
+  startCrawlerIfConfigured,
+  loadWalletWorkerConfigFromEnv,
+  startWalletWorkerIfConfigured,
   shutdownAppContext,
 } from '../srv/server';
 
@@ -54,8 +58,14 @@ export async function initialize(): Promise<void> {
     logger.info('ODATANO core initialized');
   }
 
+  // Start the pre-sync crawler if configured (plugin mode). Non-fatal.
+  const { startCrawlerIfConfigured, startWalletWorkerIfConfigured, redriveInterruptedSubmissionsIfConfigured } = await import('../srv/server');
+  await startCrawlerIfConfigured();
+
+  // Start the wallet worker if configured (plugin mode). Non-fatal.
+  await startWalletWorkerIfConfigured();
+
   // Re-drive deferred submissions interrupted by a restart (plugin mode). Non-fatal.
-  const { redriveInterruptedSubmissionsIfConfigured } = await import('../srv/server');
   await redriveInterruptedSubmissionsIfConfigured();
 }
 

@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 ---
 
@@ -100,7 +100,7 @@ POST /GetMetadataByTxHash
 {
   "hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83",
   "blockHash": "cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39",
-  "slot": 12345678,
+  "slot": "12345678",
   "size": 450,
   "fee": "200000",
   "deposit": "0"
@@ -278,7 +278,7 @@ GET /Transactions?$expand=inputs,outputs
 {"error": {"code": "503", "message": "Provider service unavailable"}}
 ```
 
-**Fix:** Wait and retry (automatic failover to Koios after 8s timeout)
+**Fix:** Wait and retry (automatic failover after `PRIMARY_TIMEOUT_MS`, default 30s)
 
 ---
 
@@ -287,7 +287,7 @@ GET /Transactions?$expand=inputs,outputs
 ### Q: How long are results cached?
 
 **A:** 
-- **Temporal entities** (Addresses, Accounts): Configurable via `INDEX_TTL_MS` (default: 60s)
+- **Temporal entities** (Addresses, Accounts): Configurable via `INDEX_TTL_MS` (default: 3600000 ms = 1 hour)
 - **Non-temporal entities** (Transactions, Blocks): Permanent storage
 
 📚 See [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) for details
@@ -298,7 +298,7 @@ GET /Transactions?$expand=inputs,outputs
 - **Blockfrost:** Primary provider, faster (250-500 req/sec), requires API key
 - **Koios:** Fallback provider, free (10 req/sec), no API key needed
 
-Service tries Blockfrost first (8s timeout), then Koios (8s timeout)
+Service tries the first configured backend (`PRIMARY_TIMEOUT_MS`, default 30s), then the next (`FALLBACK_TIMEOUT_MS`, default 60s)
 
 ### Q: Can I query mainnet?
 
@@ -312,7 +312,7 @@ Supported: `mainnet`, `preview`, `preprod`
 1. **First request:** 1-5 seconds (fetches from blockchain)
 2. **Cached:** Instant (from database)
 3. **Temporal data expired:** Re-fetches (check `INDEX_TTL_MS`)
-4. **Provider timeout:** Up to 16s (8s per backend)
+4. **Provider timeout:** up to 30s primary + 60s fallback (`PRIMARY_TIMEOUT_MS` / `FALLBACK_TIMEOUT_MS`)
 
 **Note:** Transactions are cached permanently after first fetch
 
@@ -400,7 +400,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTr
   "id": "uuid-here",
   "unsignedTxCbor": "84a50081825820...",
   "txBodyHash": "abc123...",
-  "fee": 170000
+  "fee": "170000"
 }
 ```
 
@@ -616,12 +616,163 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 ---
 
+## Upgrading from 1.x to 2.0
+
+Three things are required, in this order:
+
+1. **CAP 10 and Node >= 22.5** — `@odatano/core@2` declares `@sap/cds >=10` as a peer dependency;
+   a CAP 9 host cannot load it.
+2. **Run `cds deploy`.** 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`,
+   `CardanoWorkerWallets`, `CardanoWalletJobs`) and a `dedupKey` column with a unique constraint.
+   Skip this and the new services answer `no such table`, while `getStatus` / `GetWorkerStatus`
+   return 500 — the pre-existing services keep working, so the omission is easy to miss.
+3. **Adapt numeric parsing.** CAP 10 serializes `Decimal`, `Int64` and `$count` as JSON **strings**.
+
+The crawler and the wallet worker are **off by default**; an upgraded deployment behaves exactly as
+before until you enable them.
+
+---
+
+## Chain Crawler / Pre-Sync (v2.0, opt-in)
+
+By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2.0 adds an optional **crawler** that pre-syncs `Blocks` and `Transactions` (+ inputs/outputs/assets/metadata) forward from a configured start block, so subsequent queries hit local data instead of a backend per request.
+
+**Enable it** (plugin config or env):
+
+```jsonc
+"cds": { "requires": { "odatano-core": {
+  "crawler": {
+    "enabled": true,
+    "startSlot": 12345678,
+    "startBlockHash": "abc...",
+    "source": "auto",            // ogmios (chain-sync, reorg-aware) | pagination (Blockfrost/Koios) | auto
+    "confirmationDepth": 3        // stay N blocks behind the tip
+  }
+}}}
+```
+
+The crawler starts automatically on server boot and resumes from its cursor after a restart. Ogmios is the preferred source (native rollback/reorg handling); Blockfrost/Koios are the fallback. Control + status via **CardanoIndexerService** at `/odata/v4/cardano-indexer/`:
+
+```http
+GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, tip, syncStatus, errors
+GET  /odata/v4/cardano-indexer/ReorgLog         # audit of handled rollbacks
+GET  /odata/v4/cardano-indexer/getStatus()      # live run state summary (function -> GET)
+POST /odata/v4/cardano-indexer/pauseCrawler
+POST /odata/v4/cardano-indexer/resumeCrawler
+```
+
+**Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10). See `CRAWLER_DESIGN.md` for the architecture.
+
+---
+
+## Wallet Worker (v2.0, opt-in)
+
+The wallet worker executes transactions **asynchronously** on behalf of server-side wallets: you queue a job, the worker builds, signs (software key or HSM), submits, and tracks the transaction until it reaches the configured confirmation depth. Per wallet only ONE job is in flight at a time, so UTxO contention between your own transactions is impossible by construction.
+
+**Enable it** (plugin config or env `WALLET_WORKER_ENABLED` + `WALLET_WORKER_WALLETS`):
+
+```jsonc
+"cds": { "requires": { "odatano-core": {
+  "walletWorker": {
+    "enabled": true,
+    "wallets": [
+      { "walletId": "treasury", "signerType": "software", "keyEnv": "TREASURY_SIGNING_KEY" },
+      { "walletId": "minter",   "signerType": "hsm" }
+    ],
+    "confirmationDepth": 3,          // job is 'confirmed' at this depth
+    "confirmationTimeoutMs": 600000, // unseen past this → failed:TX_DROPPED (safe to retry)
+    "defaultMaxAttempts": 3          // transient build/submit failures retry with backoff
+  }
+}}}
+```
+
+Software wallets read their signing key from the env var named in `keyEnv` — the key never appears in config or DB. The worker wallet is **always** the sender/change target; callers cannot spend from foreign addresses through a worker wallet.
+
+**Queue and track jobs** via **CardanoWorkerService** at `/odata/v4/cardano-worker/`:
+
+```http
+POST /odata/v4/cardano-worker/SubmitWalletJob
+Content-Type: application/json
+
+{
+  "walletId": "treasury",
+  "kind": "simpleAda",                       // simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned
+  "requestJson": "{\"recipientAddress\":\"addr_test1...\",\"lovelaceAmount\":\"2000000\"}",
+  "idempotencyKey": "invoice-4711"           // optional: same key = same job (safe retries)
+}
+```
+
+`requestJson` carries the **same payload shape as the corresponding Build\* action** of the transaction service (e.g. `assetsJson`, `mintActionsJson`, `metadataJson`, the Plutus-spend fields); `senderAddress`/`changeAddress` are overridden with the wallet's address. The response returns a `jobId` immediately.
+
+```http
+GET  /odata/v4/cardano-worker/GetJobStatus(jobId=<uuid>)   # function -> GET, param in the URL
+POST /odata/v4/cardano-worker/CancelJob        # pending jobs only
+GET  /odata/v4/cardano-worker/GetWorkerStatus()            # running, wallets, executing, awaitingConfirmation, pendingJobs
+POST /odata/v4/cardano-worker/PauseWorker      # Admin scope
+POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
+```
+
+**Job lifecycle:** `pending → building → submitting → submitted → confirmed`, with `failed` (terminal, `errorCode` set) and `cancelled` branches. Transient failures during build/sign (provider outage, rate limit, HSM hiccup) retry with exponential backoff up to `maxAttempts`; deterministic rejections (validation, insufficient funds) fail immediately. `failed` and `cancelled` jobs release their `idempotencyKey` for a retry. After a chain rollback the worker re-submits the **same signed CBOR** — never a rebuild — so a double payment cannot occur.
+
+**`idempotencyKey`:** a key is *owned* by one job at a time, enforced by a unique constraint in the database rather than by a lookup — so two retries that arrive at the same moment, on two app instances, still produce exactly one job (the loser of the race gets the winner's `jobId` back with `deduplicated: true`). `failed` and `cancelled` jobs release the key so the next retry really re-executes; `confirmed` jobs keep it, so a late duplicate resolves to the completed job instead of paying again.
+
+**`submitting` (double-payment guard):** the signed transaction and its hash are written to the job row *before* the transaction is handed to a backend. A crash or an ambiguous submit therefore never leaves a job that merely looks un-submitted: the row stays `submitting`, which keeps holding the `idempotencyKey` (your retry gets the same job back, not a new payment) and blocks the wallet queue. The worker resolves it by re-submitting those exact bytes and, if that is rejected, by checking whether the transaction is already on-chain. Such a job only fails once the chain proves the transaction is absent and unusable (`SUBMIT_REJECTED`, or `TX_DROPPED` past the confirmation timeout). A job sitting in `submitting` while a backend is unreachable is intentional — it is waiting for an answer that is safe to act on.
+
+**Operations:** job state lives in the DB (`CardanoWalletJobs`); multiple app instances coordinate via per-wallet leases — held by a heartbeat for as long as a job runs and re-checked immediately before the transaction is sent, so exactly one instance ever spends a given wallet, however long a build takes. Rolling deployments are safe. Confirmation tracking uses the crawler's block feed when the crawler is enabled, and falls back to polling otherwise. `PauseWorker`/`ResumeWorker` and the crawler actions require the **CardanoAdmin** role (`$XSAPPNAME.Admin` scope).
+
+**Authorization:** `SubmitWalletJob` requires an authenticated user, and submitting a job for a wallet with `signerType: "hsm"` additionally requires the role configured in `HSM_REQUIRES_ROLE` / `hsm.requiresRole` — the same gate that protects the synchronous `SignWithHsm` actions. Callers without that role get **403**, so the async job path cannot be used to spend an HSM wallet around the sign service's role check. Software wallets remain gated on authentication alone; restrict the service further at the app-router/XSUAA level if the deployment needs that.
+
+---
+
+## Events — subscribe instead of polling (v2.0)
+
+Both v2.0 subsystems publish CAP events. Because ODATANO ships as a **plugin**, a consumer
+runs in the same process, so subscribing needs **no message broker and no
+`cds.requires.messaging`** — connect to the service and listen:
+
+```js
+const indexer = await cds.connect.to('CardanoIndexerService');
+indexer.on('blockIndexed', ({ data }) => {
+  // data: { hash, slot, height, txHashes[], tipSlot, tipHeight }
+});
+indexer.on('reorg', ({ data }) => {
+  // data: { forkSlot, forkHeight, blocksRolledBack } — everything above forkSlot is gone
+});
+
+const worker = await cds.connect.to('CardanoWorkerService');
+worker.on('jobConfirmed', ({ data }) => {
+  // data: { jobId, walletId, kind, txHash }
+});
+worker.on('jobFailed', ({ data }) => {
+  // data: { jobId, walletId, kind, txHash, errorCode, errorMessage }
+});
+```
+
+`jobConfirmed` / `jobFailed` fire once per job, on the terminal outcome only — they replace a
+`GetJobStatus` poll loop. `blockIndexed` fires per crawled block, so treat it as a stream, not a
+notification.
+
+Three guarantees worth relying on:
+
+- **Emitted after commit.** When an event arrives, the data it names is already readable — the
+  job row shows `confirmed`, the block is queryable.
+- **Failures are yours alone.** A subscriber that throws or hangs is logged and ignored; it cannot
+  stall block ingestion or a wallet job.
+- **Fire-and-forget, in-process.** There is no retry and no persistence. If you need at-least-once
+  delivery across processes, configure a CAP messaging service — the same emits are then routed
+  through it (with the outbox) without a change on our side.
+
+Events do not appear in `$metadata`: OData V4 has no event concept, so this is additive and
+invisible to existing HTTP clients.
+
+---
+
 ## Support & Resources
 
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 35 test suites (25 unit + 10 integration), 96.58% statement coverage
+- **Test Docs:** [test/README.md](../../test/README.md) - 58 test files / 1908 tests (44 unit + 14 integration, vitest)
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/

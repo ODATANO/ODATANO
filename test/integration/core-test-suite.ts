@@ -17,7 +17,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
     // 200s — covers slow live-network reads (Koios pool/account lookups can take 10-30s).
     // Set inside the describe so the value is snapshotted when these tests are registered;
     // the sibling error-handling suite reverts to a tighter 20s for its own tests.
-    jest.setTimeout(200000);
+    vi.setConfig({ testTimeout: 200000, hookTimeout: 200000 });
 
     // cds.test() starts server which triggers cds.on('served') → creates AppContext automatically
     const test = cds.test(__dirname + '/../../');
@@ -112,8 +112,9 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
             const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
             // verify response data served from DB Not re-indexed
-            expect(data.value[0].maxSupply).to.equal(4500000000000000);
-            expect(data.value[0].circulatingSupply).to.equal(4500000000000000);
+            // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
+            expect(Number(data.value[0].maxSupply)).to.equal(4500000000000000);
+            expect(Number(data.value[0].circulatingSupply)).to.equal(4500000000000000);
             expect(status).to.equal(200);
           });
 
@@ -138,8 +139,9 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
             const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
             // verify response data served from DB Not re-indexed
-            expect(data.maxSupply).to.equal(4500000000000000);
-            expect(data.circulatingSupply).to.equal(4500000000000000);
+            // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
+            expect(Number(data.maxSupply)).to.equal(4500000000000000);
+            expect(Number(data.circulatingSupply)).to.equal(4500000000000000);
             expect(status).to.equal(200);
           });
         });
@@ -915,7 +917,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect(data).to.have.property('active');
             expect(data.active).to.be.true;
             expect(data).to.have.property('controlledAmount');
-            expect(data.controlledAmount).to.equal(1000000);
+            expect(Number(data.controlledAmount)).to.equal(1000000); // CAP 10: Lovelace → string
             expect(status).to.equal(200);
           });
 
@@ -942,7 +944,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect(data).to.have.property('active');
             expect(data.active).to.be.true;
             expect(data).to.have.property('rewardsSum');
-            expect(data.rewardsSum).to.equal(500000);
+            expect(Number(data.rewardsSum)).to.equal(500000); // CAP 10: Lovelace → string
             expect(status).to.equal(200);
           });
         });

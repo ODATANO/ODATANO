@@ -4,43 +4,43 @@
  */
 
 // Mock CDS entities and QL operators
-const mockRun = jest.fn().mockResolvedValue(undefined);
+const mockRun = vi.fn().mockResolvedValue(undefined);
 const mockTx = { run: mockRun };
 
-jest.mock('@sap/cds', () => {
-  const mockEntries = jest.fn().mockReturnValue({});
-  const mockFrom = jest.fn().mockReturnValue({
-    columns: jest.fn().mockReturnValue({
-      where: jest.fn().mockReturnValue({})
+vi.mock('@sap/cds', () => {
+  const mockEntries = vi.fn().mockReturnValue({});
+  const mockFrom = vi.fn().mockReturnValue({
+    columns: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({})
     }),
-    where: jest.fn().mockReturnValue({})
+    where: vi.fn().mockReturnValue({})
   });
-  const mockEntity = jest.fn().mockReturnValue({
-    set: jest.fn().mockReturnValue({
-      where: jest.fn().mockReturnValue({})
+  const mockEntity = vi.fn().mockReturnValue({
+    set: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({})
     })
   });
   const mockOne = {
-    from: jest.fn().mockReturnValue({
-      where: jest.fn().mockReturnValue({
-        orderBy: jest.fn().mockReturnValue({})
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        orderBy: vi.fn().mockReturnValue({})
       })
     })
   };
 
-  return {
-    log: jest.fn(() => ({
-      info: jest.fn(),
-      debug: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
+  const cdsMock = {
+    log: vi.fn(() => ({
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
     })),
     utils: {
-      uuid: jest.fn(() => 'test-uuid-1234'),
+      uuid: vi.fn(() => 'test-uuid-1234'),
     },
     ql: {
-      UPSERT: { into: jest.fn().mockReturnValue({ entries: mockEntries }) },
-      INSERT: { into: jest.fn().mockReturnValue({ entries: mockEntries }) },
+      UPSERT: { into: vi.fn().mockReturnValue({ entries: mockEntries }) },
+      INSERT: { into: vi.fn().mockReturnValue({ entries: mockEntries }) },
       UPDATE: { entity: mockEntity },
       SELECT: {
         from: mockFrom,
@@ -48,10 +48,11 @@ jest.mock('@sap/cds', () => {
       },
     },
   };
+  return { default: cdsMock, ...cdsMock };
 });
 
 // Mock all CDS entity imports
-jest.mock('#cds-models/CardanoODataService', () => ({
+vi.mock('#cds-models/CardanoODataService', () => ({
   Addresses: 'Addresses',
   Transaction: 'Transaction',
   AddressAssets: 'AddressAssets',
@@ -78,9 +79,9 @@ jest.mock('#cds-models/CardanoODataService', () => ({
   Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter',
   AddressTransactions: 'AddressTransactions',
-}), { virtual: true });
+}));
 
-jest.mock('#cds-models/CardanoTransactionService', () => ({
+vi.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionBuild: 'TransactionBuild',
   TransactionBuilds: 'TransactionBuilds',
   TransactionBuildInputs: 'TransactionBuildInputs',
@@ -88,52 +89,52 @@ jest.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionSubmission: 'TransactionSubmission',
   TransactionSubmissions: 'TransactionSubmissions',
   AddressTransactionBuilds: 'AddressTransactionBuilds',
-}), { virtual: true });
+}));
 
-jest.mock('#cds-models/CardanoSignService', () => ({
+vi.mock('#cds-models/CardanoSignService', () => ({
   SigningRequests: 'SigningRequests',
   SignatureVerifications: 'SignatureVerifications',
   AddressSigningRequests: 'AddressSigningRequests',
-}), { virtual: true });
+}));
 
 // Mock the mapper functions
-jest.mock('../../srv/utils/mappers', () => ({
-  mapTransaction: jest.fn((tx: any) => ({ hash: tx.hash, block_hash: tx.blockHash })),
-  mapTransactionInputs: jest.fn(() => []),
-  mapTransactionInputAssets: jest.fn(() => []),
-  mapTransactionOutputs: jest.fn(() => []),
-  mapTransactionOutputAssets: jest.fn(() => []),
-  mapAddress: jest.fn((addr: string) => ({
+vi.mock('../../srv/utils/mappers', () => ({
+  mapTransaction: vi.fn((tx: any) => ({ hash: tx.hash, block_hash: tx.blockHash })),
+  mapTransactionInputs: vi.fn(() => []),
+  mapTransactionInputAssets: vi.fn(() => []),
+  mapTransactionOutputs: vi.fn(() => []),
+  mapTransactionOutputAssets: vi.fn(() => []),
+  mapAddress: vi.fn((addr: string) => ({
     address: addr,
     validFrom: new Date().toISOString(),
     validTo: new Date(Date.now() + 3600000).toISOString(),
   })),
-  mapAddressAssets: jest.fn(() => []),
-  mapAddressUtxos: jest.fn(() => []),
-  mapAddressUtxoAssets: jest.fn(() => []),
-  mapNetworkInfo: jest.fn(() => ({})),
-  mapBlock: jest.fn((blockInfo: any, epoch: any) => ({
+  mapAddressAssets: vi.fn(() => []),
+  mapAddressUtxos: vi.fn(() => []),
+  mapAddressUtxoAssets: vi.fn(() => []),
+  mapNetworkInfo: vi.fn(() => ({})),
+  mapBlock: vi.fn((blockInfo: any, epoch: any) => ({
     hash: blockInfo.hash || 'block-hash',
     epochNumber: epoch?.epoch ?? blockInfo.epoch,
   })),
-  mapEpoch: jest.fn((epochInfo: any) => ({ epoch: epochInfo.epoch })),
-  mapAccount: jest.fn((info: any) => ({
+  mapEpoch: vi.fn((epochInfo: any) => ({ epoch: epochInfo.epoch })),
+  mapAccount: vi.fn((info: any) => ({
     stakeaddress: info.stakeaddress,
     hasAddresses: info.addresses?.length > 0,
   })),
-  mapAsset: jest.fn((info: any) => ({ unit: info.unit, totalSupply: info.totalSupply })),
-  mapAssetHistory: jest.fn((entries: any[]) => entries.map((e: any) => ({ unit: e.unit, txHash: e.txHash }))),
-  mapDrep: jest.fn(() => ({})),
-  mapPool: jest.fn(() => ({})),
-  mapTransactionMetadata: jest.fn(() => []),
-  mapBuildResult: jest.fn(() => ({ id: 'build-1' })),
-  mapBuildInputs: jest.fn(() => []),
-  mapBuildOutputs: jest.fn(() => []),
-  mapProtocolParameters: jest.fn(() => ({})),
-  mapTransactionSubmission: jest.fn(() => ({ id: 'sub-1' })),
-  mapAddressTransactions: jest.fn(() => []),
-  mapAddressSigningRequest: jest.fn(() => ({})),
-  mapAddressTransactionBuild: jest.fn(() => ({})),
+  mapAsset: vi.fn((info: any) => ({ unit: info.unit, totalSupply: info.totalSupply })),
+  mapAssetHistory: vi.fn((entries: any[]) => entries.map((e: any) => ({ unit: e.unit, txHash: e.txHash }))),
+  mapDrep: vi.fn(() => ({})),
+  mapPool: vi.fn(() => ({})),
+  mapTransactionMetadata: vi.fn(() => []),
+  mapBuildResult: vi.fn(() => ({ id: 'build-1' })),
+  mapBuildInputs: vi.fn(() => []),
+  mapBuildOutputs: vi.fn(() => []),
+  mapProtocolParameters: vi.fn(() => ({})),
+  mapTransactionSubmission: vi.fn(() => ({ id: 'sub-1' })),
+  mapAddressTransactions: vi.fn(() => []),
+  mapAddressSigningRequest: vi.fn(() => ({})),
+  mapAddressTransactionBuild: vi.fn(() => ({})),
 }));
 
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
@@ -142,35 +143,35 @@ function createMockClient(overrides: Record<string, any> = {}) {
   return {
     max_age_ms: 3600000,
     network: 'preview',
-    getTransaction: jest.fn(),
-    getAddress: jest.fn(),
-    getBlock: jest.fn(),
-    getEpoch: jest.fn(),
-    getLatestEpoch: jest.fn(),
-    getLatestBlock: jest.fn(),
-    getNetworkInformation: jest.fn(),
-    getAccount: jest.fn(),
-    getDrep: jest.fn(),
-    getPool: jest.fn(),
-    getProtocolParameters: jest.fn(),
-    getTransactionMetadata: jest.fn(),
-    getAddressTransactionHashes: jest.fn(),
-    getTransactionsBatch: jest.fn(),
-    getCredentialUtxos: jest.fn(),
-    getAddressUtxos: jest.fn(),
-    getAssetInfo: jest.fn(),
-    getAssetHistory: jest.fn(),
+    getTransaction: vi.fn(),
+    getAddress: vi.fn(),
+    getBlock: vi.fn(),
+    getEpoch: vi.fn(),
+    getLatestEpoch: vi.fn(),
+    getLatestBlock: vi.fn(),
+    getNetworkInformation: vi.fn(),
+    getAccount: vi.fn(),
+    getDrep: vi.fn(),
+    getPool: vi.fn(),
+    getProtocolParameters: vi.fn(),
+    getTransactionMetadata: vi.fn(),
+    getAddressTransactionHashes: vi.fn(),
+    getTransactionsBatch: vi.fn(),
+    getCredentialUtxos: vi.fn(),
+    getAddressUtxos: vi.fn(),
+    getAssetInfo: vi.fn(),
+    getAssetHistory: vi.fn(),
     ...overrides,
   } as any;
 }
 
 function createMockTxBuilder(overrides: Record<string, any> = {}) {
   return {
-    buildSimpleAdaTransaction: jest.fn(),
-    buildTransactionWithMetadata: jest.fn(),
-    buildMultiAssetTransaction: jest.fn(),
-    buildMintTransaction: jest.fn(),
-    buildPlutusSpendTransaction: jest.fn(),
+    buildSimpleAdaTransaction: vi.fn(),
+    buildTransactionWithMetadata: vi.fn(),
+    buildMultiAssetTransaction: vi.fn(),
+    buildMintTransaction: vi.fn(),
+    buildPlutusSpendTransaction: vi.fn(),
     ...overrides,
   } as any;
 }
@@ -181,7 +182,7 @@ describe('CardanoIndexer', () => {
   let mockTxBuilder: any;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockRun.mockResolvedValue(undefined);
     mockClient = createMockClient();
     mockTxBuilder = createMockTxBuilder();
@@ -196,7 +197,7 @@ describe('CardanoIndexer', () => {
         utxos: [],
       });
 
-      const mapAddressAssets = require('../../srv/utils/mappers').mapAddressAssets;
+      const mapAddressAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressAssets);
       mapAddressAssets.mockReturnValue([]); // no assets
 
       await indexer.indexAddress(mockTx as any, 'addr_test1qlovelace');
@@ -213,10 +214,10 @@ describe('CardanoIndexer', () => {
         utxos: [],
       });
 
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       mapAddressUtxos.mockReturnValue([]); // no utxos
 
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       mapAddressUtxoAssets.mockReturnValue([]); // no utxo assets
 
       await indexer.indexAddress(mockTx as any, 'addr_test1qempty');
@@ -232,7 +233,7 @@ describe('CardanoIndexer', () => {
         utxos: [{ txHash: 'tx1', outputIndex: 0, address: 'addr_test1qfail', amount: [{ unit: 'lovelace', quantity: '5000000' }] }],
       });
 
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       mapAddressUtxoAssets.mockReturnValue([
         { utxo_address_address: 'addr_test1qfail', utxo_hash: 'tx1', utxo_index: 0, unit: 'lovelace' }
       ]);
@@ -262,10 +263,10 @@ describe('CardanoIndexer', () => {
         }],
       });
 
-      const mapAddressAssets = require('../../srv/utils/mappers').mapAddressAssets;
-      mapAddressAssets.mockReturnValue([{ unit: 'policyabc.token1', quantity: '100' }]);
+      const mapAddressAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressAssets);
+      mapAddressAssets.mockReturnValue([{ unit: 'policyabc.token1', quantity: '100' } as any]);
 
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       mapAddressUtxoAssets.mockReturnValue([]);
 
       await indexer.indexAddress(mockTx as any, 'addr_test1qassets');
@@ -302,10 +303,10 @@ describe('CardanoIndexer', () => {
         new Map([['tx1', { hash: 'tx1', blockHash: 'b1', inputs: [], outputs: [], metadata: [] }]])
       );
 
-      const mapAddressTransactions = require('../../srv/utils/mappers').mapAddressTransactions;
+      const mapAddressTransactions = vi.mocked((await import('../../srv/utils/mappers')).mapAddressTransactions);
       mapAddressTransactions.mockReturnValue([
-        { hash: 'tx1', blockTime: 1000 },
-        { hash: 'tx2', blockTime: 2000 },
+        { hash: 'tx1', blockTime: 1000 } as any,
+        { hash: 'tx2', blockTime: 2000 } as any,
       ]);
 
       const result = await indexer.indexAddressTransactions(mockTx as any, 'addr_test1q', 10);
@@ -348,8 +349,8 @@ describe('CardanoIndexer', () => {
 
   describe('persistSignatureVerification', () => {
     it('should set status to "failed" when signature is invalid', async () => {
-      const cds = require('@sap/cds');
-      cds.utils.uuid.mockReturnValue('ver-uuid');
+      const cds = await import('@sap/cds');
+      vi.mocked(cds.utils.uuid).mockReturnValue('ver-uuid');
 
       await indexer.persistSignatureVerification(mockTx as any, {
         signingRequestId: 'sr-1',
@@ -369,8 +370,8 @@ describe('CardanoIndexer', () => {
     });
 
     it('should set status to "verified" when signature is valid', async () => {
-      const cds = require('@sap/cds');
-      cds.utils.uuid.mockReturnValue('ver-uuid-2');
+      const cds = await import('@sap/cds');
+      vi.mocked(cds.utils.uuid).mockReturnValue('ver-uuid-2');
 
       await indexer.persistSignatureVerification(mockTx as any, {
         signingRequestId: 'sr-2',
@@ -392,7 +393,7 @@ describe('CardanoIndexer', () => {
 
   describe('updateSubmissionStatus', () => {
     it('should update status without error message', async () => {
-      const cds = require('@sap/cds');
+      const cds = await import('@sap/cds');
 
       await indexer.updateSubmissionStatus(mockTx as any, 'sub-1', 'submitted');
 
@@ -401,7 +402,7 @@ describe('CardanoIndexer', () => {
     });
 
     it('should update status with error message', async () => {
-      const cds = require('@sap/cds');
+      const cds = await import('@sap/cds');
 
       await indexer.updateSubmissionStatus(mockTx as any, 'sub-2', 'failed', 'Transaction rejected');
 
@@ -420,7 +421,7 @@ describe('CardanoIndexer', () => {
       });
       mockClient.getEpoch.mockRejectedValue(new Error('Epoch not found'));
 
-      const mapBlock = require('../../srv/utils/mappers').mapBlock;
+      const mapBlock = vi.mocked((await import('../../srv/utils/mappers')).mapBlock);
       mapBlock.mockReturnValue({ hash: 'block-123', epochNumber: 999 });
 
       const result = await indexer.indexBlock(mockTx as any, 'block-123');
@@ -441,7 +442,7 @@ describe('CardanoIndexer', () => {
       });
       mockClient.getEpoch.mockRejectedValue(new Error('Epoch not available'));
 
-      const mapBlock = require('../../srv/utils/mappers').mapBlock;
+      const mapBlock = vi.mocked((await import('../../srv/utils/mappers')).mapBlock);
       mapBlock.mockReturnValue({ hash: 'latest-block', epochNumber: 1000 });
 
       const result = await indexer.indexLatestBlock(mockTx as any);
@@ -463,7 +464,7 @@ describe('CardanoIndexer', () => {
     });
 
     it('should persist submission with buildId and update build status', async () => {
-      const cds = require('@sap/cds');
+      const cds = await import('@sap/cds');
 
       const result = await indexer.persistTransactionSubmission(mockTx as any, {
         signedTxCbor: 'cbor-hex',
@@ -524,7 +525,7 @@ describe('CardanoIndexer', () => {
         { txHash: 'c'.repeat(64), outputIndex: 1, address: ADDR_WITH_STAKE, amount: [{ unit: 'lovelace', quantity: '3' }] },
       ]);
 
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       // Return one row per input UTxO so we can count grouping
       mapAddressUtxos.mockImplementation((addr: string, _vf: string, _vt: string, group: any[]) =>
         group.map((u: any) => ({ address_address: addr, hash: u.txHash, index: u.outputIndex, lovelace: u.amount[0].quantity }))
@@ -557,10 +558,10 @@ describe('CardanoIndexer', () => {
         },
       ]);
 
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       mapAddressUtxos.mockReturnValue([{ address_address: ADDR_WITH_STAKE, hash: 'a'.repeat(64), index: 0 }]);
 
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       // Simulate a duplicate row to verify dedup logic runs
       mapAddressUtxoAssets.mockReturnValue([
         { utxo_address_address: ADDR_WITH_STAKE, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: ASSET },
@@ -579,11 +580,11 @@ describe('CardanoIndexer', () => {
       mockClient.getCredentialUtxos.mockResolvedValue([
         { txHash: 'a'.repeat(64), outputIndex: 0, address: ADDR_WITH_STAKE, amount: [{ unit: 'lovelace', quantity: '1' }] },
       ]);
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       mapAddressUtxos.mockReturnValue([{ address_address: ADDR_WITH_STAKE, hash: 'a'.repeat(64), index: 0 }]);
 
       // Verify parent Addresses entity is NEVER UPSERTed during credential indexing
-      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
       upsertInto.mockClear();
 
       await indexer.indexCredentialUtxos(mockTx as any, CRED);
@@ -598,9 +599,9 @@ describe('CardanoIndexer', () => {
 
     it('skips all UPSERTs and returns [] when the address holds no UTxOs', async () => {
       mockClient.getAddressUtxos.mockResolvedValue([]);
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       mapAddressUtxos.mockReturnValue([]);
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       mapAddressUtxoAssets.mockReturnValue([]);
 
       const result = await indexer.indexAddressUtxos(mockTx as any, ADDR);
@@ -617,9 +618,9 @@ describe('CardanoIndexer', () => {
         { txHash: 'a'.repeat(64), outputIndex: 0, address: ADDR, amount: [{ unit: 'lovelace', quantity: '5' }, { unit: 'policy.tok', quantity: '1' }] },
       ]);
       const utxoRows = [{ address_address: ADDR, hash: 'a'.repeat(64), index: 0 }];
-      const mapAddressUtxos = require('../../srv/utils/mappers').mapAddressUtxos;
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       mapAddressUtxos.mockReturnValue(utxoRows);
-      const mapAddressUtxoAssets = require('../../srv/utils/mappers').mapAddressUtxoAssets;
+      const mapAddressUtxoAssets = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxoAssets);
       // include a duplicate to exercise the dedup filter
       mapAddressUtxoAssets.mockReturnValue([
         { utxo_address_address: ADDR, utxo_hash: 'a'.repeat(64), utxo_index: 0, unit: 'policy.tok' },
@@ -660,7 +661,7 @@ describe('CardanoIndexer', () => {
       };
       mockClient.getAssetInfo.mockResolvedValue(mockInfo);
 
-      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
       upsertInto.mockClear();
 
       const result = await indexer.indexAsset(mockTx as any, UNIT);
@@ -683,7 +684,7 @@ describe('CardanoIndexer', () => {
     it('returns empty array and skips UPSERT when client returns no events', async () => {
       mockClient.getAssetHistory.mockResolvedValue([]);
 
-      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
       upsertInto.mockClear();
 
       const result = await indexer.indexAssetHistory(mockTx as any, UNIT);
@@ -698,7 +699,7 @@ describe('CardanoIndexer', () => {
         { unit: UNIT, txHash: 'b'.repeat(64), action: 'mint', quantity: '1', blockTime: 1, blockHeight: 1 },
       ]);
 
-      const upsertInto = require('@sap/cds').ql.UPSERT.into;
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
       upsertInto.mockClear();
 
       const result = await indexer.indexAssetHistory(mockTx as any, UNIT, 25);

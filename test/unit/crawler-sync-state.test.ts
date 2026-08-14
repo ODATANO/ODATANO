@@ -1,0 +1,272 @@
+/**
+ * Chain crawler — sync-state cursor helpers (C1/C7).
+ * Mocks the @sap/cds CQL layer (matching the repo's indexer-test style) and drives the
+ * cursor primitives through a fake `db.run`, asserting the CQL payloads and the CAP-10
+ * numeric-as-string normalization.
+ */
+
+// UPDATE/INSERT builders echo their payload so tests can inspect what would be written.
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  ql: {
+    SELECT: { one: { from: () => ({ where: () => ({ _op: 'SELECT.one' }) }) } },
+    INSERT: { into: () => ({ entries: (rows: unknown) => ({ _op: 'INSERT', entries: rows }) }) },
+    UPDATE: { entity: () => ({ set: (s: unknown) => ({ where: (w: unknown) => ({ _op: 'UPDATE', set: s, where: w }) }) }) },
+  },
+};
+  return { default: cdsMock, ...cdsMock };
+});
+
+// The typed entity proxies need the real cds runtime — stub them with plain names.
+vi.mock('#cds-models/odatano/cardano', () => ({
+  CardanoSyncState: 'odatano.cardano.CardanoSyncState',
+}));
+
+import type { Mock } from 'vitest';
+import {
+  ensureSyncStateSingleton,
+  readCursor,
+  advanceCursor,
+  resetCursorTo,
+  setSyncStatus,
+  recordError,
+  SINGLETON_ID,
+  MAX_CONSECUTIVE_ERRORS,
+  tryAcquireCrawlerLease,
+  renewCrawlerLease,
+  releaseCrawlerLease,
+  setCrawlerDesiredRunning,
+  isCrawlerLeaseActive,
+} from '../../srv/blockchain/crawler/sync-state';
+
+type FakeDb = { run: Mock };
+const makeDb = (): FakeDb => ({ run: vi.fn() });
+
+describe('sync-state: ensureSyncStateSingleton', () => {
+  it('INSERTs a new singleton with the configured start point when none exists', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce(undefined); // SELECT.one -> not found
+
+    const cursor = await ensureSyncStateSingleton(db as never, 'preview', { slot: 100, hash: 'aa', height: 7 });
+
+    const insertCall = db.run.mock.calls.find(c => (c[0] as { _op?: string })?._op === 'INSERT');
+    expect(insertCall).toBeDefined();
+    const entries = (insertCall![0] as { entries: Record<string, unknown> }).entries;
+    expect(entries).toMatchObject({
+      ID: SINGLETON_ID,
+      network: 'preview',
+      startSlot: 100,
+      startBlockHash: 'aa',
+      lastSlot: 100,
+      lastBlockHash: 'aa',
+      lastHeight: 7,
+      syncStatus: 'stopped',
+    });
+    expect(cursor.lastSlot).toBe(100);
+    expect(cursor.startBlockHash).toBe('aa');
+  });
+
+  it('returns the existing cursor without INSERT when the singleton is present', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ ID: SINGLETON_ID, network: 'preview', lastSlot: '55', lastBlockHash: 'bb', lastHeight: '3', syncStatus: 'syncing' });
+
+    const cursor = await ensureSyncStateSingleton(db as never, 'preview');
+
+    expect(db.run.mock.calls.some(c => (c[0] as { _op?: string })?._op === 'INSERT')).toBe(false);
+    expect(cursor.lastSlot).toBe(55);
+    expect(cursor.lastBlockHash).toBe('bb');
+  });
+
+  it('rejects an existing cursor from a different network', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ ID: SINGLETON_ID, network: 'mainnet' });
+
+    await expect(ensureSyncStateSingleton(db as never, 'preview')).rejects.toThrow(/network mismatch/i);
+  });
+});
+
+describe('sync-state: cluster lease', () => {
+  function stateDb(initial: Record<string, unknown>) {
+    const state = { ...initial };
+    const db = makeDb();
+    db.run.mockImplementation(async (query: { _op: string; set?: Record<string, unknown>; where?: Record<string, unknown> }) => {
+      if (query._op === 'SELECT.one') return { ...state };
+      if (query._op === 'UPDATE') {
+        const matches = Object.entries(query.where ?? {}).every(([key, value]) => (state[key] ?? null) === value);
+        if (!matches) return { affectedRows: 0 };
+        const set = { ...(query.set ?? {}) };
+        if (typeof set.leaseUntil === 'string') {
+          // Simulate an adapter normalizing Timestamp precision and string format.
+          set.leaseUntil = new Date(Math.floor(Date.parse(set.leaseUntil) / 1000) * 1000).toISOString();
+        }
+        Object.assign(state, set);
+        return { affectedRows: 1 };
+      }
+      return undefined;
+    });
+    return { db, state };
+  }
+
+  const base = {
+    ID: SINGLETON_ID, network: 'preview', desiredRunning: true,
+    leaseOwner: null, leaseUntil: null, syncStatus: 'stopped',
+  };
+
+  it('elects one owner and rejects a second owner while the normalized lease is live', async () => {
+    const { db } = stateDb(base);
+    const now = new Date('2026-01-01T00:00:00.500Z');
+
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', now, 15_000)).resolves.toBe(true);
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-b', now, 15_000)).resolves.toBe(false);
+  });
+
+  it('allows failover after expiry and fences renewal/release by owner', async () => {
+    const { db, state } = stateDb({
+      ...base, leaseOwner: 'dead-owner', leaseUntil: '2025-12-31T23:59:00.000Z',
+    });
+    const now = new Date('2026-01-01T00:00:00.500Z');
+
+    await expect(tryAcquireCrawlerLease(db as never, 'new-owner', now, 15_000)).resolves.toBe(true);
+    await expect(renewCrawlerLease(db as never, 'dead-owner', now, 15_000)).resolves.toBe(false);
+    await releaseCrawlerLease(db as never, 'dead-owner', 'error');
+
+    expect(state.leaseOwner).toBe('new-owner');
+    expect(isCrawlerLeaseActive(await readCursor(db as never), now)).toBe(true);
+  });
+
+  it('an errored release keeps the cluster runnable — a restart must resume', async () => {
+    // The regression this guards: a dropped chain-sync socket (node restart,
+    // provider blip) used to clear desiredRunning, which no restart undoes. The
+    // pre-sync then stayed silently down until someone called resumeCrawler.
+    const { db, state } = stateDb({ ...base, leaseOwner: 'owner-a', leaseUntil: '2099-01-01T00:00:00.000Z' });
+
+    await releaseCrawlerLease(db as never, 'owner-a', 'error');
+
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: true, leaseOwner: null });
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', new Date(), 15_000)).resolves.toBe(true);
+  });
+
+  it('latches the cluster only when the caller says the failure is unrecoverable', async () => {
+    const { db, state } = stateDb({ ...base, leaseOwner: 'owner-a', leaseUntil: '2099-01-01T00:00:00.000Z' });
+
+    await releaseCrawlerLease(db as never, 'owner-a', 'error', true);
+
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: false });
+    // …and stays down across restarts until an operator resumes.
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', new Date(), 15_000)).resolves.toBe(false);
+  });
+
+  it('setSyncStatus latches only on request (no lease held path)', async () => {
+    const { db, state } = stateDb(base);
+
+    await setSyncStatus(db as never, 'error');
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: true });
+
+    await setSyncStatus(db as never, 'error', true);
+    expect(state).toMatchObject({ syncStatus: 'error', desiredRunning: false });
+  });
+
+  it('shared pause prevents acquisition immediately', async () => {
+    const { db, state } = stateDb(base);
+    await setCrawlerDesiredRunning(db as never, false);
+
+    await expect(tryAcquireCrawlerLease(db as never, 'owner', new Date(), 15_000)).resolves.toBe(false);
+    expect(state).toMatchObject({ desiredRunning: false, syncStatus: 'stopped' });
+  });
+});
+
+describe('sync-state: readCursor CAP-10 numeric normalization', () => {
+  it('coerces Integer64/Decimal string reads back to numbers', async () => {
+    const db = makeDb();
+    // CAP 10 returns Int64/Decimal columns as STRINGS even via db.run
+    db.run.mockResolvedValueOnce({
+      lastSlot: '123456789',
+      lastHeight: '42',
+      tipSlot: '999',
+      tipHeight: '50',
+      consecutiveErrors: '2',
+      syncStatus: 'syncing',
+      lastBlockHash: 'cc',
+    });
+
+    const cursor = await readCursor(db as never);
+    expect(cursor).not.toBeNull();
+    expect(cursor!.lastSlot).toBe(123456789);
+    expect(typeof cursor!.lastSlot).toBe('number');
+    expect(cursor!.lastHeight).toBe(42);
+    expect(cursor!.tipHeight).toBe(50);
+    expect(cursor!.consecutiveErrors).toBe(2);
+    expect(cursor!.syncStatus).toBe('syncing');
+  });
+
+  it('returns null when the singleton is absent', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce(undefined);
+    expect(await readCursor(db as never)).toBeNull();
+  });
+});
+
+describe('sync-state: advanceCursor / resetCursorTo / setSyncStatus', () => {
+  it('advanceCursor sets the block, marks syncing and clears the error streak', async () => {
+    const db = makeDb();
+    await advanceCursor(db as never, { slot: 10, hash: 'h', height: 4 }, { slot: 12, height: 5 });
+
+    const set = (db.run.mock.calls[0][0] as { set: Record<string, unknown> }).set;
+    expect(set).toMatchObject({
+      lastSlot: 10, lastBlockHash: 'h', lastHeight: 4,
+      syncStatus: 'syncing', consecutiveErrors: 0, lastError: null,
+      tipSlot: 12, tipHeight: 5,
+    });
+  });
+
+  it('advanceCursor writes the given status (synced at the tip)', async () => {
+    const db = makeDb();
+    await advanceCursor(db as never, { slot: 12, hash: 'h', height: 5 }, { slot: 12, height: 5 }, 'synced');
+    const set = (db.run.mock.calls[0][0] as { set: Record<string, unknown> }).set;
+    expect(set.syncStatus).toBe('synced');
+  });
+
+  it('resetCursorTo rewinds the cursor to the fork point', async () => {
+    const db = makeDb();
+    await resetCursorTo(db as never, { slot: 3, hash: 'fork', height: 1 });
+    const set = (db.run.mock.calls[0][0] as { set: Record<string, unknown> }).set;
+    expect(set).toMatchObject({ lastSlot: 3, lastBlockHash: 'fork', lastHeight: 1 });
+  });
+
+  it('setSyncStatus writes only the status', async () => {
+    const db = makeDb();
+    await setSyncStatus(db as never, 'synced');
+    const set = (db.run.mock.calls[0][0] as { set: Record<string, unknown> }).set;
+    expect(set).toEqual({ syncStatus: 'synced' });
+  });
+});
+
+describe('sync-state: recordError circuit breaker', () => {
+  it('stays "syncing" below the threshold', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ consecutiveErrors: '0', syncStatus: 'syncing' }); // readCursor
+    const streak = await recordError(db as never, new Error('boom'));
+    expect(streak).toBe(1);
+    const set = (db.run.mock.calls[1][0] as { set: Record<string, unknown> }).set;
+    expect(set.consecutiveErrors).toBe(1);
+    expect(set.syncStatus).toBe('syncing');
+  });
+
+  it('flips to "error" once the streak reaches the threshold', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ consecutiveErrors: String(MAX_CONSECUTIVE_ERRORS - 1), syncStatus: 'syncing' });
+    const streak = await recordError(db as never, new Error('boom'));
+    expect(streak).toBe(MAX_CONSECUTIVE_ERRORS);
+    const set = (db.run.mock.calls[1][0] as { set: Record<string, unknown> }).set;
+    expect(set.syncStatus).toBe('error');
+  });
+
+  it('truncates the error message to 500 chars', async () => {
+    const db = makeDb();
+    db.run.mockResolvedValueOnce({ consecutiveErrors: '0' });
+    await recordError(db as never, new Error('x'.repeat(1000)));
+    const set = (db.run.mock.calls[1][0] as { set: Record<string, string> }).set;
+    expect(set.lastError.length).toBe(500);
+  });
+});

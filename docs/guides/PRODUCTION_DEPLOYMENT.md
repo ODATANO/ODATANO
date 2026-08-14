@@ -1,6 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 ---
 
 ## Table of Contents
@@ -18,6 +18,12 @@
 
 ## Pre-Deployment Checklist
 
+- [ ] **Node >= 22.5** and **@sap/cds >= 10** on the target runtime (hard requirements)
+- [ ] **`cds deploy` run** when upgrading from 1.x — 2.0 adds `CardanoSyncState`, `CardanoReorgLog`,
+      `CardanoWorkerWallets`, `CardanoWalletJobs` plus a `dedupKey` column with a unique constraint
+- [ ] `HSM_REQUIRES_ROLE` set whenever `HSM_ENABLED=true` — startup throws `ConfigError` without it
+- [ ] `CardanoAdmin` role collection assigned to operators who control the crawler / worker
+      (`$XSAPPNAME.Admin` is deliberately NOT part of `CardanoUser`)
 - [ ] `NETWORK` set to target network (`mainnet`, `preview`, `preprod`)
 - [ ] `BACKENDS` specifies at least one provider
 - [ ] `BLOCKFROST_API_KEY` set and matching the target network prefix (`mainnetXXX`, `previewXXX`, `preprodXXX`)
@@ -75,11 +81,44 @@ LOG_LEVEL=info
 BACKENDS=blockfrost,koios
 BLOCKFROST_API_KEY=mainnetYourApiKeyHere
 KOIOS_API_KEY=yourKoiosApiKeyHere
-TX_BUILDERS=buildooor
-PRIMARY_TIMEOUT_MS=8000
-FALLBACK_TIMEOUT_MS=10000
-INDEX_TTL_MS=600000
+PRIMARY_TIMEOUT_MS=30000
+FALLBACK_TIMEOUT_MS=60000
+INDEX_TTL_MS=3600000
+
+# --- HSM signing (optional) -------------------------------------------------
+HSM_ENABLED=false
+# MANDATORY when HSM_ENABLED=true — startup throws ConfigError without it.
+# Names the role required for SignWithHsm / SignAndSubmitWithHsm and for
+# SubmitWalletJob against an HSM-backed wallet (403 ODATANO_FORBIDDEN otherwise).
+HSM_REQUIRES_ROLE=
+HSM_SLOT=0
+HSM_PIN=                          # supply via the credential store, never in the file
+HSM_KEY_LABEL=cardano-signing-key
+
+# --- Chain crawler / pre-sync (v2.0, off by default) ------------------------
+CRAWLER_ENABLED=false
+CRAWLER_START_SLOT=               # required when enabled
+CRAWLER_START_HASH=               # required when enabled
+CRAWLER_SOURCE=auto               # ogmios | pagination | auto
+CRAWLER_CONFIRMATION_DEPTH=3
+CRAWLER_BATCH_SIZE=20
+CRAWLER_POLL_INTERVAL_MS=20000
+
+# --- Wallet worker (v2.0, off by default) -----------------------------------
+WALLET_WORKER_ENABLED=false
+WALLET_WORKER_WALLETS=            # [{"walletId":"treasury","signerType":"hsm"}]
+WALLET_WORKER_MAX_CONCURRENT=4
+WALLET_WORKER_CONFIRMATION_DEPTH=3
+WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000
+WALLET_WORKER_POLL_INTERVAL_MS=2000
+WALLET_WORKER_MAX_ATTEMPTS=3
+WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
 ```
+
+Both subsystems run continuously once enabled and consume backend requests on their own
+schedule — factor that into rate-limit and cost planning, and prefer Ogmios for the crawler.
+`TX_BUILDERS` is intentionally absent: Buildooor has been the only builder since 1.8.0 and the
+variable is ignored.
 
 ---
 ## SAP BTP Cloud Foundry Deployment
@@ -95,9 +134,11 @@ INDEX_TTL_MS=600000
 ```
 BTP Cloud Foundry
 ├── odatano-srv (CAP Node.js Backend)
-│   ├── CardanoODataService
-│   ├── CardanoTransactionService
-│   └── CardanoSignService
+│   ├── CardanoODataService        (/odata/v4/cardano-odata/)
+│   ├── CardanoTransactionService  (/odata/v4/cardano-transaction/)
+│   ├── CardanoSignService         (/odata/v4/cardano-sign/)
+│   ├── CardanoIndexerService      (/odata/v4/cardano-indexer/  — crawler control, Admin)
+│   └── CardanoWorkerService       (/odata/v4/cardano-worker/   — wallet jobs, Admin for pause/resume)
 │
 ├── odatano-db-deployer (HDI Container Deployment)
 │   └── Deploys schema to HANA Cloud
@@ -122,14 +163,17 @@ BTP Cloud Foundry
 ```yaml
 _schema-version: 3.3.0
 ID: odatano
-version: 1.0.0
+version: 2.0.0
 
 build-parameters:
   before-all:
     - builder: custom
       commands:
         - npm ci
-        - npx cds build --production --ws-pack
+        - npx cds-typer "*" --outputDirectory @cds-models
+        - npx tsc -p tsconfig.build.json
+        - npx cds build --production
+        - node scripts/build/gen-srv-package.js
 
 modules:
   - name: odatano-srv
@@ -177,7 +221,8 @@ resources:
   ],
   "role-templates": [
     { "name": "CardanoReader", "description": "Read Cardano blockchain data", "scope-references": ["$XSAPPNAME.Read"] },
-    { "name": "CardanoUser", "description": "Full access to Cardano services", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"] }
+    { "name": "CardanoUser", "description": "Read, build/submit and sign Cardano transactions (no operational admin)", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"] },
+    { "name": "CardanoAdmin", "description": "Operate the ODATANO chain crawler and wallet worker", "scope-references": ["$XSAPPNAME.Admin"] }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
@@ -233,7 +278,7 @@ cd /mnt/c/Users/<you>/ODATANO/ODATANO && npm ci && mbt build
 cf login -a https://api.cf.<region>.hana.ondemand.com
 
 # Deploy MTA (filename matches the version in mta.yaml)
-cf deploy mta_archives/odatano_1.9.0.mtar -e prod.mtaext
+cf deploy mta_archives/odatano_2.0.0.mtar -e prod.mtaext
 ```
 
 ### Environment Variables (`odatano-srv`)

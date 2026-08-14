@@ -10,13 +10,16 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext } from '../../srv/server';
+// require() shares the native module graph with the booted CAP server
+// (see signing-services.test.ts for the rationale).
+const { createTestContext, resetAppContext, shutdownAppContext } =
+  require('../../srv/server') as typeof import('../../srv/server');
 import { TEST_FIXTURES } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
 
 const { INSERT, SELECT } = cds.ql;
 
-jest.setTimeout(30000);
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';

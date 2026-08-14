@@ -77,7 +77,8 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine } from '../utils/types';
+import { chunk, IN_CHUNK } from '../utils/collections';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -101,6 +102,88 @@ export class CardanoIndexer {
   private client: CardanoClient;
   private txBuilder: CardanoTransactionBuilder;
   private lastParamsFetchTime = 0;
+
+  private static readonly CRAWL_EPOCH_REFRESH_MS = 5 * 60 * 1000;
+  private static readonly CRAWL_EPOCH_RETRY_MS = 30 * 1000;
+
+  /**
+   * Crawler epoch memo. Network reads are refreshed periodically while an epoch is
+   * live and once more when the next epoch starts, so counters such as block_count,
+   * fees and lastBlockTime do not remain frozen at their first observed value.
+   *
+   * At most the current and immediately previous epoch are retained. The rows are
+   * intentionally UPSERTed in every block transaction: the caller owns that
+   * transaction, so an in-memory "persisted" bit cannot know whether its commit later
+   * succeeded. Repeating one local UPSERT is cheap and remains correct after rollback.
+   */
+  private crawlEpochCache = new Map<number, {
+    row?: Epoch;
+    nextRefreshAt: number;
+    finalized: boolean;
+  }>();
+  private crawlEpochCurrent: number | null = null;
+  private crawlEpochPrevious: number | null = null;
+
+  /**
+   * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block
+   * write transaction — the backend round-trip must never run while the DB write
+   * lock is held (indexBlockFull then serves the epoch from this memo). Never throws.
+   */
+  async prefetchCrawlEpoch(epochNumber: number): Promise<void> {
+    const previousEpoch = this.crawlEpochCurrent;
+    const enteringNewEpoch = previousEpoch !== null && previousEpoch !== epochNumber;
+
+    // At an epoch boundary, refresh the completed epoch one last time. A failed
+    // final refresh is retried with a short backoff on subsequent blocks.
+    if (enteringNewEpoch && previousEpoch !== null) {
+      await this.refreshCrawlEpoch(previousEpoch, true, true);
+      this.crawlEpochPrevious = previousEpoch;
+    } else {
+      for (const [cachedEpoch, entry] of this.crawlEpochCache) {
+        if (cachedEpoch !== epochNumber && !entry.finalized) {
+          await this.refreshCrawlEpoch(cachedEpoch, false, true);
+        }
+      }
+    }
+
+    await this.refreshCrawlEpoch(epochNumber, false, false);
+    this.crawlEpochCurrent = epochNumber;
+
+    // Keep only the live epoch and its predecessor/final snapshot.
+    for (const cachedEpoch of this.crawlEpochCache.keys()) {
+      if (cachedEpoch !== epochNumber && cachedEpoch !== this.crawlEpochPrevious) {
+        this.crawlEpochCache.delete(cachedEpoch);
+      }
+    }
+  }
+
+  private async refreshCrawlEpoch(
+    epochNumber: number,
+    force: boolean,
+    finalized: boolean,
+  ): Promise<void> {
+    const now = Date.now();
+    const existing = this.crawlEpochCache.get(epochNumber);
+    if (existing?.finalized && finalized) return;
+    if (!force && existing && now < existing.nextRefreshAt) return;
+
+    try {
+      const row = mapEpoch(await this.client.getEpoch(epochNumber));
+      this.crawlEpochCache.set(epochNumber, {
+        row,
+        nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_REFRESH_MS,
+        finalized,
+      });
+    } catch {
+      // Keep the last good snapshot, but retry transient/negative results soon rather
+      // than suppressing enrichment for the rest of the five-day epoch.
+      this.crawlEpochCache.set(epochNumber, {
+        row: existing?.row,
+        nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_RETRY_MS,
+        finalized: false,
+      });
+    }
+  }
 
   /**
    * Create a new CardanoIndexer instance
@@ -525,6 +608,124 @@ export class CardanoIndexer {
     const blockEntity = mapBlock(blockInfo, epoch);
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
+  }
+
+  /**
+   * Bulk-index a whole block and all of its transactions in ONE pass (chain crawler,
+   * v2.0). Unlike indexTransaction()/indexBlock() this does NOT re-fetch per hash — the
+   * crawler already carries the block + full tx list from the stream/page. Rows are
+   * accumulated across the block's txs and UPSERTed once per table (few statements).
+   *
+   * All writes run inside the caller's CAP transaction (`tx`), so a block is persisted
+   * atomically — a failure mid-block rolls the whole block back, keeping the cursor and
+   * the data consistent.
+   *
+   * Inputs from the Ogmios chain-sync path arrive as bare references (no address/amount);
+   * resolveInputs() backfills them from this block's own outputs and previously-indexed
+   * outputs before mapping. Blockfrost/Koios inputs already carry address/amount and are
+   * left untouched.
+   *
+   * @param tx        CAP transaction (one per block, committed by the crawler)
+   * @param blockData block header/summary from the crawler source
+   * @param txs       the block's full transaction list (in block order)
+   */
+  async indexBlockFull(tx: CapTransaction, blockData: BlockData, txs: ProviderTransaction[]): Promise<void> {
+    // Block row — best-effort epoch enrichment from the prefetched memo. The network
+    // fetch happens in prefetchCrawlEpoch() BEFORE the caller opened this write tx;
+    // if the caller skipped it, resolve now (memoized) and accept the in-tx fetch.
+    let epoch: Epoch | undefined;
+    if (blockData.epoch != null) {
+      await this.prefetchCrawlEpoch(blockData.epoch);
+      epoch = this.crawlEpochCache.get(blockData.epoch)?.row;
+
+      const epochRows = [...this.crawlEpochCache.values()]
+        .map((entry) => entry.row)
+        .filter((row): row is Epoch => row !== undefined);
+      if (epochRows.length) await tx.run(UPSERT.into(Epoch).entries(epochRows));
+    }
+    await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
+
+    // Backfill chain-sync inputs (empty address/amount) from local outputs
+    await this.resolveInputs(tx, txs);
+
+    // Accumulate rows across the whole block, then one bulk UPSERT per table
+    const txRows = txs.map(t => mapTransaction(t));
+    const inputRows = txs.flatMap(t => mapTransactionInputs(t.hash, t.inputs ?? []));
+    const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(t.hash, t.inputs ?? []));
+    const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
+    const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
+    const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
+
+    if (txRows.length) await tx.run(UPSERT.into(Transactions).entries(txRows));
+    if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
+    if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
+    if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
+    if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
+    if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+
+    logger.debug(`indexBlockFull: block ${blockData.hash} — ${txs.length} txs, ${outputRows.length} outputs`);
+  }
+
+  /**
+   * Backfill input address/amount for chain-sync transactions whose inputs are bare
+   * references. Resolves first from this block's own outputs (a tx may spend an earlier
+   * tx's output in the same block), then batch-reads previously-indexed outputs from the
+   * DB. Inputs that already carry an address (Blockfrost/Koios) are skipped.
+   */
+  private async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
+    // 1. In-memory index of this block's outputs (txHash#outputIndex -> {address, amount})
+    const blockOutputs = new Map<string, { address: string; amount: Amount[] }>();
+    for (const t of txs) {
+      for (const o of t.outputs ?? []) {
+        blockOutputs.set(`${t.hash}#${o.outputIndex}`, { address: o.address, amount: o.amount ?? [] });
+      }
+    }
+
+    // 2. Collect inputs still needing resolution after the same-block pass
+    const unresolved: { input: TxInputLine; key: string }[] = [];
+    for (const t of txs) {
+      for (const input of t.inputs ?? []) {
+        if (input.address) continue; // already resolved by the backend (Blockfrost/Koios)
+        const key = `${input.txHash}#${input.outputIndex}`;
+        const local = blockOutputs.get(key);
+        if (local) {
+          input.address = local.address;
+          input.amount = local.amount;
+        } else {
+          unresolved.push({ input, key });
+        }
+      }
+    }
+    if (!unresolved.length) return;
+
+    // 3. Batch-read prior-block outputs from the DB — chunked so a dense block's
+    //    input set can never exceed a driver's bind-variable cap (same IN_CHUNK
+    //    discipline as the crawler's reorg deletes)
+    const sourceHashes = [...new Set(unresolved.map(u => u.input.txHash))];
+    const addrByKey = new Map<string, string>();
+    const amtByKey = new Map<string, Amount[]>();
+    for (const hashChunk of chunk(sourceHashes, IN_CHUNK)) {
+      const [outRows, assetRows] = await Promise.all([
+        tx.run(SELECT.from(TransactionOutputs).where({ tx_hash: { in: hashChunk } })),
+        tx.run(SELECT.from(TransactionOutputAssets).where({ output_tx_hash: { in: hashChunk } })),
+      ]);
+      for (const r of outRows as Array<{ tx_hash: string; outputIndex: number; address_address: string }>) {
+        addrByKey.set(`${r.tx_hash}#${r.outputIndex}`, r.address_address);
+      }
+      for (const r of assetRows as Array<{ output_tx_hash: string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
+        const k = `${r.output_tx_hash}#${r.output_outputIndex}`;
+        const list = amtByKey.get(k) ?? [];
+        list.push({ unit: r.unit, quantity: String(r.asset_quantity) });
+        amtByKey.set(k, list);
+      }
+    }
+
+    for (const { input, key } of unresolved) {
+      const addr = addrByKey.get(key);
+      if (addr != null) input.address = addr;
+      const amt = amtByKey.get(key);
+      if (amt) input.amount = amt;
+    }
   }
 
   /** 

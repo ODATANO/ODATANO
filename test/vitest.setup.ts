@@ -1,25 +1,37 @@
+/**
+ * Vitest global setup (runs before every test file).
+ *
+ * Uses require() instead of imports: require is not hoisted, so the env vars
+ * below are guaranteed to be set before any CDS module loads. @sap/cds is
+ * externalized (node_modules CJS), so require() yields the same instance the
+ * test files get via import.
+ */
+
+/* eslint-disable @typescript-eslint/no-var-requires */
+
+// Test detection for application code (was set in jest.config.cjs)
+process.env.NODE_ENV = 'test';
+
 // Disable telemetry plugin before any CDS modules load
 // Must be set before @cap-js/telemetry/cds-plugin.js is required
 process.env.NO_TELEMETRY = 'true';
 
 // Clear SKIP_AUTO_INIT before every test file's top-level code runs.
-// Jest workers reuse OS processes across multiple test files; integration suites
-// that need to skip auto-init (e.g. tx-test-suite, signing-services) set this at
-// module load and never clean it up, so it leaks into subsequent files in the
-// same worker. Files that genuinely need it will re-set it on their own
-// top-level line, AFTER this setup file runs.
+// Vitest forks give each test file a fresh process, so cross-file leaks are
+// structurally impossible — this guards against a developer's shell env (and
+// any future isolate/parallelism tuning). Files that genuinely need it re-set
+// it on their own top-level line, AFTER this setup file runs.
 delete process.env.SKIP_AUTO_INIT;
 
-/**
- * Jest Setup File
- * - Set privileged default user so tests pass @requires: 'authenticated-user' without auth headers
- * - Suppress console output during tests
- */
-import cds from '@sap/cds';
-cds.User.default = cds.User.Privileged as unknown as cds.User;
+// CAP resolves srv/*.ts service impls via native require at cds.test() boot;
+// keep the on-the-fly compile hook that jest's setupFilesAfterEnv provided.
+require('ts-node/register/transpile-only');
+
+// Set privileged default user so tests pass @requires without auth headers
+const cds = require('@sap/cds') as typeof import('@sap/cds');
+cds.User.default = cds.User.Privileged as unknown as typeof cds.User.default;
 
 /* eslint-disable no-console */
-
 
 // Store original console methods
 const originalConsoleLog = console.log;

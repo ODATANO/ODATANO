@@ -1,6 +1,6 @@
 # ODATANO Quick Start Guide
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 
@@ -57,10 +57,24 @@ All config options:
 cds watch
 ```
 
-Both services auto-register:
+All five services auto-register:
 - **CardanoODataService** at `/odata/v4/cardano-odata/` — read blockchain data
 - **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
 - **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
+- **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (v2.0, off by default)
+- **CardanoWorkerService** at `/odata/v4/cardano-worker/` — asynchronous wallet jobs (v2.0, off by default)
+
+> `getStatus`, `GetJobStatus` and `GetWorkerStatus` are OData **functions** — call them with
+> HTTP GET and the parameters in the URL, e.g. `GET .../cardano-worker/GetWorkerStatus()`.
+> POSTing to a function returns 405.
+
+Both v2.0 services also publish **CAP events**, so a CAP consumer can subscribe rather than poll —
+in-process, so no message broker is involved:
+
+```js
+(await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)  // jobId, txHash
+(await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …) // hash, height, txHashes
+```
 
 ### 4) Verify
 
@@ -115,8 +129,8 @@ NETWORK=preview
 BLOCKFROST_API_KEY=your_api_key_here
 
 # Timeouts (milliseconds)
-PRIMARY_TIMEOUT_MS=8000
-FALLBACK_TIMEOUT_MS=10000
+PRIMARY_TIMEOUT_MS=30000
+FALLBACK_TIMEOUT_MS=60000
 
 # Enabled Backends (comma-separated): koios, blockfrost, ogmios
 BACKENDS=koios
@@ -127,7 +141,43 @@ OGMIOS_URL=ws://localhost:1337
 # Transaction builder is Buildooor only — TX_BUILDERS is no longer needed (any value is ignored)
 
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
-INDEX_TTL_MS=60000
+INDEX_TTL_MS=3600000
+KOIOS_API_KEY=
+
+# --- HSM signing (optional; server-side keys) -------------------------------
+HSM_ENABLED=false
+# HSM_REQUIRES_ROLE is MANDATORY when HSM_ENABLED=true — startup throws ConfigError
+# without it. It names the role required for SignWithHsm / SignAndSubmitWithHsm and
+# for SubmitWalletJob against an HSM-backed wallet (403 ODATANO_FORBIDDEN otherwise).
+HSM_REQUIRES_ROLE=
+HSM_SLOT=0
+HSM_PIN=
+HSM_KEY_LABEL=cardano-signing-key
+
+# --- Chain crawler / pre-sync (v2.0, off by default) ------------------------
+CRAWLER_ENABLED=false
+CRAWLER_START_SLOT=              # required when enabled
+CRAWLER_START_HASH=              # required when enabled
+CRAWLER_START_HEIGHT=
+CRAWLER_SOURCE=auto              # ogmios | pagination | auto
+CRAWLER_CONFIRMATION_DEPTH=3
+CRAWLER_BATCH_SIZE=20
+CRAWLER_POLL_INTERVAL_MS=20000
+# chain-sync needs `ogmios` listed in BACKENDS — a reachable Ogmios alone is not enough
+
+# --- Wallet worker (v2.0, off by default) -----------------------------------
+WALLET_WORKER_ENABLED=false
+# JSON array: [{"walletId":"treasury","signerType":"software","keyEnv":"TREASURY_KEY"}]
+# signerType hsm | software; the software key is read from the env var named in keyEnv
+# (plain 64-hex or AES-256-GCM iv:tag:ciphertext) and never persisted.
+WALLET_WORKER_WALLETS=
+WALLET_WORKER_MAX_CONCURRENT=4
+WALLET_WORKER_CONFIRMATION_DEPTH=3
+WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000
+WALLET_WORKER_POLL_INTERVAL_MS=2000
+WALLET_WORKER_MAX_ATTEMPTS=3
+WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
+
 ```
 
 ### 3) Initialize Database
@@ -369,7 +419,7 @@ See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete ex
 ## Testing
 
 ```bash
-# All tests (35 test suites, 1549 tests)
+# All tests (58 files / 1908 tests: 44 unit + 14 integration, vitest)
 npm test
 
 # Coverage report

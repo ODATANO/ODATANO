@@ -1,3 +1,4 @@
+import type { Mock, Mocked } from 'vitest';
 import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
 import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
@@ -5,7 +6,7 @@ import type { CardanoClient } from '../../srv/blockchain/cardano-client';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO } from '../../srv/utils/types';
 
 // Mock the Buildooor builder (the coordinator constructs it directly via `new BuildooorTxBuilder()`)
-jest.mock('../../srv/blockchain/transaction-building/buildooor-tx');
+vi.mock('../../srv/blockchain/transaction-building/buildooor-tx');
 
 // Mock CardanoTxBuilder for testing
 class MockTxBuilder implements CardanoTxBuilder {
@@ -98,24 +99,24 @@ const mockMintTxRequest: TxBuildRequest = {
 describe('CardanoTransactionBuilder', () => {
   let builder: CardanoTransactionBuilder;
   let mockTxBuilder: MockTxBuilder;
-  let mockCardanoClient: jest.Mocked<CardanoClient>;
+  let mockCardanoClient: Mocked<CardanoClient>;
 
   beforeEach(() => {
     // Reset all mocks
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     // Create mock CardanoClient
     mockCardanoClient = {
       // sender → mockUtxos; script address → the default getTransaction output is live
       // (the spent-check verifies fetched outputs against the live UTxO set)
-      getAddressUtxos: jest.fn().mockImplementation(async (addr: string) =>
+      getAddressUtxos: vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1script'
           ? [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr_test1script', amount: [{ unit: 'lovelace', quantity: '2000000' }] }]
           : mockUtxos
       ),
-      hasOgmiosBackend: jest.fn().mockReturnValue(false),
-      evaluateTransaction: jest.fn(),
-      getTransaction: jest.fn().mockResolvedValue({
+      hasOgmiosBackend: vi.fn().mockReturnValue(false),
+      evaluateTransaction: vi.fn(),
+      getTransaction: vi.fn().mockResolvedValue({
         hash: 'a'.repeat(64),
         outputs: [
           {
@@ -138,15 +139,16 @@ describe('CardanoTransactionBuilder', () => {
         size: 300,
         blockTime: 1700000000,
       }),
-    } as unknown as jest.Mocked<CardanoClient>;
+    } as unknown as Mocked<CardanoClient>;
 
     // Create fresh instances - pass mock client to constructor
     builder = new CardanoTransactionBuilder(mockCardanoClient);
     mockTxBuilder = new MockTxBuilder();
 
     // The coordinator does `new BuildooorTxBuilder()`; return our mock instance.
-    (BuildooorTxBuilder as unknown as jest.Mock).mockClear();
-    (BuildooorTxBuilder as unknown as jest.Mock).mockImplementation(() => mockTxBuilder);
+    (BuildooorTxBuilder as unknown as Mock).mockClear();
+    // function expression, not arrow — vitest forwards `new` to the impl
+    (BuildooorTxBuilder as unknown as Mock).mockImplementation(function () { return mockTxBuilder; });
   });
 
   // ============================================================================
@@ -156,7 +158,7 @@ describe('CardanoTransactionBuilder', () => {
     it('should initialize the builder from registry', async () => {
       await builder.init();
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as Mock)).toHaveBeenCalledTimes(1);
       expect(mockTxBuilder.initCalled).toBe(true);
     });
 
@@ -165,7 +167,7 @@ describe('CardanoTransactionBuilder', () => {
       await builder.init();
       await builder.init();
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as Mock)).toHaveBeenCalledTimes(1);
     });
 
     it('should propagate errors from builder init', async () => {
@@ -183,7 +185,7 @@ describe('CardanoTransactionBuilder', () => {
       // Don't call init() explicitly
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as Mock)).toHaveBeenCalledTimes(1);
       expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
 
@@ -191,7 +193,7 @@ describe('CardanoTransactionBuilder', () => {
       await builder.init();
       await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(1);
+      expect((BuildooorTxBuilder as unknown as Mock)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -206,7 +208,7 @@ describe('CardanoTransactionBuilder', () => {
       // After reset, next operation should re-initialize
       await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).toHaveBeenCalledTimes(2);
+      expect((BuildooorTxBuilder as unknown as Mock)).toHaveBeenCalledTimes(2);
     });
 
     it('should allow setting a custom builder', async () => {
@@ -218,7 +220,7 @@ describe('CardanoTransactionBuilder', () => {
       // Should use the custom builder without calling registry
       const result = await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
 
-      expect((BuildooorTxBuilder as unknown as jest.Mock)).not.toHaveBeenCalled();
+      expect((BuildooorTxBuilder as unknown as Mock)).not.toHaveBeenCalled();
       expect(result.unsignedTxCbor).toBe('mock-transfer-tx-cbor');
     });
   });
@@ -306,7 +308,7 @@ describe('CardanoTransactionBuilder', () => {
 
       // Create a spy to capture the context passed to buildUnsignedMintTransaction
       let capturedContext: TxBuildContext | undefined;
-      mockTxBuilder.buildUnsignedMintTransaction = jest.fn().mockImplementation(
+      mockTxBuilder.buildUnsignedMintTransaction = vi.fn().mockImplementation(
         async (_req: TxBuildRequest, ctx: TxBuildContext) => {
           capturedContext = ctx;
           return {
@@ -331,7 +333,7 @@ describe('CardanoTransactionBuilder', () => {
       mockCardanoClient.hasOgmiosBackend.mockReturnValue(false);
 
       let capturedContext: TxBuildContext | undefined;
-      mockTxBuilder.buildUnsignedMintTransaction = jest.fn().mockImplementation(
+      mockTxBuilder.buildUnsignedMintTransaction = vi.fn().mockImplementation(
         async (_req: TxBuildRequest, ctx: TxBuildContext) => {
           capturedContext = ctx;
           return {
@@ -395,7 +397,7 @@ describe('CardanoTransactionBuilder', () => {
       const scriptTxHash = 'f'.repeat(64);
       const datumHash = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
       const refScriptHash = 'c'.repeat(56);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: scriptTxHash,
         outputs: [{
           address: 'addr_test1script',
@@ -408,14 +410,14 @@ describe('CardanoTransactionBuilder', () => {
         }],
       });
 
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1script'
           ? [{ txHash: scriptTxHash, outputIndex: 0, address: 'addr_test1script', amount: [{ unit: 'lovelace', quantity: '2000000' }] }]
           : mockUtxos
       );
 
       let captured: TxBuildContext | undefined;
-      (mockTxBuilder.buildUnsignedPlutusSpendTransaction as any) = jest.fn().mockImplementation(
+      (mockTxBuilder.buildUnsignedPlutusSpendTransaction as any) = vi.fn().mockImplementation(
         async (_req: TxBuildRequest, ctx: TxBuildContext) => {
           captured = ctx;
           return {
@@ -446,7 +448,7 @@ describe('CardanoTransactionBuilder', () => {
     it('should reject an already-spent script UTxO with a clear 400 (replay protection)', async () => {
       // default getTransaction returns a..a#0 at addr_test1script, but the live UTxO
       // set of that address is empty → the output has been consumed
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1script' ? [] : mockUtxos
       );
       const plutusRequest: TxBuildRequest = {
@@ -475,7 +477,7 @@ describe('CardanoTransactionBuilder', () => {
     });
 
     it('should propagate builder errors', async () => {
-      mockTxBuilder.buildUnsignedTransfer = jest.fn().mockRejectedValue(
+      mockTxBuilder.buildUnsignedTransfer = vi.fn().mockRejectedValue(
         new Error('Insufficient funds')
       );
 
@@ -491,7 +493,7 @@ describe('CardanoTransactionBuilder', () => {
     // Helper: capture the ctx that the mock builder receives
     function captureCtx<K extends 'buildUnsignedTransfer' | 'buildUnsignedTransactionWithMetadata' | 'buildUnsignedMintTransaction' | 'buildUnsignedPlutusSpendTransaction'>(method: K): () => TxBuildContext | undefined {
       let captured: TxBuildContext | undefined;
-      (mockTxBuilder[method] as any) = jest.fn().mockImplementation(
+      (mockTxBuilder[method] as any) = vi.fn().mockImplementation(
         async (_req: TxBuildRequest, ctx: TxBuildContext) => {
           captured = ctx;
           return {
@@ -521,7 +523,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should fetch via getTransaction when forceInput ref is not in sender UTxOs', async () => {
       const foreignTxHash = 'f'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: foreignTxHash,
         outputs: [
           { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
@@ -529,7 +531,7 @@ describe('CardanoTransactionBuilder', () => {
         inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1foreign'
           ? [{ txHash: foreignTxHash, outputIndex: 0, address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }] }]
           : mockUtxos
@@ -550,7 +552,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should deduplicate identical forceInput refs (call getTransaction only once)', async () => {
       const foreignTxHash = 'd'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: foreignTxHash,
         outputs: [
           { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
@@ -558,7 +560,7 @@ describe('CardanoTransactionBuilder', () => {
         inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1foreign'
           ? [{ txHash: foreignTxHash, outputIndex: 0, address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }] }]
           : mockUtxos
@@ -582,7 +584,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should reject a forceInput whose output exists but is already spent', async () => {
       const foreignTxHash = 'e'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: foreignTxHash,
         outputs: [
           { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
@@ -591,7 +593,7 @@ describe('CardanoTransactionBuilder', () => {
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
       // live UTxO set of the foreign address does NOT contain the ref → spent
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) =>
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) =>
         addr === 'addr_test1foreign' ? [] : mockUtxos
       );
       const req: TxBuildRequest = {
@@ -605,7 +607,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should tolerate a failing live-UTxO lookup during the spent-check (best-effort)', async () => {
       const foreignTxHash = 'e'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: foreignTxHash,
         outputs: [
           { address: 'addr_test1foreign', amount: [{ unit: 'lovelace', quantity: '5000000' }], outputIndex: 0, txHash: foreignTxHash, dataHash: null, inlineDatum: null, isCollateral: false },
@@ -613,7 +615,7 @@ describe('CardanoTransactionBuilder', () => {
         inputs: [], blockHash: 'b'.repeat(64), blockHeight: 1, slot: 1, index: 0,
         fee: '0', deposit: '0', size: 0, blockTime: 0,
       });
-      mockCardanoClient.getAddressUtxos = jest.fn().mockImplementation(async (addr: string) => {
+      mockCardanoClient.getAddressUtxos = vi.fn().mockImplementation(async (addr: string) => {
         if (addr === 'addr_test1foreign') throw new Error('backend hiccup');
         return mockUtxos;
       });
@@ -629,7 +631,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should throw TransactionValidationError when forceInput UTxO is not found on-chain', async () => {
       const missingTxHash = '9'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockRejectedValue(new Error('Transaction not found'));
+      mockCardanoClient.getTransaction = vi.fn().mockRejectedValue(new Error('Transaction not found'));
       const req: TxBuildRequest = {
         ...mockTxRequest,
         forceInputs: [{ txHash: missingTxHash, outputIndex: 0 }],
@@ -641,7 +643,7 @@ describe('CardanoTransactionBuilder', () => {
 
     it('should throw TransactionValidationError when forceInput outputIndex does not exist in tx', async () => {
       const txHash = '7'.repeat(64);
-      mockCardanoClient.getTransaction = jest.fn().mockResolvedValue({
+      mockCardanoClient.getTransaction = vi.fn().mockResolvedValue({
         hash: txHash,
         outputs: [
           { address: 'addr', amount: [{ unit: 'lovelace', quantity: '1000000' }], outputIndex: 0, txHash, dataHash: null, inlineDatum: null, isCollateral: false },

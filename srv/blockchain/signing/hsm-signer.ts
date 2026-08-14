@@ -51,6 +51,18 @@ type Pkcs11JsModule = {
   [k: string]: unknown;
 };
 
+// pkcs11js is loaded lazily (optionalDependency with a native binding). The
+// loader is an injectable seam: tests swap in a fake module because module
+// mocks cannot intercept this native require.
+type Pkcs11Loader = () => Pkcs11JsModule;
+const defaultPkcs11Loader: Pkcs11Loader = () => require('pkcs11js') as Pkcs11JsModule;
+let pkcs11Loader: Pkcs11Loader = defaultPkcs11Loader;
+
+/** Test seam: inject a fake pkcs11js module loader (null restores the default). */
+export function setPkcs11Loader(loader: Pkcs11Loader | null): void {
+  pkcs11Loader = loader ?? defaultPkcs11Loader;
+}
+
 export class HsmSigner {
   private pkcs11!: PKCS11Instance;
   private session!: Buffer;
@@ -75,7 +87,7 @@ export class HsmSigner {
     // Dynamic import — pkcs11js is only loaded when HSM is configured
     let pkcs11js: Pkcs11JsModule;
     try {
-      pkcs11js = require('pkcs11js');
+      pkcs11js = pkcs11Loader();
     } catch {
       throw new HsmError(
         'pkcs11js is not installed. Install it with: npm install pkcs11js',

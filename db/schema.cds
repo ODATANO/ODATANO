@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -73,6 +73,10 @@ entity Blocks {
         @description: 'Association to Epochs entity'
         epoch       : Association to Epochs
                           on epoch.epoch = $self.epochNumber;
+
+        @title      : 'Block Absolute Slot'
+        @description: 'Absolute slot number of the block'
+        slot        : Integer64;
 
         @title      : 'Block Slot within Epoch'
         @description: 'Slot number within the epoch as integer'
@@ -1348,4 +1352,282 @@ entity SignatureVerifications {
         @title      : 'Verified At'
         @description: 'Timestamp when the verification was performed'
         verifiedAt       : Timestamp;
+}
+
+// -----------------------------------------------------
+// Chain Crawler / Pre-Sync (v2.0)
+// -----------------------------------------------------
+
+@title      : 'Cardano Sync State'
+@description: 'Singleton crawl cursor tracking the pre-sync progress of the chain crawler'
+entity CardanoSyncState {
+
+        @title      : 'Cursor Id (Key)'
+        @description: 'Singleton key — always the literal string SINGLETON'
+    key ID                : String(10) default 'SINGLETON';
+
+        @title      : 'Network'
+        @description: 'The Cardano network this cursor tracks (mainnet | preprod | preview)'
+        network           : String(10);
+
+        @title      : 'Start Slot'
+        @description: 'Absolute slot of the configured pre-sync origin (immutable once syncing starts)'
+        startSlot         : Integer64;
+
+        @title      : 'Start Block Hash'
+        @description: 'Block hash of the configured pre-sync origin'
+        startBlockHash    : Blake2b256;
+
+        @title      : 'Last Slot'
+        @description: 'Absolute slot of the last indexed block (resume point)'
+        lastSlot          : Integer64 default 0;
+
+        @title      : 'Last Block Hash'
+        @description: 'Hash of the last indexed block — used for the reorg parent-hash check'
+        lastBlockHash     : Blake2b256;
+
+        @title      : 'Last Height'
+        @description: 'Block height of the last indexed block'
+        lastHeight        : Integer64 default 0;
+
+        @title      : 'Last Indexed At'
+        @description: 'Wall-clock timestamp of the last successful block persist'
+        lastIndexedAt     : Timestamp;
+
+        @title      : 'Tip Slot'
+        @description: 'Latest known chain-tip slot, for lag/progress calculation'
+        tipSlot           : Integer64;
+
+        @title      : 'Tip Height'
+        @description: 'Latest known chain-tip height'
+        tipHeight         : Integer64;
+
+        @title      : 'Sync Status'
+        @description: 'Current crawler state (stopped | syncing | synced | error)'
+        syncStatus        : CrawlSyncStatus default 'stopped';
+
+        // NOTE: live progress is computed by CardanoIndexerService.getStatus from
+        // lastHeight/tipHeight — deliberately NOT persisted here (a stored copy went
+        // stale immediately and misled OData readers).
+
+        @title      : 'Last Error'
+        @description: 'Message of the most recent crawler error (null when healthy)'
+        lastError         : String(500);
+
+        @title      : 'Last Error At'
+        @description: 'Timestamp of the most recent crawler error'
+        lastErrorAt       : Timestamp;
+
+        @title      : 'Consecutive Errors'
+        @description: 'Count of back-to-back failures; trips the circuit breaker past its threshold'
+        consecutiveErrors : Integer default 0;
+
+        @title      : 'Crawler Desired Running State'
+        @description: 'Cluster-wide operator intent. False fences every crawler instance before its next write.'
+        desiredRunning    : Boolean default true;
+
+        @title      : 'Crawler Lease Owner'
+        @description: 'Opaque process identifier of the single crawler instance currently allowed to write'
+        leaseOwner        : String(128);
+
+        @title      : 'Crawler Lease Expiry'
+        @description: 'Lease deadline renewed by the active crawler; another instance may take over only after this time'
+        leaseUntil        : Timestamp;
+}
+
+@title      : 'Cardano Reorg Log'
+@description: 'Audit trail of chain rollbacks (reorgs) handled by the crawler'
+entity CardanoReorgLog {
+
+        @title      : 'Reorg Id (Key)'
+        @description: 'Unique identifier of the reorg event'
+    key ID               : UUID;
+
+        @title      : 'Detected At'
+        @description: 'Timestamp when the rollback was detected'
+        detectedAt       : Timestamp;
+
+        @title      : 'Fork Slot'
+        @description: 'Absolute slot of the common ancestor the chain rolled back to'
+        forkSlot         : Integer64;
+
+        @title      : 'Fork Height'
+        @description: 'Block height of the common ancestor the chain rolled back to'
+        forkHeight       : Integer64;
+
+        @title      : 'Old Tip Hash'
+        @description: 'Hash of the abandoned tip before the rollback'
+        oldTipHash       : Blake2b256;
+
+        @title      : 'New Tip Hash'
+        @description: 'Hash of the block the chain rolled back to'
+        newTipHash       : Blake2b256;
+
+        @title      : 'Blocks Rolled Back'
+        @description: 'Number of blocks (and their child rows) deleted during rollback'
+        blocksRolledBack : Integer;
+
+        @title      : 'Status'
+        @description: 'Lifecycle of the reorg handling (detected | rolling_back | reindexing | completed)'
+        status           : ReorgStatus;
+}
+
+// -----------------------------------------------------
+// Wallet Worker / Job Engine (v2.1)
+// -----------------------------------------------------
+
+@title      : 'Cardano Worker Wallets'
+@description: 'Operator-registered server-side wallets the wallet worker executes jobs from. No key material is ever stored here.'
+entity CardanoWorkerWallets {
+
+        @title      : 'Wallet Id (Key)'
+        @description: 'Stable operator-chosen handle used in job requests'
+    key walletId      : String(50);
+
+        @title      : 'Signer Type'
+        @description: 'How this wallet signs (hsm | software)'
+        signerType    : WorkerSignerType;
+
+        @title      : 'Address'
+        @description: 'Bech32 address derived from the signing key at worker init (informational)'
+        address       : Bech32;
+
+        @title      : 'Public Key Hash'
+        @description: 'Blake2b-224 hash of the wallet verification key'
+        publicKeyHash : Blake2b224;
+
+        @title      : 'Enabled'
+        @description: 'Disabled wallets accept no new jobs and are skipped by the dispatch loop'
+        enabled       : Boolean default true;
+
+        @title      : 'Wallet Lease Owner'
+        @description: 'Opaque process identifier of the single worker instance currently allowed to execute jobs for this wallet'
+        leaseOwner    : String(128);
+
+        @title      : 'Wallet Lease Expiry'
+        @description: 'Lease deadline renewed by the executing worker; another instance may take over only after this time'
+        leaseUntil    : Timestamp;
+
+        @title      : 'Last Job At'
+        @description: 'Timestamp of the most recent job execution for this wallet'
+        lastJobAt     : Timestamp;
+
+        @title      : 'Jobs Confirmed'
+        @description: 'Rolling count of jobs that reached confirmed state'
+        jobsConfirmed : Integer64 default 0;
+
+        @title      : 'Jobs Failed'
+        @description: 'Rolling count of jobs that reached failed state'
+        jobsFailed    : Integer64 default 0;
+}
+
+@title      : 'Cardano Wallet Jobs'
+@description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
+// Idempotency is enforced by the DATABASE, not by a read-before-insert check:
+// concurrent retries of the same key (two app instances, or two HANA sessions)
+// can both find no existing job and both insert. The unique constraint makes one
+// of them lose, and insertJob returns the winner's job to it. See `dedupKey`.
+// Generates a table UNIQUE constraint on SQLite and a UNIQUE INVERTED INDEX on HANA.
+@assert.unique.dedup: [
+    walletId,
+    kind,
+    dedupKey
+]
+entity CardanoWalletJobs {
+
+        @title      : 'Job Id (Key)'
+        @description: 'Unique identifier of the job, returned by SubmitWalletJob'
+    key ID             : UUID;
+
+        @title      : 'Wallet Id'
+        @description: 'The worker wallet this job executes from'
+        walletId       : String(50);
+
+        @title      : 'Job Kind'
+        @description: 'Transaction kind (simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned)'
+        kind           : WalletJobKind;
+
+        @title      : 'Status'
+        @description: 'Job lifecycle state (pending | building | submitting | submitted | confirmed | failed | cancelled)'
+        status         : WalletJobStatus default 'pending';
+
+        @title      : 'Idempotency Key'
+        @description: 'Optional caller-supplied dedup key — a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
+        idempotencyKey : String(100);
+
+        @title      : 'Dedup Key (internal)'
+        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide — no reliance on NULL semantics, which differ across databases.'
+        dedupKey       : String(100);
+
+        @title      : 'Request'
+        @description: 'The build-action payload as JSON, verbatim (validated before insert; never contains key material)'
+        request        : LargeString;
+
+        @title      : 'Priority'
+        @description: 'Dispatch order within a wallet queue — lower runs sooner (default 100)'
+        priority       : Integer default 100;
+
+        @title      : 'Not Before'
+        @description: 'Optional earliest execution time (one-shot scheduling)'
+        notBefore      : Timestamp;
+
+        @title      : 'Attempt'
+        @description: 'Number of execution attempts made so far'
+        attempt        : Integer default 0;
+
+        @title      : 'Max Attempts'
+        @description: 'Bound for transient-failure retries (build/submit); deterministic rejections fail immediately'
+        maxAttempts    : Integer default 3;
+
+        @title      : 'Transaction Hash'
+        @description: 'Hash of the signed transaction — persisted before the submit call (status submitting), so a crash mid-submit stays reconcilable'
+        txHash         : Blake2b256;
+
+        @title      : 'Unsigned Transaction CBOR'
+        @description: 'The built unsigned transaction, kept for diagnosis until the job confirms'
+        unsignedTxCbor : LargeString;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The signed transaction, stored before submission — reused verbatim for crash reconciliation and rollback re-submission (never rebuilt)'
+        signedTxCbor   : LargeString;
+
+        @title      : 'Fee'
+        @description: 'Transaction fee in lovelace, from the build result'
+        fee            : Lovelace;
+
+        @title      : 'Submitted At'
+        @description: 'Timestamp of the submission attempt (written with the signed tx, before it is sent) — the base for the confirmation timeout'
+        submittedAt    : Timestamp;
+
+        @title      : 'Confirmed At'
+        @description: 'Timestamp when the configured confirmation depth was reached'
+        confirmedAt    : Timestamp;
+
+        @title      : 'Confirmed Slot'
+        @description: 'Absolute slot of the block containing the transaction — used for reorg checks'
+        confirmedSlot  : Integer64;
+
+        @title      : 'Confirmed Height'
+        @description: 'Block height of the block containing the transaction — used for depth calculation'
+        confirmedHeight : Integer64;
+
+        @title      : 'Error Code'
+        @description: 'Machine-readable code of the terminal failure (null while healthy)'
+        errorCode      : String(50);
+
+        @title      : 'Error Message'
+        @description: 'Human-readable message of the terminal failure'
+        errorMessage   : String(500);
+
+        @title      : 'Created At'
+        @description: 'Timestamp the job was accepted'
+        createdAt      : Timestamp;
+
+        @title      : 'Created By'
+        @description: 'User id of the caller that submitted the job'
+        createdBy      : String(100);
+
+        @title      : 'Finished At'
+        @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled)'
+        finishedAt     : Timestamp;
 }

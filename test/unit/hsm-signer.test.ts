@@ -1,17 +1,20 @@
-import { HsmSigner } from '../../srv/blockchain/signing/hsm-signer';
+import { HsmSigner, setPkcs11Loader } from '../../srv/blockchain/signing/hsm-signer';
 import { HsmError } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 import type { HsmConfig } from '../../srv/utils/types';
 
 // Mock @sap/cds for logger
-jest.mock('@sap/cds', () => ({
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
   log: () => ({
-    info: jest.fn(),
-    debug: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 // ---------------------------------------------------------------------------
 // Mock PKCS#11 infrastructure
@@ -54,20 +57,20 @@ function createMockPkcs11(options?: {
   let findCallCount = 0;
 
   const mockPkcs11Instance = {
-    load: jest.fn(),
-    C_Initialize: jest.fn(),
-    C_Finalize: jest.fn(),
-    C_GetSlotList: jest.fn(() => {
+    load: vi.fn(),
+    C_Initialize: vi.fn(),
+    C_Finalize: vi.fn(),
+    C_GetSlotList: vi.fn(() => {
       return Array(opts.slotCount).fill(null).map((_, i) => Buffer.from([i]));
     }),
-    C_OpenSession: jest.fn(() => MOCK_SESSION),
-    C_CloseSession: jest.fn(),
-    C_Login: jest.fn(() => {
+    C_OpenSession: vi.fn(() => MOCK_SESSION),
+    C_CloseSession: vi.fn(),
+    C_Login: vi.fn(() => {
       if (opts.loginError) throw opts.loginError;
     }),
-    C_Logout: jest.fn(),
-    C_FindObjectsInit: jest.fn(),
-    C_FindObjects: jest.fn((_session: any, _count: number) => {
+    C_Logout: vi.fn(),
+    C_FindObjectsInit: vi.fn(),
+    C_FindObjects: vi.fn((_session: any, _count: number) => {
       findCallCount++;
       // First call finds private key, second call finds public key
       if (findCallCount % 2 === 1) {
@@ -76,8 +79,8 @@ function createMockPkcs11(options?: {
         return opts.publicKeyFound ? [MOCK_PUBLIC_KEY_HANDLE] : [];
       }
     }),
-    C_FindObjectsFinal: jest.fn(),
-    C_GetAttributeValue: jest.fn(() => {
+    C_FindObjectsFinal: vi.fn(),
+    C_GetAttributeValue: vi.fn(() => {
       let ecPoint: Buffer;
       if (opts.publicKeyFormat === 'invalid') {
         ecPoint = Buffer.alloc(48, 0xaa); // 48 bytes — neither 34 (DER) nor 32 (raw)
@@ -86,15 +89,16 @@ function createMockPkcs11(options?: {
       }
       return [{ value: ecPoint }];
     }),
-    C_SignInit: jest.fn(),
-    C_Sign: jest.fn((_session: any, _data: Buffer, _outBuf: Buffer) => {
+    C_SignInit: vi.fn(),
+    C_Sign: vi.fn((_session: any, _data: Buffer, _outBuf: Buffer) => {
       if (opts.signError) throw opts.signError;
       return TEST_SIGNATURE;
     }),
   };
 
   return {
-    PKCS11: jest.fn(() => mockPkcs11Instance),
+    // function expression, not arrow — `new PKCS11()` must be constructible
+    PKCS11: vi.fn(function () { return mockPkcs11Instance; }),
     CKF_SERIAL_SESSION: 0x00000004,
     CKF_RW_SESSION: 0x00000002,
     CKU_USER: 1,
@@ -114,15 +118,15 @@ function createMockPkcs11(options?: {
 // Default mock setup
 let mockPkcs11: ReturnType<typeof createMockPkcs11>;
 
-jest.mock('pkcs11js', () => {
-  // Return a factory that delegates to the current mockPkcs11
-  return new Proxy({}, {
-    get: (_target, prop) => {
-      if (!mockPkcs11) throw new Error('mockPkcs11 not initialized');
-      return (mockPkcs11 as any)[prop];
-    },
-  });
-}, { virtual: true });
+// The SUT loads pkcs11js via native require, which no module mock can
+// intercept under vitest (and the optional native binding may not even build
+// on this machine). Inject the fake module through the loader seam instead.
+setPkcs11Loader(() => {
+  if (!mockPkcs11) throw new Error('mockPkcs11 not initialized');
+  return mockPkcs11 as any;
+});
+
+afterAll(() => setPkcs11Loader(null));
 
 
 // ---------------------------------------------------------------------------
@@ -436,8 +440,8 @@ describe('HsmSigner', () => {
 // ---------------------------------------------------------------------------
 
 describe('HSM Signer Singleton', () => {
-  it('should export getHsmSigner and setHsmSigner', () => {
-    const { getHsmSigner, setHsmSigner } = require('../../srv/blockchain/signing/hsm-signer');
+  it('should export getHsmSigner and setHsmSigner', async () => {
+    const { getHsmSigner, setHsmSigner } = await import('../../srv/blockchain/signing/hsm-signer');
 
     expect(typeof getHsmSigner).toBe('function');
     expect(typeof setHsmSigner).toBe('function');

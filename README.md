@@ -89,6 +89,31 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 >
 > Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
 
+## Services
+
+| Service | Path | Purpose |
+|---|---|---|
+| CardanoODataService | `/odata/v4/cardano-odata/` | Read blockchain data (20 entities, 19 actions) |
+| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (13 actions) |
+| CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
+| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (v2.0, off by default) |
+| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (v2.0, off by default) |
+
+Both v2.0 services also publish **CAP events**, so a consumer can subscribe instead of polling —
+in-process, no broker required:
+
+```js
+(await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
+(await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
+```
+
+## Requirements
+
+- **Node.js >= 22.5** and **@sap/cds >= 10** (peer dependency). CAP 9 hosts cannot load `@odatano/core@2`.
+- Upgrading a consumer from 1.x: run **`cds deploy`**. 2.0 adds four tables (`CardanoSyncState`,
+  `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`) plus a `dedupKey` column; without
+  the redeploy the new services answer `no such table` while the old ones keep working.
+
 ## Documentation
 
 | Guide | Description |

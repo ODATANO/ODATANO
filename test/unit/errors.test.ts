@@ -11,7 +11,9 @@ import {
   TransactionValidationError,
   getErrorStatus,
   getErrorMessage,
-  normalizeBackendError
+  normalizeBackendError,
+  rejectInvalid,
+  rejectMissing
 } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
 
@@ -389,11 +391,70 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
 
-    it('should preserve original error', () => {
-      const error = { status: 503, message: 'Service down' };
+    // ============================================================================
+    // Priority 3b: PostgREST server-side SQL faults surfaced as HTTP 400 (Koios)
+    // ============================================================================
+    it('should classify PostgREST 42703 (undefined column) 400 as 503 ProviderUnavailableError', () => {
+      // Real-world case (Koios preview 2026-07): half-migrated drep_info
+      // function on one LB instance.
+      const error = {
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: { code: '42703', details: null, hint: null, message: 'column dc.live_deleg_count does not exist' },
+        },
+      };
       const result = normalizeBackendError(error, 'koios');
 
-      expect(result.originalError).toBeDefined();
+      expect(result.statusCode).toBe(503);
+      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+      expect(result.message).toContain('42703');
+      expect(result.message).toContain('does not exist');
+    });
+
+    it('should classify PostgREST 57014 (statement timeout) 400 as 503 ProviderUnavailableError', () => {
+      const error = {
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: { code: '57014', message: 'canceling statement due to statement timeout' },
+        },
+      };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result).toBeInstanceOf(ProviderUnavailableError);
+    });
+
+    it('should NOT reclassify PostgREST client-input errors (class 22) — stays 400', () => {
+      const error = {
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: { code: '22P02', message: 'invalid input syntax for type' },
+        },
+      };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(400);
+      expect(result).toBeInstanceOf(TransactionValidationError);
+    });
+
+    it('should NOT misread the PostgREST "does not exist" message as a resource 404', () => {
+      // 'column … does not exist' contains the Priority-4 'does not exist' hint —
+      // the code-based check must win so a provider fault is not served as 404.
+      const error = {
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: { code: '42703', message: 'column dc.live_deleg_count does not exist' },
+        },
+      };
+      const result = normalizeBackendError(error, 'koios');
+
+      expect(result.statusCode).toBe(503);
+      expect(result).not.toBeInstanceOf(NotFoundError);
     });
 
     it('should convert unknown error to 503 PROVIDER_UNAVAILABLE', () => {
@@ -712,7 +773,6 @@ describe('Error Classes', () => {
     it('should throw BackendError with invalid input error', () => {
       const mockReq = {} as any;
 
-      const { rejectInvalid } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectInvalid(mockReq, 'TestContext', 'Invalid value', 'fieldName');
@@ -731,7 +791,6 @@ describe('Error Classes', () => {
     it('should throw BackendError without target', () => {
       const mockReq = {} as any;
 
-      const { rejectInvalid } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectInvalid(mockReq, 'TestContext', 'Invalid value');
@@ -752,7 +811,6 @@ describe('Error Classes', () => {
     it('should throw BackendError for missing field', () => {
       const mockReq = {} as any;
 
-      const { rejectMissing } = require('../../srv/utils/errors');
       
       expect(() => {
         rejectMissing(mockReq, 'TestContext', 'requiredField');

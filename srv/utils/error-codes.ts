@@ -9,6 +9,13 @@ export const ERROR_CODES = {
   INVALID_INPUT: 'ODATANO_INVALID_INPUT',
 
   /**
+   * 403 – Caller lacks the required role
+   * Indicates the caller is authenticated but not authorized for the operation
+   * (e.g. HSM-backed signing without the configured hsm.requiresRole)
+   */
+  FORBIDDEN: 'ODATANO_FORBIDDEN',
+
+  /**
    * 404 – Data not found
    * Indicates that the requested resource could not be found (Empty result set Address with no UTxOs, Transaction hash not found, etc.)
    */

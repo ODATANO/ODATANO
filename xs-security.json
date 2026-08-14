@@ -18,6 +18,10 @@
     {
       "name": "$XSAPPNAME.Sign",
       "description": "Sign transactions and manage HSM"
+    },
+    {
+      "name": "$XSAPPNAME.Admin",
+      "description": "Operate the ODATANO chain crawler and wallet worker"
     }
   ],
   "attributes": [],
@@ -29,8 +33,13 @@
     },
     {
       "name": "CardanoUser",
-      "description": "Full access to Cardano services",
+      "description": "Read, build/submit and sign Cardano transactions (no operational admin)",
       "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
+    },
+    {
+      "name": "CardanoAdmin",
+      "description": "Operate the ODATANO chain crawler and wallet worker",
+      "scope-references": ["$XSAPPNAME.Admin"]
     }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]

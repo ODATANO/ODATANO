@@ -1,29 +1,33 @@
+import { BlockFrostAPI as BlockFrostAPIActual } from '@blockfrost/blockfrost-js';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
 // Mock the BlockFrostAPI
-jest.mock('@blockfrost/blockfrost-js', () => {
-  const mockBlockFrostAPI = jest.fn().mockImplementation(() => ({
-    txSubmit: jest.fn(),
-    poolsById: jest.fn(),
-    blocksLatest: jest.fn(),
-    addressesUtxosAll: jest.fn(),
-    assetsById: jest.fn(),
-    assetsHistory: jest.fn(),
-    txs: jest.fn(),
-    epochsLatestParameters: jest.fn(),
+vi.mock('@blockfrost/blockfrost-js', () => {
+  const mockBlockFrostAPI = vi.fn().mockImplementation(function () { return {
+    txSubmit: vi.fn(),
+    poolsById: vi.fn(),
+    blocksLatest: vi.fn(),
+    addressesUtxosAll: vi.fn(),
+    assetsById: vi.fn(),
+    assetsHistory: vi.fn(),
+    txs: vi.fn(),
+    epochsLatestParameters: vi.fn(),
     options: { requestTimeout: 0 },
-  }));
+  }; });
   return { BlockFrostAPI: mockBlockFrostAPI };
 });
+
+// Shared handle on the mocked constructor (replaces the per-test
+// jest.requireMock('@blockfrost/blockfrost-js') lookups).
+const BlockFrostAPI = vi.mocked(BlockFrostAPIActual);
 
 const NETWORK = 'preview' as const;
 const TIMEOUT_MS = 5000;
 
 describe('BlockfrostBackend constructor', () => {
   beforeEach(() => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     BlockFrostAPI.mockClear();
   });
 
@@ -45,7 +49,6 @@ describe('BlockfrostBackend constructor', () => {
   });
 
   it('forwards customBackend into the BlockFrostAPI constructor', () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key', 'http://demeter.example/v0');
     expect(BlockFrostAPI).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -57,7 +60,6 @@ describe('BlockfrostBackend constructor', () => {
   });
 
   it("substitutes 'self-hosted' projectId when customBackend is set without a key", () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     new BlockfrostBackend(NETWORK, TIMEOUT_MS, '', 'http://localhost:3010/api/v0');
     expect(BlockFrostAPI).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -68,9 +70,8 @@ describe('BlockfrostBackend constructor', () => {
   });
 
   it('omits customBackend from SDK options when not provided', () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
     new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
-    const callArgs = BlockFrostAPI.mock.calls[0][0];
+    const callArgs = BlockFrostAPI.mock.calls[0][0]!;
     expect(callArgs).not.toHaveProperty('customBackend');
     expect(callArgs.projectId).toBe('test-key');
   });
@@ -80,12 +81,11 @@ describe('BlockfrostBackend submitTransaction mock test', () => {
   it('should submit a transaction and return the transaction hash', async () => {
     const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txSubmit: jest.fn().mockResolvedValue(mockTxHash),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      txSubmit: vi.fn().mockResolvedValue(mockTxHash),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -99,7 +99,7 @@ describe('BlockfrostBackend submitTransaction mock test', () => {
 
 describe('BlockfrostBackend getPool mock test', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should return pool data for a valid pool ID', async () => {
@@ -120,12 +120,11 @@ describe('BlockfrostBackend getPool mock test', () => {
       reward_account: 'stake1uxyz789'
     };
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      poolsById: jest.fn().mockResolvedValue(mockPoolData),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      poolsById: vi.fn().mockResolvedValue(mockPoolData),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -168,12 +167,11 @@ describe('BlockfrostBackend getPool mock test', () => {
       reward_account: 'stake1min'
     };
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      poolsById: jest.fn().mockResolvedValue(mockPoolData),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      poolsById: vi.fn().mockResolvedValue(mockPoolData),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -187,15 +185,14 @@ describe('BlockfrostBackend getPool mock test', () => {
   });
 
   it('should throw NotFoundError when pool does not exist', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      poolsById: jest.fn().mockRejectedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      poolsById: vi.fn().mockRejectedValue({
         status: 404,
         message: 'Pool not found'
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -206,7 +203,7 @@ describe('BlockfrostBackend getPool mock test', () => {
 
 describe('BlockfrostBackend getAddressUtxos', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should return UTxOs for valid address', async () => {
@@ -234,12 +231,11 @@ describe('BlockfrostBackend getAddressUtxos', () => {
       }
     ];
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      addressesUtxosAll: vi.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -253,15 +249,14 @@ describe('BlockfrostBackend getAddressUtxos', () => {
   });
 
   it('should throw NotFoundError when address has no UTxOs', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxosAll: jest.fn().mockRejectedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      addressesUtxosAll: vi.fn().mockRejectedValue({
         status_code: 404,
         message: 'The requested component has not been found.'
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -294,12 +289,11 @@ describe('BlockfrostBackend getAddressUtxos', () => {
       },
     ];
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      addressesUtxosAll: vi.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -326,12 +320,11 @@ describe('BlockfrostBackend getAddressUtxos', () => {
       },
     ];
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      addressesUtxosAll: jest.fn().mockResolvedValue(mockUtxos),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      addressesUtxosAll: vi.fn().mockResolvedValue(mockUtxos),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -345,7 +338,7 @@ describe('BlockfrostBackend getAddressUtxos', () => {
 
 describe('BlockfrostBackend getAddressTransactions', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should preserve requested order and skip hashes missing from batch result', async () => {
@@ -353,23 +346,22 @@ describe('BlockfrostBackend getAddressTransactions', () => {
     const txHashB = 'b'.repeat(64);
     const txHashC = 'c'.repeat(64);
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      addressesTransactions: jest.fn().mockResolvedValue([
+    BlockFrostAPI.mockImplementation(function () { return {
+      addressesTransactions: vi.fn().mockResolvedValue([
         { tx_hash: txHashB },
         { tx_hash: txHashA },
         { tx_hash: txHashC },
       ]),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
 
     const txA = { hash: txHashA } as any;
     const txC = { hash: txHashC } as any;
-    const batchSpy = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
+    const batchSpy = vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
       new Map<string, any>([
         [txHashA, txA],
         [txHashC, txC],
@@ -385,7 +377,7 @@ describe('BlockfrostBackend getAddressTransactions', () => {
 
 describe('BlockfrostBackend getProtocolParameters', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should return protocol parameters', async () => {
@@ -423,12 +415,11 @@ describe('BlockfrostBackend getProtocolParameters', () => {
       }
     };
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      epochsLatestParameters: jest.fn().mockResolvedValue(mockProtocolParams),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      epochsLatestParameters: vi.fn().mockResolvedValue(mockProtocolParams),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -477,12 +468,11 @@ describe('BlockfrostBackend getProtocolParameters', () => {
       }
     };
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      epochsLatestParameters: jest.fn().mockResolvedValue(mockProtocolParams),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      epochsLatestParameters: vi.fn().mockResolvedValue(mockProtocolParams),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -498,15 +488,14 @@ describe('BlockfrostBackend getProtocolParameters', () => {
   });
 
   it('should throw on API error', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      epochsLatestParameters: jest.fn().mockRejectedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      epochsLatestParameters: vi.fn().mockRejectedValue({
         status_code: 500,
         message: 'Internal server error'
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'block123' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -517,7 +506,7 @@ describe('BlockfrostBackend getProtocolParameters', () => {
 
 describe('BlockfrostBackend getAssetInfo', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   const POLICY = 'a'.repeat(56);
@@ -545,12 +534,11 @@ describe('BlockfrostBackend getAssetInfo', () => {
       },
     };
 
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsById: jest.fn().mockResolvedValue(mockResponse),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsById: vi.fn().mockResolvedValue(mockResponse),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -578,9 +566,8 @@ describe('BlockfrostBackend getAssetInfo', () => {
   });
 
   it('handles asset without registry metadata (null fields)', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsById: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsById: vi.fn().mockResolvedValue({
         asset: UNIT,
         policy_id: POLICY,
         asset_name: ASSET_NAME_HEX,
@@ -591,9 +578,9 @@ describe('BlockfrostBackend getAssetInfo', () => {
         onchain_metadata: null,
         metadata: null,
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -605,15 +592,14 @@ describe('BlockfrostBackend getAssetInfo', () => {
   });
 
   it('throws NotFoundError when asset does not exist', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsById: jest.fn().mockRejectedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsById: vi.fn().mockRejectedValue({
         status_code: 404,
         message: 'The requested component has not been found.',
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -624,7 +610,7 @@ describe('BlockfrostBackend getAssetInfo', () => {
 
 describe('BlockfrostBackend getAssetHistory', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   const POLICY = 'a'.repeat(56);
@@ -639,21 +625,20 @@ describe('BlockfrostBackend getAssetHistory', () => {
     ];
 
     let captured: any = null;
-    const txsMock = jest.fn((hash: string) => {
+    const txsMock = vi.fn((hash: string) => {
       if (hash === TX1) return Promise.resolve({ block_time: 1700000200, block_height: 200 });
       if (hash === TX2) return Promise.resolve({ block_time: 1700000100, block_height: 199 });
       return Promise.reject(new Error('unknown tx'));
     });
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsHistory: jest.fn((asset: string, opts: any) => {
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsHistory: vi.fn((asset: string, opts: any) => {
         captured = { asset, opts };
         return Promise.resolve(mockHistory);
       }),
       txs: txsMock,
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -671,15 +656,14 @@ describe('BlockfrostBackend getAssetHistory', () => {
 
   it('leaves blockTime/blockHeight null when tx-fetch fails (best-effort)', async () => {
     const TX1 = 'b'.repeat(64);
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsHistory: jest.fn().mockResolvedValue([
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsHistory: vi.fn().mockResolvedValue([
         { tx_hash: TX1, action: 'minted', amount: '1' },
       ]),
-      txs: jest.fn().mockRejectedValue({ status_code: 500, message: 'temporary' }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      txs: vi.fn().mockRejectedValue({ status_code: 500, message: 'temporary' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -695,16 +679,15 @@ describe('BlockfrostBackend getAssetHistory', () => {
 
   it('clamps limit to [1, 100]', async () => {
     let captured: any = null;
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsHistory: jest.fn((asset: string, opts: any) => {
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsHistory: vi.fn((asset: string, opts: any) => {
         captured = opts;
         return Promise.resolve([]);
       }),
-      txs: jest.fn(),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+      txs: vi.fn(),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -717,13 +700,12 @@ describe('BlockfrostBackend getAssetHistory', () => {
   });
 
   it('returns empty array when no history exists', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      assetsHistory: jest.fn().mockResolvedValue([]),
-      txs: jest.fn(),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'b' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      assetsHistory: vi.fn().mockResolvedValue([]),
+      txs: vi.fn(),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'b' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -735,11 +717,10 @@ describe('BlockfrostBackend getAssetHistory', () => {
 
 describe('BlockfrostBackend getCurrentSlot', () => {
   it('returns the slot from getLatestBlock', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h', slot: 80_000_000 }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h', slot: 80_000_000 }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -749,11 +730,10 @@ describe('BlockfrostBackend getCurrentSlot', () => {
   });
 
   it('throws ProviderUnavailableError when latest block has no slot', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h', slot: null }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h', slot: null }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -766,14 +746,13 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   const TX = 'a'.repeat(64);
 
   it('returns true when consumed_by_tx is null', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockResolvedValue({
         outputs: [{ output_index: 0, consumed_by_tx: null }],
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -782,14 +761,13 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('returns false when consumed_by_tx is a tx hash', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockResolvedValue({
         outputs: [{ output_index: 0, consumed_by_tx: 'b'.repeat(64) }],
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -798,17 +776,16 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('matches by output_index regardless of array order', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockResolvedValue({
         outputs: [
           { output_index: 1, consumed_by_tx: 'b'.repeat(64) },
           { output_index: 0, consumed_by_tx: null },
         ],
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -818,14 +795,13 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('returns false for out-of-range outputIndex', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockResolvedValue({
         outputs: [{ output_index: 0, consumed_by_tx: null }],
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -834,13 +810,12 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('returns false for negative outputIndex without making a network call', async () => {
-    const txsUtxos = jest.fn();
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
+    const txsUtxos = vi.fn();
+    BlockFrostAPI.mockImplementation(function () { return {
       txsUtxos,
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -850,12 +825,11 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('returns false when tx is 404 (never on chain)', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockRejectedValue({ status_code: 404, message: 'not found' }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockRejectedValue({ status_code: 404, message: 'not found' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();
@@ -864,14 +838,13 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
   });
 
   it('throws ProviderUnavailableError when consumed_by_tx field is absent (older server)', async () => {
-    const { BlockFrostAPI } = jest.requireMock('@blockfrost/blockfrost-js');
-    BlockFrostAPI.mockImplementation(() => ({
-      txsUtxos: jest.fn().mockResolvedValue({
+    BlockFrostAPI.mockImplementation(function () { return {
+      txsUtxos: vi.fn().mockResolvedValue({
         outputs: [{ output_index: 0 }], // no consumed_by_tx key
       }),
-      blocksLatest: jest.fn().mockResolvedValue({ hash: 'h' }),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
       options: { requestTimeout: 0 },
-    }));
+    }; });
 
     const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
     await backend.init();

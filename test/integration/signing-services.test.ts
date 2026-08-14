@@ -5,15 +5,22 @@
  */
 
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } from '../../srv/server';
-import { TransactionAlreadySubmittedError } from '../../srv/utils/errors';
-import { setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
+// The CAP server booted by cds.test() loads srv/* through Node's native
+// require — an ESM import here would create a second module instance whose
+// app context / HSM singleton / error classes the service handlers never
+// see. require() shares the native graph (NIGHTGATE pattern).
+const { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } =
+  require('../../srv/server') as typeof import('../../srv/server');
+const { TransactionAlreadySubmittedError } =
+  require('../../srv/utils/errors') as typeof import('../../srv/utils/errors');
+const { setHsmSigner } =
+  require('../../srv/blockchain/signing/hsm-signer') as typeof import('../../srv/blockchain/signing/hsm-signer');
 import { TEST_FIXTURES } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
 
 const { INSERT, UPDATE } = cds.ql;
 
-jest.setTimeout(30000);
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 // Skip server auto-init - mock tests create their own context after setting up nock mocks
 process.env.SKIP_AUTO_INIT = 'true';
@@ -292,7 +299,7 @@ describe('Signing Services Integration Tests', () => {
       // Lost-response duplicate: the node already holds the tx, so submit throws 409
       // (TransactionAlreadySubmittedError). That is success — the request must finalize as
       // 'submitted', not record a spurious 'failed'.
-      const spy = jest.spyOn(getCardanoClient(), 'submitTransaction')
+      const spy = vi.spyOn(getCardanoClient(), 'submitTransaction')
         .mockRejectedValue(new TransactionAlreadySubmittedError('a'.repeat(64)));
       try {
         const { status, data } = await test.post('/odata/v4/cardano-sign/SubmitVerifiedTransaction', {
@@ -711,7 +718,7 @@ describe('Signing Services Integration Tests', () => {
           }
           return toHex(Cbor.encode(new CborArray(txObj.array, { indefinite: txObj.indefinite })));
         },
-        shutdown: jest.fn(),
+        shutdown: vi.fn(),
       } as any;
 
       setHsmSigner(badSigner);
@@ -1001,6 +1008,6 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
         new CborArray(txObj.array, { indefinite: txObj.indefinite })
       ));
     },
-    shutdown: jest.fn(),
+    shutdown: vi.fn(),
   } as any;
 }

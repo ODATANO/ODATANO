@@ -2,13 +2,14 @@ import cds, { Request } from '@sap/cds';
 import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isTxHash, isAssetUnit, isValidCbor, validateRequiredSigners } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isAssetUnit } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, applyScriptParameters, extractTxCacheTargets } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
 import type { JSONValue, TxBuildPlutusSpendRequest } from './utils/types';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs } from './utils/tx-request-parsers';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -16,170 +17,6 @@ const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoTxService');
 
-/**
- * Parse and validate a JSON array of UTxO refs ({txHash, outputIndex}) — the shared
- * shape of forceInputsJson and referenceInputsJson (CIP-31). Returns { parsed } on
- * success (undefined for absent/empty input → treated as no-op) or { error } on
- * validation failure. Error messages reference the entry name derived from fieldName.
- */
-function parseUtxoRefArray(
-  json: string | undefined,
-  fieldName: 'forceInputsJson' | 'referenceInputsJson'
-): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
-  if (!json) return { parsed: undefined };
-  const entryName = fieldName.replace(/Json$/, '');
-  const jsonResult = validateJsonWithLimits(json, fieldName);
-  if (!jsonResult.valid) return { error: jsonResult.error! };
-  if (!Array.isArray(jsonResult.parsed)) return { error: `${fieldName} must be a JSON array` };
-  if (jsonResult.parsed.length === 0) return { parsed: undefined };
-  const refs: Array<{ txHash: string; outputIndex: number }> = [];
-  for (const rawEntry of jsonResult.parsed) {
-    if (!rawEntry || typeof rawEntry !== 'object') {
-      return { error: `Each ${entryName} entry must be an object with txHash and outputIndex` };
-    }
-    const entry = rawEntry as Record<string, unknown>;
-    if (typeof entry.txHash !== 'string' || !isTxHash(entry.txHash)) {
-      return { error: `Each ${entryName} entry must have a valid 64-hex txHash` };
-    }
-    const idx = entry.outputIndex;
-    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
-      return { error: `Each ${entryName} entry must have a non-negative integer outputIndex` };
-    }
-    refs.push({ txHash: entry.txHash, outputIndex: idx });
-  }
-  return { parsed: refs };
-}
-
-/**
- * Parse and validate requiredSignersJson (array of 56-hex Ed25519 key hashes).
- * Same result contract as the other parse* helpers.
- */
-function parseRequiredSigners(
-  requiredSignersJson: string | undefined
-): { parsed?: string[]; error?: string } {
-  if (!requiredSignersJson) return { parsed: undefined };
-  const jsonResult = validateJsonWithLimits(requiredSignersJson, 'requiredSignersJson');
-  if (!jsonResult.valid) return { error: jsonResult.error! };
-  try {
-    return { parsed: validateRequiredSigners(jsonResult.parsed) };
-  } catch (err: unknown) {
-    return { error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-/**
- * Parse and validate an assetsJson array ({unit, quantity} entries) with the same
- * per-entry strictness as parseExtraOutputs — unchecked entries previously flowed
- * into the builder and surfaced as 500s.
- */
-function parseAssetsArray(
-  assetsJson: string | undefined,
-  fieldName: string
-): { parsed?: Array<{ unit: string; quantity: string }>; error?: string } {
-  if (!assetsJson) return { parsed: undefined };
-  const jsonResult = validateJsonWithLimits(assetsJson, fieldName);
-  if (!jsonResult.valid) return { error: jsonResult.error! };
-  if (!Array.isArray(jsonResult.parsed)) return { error: `${fieldName} must be a JSON array` };
-  const out: Array<{ unit: string; quantity: string }> = [];
-  for (let i = 0; i < jsonResult.parsed.length; i++) {
-    const a = jsonResult.parsed[i] as Record<string, unknown>;
-    if (!a || typeof a !== 'object') {
-      return { error: `${fieldName}[${i}] must be an object` };
-    }
-    if (typeof a.unit !== 'string' || a.unit.toLowerCase() === 'lovelace' || !isAssetUnit(a.unit)) {
-      return { error: `${fieldName}[${i}].unit must be a valid asset unit (policyId + assetName hex)` };
-    }
-    if (typeof a.quantity !== 'string' || !/^\d+$/.test(a.quantity) || a.quantity === '0') {
-      return { error: `${fieldName}[${i}].quantity must be a positive integer string` };
-    }
-    out.push({ unit: a.unit, quantity: a.quantity });
-  }
-  return { parsed: out };
-}
-
-/** Upper bound on extra outputs per transaction (defence against tx-size blow-up). */
-const MAX_EXTRA_OUTPUTS = 32;
-
-export interface ParsedExtraOutput {
-  address: string;
-  lovelaceAmount: string;
-  assets?: Array<{ unit: string; quantity: string }>;
-  inlineDatum?: JSONValue;
-  referenceScript?: string;
-}
-
-/**
- * Parse and validate extraOutputsJson. Returns { parsed } on success (possibly undefined
- * for empty array → no-op) or { error } on validation failure.
- */
-function parseExtraOutputs(
-  extraOutputsJson: string | undefined
-): { parsed?: ParsedExtraOutput[]; error?: string } {
-  if (!extraOutputsJson) return { parsed: undefined };
-  const jsonResult = validateJsonWithLimits(extraOutputsJson, 'extraOutputsJson');
-  if (!jsonResult.valid) return { error: jsonResult.error! };
-  if (!Array.isArray(jsonResult.parsed)) return { error: 'extraOutputsJson must be a JSON array' };
-  if (jsonResult.parsed.length === 0) return { parsed: undefined };
-  if (jsonResult.parsed.length > MAX_EXTRA_OUTPUTS) {
-    return { error: `extraOutputsJson exceeds maximum of ${MAX_EXTRA_OUTPUTS} entries` };
-  }
-
-  const out: ParsedExtraOutput[] = [];
-  for (let i = 0; i < jsonResult.parsed.length; i++) {
-    const entry = jsonResult.parsed[i] as Record<string, unknown>;
-    if (!entry || typeof entry !== 'object') {
-      return { error: `extraOutputs[${i}] must be an object` };
-    }
-    if (typeof entry.address !== 'string' || !isValidBech32Address(entry.address)) {
-      return { error: `extraOutputs[${i}].address is not a valid Bech32 address` };
-    }
-    if (typeof entry.lovelaceAmount !== 'string' || !/^\d+$/.test(entry.lovelaceAmount) || entry.lovelaceAmount === '0') {
-      return { error: `extraOutputs[${i}].lovelaceAmount must be a positive integer string` };
-    }
-
-    let assets: Array<{ unit: string; quantity: string }> | undefined;
-    if (entry.assets !== undefined && entry.assets !== null) {
-      if (!Array.isArray(entry.assets)) {
-        return { error: `extraOutputs[${i}].assets must be an array` };
-      }
-      assets = [];
-      for (let j = 0; j < entry.assets.length; j++) {
-        const a = entry.assets[j] as Record<string, unknown>;
-        if (!a || typeof a !== 'object') {
-          return { error: `extraOutputs[${i}].assets[${j}] must be an object` };
-        }
-        if (typeof a.unit !== 'string' || a.unit.toLowerCase() === 'lovelace' || !isAssetUnit(a.unit)) {
-          return { error: `extraOutputs[${i}].assets[${j}].unit must be a valid asset unit (policyId + assetName hex)` };
-        }
-        if (typeof a.quantity !== 'string' || !/^\d+$/.test(a.quantity) || a.quantity === '0') {
-          return { error: `extraOutputs[${i}].assets[${j}].quantity must be a positive integer string` };
-        }
-        assets.push({ unit: a.unit, quantity: a.quantity });
-      }
-    }
-
-    let inlineDatum: JSONValue | undefined;
-    if (entry.inlineDatumJson !== undefined && entry.inlineDatumJson !== null) {
-      if (typeof entry.inlineDatumJson !== 'string') {
-        return { error: `extraOutputs[${i}].inlineDatumJson must be a JSON string` };
-      }
-      const datumResult = validateJsonWithLimits(entry.inlineDatumJson, `extraOutputs[${i}].inlineDatumJson`);
-      if (!datumResult.valid) return { error: datumResult.error! };
-      inlineDatum = datumResult.parsed as JSONValue;
-    }
-
-    let referenceScript: string | undefined;
-    if (entry.referenceScriptHex !== undefined && entry.referenceScriptHex !== null) {
-      if (typeof entry.referenceScriptHex !== 'string' || !isValidCbor(entry.referenceScriptHex)) {
-        return { error: `extraOutputs[${i}].referenceScriptHex must be even-length hex` };
-      }
-      referenceScript = entry.referenceScriptHex;
-    }
-
-    out.push({ address: entry.address, lovelaceAmount: entry.lovelaceAmount, assets, inlineDatum, referenceScript });
-  }
-  return { parsed: out };
-}
 
 /**
  * Cardano Transaction Service Implementation

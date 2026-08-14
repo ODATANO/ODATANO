@@ -1,16 +1,19 @@
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({
-    info: jest.fn(),
-    error: jest.fn(),
-    warn: jest.fn(),
-    debug: jest.fn(),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
   })),
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
-jest.mock('@cardano-ogmios/client', () => ({
-  createInteractionContext: jest.fn(),
-  createLedgerStateQueryClient: jest.fn(),
-  createTransactionSubmissionClient: jest.fn()
+vi.mock('@cardano-ogmios/client', () => ({
+  createInteractionContext: vi.fn(),
+  createLedgerStateQueryClient: vi.fn(),
+  createTransactionSubmissionClient: vi.fn()
 }));
 
 import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight } from '../../srv/blockchain/backends/ogmios-backend';
@@ -188,7 +191,7 @@ describe('OgmiosBackend', () => {
   describe('getAccount', () => {
     it('should return account data for valid stake address', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{
           controlledAmount: 50000000000,
           rewards: 1500000,
           withdrawals: 500000,
@@ -225,7 +228,7 @@ describe('OgmiosBackend', () => {
 
     it('should throw NotFoundError when account does not exist', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue([])
+        rewardAccountSummaries: vi.fn().mockResolvedValue([])
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -247,7 +250,7 @@ describe('OgmiosBackend', () => {
 
     it('should handle account with no delegation or drep', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{
           controlledAmount: 2000000,
           rewards: 0,
           withdrawals: 0
@@ -267,7 +270,7 @@ describe('OgmiosBackend', () => {
 
     it('should extract lovelace from Ogmios v6 {ada:{lovelace}} value objects (no "[object Object]")', async () => {
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue([{
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{
           // real Ogmios v6 shape — .toString() on these produced "[object Object]"
           controlledAmount: { ada: { lovelace: 50_000_000_000n } },
           rewards: { ada: { lovelace: 1_500_000n } },
@@ -295,16 +298,16 @@ describe('OgmiosBackend', () => {
         readyState: 1, // OPEN
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
-        terminate: jest.fn()
+        once: vi.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: vi.fn()
       };
       const mockContext = {
         socket: mockSocket
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = { shutdown: jest.fn() };
-      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).stateQueryClient = { shutdown: vi.fn() };
+      (backend as any).txSubmissionClient = { shutdown: vi.fn() };
       (backend as any).context = mockContext;
       (backend as any).isShutdown = false;
 
@@ -332,13 +335,13 @@ describe('OgmiosBackend', () => {
         readyState: 1,
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
-        terminate: jest.fn()
+        once: vi.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: vi.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = { shutdown: jest.fn() };
-      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).stateQueryClient = { shutdown: vi.fn() };
+      (backend as any).txSubmissionClient = { shutdown: vi.fn() };
       (backend as any).context = { socket: mockSocket };
       (backend as any).isShutdown = false;
 
@@ -411,7 +414,7 @@ describe('OgmiosBackend', () => {
   describe('ensureNotShutdown', () => {
     it('should not throw when client is not shutdown', () => {
       const mockStateQueryClient = {
-        epoch: jest.fn().mockResolvedValue(500)
+        epoch: vi.fn().mockResolvedValue(500)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -430,8 +433,8 @@ describe('OgmiosBackend', () => {
 
     it('should prevent operations after shutdown', async () => {
       const mockStateQueryClient = {
-        epoch: jest.fn().mockResolvedValue(500),
-        protocolParameters: jest.fn().mockResolvedValue({})
+        epoch: vi.fn().mockResolvedValue(500),
+        protocolParameters: vi.fn().mockResolvedValue({})
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -446,7 +449,7 @@ describe('OgmiosBackend', () => {
     it('should submit a transaction and return the transaction hash', async () => {
       const mockTxHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
       const mockTxSubmissionClient = {
-        submitTransaction: jest.fn().mockResolvedValue(mockTxHash)
+        submitTransaction: vi.fn().mockResolvedValue(mockTxHash)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -488,7 +491,7 @@ describe('OgmiosBackend', () => {
       ];
 
       const mockTxSubmissionClient = {
-        evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
+        evaluateTransaction: vi.fn().mockResolvedValue(mockEvaluationResult)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -509,7 +512,7 @@ describe('OgmiosBackend', () => {
       ];
 
       const mockTxSubmissionClient = {
-        evaluateTransaction: jest.fn().mockResolvedValue(mockEvaluationResult)
+        evaluateTransaction: vi.fn().mockResolvedValue(mockEvaluationResult)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -542,7 +545,7 @@ describe('OgmiosBackend', () => {
 
     it('should propagate evaluation errors from ogmios', async () => {
       const mockTxSubmissionClient = {
-        evaluateTransaction: jest.fn().mockRejectedValue(
+        evaluateTransaction: vi.fn().mockRejectedValue(
           new Error('Script execution failed: validation error')
         )
       };
@@ -559,8 +562,8 @@ describe('OgmiosBackend', () => {
   describe('shutdown error handling', () => {
     it('should handle shutdown when no socket exists', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = { shutdown: jest.fn() };
-      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).stateQueryClient = { shutdown: vi.fn() };
+      (backend as any).txSubmissionClient = { shutdown: vi.fn() };
       (backend as any).context = null;
       (backend as any).isShutdown = false;
 
@@ -573,8 +576,8 @@ describe('OgmiosBackend', () => {
         readyState: 3, // CLOSED
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn(),
-        terminate: jest.fn()
+        once: vi.fn(),
+        terminate: vi.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -594,13 +597,13 @@ describe('OgmiosBackend', () => {
         readyState: 3, // CLOSED
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn(),
-        terminate: jest.fn()
+        once: vi.fn(),
+        terminate: vi.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = { shutdown: jest.fn() };
-      (backend as any).txSubmissionClient = { shutdown: jest.fn() };
+      (backend as any).stateQueryClient = { shutdown: vi.fn() };
+      (backend as any).txSubmissionClient = { shutdown: vi.fn() };
       (backend as any).context = { socket: mockSocket };
       (backend as any).isShutdown = false;
 
@@ -615,7 +618,7 @@ describe('OgmiosBackend', () => {
   describe('getPool', () => {
     it('should return pool data for valid pool', async () => {
       const mockStateQueryClient = {
-        stakePools: jest.fn().mockResolvedValue({
+        stakePools: vi.fn().mockResolvedValue({
           'pool1abc': {
             vrf: 'vrf123',
             stake: { ada: { lovelace: 50000000000n } },
@@ -643,7 +646,7 @@ describe('OgmiosBackend', () => {
 
     it('should map Ogmios v6 value shapes (ValueAdaOnly pledge/cost, Ratio margin) without fabricating activeStake', async () => {
       const mockStateQueryClient = {
-        stakePools: jest.fn().mockResolvedValue({
+        stakePools: vi.fn().mockResolvedValue({
           'pool1v6': {
             vrf: 'vrf456',
             stake: { ada: { lovelace: 7000000000n } },
@@ -669,7 +672,7 @@ describe('OgmiosBackend', () => {
 
     it('should throw NotFoundError when pool does not exist', async () => {
       const mockStateQueryClient = {
-        stakePools: jest.fn().mockResolvedValue({})
+        stakePools: vi.fn().mockResolvedValue({})
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -681,7 +684,7 @@ describe('OgmiosBackend', () => {
 
     it('should handle pool with missing optional fields', async () => {
       const mockStateQueryClient = {
-        stakePools: jest.fn().mockResolvedValue({
+        stakePools: vi.fn().mockResolvedValue({
           'pool1minimal': {}
         })
       };
@@ -701,7 +704,7 @@ describe('OgmiosBackend', () => {
 
     it('should use vrfKeyHash fallback when vrf is missing', async () => {
       const mockStateQueryClient = {
-        stakePools: jest.fn().mockResolvedValue({
+        stakePools: vi.fn().mockResolvedValue({
           'pool1abc': { vrfKeyHash: 'vrfhash456' }
         })
       };
@@ -719,7 +722,7 @@ describe('OgmiosBackend', () => {
     it('should handle rewardAccountSummaries returning object instead of array', async () => {
       // Ogmios may return a record keyed by stake address
       const mockStateQueryClient = {
-        rewardAccountSummaries: jest.fn().mockResolvedValue({
+        rewardAccountSummaries: vi.fn().mockResolvedValue({
           'stake1u8test': {
             controlledAmount: 25000000,
             rewards: 500000,
@@ -750,10 +753,10 @@ describe('OgmiosBackend', () => {
       (backend as any).stateQueryClient = null;
       (backend as any).context = { socket: { readyState: 3, OPEN: 1 } };
       (backend as any).isShutdown = false;
-      const initSpy = jest.spyOn(backend, 'init').mockImplementation(async () => {
+      const initSpy = vi.spyOn(backend, 'init').mockImplementation(async () => {
         (backend as any).stateQueryClient = {
-          epoch: jest.fn().mockResolvedValue(450),
-          ledgerTip: jest.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
+          epoch: vi.fn().mockResolvedValue(450),
+          ledgerTip: vi.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
         };
         (backend as any).context = { socket: { readyState: 1, OPEN: 1 } };
         return true;
@@ -783,12 +786,12 @@ describe('OgmiosBackend', () => {
     it('does not reconnect when the socket is healthy', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = {
-        epoch: jest.fn().mockResolvedValue(500),
-        ledgerTip: jest.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
+        epoch: vi.fn().mockResolvedValue(500),
+        ledgerTip: vi.fn().mockResolvedValue({ slot: 100, id: 'tip' }),
       };
       (backend as any).context = { socket: { readyState: 1, OPEN: 1 } };
       (backend as any).isShutdown = false;
-      const initSpy = jest.spyOn(backend, 'init');
+      const initSpy = vi.spyOn(backend, 'init');
 
       await backend.getLatestEpoch();
       expect(initSpy).not.toHaveBeenCalled();
@@ -837,7 +840,7 @@ describe('OgmiosBackend', () => {
   describe('getAddressUtxos — UTxO mapping', () => {
     const mkBackend = (utxos: unknown[]) => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = { utxo: jest.fn().mockResolvedValue(utxos) };
+      (backend as any).stateQueryClient = { utxo: vi.fn().mockResolvedValue(utxos) };
       (backend as any).isShutdown = false;
       return backend;
     };
@@ -900,10 +903,10 @@ describe('OgmiosBackend', () => {
   describe('getLatestBlock', () => {
     it('should handle origin tip (genesis block)', async () => {
       const mockStateQueryClient = {
-        ledgerTip: jest.fn().mockResolvedValue('origin'),
-        networkBlockHeight: jest.fn().mockResolvedValue('origin'),
-        epoch: jest.fn().mockResolvedValue(0),
-        eraStart: jest.fn().mockResolvedValue({
+        ledgerTip: vi.fn().mockResolvedValue('origin'),
+        networkBlockHeight: vi.fn().mockResolvedValue('origin'),
+        epoch: vi.fn().mockResolvedValue(0),
+        eraStart: vi.fn().mockResolvedValue({
           time: { seconds: 1654041600n },
           slot: 0
         })
@@ -921,10 +924,10 @@ describe('OgmiosBackend', () => {
 
     it('should return block data with correct epoch slot calculation', async () => {
       const mockStateQueryClient = {
-        ledgerTip: jest.fn().mockResolvedValue({ slot: 432123, id: 'blockhash123' }),
-        networkBlockHeight: jest.fn().mockResolvedValue(100000),
-        epoch: jest.fn().mockResolvedValue(1),
-        eraStart: jest.fn().mockResolvedValue({
+        ledgerTip: vi.fn().mockResolvedValue({ slot: 432123, id: 'blockhash123' }),
+        networkBlockHeight: vi.fn().mockResolvedValue(100000),
+        epoch: vi.fn().mockResolvedValue(1),
+        eraStart: vi.fn().mockResolvedValue({
           time: { seconds: 1654041600n },
           slot: 0
         })
@@ -950,8 +953,8 @@ describe('OgmiosBackend', () => {
   describe('getProtocolParameters', () => {
     it('should handle missing optional fields with zero defaults', async () => {
       const mockStateQueryClient = {
-        protocolParameters: jest.fn().mockResolvedValue({}),
-        epoch: jest.fn().mockResolvedValue(100)
+        protocolParameters: vi.fn().mockResolvedValue({}),
+        epoch: vi.fn().mockResolvedValue(100)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -986,7 +989,7 @@ describe('OgmiosBackend', () => {
 
     it('should handle fully populated protocol parameters', async () => {
       const mockStateQueryClient = {
-        protocolParameters: jest.fn().mockResolvedValue({
+        protocolParameters: vi.fn().mockResolvedValue({
           minUtxoDepositCoefficient: 4310,
           minFeeCoefficient: 44,
           minFeeConstant: { ada: { lovelace: 155381 } },
@@ -1010,7 +1013,7 @@ describe('OgmiosBackend', () => {
           version: { major: 9, minor: 0 },
           plutusCostModels: {}
         }),
-        epoch: jest.fn().mockResolvedValue(450)
+        epoch: vi.fn().mockResolvedValue(450)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1031,14 +1034,14 @@ describe('OgmiosBackend', () => {
 
     it('parses Ratio strings ("num/den") and maps rho/tau to the correct sources', async () => {
       const mockStateQueryClient = {
-        protocolParameters: jest.fn().mockResolvedValue({
+        protocolParameters: vi.fn().mockResolvedValue({
           // Ogmios v6 delivers ratios as STRINGS — Number("3/1000") is NaN
           scriptExecutionPrices: { memory: '577/10000', cpu: '721/10000000' },
           stakePoolPledgeInfluence: '3/10',
           monetaryExpansion: '3/1000', // ρ
           treasuryExpansion: '1/5',    // τ
         }),
-        epoch: jest.fn().mockResolvedValue(500)
+        epoch: vi.fn().mockResolvedValue(500)
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1061,8 +1064,8 @@ describe('OgmiosBackend', () => {
         readyState: 0, // CONNECTING
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
-        terminate: jest.fn()
+        once: vi.fn().mockImplementation((_event: string, cb: () => void) => { cb(); }),
+        terminate: vi.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1077,13 +1080,13 @@ describe('OgmiosBackend', () => {
     });
 
     it('should handle close timeout during shutdown', async () => {
-      jest.useFakeTimers();
+      vi.useFakeTimers();
       const mockSocket = {
         readyState: 1, // OPEN
         OPEN: 1,
         CONNECTING: 0,
-        once: jest.fn(), // Never calls the callback — simulates timeout
-        terminate: jest.fn()
+        once: vi.fn(), // Never calls the callback — simulates timeout
+        terminate: vi.fn()
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1093,24 +1096,24 @@ describe('OgmiosBackend', () => {
       (backend as any).isShutdown = false;
 
       const shutdownPromise = backend.shutdown();
-      jest.advanceTimersByTime(3000);
+      vi.advanceTimersByTime(3000);
       await shutdownPromise;
 
       expect(mockSocket.terminate).toHaveBeenCalled();
       expect((backend as any).isShutdown).toBe(true);
-      jest.useRealTimers();
+      vi.useRealTimers();
     });
   });
 
   describe('getLatestEpoch', () => {
     it('should return epoch data with calculated boundaries', async () => {
       const mockStateQueryClient = {
-        epoch: jest.fn().mockResolvedValue(100),
-        eraStart: jest.fn().mockResolvedValue({
+        epoch: vi.fn().mockResolvedValue(100),
+        eraStart: vi.fn().mockResolvedValue({
           time: { seconds: 1654041600n },
           slot: 0
         }),
-        ledgerTip: jest.fn().mockResolvedValue({ slot: 43200100, id: 'tiphash' })
+        ledgerTip: vi.fn().mockResolvedValue({ slot: 43200100, id: 'tiphash' })
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1131,10 +1134,10 @@ describe('OgmiosBackend', () => {
   describe('getCurrentSlot', () => {
     it('returns the slot from ledger tip', async () => {
       const mockStateQueryClient = {
-        ledgerTip: jest.fn().mockResolvedValue({ slot: 80_000_123, id: 'tiphash' }),
-        networkBlockHeight: jest.fn().mockResolvedValue(1_000_000),
-        epoch: jest.fn().mockResolvedValue(100),
-        eraStart: jest.fn().mockResolvedValue({ time: { seconds: 1654041600n }, slot: 0 }),
+        ledgerTip: vi.fn().mockResolvedValue({ slot: 80_000_123, id: 'tiphash' }),
+        networkBlockHeight: vi.fn().mockResolvedValue(1_000_000),
+        epoch: vi.fn().mockResolvedValue(100),
+        eraStart: vi.fn().mockResolvedValue({ time: { seconds: 1654041600n }, slot: 0 }),
       };
 
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
@@ -1149,7 +1152,7 @@ describe('OgmiosBackend', () => {
     const TX = 'a'.repeat(64);
 
     it('returns true when utxo query returns a non-empty array', async () => {
-      const utxo = jest.fn().mockResolvedValue([{ transaction: { id: TX }, index: 0 }]);
+      const utxo = vi.fn().mockResolvedValue([{ transaction: { id: TX }, index: 0 }]);
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = { utxo };
       (backend as any).isShutdown = false;
@@ -1158,7 +1161,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('returns false when utxo query returns an empty array', async () => {
-      const utxo = jest.fn().mockResolvedValue([]);
+      const utxo = vi.fn().mockResolvedValue([]);
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = { utxo };
       (backend as any).isShutdown = false;
@@ -1167,7 +1170,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('passes the correct outputReferences shape to the client', async () => {
-      const utxo = jest.fn().mockResolvedValue([]);
+      const utxo = vi.fn().mockResolvedValue([]);
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = { utxo };
       (backend as any).isShutdown = false;
@@ -1179,7 +1182,7 @@ describe('OgmiosBackend', () => {
     });
 
     it('returns false for negative outputIndex without invoking the client', async () => {
-      const utxo = jest.fn();
+      const utxo = vi.fn();
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = { utxo };
       (backend as any).isShutdown = false;

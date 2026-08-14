@@ -272,6 +272,22 @@ export class AllBackendsFailedError extends BackendError {
 }
 
 /**
+ * True when the error proves the resource is absent on EVERY backend that was
+ * consulted: either a direct NotFoundError, or an AllBackendsFailedError whose
+ * collected per-backend errors are all 404s. CardanoClient's failover wraps
+ * per-backend errors (including 404s) into AllBackendsFailedError, so callers
+ * that need "definitively not found" (e.g. the wallet-worker's dropped-tx
+ * detection) must use this instead of `instanceof NotFoundError`. A mixed
+ * result (one backend 404, another 500) is NOT proof of absence.
+ */
+export function isNotFoundOnAllBackends(err: unknown): boolean {
+  if (err instanceof NotFoundError) return true;
+  return err instanceof AllBackendsFailedError
+    && err.errors.length > 0
+    && err.errors.every((e) => e instanceof NotFoundError || e.statusCode === 404);
+}
+
+/**
  *  HttpErrorLike - Simplified interface for HTTP errors from various libraries 
  */
 export interface HttpErrorLike {
@@ -290,7 +306,25 @@ export interface HttpErrorLike {
   [k: string]: unknown;
 }
 
-/** 
+/**
+ * PostgreSQL error-code classes that indicate a fault in the provider's own
+ * database/deployment rather than in our request. Koios (PostgREST) surfaces
+ * these as HTTP 400 — e.g. code '42703' ("column … does not exist") from a
+ * half-migrated SQL function on one load-balanced instance, or '57014'
+ * (statement timeout) under load. Client-input errors (class 22, invalid text
+ * representation etc.) are deliberately NOT listed — those remain 4xx.
+ * Classes: 08 connection, 42 syntax/undefined object, 53 insufficient
+ * resources, 57 operator intervention (incl. query_canceled), 58 system
+ * error, XX internal error.
+ */
+const PG_SERVER_ERROR_CODE_CLASSES = ['08', '42', '53', '57', '58', 'XX'];
+
+/** True when a PostgREST error body's `code` denotes a provider-side SQL fault. */
+export function isPostgrestServerErrorCode(code: unknown): boolean {
+  return typeof code === 'string' && PG_SERVER_ERROR_CODE_CLASSES.some(c => code.startsWith(c));
+}
+
+/**
  * Utility functions to extract status and message from HttpErrorLike
  * @param err error object
  * @returns {number} status code
@@ -416,6 +450,23 @@ export function normalizeBackendError(
   if (validationErrorHints.some(h => messageLower.includes(h))) {
     return new TransactionValidationError(
       `Transaction validation failed: ${message}`,
+      err
+    );
+  }
+
+  // Priority 3b: PostgREST server-side SQL faults surfaced as HTTP 400 (Koios).
+  // Body shape: { code: '42703', message: 'column … does not exist' } (broken
+  // SQL function on one LB instance) or { code: '57014' } (statement timeout).
+  // These are provider faults, not request validation — classify as retry-able
+  // 503 so multi-backend failover and the circuit breaker treat them like any
+  // other provider outage. Checked before Priority 4: the PostgREST message
+  // ("column … does not exist") would otherwise be misread as a resource 404.
+  const pgErrorBody = (err as HttpErrorLike)?.response?.data;
+  if ((status === 400 || status === 422) && isPostgrestServerErrorCode(pgErrorBody?.code)) {
+    return new ProviderUnavailableError(
+      `Provider database error (${pgErrorBody?.code}): ${pgErrorBody?.message ?? message}`,
+      backendName,
+      undefined,
       err
     );
   }

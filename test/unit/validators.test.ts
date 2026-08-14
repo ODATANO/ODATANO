@@ -11,6 +11,7 @@ import {
   isValidCbor,
   validateRequiredSigners,
   validateTransactionInputs,
+  extractPaymentCredential,
 } from '../../srv/utils/validators';
 // Network-aware validators read the active network from this leaf module
 // (no longer from srv/server — that back-dependency was removed).
@@ -1160,7 +1161,6 @@ describe('Validator Helper Methods and Type Guards', () => {
   // extractPaymentCredential (signature-binding support)
   // ==========================================================================
   describe('extractPaymentCredential', () => {
-    const { extractPaymentCredential } = require('../../srv/utils/validators');
     // type-0 base address (key payment credential)
     const KEY_ADDRESS = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
     // type-7 enterprise address (script payment credential)

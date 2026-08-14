@@ -1,8 +1,8 @@
 import cds from '@sap/cds';
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import { CardanoBackend } from './cardano-backend';
+import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
+import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, isPostgrestServerErrorCode } from '../../utils/errors';
 import { normalizeCostModels } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
@@ -27,6 +27,10 @@ import {
   LedgerProtocolParameters
 } from '../../utils/types';
 import { Network } from '../cardano-client';
+
+/** Bounded retries for instance-specific PostgREST server errors (42703, 57014, …). */
+const PG_SERVER_ERROR_MAX_RETRIES = 2;
+const PG_SERVER_ERROR_RETRY_DELAY_MS = 300;
 
 const KOIOS_URLS: Record<Network, string> = {
   mainnet: 'https://api.koios.rest/api/v1',
@@ -115,7 +119,7 @@ function sortAddressTxsDesc<T extends { block_height?: number | string | null; b
  * KoiosBackend Implementation for CardanoBackend Interface
  * Implements the CardanoBackend interface using Koios API with Axios
  */
-export class KoiosBackend implements CardanoBackend {
+export class KoiosBackend implements CardanoBackend, PaginatingBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   private network: Network;
@@ -137,6 +141,28 @@ export class KoiosBackend implements CardanoBackend {
       headers,
     });
     this.network = network;
+
+    // Koios runs multiple instances behind a load balancer; during their schema
+    // migrations single instances serve broken SQL functions (PostgREST 400,
+    // e.g. code 42703 "column … does not exist") or hit statement timeouts
+    // (57014) while the rest are healthy. Such failures are instance-specific,
+    // so a short bounded retry usually lands on a healthy instance. Genuine
+    // client-input errors (PG class 22 etc.) are not retried.
+    this.api.interceptors.response.use(undefined, async (error: AxiosError) => {
+      const config = error.config as (InternalAxiosRequestConfig & { pgRetryCount?: number }) | undefined;
+      const pgCode = (error.response?.data as { code?: unknown } | undefined)?.code;
+      if (!config || !isPostgrestServerErrorCode(pgCode)) throw error;
+
+      const attempt = (config.pgRetryCount ?? 0) + 1;
+      if (attempt > PG_SERVER_ERROR_MAX_RETRIES) throw error;
+      config.pgRetryCount = attempt;
+
+      logger.warn(
+        `Koios instance returned server-side SQL error ${pgCode} for ${config.url} — retry ${attempt}/${PG_SERVER_ERROR_MAX_RETRIES}`
+      );
+      await new Promise(resolve => setTimeout(resolve, PG_SERVER_ERROR_RETRY_DELAY_MS * attempt));
+      return this.api.request(config);
+    });
   }
 
   /** 
@@ -271,20 +297,7 @@ export class KoiosBackend implements CardanoBackend {
           throw new NotFoundError('Block', this.name);
         }
 
-        const data = results[0];
-
-        return {
-          time: data.block_time,
-          height: data.block_height,
-          hash: data.hash,
-          slot: data.abs_slot,
-          epoch: data.epoch_no,
-          epochSlot: data.epoch_slot,
-          slotLeader: data.vrf_key,
-          size: data.block_size,
-          txCount: data.tx_count,
-          fees: data.total_fees,
-        };
+        return this.mapKoiosBlockInfo(results[0]);
       },
       this.name
     );
@@ -764,14 +777,23 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         const drepData = data[0];
+        // Koios changed the /drep_info schema (observed 2026-07): the old
+        // `expired`/`retired`/`last_active_epoch` fields were replaced by
+        // `drep_status` ('registered' | 'retired'), `active` (boolean) and
+        // `expires_epoch_no`. Read the old fields first (mainnet/preprod may
+        // lag the migration), then derive from the new ones.
+        const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
+        const expired: boolean = drepData.expired ?? (drepData.active === false && !retired);
         return {
           drepId: drepData.drep_id,
           hex: drepData.hex,
           amount: drepData.amount,
           hasScript: drepData.has_script,
+          // The new schema no longer reports the last-activity epoch (only
+          // `expires_epoch_no`, which has different semantics) — keep 0 there.
           lastActiveEpoch: drepData.last_active_epoch ?? 0,
-          expired: drepData.expired,
-          retired: drepData.retired,
+          expired,
+          retired,
         };
       },
       this.name
@@ -1067,6 +1089,163 @@ export class KoiosBackend implements CardanoBackend {
         }
 
         return result;
+      },
+      this.name
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // PaginatingBackend — forward iteration for the chain crawler (v2.0)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Map a Koios /block_info response object to our BlockData (same shape getBlock
+   * maps inline; kept private to avoid touching getBlock).
+   */
+  private mapKoiosBlockInfo(data: {
+    block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
+    epoch_no: number | null; epoch_slot: number | null; vrf_key: string; block_size: number;
+    tx_count: number; total_fees?: string | null;
+  }): BlockData {
+    return {
+      time: data.block_time,
+      height: data.block_height,
+      hash: data.hash,
+      slot: data.abs_slot,
+      epoch: data.epoch_no,
+      epochSlot: data.epoch_slot,
+      slotLeader: data.vrf_key,
+      size: data.block_size,
+      txCount: data.tx_count,
+      fees: data.total_fees,
+    };
+  }
+
+  /**
+   * Get a block by its height via the PostgREST-filtered /blocks list, then resolve
+   * full data through /block_info.
+   */
+  async getBlockByHeight(height: number): Promise<BlockData> {
+    return handleBackendRequest(
+      async () => {
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.get(`/blocks?block_height=eq.${height}&limit=1`),
+          `getBlockByHeight(${height})`
+        );
+        if (!rows.length) throw new NotFoundError('Block', this.name);
+        return await this.getBlock(rows[0].hash);
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get up to `count` blocks following `afterHash`, in ascending chain order.
+   * Koios has no "next after hash" endpoint, so we list blocks above the anchor height
+   * (PostgREST gt + order + limit), then batch /block_info. When the caller already
+   * knows the anchor height (the crawler's cursor), the hash→height resolution
+   * round-trip is skipped entirely.
+   */
+  async getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]> {
+    return handleBackendRequest(
+      async () => {
+        let anchorHeight = afterHeight;
+        if (anchorHeight != null && anchorHeight > 0) {
+          // A height hint saves the hash -> height lookup, but it must never be
+          // trusted as proof that the cursor is still on the canonical chain.
+          // After a rollback Koios can continue listing canonical blocks above H
+          // even though `afterHash` is the now-orphaned block at H. Validate the
+          // canonical hash first so the crawler enters its reorg-recovery path.
+          const canonical = await this.fetchWithRetryOnEmpty(
+            () => this.api.get(`/blocks?block_height=eq.${anchorHeight}&limit=1`),
+            `getNextBlocks/anchor(${anchorHeight})`
+          );
+          const canonicalHash = canonical[0]?.hash;
+          if (!canonicalHash) {
+            throw new ProviderUnavailableError(
+              `Unable to validate canonical block at height ${anchorHeight}`,
+              this.name
+            );
+          }
+          if (canonicalHash !== afterHash) {
+            throw new ProviderUnavailableError(
+              `CHAIN_POINT_MISMATCH: cursor block ${afterHash} at height ${anchorHeight} is no longer canonical (canonical block: ${canonicalHash})`,
+              this.name
+            );
+          }
+        } else {
+          const info = await this.fetchWithRetryOnEmpty(
+            () => this.api.post('/block_info', { _block_hashes: [afterHash] }),
+            `getNextBlocks/height(${afterHash})`
+          );
+          if (!info.length) throw new NotFoundError('Block', this.name);
+          anchorHeight = info[0].block_height;
+        }
+
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.get(`/blocks?block_height=gt.${anchorHeight}&order=block_height.asc&limit=${count}`),
+          `getNextBlocks(${afterHash})`
+        );
+        if (!rows.length) return [];
+
+        const requestedHashes: string[] = rows.map((r: { hash: string }) => r.hash);
+        const infos = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_info', { _block_hashes: requestedHashes }),
+          `getNextBlocks/info(${afterHash})`
+        );
+        // Completeness guard: Koios' load-balanced instances can return a PARTIAL
+        // /block_info batch (fetchWithRetryOnEmpty only retries fully empty
+        // responses). Returning the subset would let the crawler advance its cursor
+        // past the missing block, leaving a permanent hole in the pre-synced range
+        // (crawled entities are non-temporal — nothing re-fetches them). Fail the
+        // round as transient instead; the next round retries the same anchor.
+        if (infos.length < requestedHashes.length) {
+          const returned = new Set(infos.map((d: { hash: string }) => d.hash));
+          const missing = requestedHashes.filter((h) => !returned.has(h));
+          throw new ProviderUnavailableError(
+            `Incomplete /block_info batch: ${infos.length}/${requestedHashes.length} blocks returned (missing: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''})`,
+            this.name
+          );
+        }
+        return infos
+          .map((d: Parameters<KoiosBackend['mapKoiosBlockInfo']>[0]) => this.mapKoiosBlockInfo(d))
+          .sort((a: BlockData, b: BlockData) => (a.height ?? 0) - (b.height ?? 0));
+      },
+      this.name
+    );
+  }
+
+  /**
+   * Get the full transaction list of a block in block order via /block_txs → /tx_info
+   * batch. Handles both the current flattened shape ({tx_hash} per row) and the older
+   * {tx_hashes:[...]} shape defensively.
+   */
+  async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
+    return handleBackendRequest(
+      async () => {
+        const rows = await this.fetchWithRetryOnEmpty(
+          () => this.api.post('/block_txs', { _block_hashes: [blockHash] }),
+          `getBlockTransactions(${blockHash})`
+        );
+        const hashes: string[] = [];
+        for (const row of rows) {
+          if (Array.isArray(row.tx_hashes)) hashes.push(...row.tx_hashes);
+          else if (row.tx_hash) hashes.push(row.tx_hash);
+        }
+        if (!hashes.length) return [];
+
+        const byHash = await this.getTransactionsBatch(hashes);
+        const missing = hashes.filter(h => !byHash.has(h));
+        if (missing.length > 0) {
+          // Advancing the block cursor with only a subset of /tx_info would make
+          // the omitted transactions permanent. Surface a 503 so the crawler
+          // retries the whole block without persisting it.
+          throw new ProviderUnavailableError(
+            `Incomplete transaction data for block ${blockHash}: ${missing.length}/${hashes.length} transaction(s) missing`,
+            this.name
+          );
+        }
+        return hashes.map(h => byHash.get(h)!);
       },
       this.name
     );

@@ -1,6 +1,6 @@
 # SAP Integration Examples
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 This guide demonstrates how to integrate ODATANO with SAP systems, including OData consumption from S/4HANA, ABAP code templates, and enterprise use cases.
 
@@ -50,6 +50,21 @@ Now you can add ODATANO as Action in your workflow
 Explore the whole API and select the OData actions you want to use in your workflow, for example to get a specific block or transaction information from the Cardano blockchain. And use it in your workflow for example to get details of a payment transaction and use the information for further processing in your workflow.
 
 ![SAP Build Action2](../assets/screenshots/setup_action2.png)
+
+## Reacting to on-chain events instead of polling
+
+The scenario below polls for a transaction's confirmation. Since v2.0 a CAP application embedding
+`@odatano/core` can subscribe instead:
+
+```js
+const worker = await cds.connect.to('CardanoWorkerService');
+worker.on('jobConfirmed', ({ data }) => { /* data.jobId, data.txHash — settle the business object */ });
+worker.on('jobFailed',    ({ data }) => { /* data.errorCode, data.errorMessage */ });
+```
+
+This removes the polling loop entirely for anything submitted through the wallet worker. For
+transactions submitted the synchronous way, `CardanoIndexerService`'s `blockIndexed` event carries
+the tx hashes of each crawled block (crawler enabled).
 
 ## Example SAP Build Automation Scenario - ADA Invoice Check
 

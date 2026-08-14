@@ -1,6 +1,6 @@
 # Error Handling in ODATANO
 
-**Version:** v1.9 | **Last Updated:** June 2026
+**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
 
 This documentation describes error handling in ODATANO, specifically how backend
 errors are normalized and propagated to the client.
@@ -133,6 +133,7 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | Code | HTTP | Description |
 |------|------|-------------|
 | `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid transaction hash, missing fields |
+| `ODATANO_FORBIDDEN` | 403 | Authenticated, but missing the required role — HSM signing paths and `SubmitWalletJob` against an HSM-backed wallet enforce `hsm.requiresRole` |
 | `ODATANO_NOT_FOUND` | 404 | Resource not found on blockchain |
 | `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds/assets for transaction |
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | Transaction failed protocol validation |
@@ -143,6 +144,22 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | `ODATANO_HSM_UNAVAILABLE` | 503 | HSM device or session not available |
 | `ODATANO_HSM_SIGNING_FAILED` | 500 | HSM signing operation failed |
 | `ODATANO_HSM_NOT_CONFIGURED` | 400 | HSM signing requested but not configured |
+| `ODATANO_TX_PARSE_FAILED` | 400 | Transaction CBOR could not be decoded (malformed/truncated) |
+| `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | Ledger rejected the tx in phase-2 script evaluation |
+| `ODATANO_NESTED_TX_TIMEOUT` | 503 | A detached bookkeeping transaction could not acquire a pooled connection (see KNOWN_ISSUES #11) |
+
+### v2.0: failures that are deliberately NOT surfaced as errors
+
+The chain crawler and the wallet worker are background subsystems — their failures land on a row,
+not in an HTTP response:
+
+- **Wallet jobs** carry `errorCode` / `errorMessage` and a terminal `status`. The codes are job-level,
+  not `ODATANO_*`: `PROCESS_RESTART`, `TX_DROPPED`, `RETRIES_EXHAUSTED`, `CANCELLED`, `SUBMIT_REJECTED`.
+  A job whose submit outcome is unknown stays in `submitting` and is reconciled against the chain
+  rather than failed — failing it would release the idempotency key and invite a duplicate payment.
+- **The crawler** records `syncStatus` and `consecutiveErrors` on its cursor. Runtime failures leave
+  `desiredRunning: true` so a restart resumes; only unrecoverable configuration errors latch the
+  cluster (`desiredRunning: false`), which then requires an explicit `resumeCrawler`.
 
 ## Normalization Rules
 

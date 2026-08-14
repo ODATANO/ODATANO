@@ -1,16 +1,20 @@
 import nock from 'nock';
 
-jest.mock('@sap/cds', () => ({
-  log: jest.fn(() => ({
-    info: jest.fn(),
-    error: jest.fn(),
-    warn: jest.fn(),
-    debug: jest.fn(),
+vi.mock('@sap/cds', () => {
+  const cdsMock = {
+  log: vi.fn(() => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
   })),
-}));
+};
+  return { default: cdsMock, ...cdsMock };
+});
 
 import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';
 import { CARDANO_DEFAULTS } from '../../srv/utils/const';
+import { ProviderUnavailableError } from '../../srv/utils/errors';
 
 describe('KoiosBackend', () => {
   let backend: KoiosBackend;
@@ -205,7 +209,7 @@ describe('KoiosBackend', () => {
           { tx_hash: 'b'.repeat(64), block_height: 200 },
         ]);
 
-      const batchSpy = jest.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
+      const batchSpy = vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(new Map([
         ['c'.repeat(64), { hash: 'c'.repeat(64) } as any],
         ['b'.repeat(64), { hash: 'b'.repeat(64) } as any],
       ]));
@@ -291,7 +295,7 @@ describe('KoiosBackend', () => {
         active_stake: '2000',
       };
 
-      const epochSpy = jest.spyOn(backend, 'getEpoch')
+      const epochSpy = vi.spyOn(backend, 'getEpoch')
         .mockRejectedValueOnce(new Error('current epoch not indexed yet'))
         .mockResolvedValueOnce(epoch99 as any);
 
@@ -300,6 +304,122 @@ describe('KoiosBackend', () => {
       expect(result.epoch).toBe(99);
       expect(epochSpy).toHaveBeenNthCalledWith(1, 100);
       expect(epochSpy).toHaveBeenNthCalledWith(2, 99);
+    });
+  });
+
+  describe('getDrep', () => {
+    const DREP_ID = 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0';
+    const DREP_HEX = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
+
+    // New Koios schema (observed 2026-07): drep_status/active/expires_epoch_no
+    // replaced expired/retired/last_active_epoch.
+    const newSchemaRow = {
+      drep_id: DREP_ID,
+      hex: DREP_HEX,
+      has_script: false,
+      drep_status: 'registered',
+      deposit: '500000000',
+      active: true,
+      expires_epoch_no: 1369,
+      amount: '9653730',
+    };
+
+    it('should map the new drep_info schema (registered + active)', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info', { _drep_ids: [DREP_ID] })
+        .reply(200, [newSchemaRow]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result).toEqual({
+        drepId: DREP_ID,
+        hex: DREP_HEX,
+        amount: '9653730',
+        hasScript: false,
+        lastActiveEpoch: 0,
+        expired: false,
+        retired: false,
+      });
+    });
+
+    it('should derive retired from drep_status in the new schema', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(200, [{ ...newSchemaRow, drep_status: 'retired', active: false }]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result.retired).toBe(true);
+      expect(result.expired).toBe(false);
+    });
+
+    it('should derive expired from active=false (not retired) in the new schema', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(200, [{ ...newSchemaRow, drep_status: 'registered', active: false }]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result.expired).toBe(true);
+      expect(result.retired).toBe(false);
+    });
+
+    it('should prefer the old schema fields when present (mainnet/preprod lag)', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(200, [{
+          drep_id: DREP_ID,
+          hex: DREP_HEX,
+          has_script: false,
+          amount: '9653730',
+          last_active_epoch: 500,
+          expired: true,
+          retired: false,
+        }]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result.lastActiveEpoch).toBe(500);
+      expect(result.expired).toBe(true);
+      expect(result.retired).toBe(false);
+    });
+
+    it('should retry an instance-specific PostgREST 400 (42703) and succeed', async () => {
+      // Real-world case: one Koios LB instance serves a half-migrated SQL
+      // function while the others are healthy — the retry lands on a healthy one.
+      const scope = nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(400, { code: '42703', details: null, hint: null, message: 'column dc.live_deleg_count does not exist' })
+        .post('/api/v1/drep_info')
+        .reply(200, [newSchemaRow]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result.drepId).toBe(DREP_ID);
+      expect(scope.isDone()).toBe(true);
+    });
+
+    it('should surface ProviderUnavailableError (503) when PostgREST retries are exhausted', async () => {
+      // 1 initial attempt + 2 interceptor retries = 3 requests.
+      const scope = nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .times(3)
+        .reply(400, { code: '42703', message: 'column dc.live_deleg_count does not exist' });
+
+      const err = await backend.getDrep(DREP_ID).catch(e => e);
+      expect(err).toBeInstanceOf(ProviderUnavailableError);
+      expect(err.statusCode).toBe(503);
+      expect(scope.isDone()).toBe(true);
+    });
+
+    it('should NOT retry PostgREST client-input errors (class 22)', async () => {
+      const scope = nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(400, { code: '22P02', message: 'invalid input syntax for type' });
+
+      await expect(backend.getDrep(DREP_ID)).rejects.toThrow();
+      expect(scope.isDone()).toBe(true);
+      expect(nock.pendingMocks()).toHaveLength(0);
     });
   });
 

@@ -111,6 +111,54 @@ type SigningStatus    : String(20) enum {
     failed = 'failed';
 }
 
+@title      : 'Crawl Sync Status'
+@description: 'Enum type for the chain crawler / pre-sync cursor state'
+type CrawlSyncStatus  : String(12) enum {
+    stopped = 'stopped'; // crawler not running
+    syncing = 'syncing'; // actively catching up / streaming
+    synced = 'synced'; // caught up to (tip - confirmationDepth)
+    error = 'error'; // circuit-broken after repeated failures
+}
+
+@title      : 'Reorg Status'
+@description: 'Enum type for the lifecycle of a handled chain rollback'
+type ReorgStatus      : String(12) enum {
+    detected = 'detected';
+    rolling_back = 'rolling_back';
+    reindexing = 'reindexing';
+    completed = 'completed';
+}
+
+@title      : 'Wallet Job Status'
+@description: 'Enum type for the wallet-worker job lifecycle'
+type WalletJobStatus  : String(12) enum {
+    pending = 'pending'; // queued, waiting for the worker to pick it up
+    building = 'building'; // build + sign in progress, nothing sent to the network yet
+    submitting = 'submitting'; // signed tx durably stored, submit in flight or its outcome unknown
+    submitted = 'submitted'; // accepted into the mempool, awaiting confirmation
+    confirmed = 'confirmed'; // on-chain at the configured confirmation depth
+    failed = 'failed'; // terminal failure (see errorCode/errorMessage)
+    cancelled = 'cancelled'; // cancelled by the caller while still pending
+}
+
+@title      : 'Wallet Job Kind'
+@description: 'Enum type for the transaction kind a wallet-worker job executes'
+type WalletJobKind    : String(12) enum {
+    simpleAda = 'simpleAda'; // BuildSimpleAdaTransaction payload
+    metadata = 'metadata'; // BuildTransactionWithMetadata payload
+    multiAsset = 'multiAsset'; // BuildMultiAssetTransaction payload
+    mint = 'mint'; // BuildMintTransaction payload
+    plutusSpend = 'plutusSpend'; // BuildPlutusSpendTransaction payload
+    submitSigned = 'submitSigned'; // externally signed CBOR — managed submit + confirm only
+}
+
+@title      : 'Worker Signer Type'
+@description: 'Enum type for how a worker wallet signs transactions'
+type WorkerSignerType : String(10) enum {
+    hsm = 'hsm'; // PKCS#11 HSM (production) — keys never leave the module
+    software = 'software'; // operator-configured Ed25519 key (dev/test)
+}
+
 // -----------------------------------------------------
 // Parsed Transaction (ParseTransactionCbor action result)
 // -----------------------------------------------------

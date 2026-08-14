@@ -1,10 +1,14 @@
 import cds from '@sap/cds';
-import { createTestContext, resetAppContext, getCardanoClient, shutdownAppContext } from '../../srv/server';
+// Native require: must share the module graph of the cds.test()-booted CAP
+// server, or the handlers never see the app context set by createTestContext.
+const { createTestContext, resetAppContext, getCardanoClient, shutdownAppContext } =
+  require('../../srv/server') as typeof import('../../srv/server');
 import { TEST_FIXTURES, MOCK_EVALUATED_BUDGET, mockUtxosAdaOnly, multiAssetUtxos, utxosForBurn, mockUtxosWithAssets, simpleRequestBody, mintingRequestBody, metaDataRequestBody, burningRequestBody, multiAssetRequestBody, plutusSpendRequestBody, mockScriptTxInfo, mockScriptTxInfoWithAssets, plutusSpendWithExtraOutputsRequestBody, plutusSpendWithExtraOutputInlineDatumRequestBody, plutusSpendWithMintRequestBody, plutusSpendMultiPurposeScriptRequestBody, plutusSpendWithIndexPlaceholderRequestBody, SCRIPT_UTXO_TX_HASH, SCRIPT_UTXO_OUTPUT_INDEX, TestConfiguration, simpleLockOnScriptRequestBody, simpleLockOnScriptWithParamsRequestBody, validScriptParamsJson, altScriptParamsJson } from './test-fixtures';
-import { sortInputsLikeBuildooor } from '../../srv/utils/plutus-placeholders';
+const { sortInputsLikeBuildooor } =
+  require('../../srv/utils/plutus-placeholders') as typeof import('../../srv/utils/plutus-placeholders');
 import { setupKoiosMocks, setupUtxoMock, setupTxInfoMock, setupNocks, nock } from './mock-helpers';
 const { SELECT, INSERT } = cds.ql;
-jest.setTimeout(60000);
+vi.setConfig({ testTimeout: 60000, hookTimeout: 60000 });
 
 // Skip server auto-init - mock tests create their own context after setting up nock mocks
 process.env.SKIP_AUTO_INIT = 'true';
@@ -146,7 +150,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           // Should have recipient output
           const recipientOutput = outputs.find((o: any) => o.address === TEST_FIXTURES.emptyAddress);
           expect(recipientOutput).to.exist;
-          expect(recipientOutput.lovelace).to.equal(Number(TEST_FIXTURES.lovelaceAmount));
+          expect(Number(recipientOutput.lovelace)).to.equal(Number(TEST_FIXTURES.lovelaceAmount)); // CAP 10: Lovelace → string
         });
 
         it('POST /BuildSimpleAdaTransaction - without change address (fallback to sender)', async () => {
@@ -428,10 +432,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           const cardanoClient = getCardanoClient();
 
           // Spy on hasOgmiosBackend to return true
-          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
 
           // Spy on evaluateTransaction to return mock evaluation results
-          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
+          const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
             {
               validator: { purpose: 'mint', index: 0 },
               budget: MOCK_EVALUATED_BUDGET
@@ -444,10 +448,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
 
-          // Verify the mocks were called (use global Jest expect for spy assertions)
-          const jestExpect = (global as any).expect;
-          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
-          jestExpect(evaluateSpy).toHaveBeenCalled();
+          // Verify the mocks were called (use the global Vitest expect for spy assertions)
+          const viExpect = (global as any).expect;
+          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(evaluateSpy).toHaveBeenCalled();
 
           // The fee should be calculated based on evaluated units
           // With lower execution units, the fee should be lower than with defaults
@@ -463,10 +467,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           const cardanoClient = getCardanoClient();
 
           // Spy on hasOgmiosBackend to return true (Ogmios is "available")
-          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
 
           // Spy on evaluateTransaction to throw an error (evaluation fails)
-          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
+          const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
             new Error('Evaluation failed: script execution error')
           );
 
@@ -477,10 +481,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
 
-          // Verify the mocks were called (use global Jest expect for spy assertions)
-          const jestExpect = (global as any).expect;
-          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
-          jestExpect(evaluateSpy).toHaveBeenCalled();
+          // Verify the mocks were called (use the global Vitest expect for spy assertions)
+          const viExpect = (global as any).expect;
+          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(evaluateSpy).toHaveBeenCalled();
 
           // Cleanup spies
           hasOgmiosSpy.mockRestore();
@@ -667,8 +671,8 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           setupTxInfoMock(mockScriptTxInfo);
 
           const cardanoClient = getCardanoClient();
-          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
-          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
+          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
             {
               validator: { purpose: 'spend', index: 0 },
               budget: MOCK_EVALUATED_BUDGET
@@ -681,9 +685,9 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
           expect(data).to.have.property('fee');
 
-          const jestExpect = (global as any).expect;
-          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
-          jestExpect(evaluateSpy).toHaveBeenCalled();
+          const viExpect = (global as any).expect;
+          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(evaluateSpy).toHaveBeenCalled();
 
           hasOgmiosSpy.mockRestore();
           evaluateSpy.mockRestore();
@@ -693,8 +697,8 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           setupTxInfoMock(mockScriptTxInfo);
 
           const cardanoClient = getCardanoClient();
-          const hasOgmiosSpy = jest.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
-          const evaluateSpy = jest.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
+          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
             new Error('Evaluation failed: script execution error')
           );
 
@@ -703,9 +707,9 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
 
-          const jestExpect = (global as any).expect;
-          jestExpect(hasOgmiosSpy).toHaveBeenCalled();
-          jestExpect(evaluateSpy).toHaveBeenCalled();
+          const viExpect = (global as any).expect;
+          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(evaluateSpy).toHaveBeenCalled();
 
           hasOgmiosSpy.mockRestore();
           evaluateSpy.mockRestore();

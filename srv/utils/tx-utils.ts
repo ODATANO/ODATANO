@@ -3,7 +3,7 @@ import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
 
 /**
- * Transaction utilities for the sign-service.
+ * Transaction utilities shared by the sign-service and the background workers.
  *
  * Context: @cap-js/sqlite runs on a SINGLE pooled connection. A request
  * transaction begins lazily on its first CQL statement and holds that
@@ -28,7 +28,8 @@ function effectiveTimeoutMs(): number {
  * Run `fn` with `cds.context` cleared, so any `db.run(...)` inside it gets a
  * fresh short-lived transaction instead of joining a long-lived ambient one.
  * Under @cap-js/sqlite (pool.max=1) this is what keeps the single pooled
- * connection free during long awaits (e.g. the deferred network submit).
+ * connection free during long awaits (NIGHTGATE lesson 2; used by the
+ * wallet-worker job loops).
  */
 export function runWithoutAmbientTx<T>(fn: () => Promise<T>): Promise<T> {
   return (cds as unknown as { _with: <R>(store: undefined, fn: () => Promise<R>) => Promise<R> })._with(undefined, fn);

@@ -1,6 +1,8 @@
 import { env } from 'process';
+import cds from '@sap/cds';
 import {
   loadConfigFromEnv,
+  loadCrawlerConfigFromEnv,
   loadHsmConfigFromEnv,
   initializeFromConfig,
   getAppContext,
@@ -104,10 +106,9 @@ describe('server.ts', () => {
       expect(() => loadConfigFromEnv()).toThrow('Must be a number');
     });
 
-    it('should reject a CDS-config numeric 0 timeout instead of silently defaulting', () => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const cds = require('@sap/cds');
-      const reqs = (cds.env.requires ??= {});
+    it('should reject a CDS-config numeric 0 timeout instead of silently defaulting', async () => {
+      const cds = await import('@sap/cds');
+      const reqs = (cds.env.requires ??= {} as any);
       const prev = reqs['odatano-core'];
       reqs['odatano-core'] = { backends: ['koios'], primaryTimeoutMs: 0 };
       try {
@@ -151,6 +152,135 @@ describe('server.ts', () => {
       const config = loadConfigFromEnv();
       expect(config.backends).toEqual(['ogmios']);
       expect(config.ogmiosUrl).toBe('');
+    });
+  });
+
+  // ============================================================================
+  // loadCrawlerConfigFromEnv
+  // ============================================================================
+  describe('loadCrawlerConfigFromEnv', () => {
+    const crawlerEnvKeys = [
+      'CRAWLER_ENABLED',
+      'CRAWLER_START_SLOT',
+      'CRAWLER_START_HASH',
+      'CRAWLER_START_HEIGHT',
+      'CRAWLER_SOURCE',
+      'CRAWLER_BATCH_SIZE',
+      'CRAWLER_CONFIRMATION_DEPTH',
+      'CRAWLER_POLL_INTERVAL_MS',
+    ];
+    const originalEnv: Record<string, string | undefined> = {};
+    let previousCoreConfig: unknown;
+
+    function setCdsCrawlerConfig(crawler: Record<string, unknown>): void {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      requires['odatano-core'] = { crawler };
+    }
+
+    beforeEach(() => {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      previousCoreConfig = requires['odatano-core'];
+      delete requires['odatano-core'];
+      for (const key of crawlerEnvKeys) {
+        originalEnv[key] = env[key];
+        delete env[key];
+      }
+    });
+
+    afterEach(() => {
+      const runtime = cds as any;
+      const requires = (runtime.env.requires ??= {});
+      if (previousCoreConfig === undefined) delete requires['odatano-core'];
+      else requires['odatano-core'] = previousCoreConfig;
+      for (const key of crawlerEnvKeys) {
+        const value = originalEnv[key];
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+    });
+
+    it('returns safe defaults when the crawler is not configured', () => {
+      expect(loadCrawlerConfigFromEnv()).toEqual({
+        enabled: false,
+        startSlot: undefined,
+        startBlockHash: undefined,
+        startHeight: undefined,
+        source: 'auto',
+        batchSize: 20,
+        confirmationDepth: 3,
+        pollIntervalMs: 20_000,
+      });
+    });
+
+    it('parses valid environment values including numeric boundaries', () => {
+      env.CRAWLER_ENABLED = 'true';
+      env.CRAWLER_START_SLOT = '0';
+      env.CRAWLER_START_HASH = 'a'.repeat(64);
+      env.CRAWLER_START_HEIGHT = String(Number.MAX_SAFE_INTEGER);
+      env.CRAWLER_SOURCE = 'pagination';
+      env.CRAWLER_BATCH_SIZE = '100';
+      env.CRAWLER_CONFIRMATION_DEPTH = '0';
+      env.CRAWLER_POLL_INTERVAL_MS = '1000';
+
+      expect(loadCrawlerConfigFromEnv()).toEqual({
+        enabled: true,
+        startSlot: 0,
+        startBlockHash: 'a'.repeat(64),
+        startHeight: Number.MAX_SAFE_INTEGER,
+        source: 'pagination',
+        batchSize: 100,
+        confirmationDepth: 0,
+        pollIntervalMs: 1000,
+      });
+    });
+
+    it('lets an explicit CDS false override CRAWLER_ENABLED=true', () => {
+      env.CRAWLER_ENABLED = 'true';
+      setCdsCrawlerConfig({ enabled: false });
+
+      expect(loadCrawlerConfigFromEnv().enabled).toBe(false);
+    });
+
+    it('rejects non-boolean enabled values', () => {
+      env.CRAWLER_ENABLED = 'yes';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow('Invalid CRAWLER_ENABLED');
+    });
+
+    it('requires a complete start point when enabled', () => {
+      env.CRAWLER_ENABLED = 'true';
+      env.CRAWLER_START_SLOT = '1';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow('no start block is configured');
+    });
+
+    it.each(['', 'abc', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)])(
+      'rejects invalid block hash %p',
+      (value) => {
+        setCdsCrawlerConfig({ startBlockHash: value });
+        expect(() => loadCrawlerConfigFromEnv()).toThrow('exactly 64 hexadecimal characters');
+      },
+    );
+
+    it.each([
+      ['CRAWLER_START_SLOT', '-1'],
+      ['CRAWLER_START_SLOT', '1.5'],
+      ['CRAWLER_START_SLOT', 'Infinity'],
+      ['CRAWLER_START_SLOT', String(Number.MAX_SAFE_INTEGER + 1)],
+      ['CRAWLER_START_HEIGHT', '-1'],
+      ['CRAWLER_START_HEIGHT', 'NaN'],
+      ['CRAWLER_BATCH_SIZE', '0'],
+      ['CRAWLER_BATCH_SIZE', '101'],
+      ['CRAWLER_BATCH_SIZE', '1.5'],
+      ['CRAWLER_CONFIRMATION_DEPTH', '-1'],
+      ['CRAWLER_CONFIRMATION_DEPTH', '2161'],
+      ['CRAWLER_CONFIRMATION_DEPTH', 'Infinity'],
+      ['CRAWLER_POLL_INTERVAL_MS', '999'],
+      ['CRAWLER_POLL_INTERVAL_MS', '3600001'],
+      ['CRAWLER_POLL_INTERVAL_MS', '1.5'],
+    ])('rejects invalid %s=%s', (key, value) => {
+      env[key] = value;
+      expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);
     });
   });
 
@@ -366,7 +496,7 @@ describe('server.ts', () => {
     } as any;
 
     afterEach(async () => {
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
       await shutdownAppContext();
       resetAppContext(null);
       setHsmSigner(null);
@@ -374,7 +504,7 @@ describe('server.ts', () => {
     });
 
     it('should initialize from pre-built config', async () => {
-      const txBuilderInitSpy = jest
+      const txBuilderInitSpy = vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
 
@@ -385,10 +515,10 @@ describe('server.ts', () => {
     });
 
     it('should initialize HSM signer when hsm config is enabled', async () => {
-      jest
+      vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
-      const hsmInitSpy = jest
+      const hsmInitSpy = vi
         .spyOn(HsmSigner.prototype, 'init')
         .mockResolvedValue(undefined);
 
@@ -404,10 +534,10 @@ describe('server.ts', () => {
     });
 
     it('should not fail app init when HSM init throws', async () => {
-      jest
+      vi
         .spyOn(CardanoTransactionBuilder.prototype, 'init')
         .mockResolvedValue(undefined);
-      const hsmInitSpy = jest
+      const hsmInitSpy = vi
         .spyOn(HsmSigner.prototype, 'init')
         .mockRejectedValue(new Error('hsm unavailable'));
 
@@ -433,7 +563,7 @@ describe('server.ts', () => {
     });
 
     it('should shutdown client and clear context', async () => {
-      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      const mockShutdown = vi.fn().mockResolvedValue(undefined);
       resetAppContext({
         cardanoClient: { shutdown: mockShutdown } as any,
         cardanoIndexer: {} as any,
@@ -447,15 +577,15 @@ describe('server.ts', () => {
     });
 
     it('should shutdown HSM signer if active', async () => {
-      const mockShutdown = jest.fn().mockResolvedValue(undefined);
+      const mockShutdown = vi.fn().mockResolvedValue(undefined);
       resetAppContext({
         cardanoClient: { shutdown: mockShutdown } as any,
         cardanoIndexer: {} as any,
         cardanoTxBuilder: {} as any,
       });
 
-      const mockHsmShutdown = jest.fn();
-      setHsmSigner({ shutdown: mockHsmShutdown, getStatus: jest.fn() } as any);
+      const mockHsmShutdown = vi.fn();
+      setHsmSigner({ shutdown: mockHsmShutdown, getStatus: vi.fn() } as any);
 
       await shutdownAppContext();
 

@@ -123,10 +123,10 @@ jobs:
           # 0.99 is reported the instant the node opens the socket (it just
           # echoes the CACHED tip, which is ~13 days behind live). Passing at
           # 0.99 lets the node do its heavy multi-day catch-up DURING the test
-          # run, starving Ogmios while jest hammers the CPU → "Premature close"
+          # run, starving Ogmios while the test runner hammers the CPU → "Premature close"
           # at backend init → whole Ogmios suite 503s. Requiring 0.999 (~1 day
           # behind) forces the bulk catch-up to finish HERE — in the gate step,
-          # with no jest competing — so tests run against a near-tip, lightly
+          # with no test runner competing — so tests run against a near-tip, lightly
           # loaded node where Ogmios stays responsive.
           THRESHOLD=0.999
 

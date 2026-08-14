@@ -1,7 +1,9 @@
 import cds from '@sap/cds';
-import { shutdownAppContext } from '../../srv/server';
+// Native require: shuts down the app context of the cds.test()-booted server
+// (an ESM import would target a second, never-initialized module instance).
+const { shutdownAppContext } = require('../../srv/server') as typeof import('../../srv/server');
 
-jest.setTimeout(20000);
+vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 });
 
 // Configure environment BEFORE cds.test() - server uses these via cds.on('served')
 process.env.BACKENDS = 'koios';
@@ -142,8 +144,9 @@ describe('OData Query Features', () => {
 
         // OData v4 includes @odata.count when $count=true
         if (data['@odata.count'] !== undefined) {
-          expect(typeof data['@odata.count']).to.equal('number');
-          expect(data['@odata.count']).to.be.at.least(0);
+          // CAP 10: @odata.count serializes as string (Edm.Int64) — accept both, normalize for range check
+          expect(typeof data['@odata.count']).to.be.oneOf(['number', 'string']);
+          expect(Number(data['@odata.count'])).to.be.at.least(0);
         }
       });
 
@@ -295,7 +298,7 @@ describe('OData Query Features', () => {
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {
-          expect(data['@odata.count']).to.be.at.least(0);
+          expect(Number(data['@odata.count'])).to.be.at.least(0); // CAP 10: @odata.count → string
         }
       });
     });

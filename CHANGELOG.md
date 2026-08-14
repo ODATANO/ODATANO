@@ -5,6 +5,73 @@ All notable changes to ODATANO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
+
+> Shipping first as **v2.0.0-rc.1** on the npm dist-tag `next` (10-08-2026).
+> `latest` stays on 1.x, and `^2.0.0` does not match a pre-release — install it
+> explicitly with `npm i @odatano/core@next` to try it.
+
+### ⚠ Breaking
+
+- **SAP CAP 10** — peer dependency is now `@sap/cds >=10` (was `^9`). Consumer projects on CAP 9 must upgrade before adopting `@odatano/core@2`.
+- **Node.js >= 22.5** — required by `@cap-js/sqlite` v3 (`node:sqlite` floor).
+- **Numeric OData fields serialize as strings** — CAP 10 renders `Decimal`, `Int64` and `$count` values as JSON strings. API clients that parse these fields as JSON numbers must be adapted.
+- **XSUAA role separation** — the `$XSAPPNAME.Admin` scope (crawler/worker control) is no longer part of the `CardanoUser` role template or the app authorities; assign the new `CardanoAdmin` template explicitly. Existing `CardanoUser` role collections lose crawler/worker control on redeploy (intentional least-privilege fix).
+- **Database redeploy required** — 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`) plus a `dedupKey` column and its unique constraint on the jobs table. Consumers upgrading from 1.x must run `cds deploy`; without it the new services answer `no such table` and `getStatus`/`GetWorkerStatus` return 500. (Verified against a real 1.10 consumer project.)
+
+### Added
+
+- **Chain crawler / pre-sync (opt-in)** — `CRAWLER_ENABLED` / `cds.requires.odatano-core.crawler`: streams the chain forward from a configured start block into `Blocks`/`Transactions` (+inputs/outputs/assets/metadata) so queries hit local data instead of a backend per request. Ogmios chain-sync (native rollForward/rollBackward) with Blockfrost/Koios pagination fallback, parent-hash reorg recovery, cursor (`CardanoSyncState`) + audit log (`CardanoReorgLog`), cluster-safe via DB lease. New **CardanoIndexerService** (`/odata/v4/cardano-indexer/`): SyncState + ReorgLog (read-only), `getStatus` / `pauseCrawler` / `resumeCrawler` (Admin).
+- **Wallet worker (opt-in)** — `WALLET_WORKER_ENABLED` / `cds.requires.odatano-core.walletWorker`: asynchronous per-wallet transaction queue (build → sign → submit → confirm) with software/HSM signers, idempotency keys, exponential retry, per-wallet DB leases (multi-instance safe), and a confirmation tracker (crawler hook or polling) with rollback re-submit of the SAME signed CBOR. New **CardanoWorkerService** (`/odata/v4/cardano-worker/`): `SubmitWalletJob` / `CancelJob` / `GetJobStatus` / `GetWorkerStatus` / `PauseWorker` / `ResumeWorker`.
+- **CAP events on both v2.0 services** — consumers can subscribe instead of polling.
+  `CardanoIndexerService` publishes `blockIndexed` (hash, slot, height, txHashes, tip) and `reorg`
+  (forkSlot, forkHeight, blocksRolledBack); `CardanoWorkerService` publishes the terminal
+  `jobConfirmed` and `jobFailed` (jobId, walletId, kind, txHash, + errorCode/errorMessage).
+  ODATANO runs in the consumer's process as a plugin, so this needs no broker and no
+  `cds.requires.messaging`; configuring one later routes the same emits through it. All emits
+  happen AFTER the corresponding commit, are fire-and-forget, and swallow subscriber failures so a
+  broken observer cannot stall the crawler or a wallet job. Events are absent from `$metadata`
+  (OData V4 has no event concept), so the change is additive for existing HTTP clients.
+- **KoiosBackend.getDrep** with the new Koios schema.
+
+### Changed
+
+- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1908 tests across 58 files (44 unit + 14 integration).
+- **Integration suites for both v2.0 subsystems** — `test/integration/wallet-worker.test.ts` (real CAP + real SQLite, backends stubbed: guards the deployed `UNIQUE(walletId, kind, dedupKey)`, real transactions and the OData layer; needs no network or funds) and `test/integration/crawler.test.ts` (real Ogmios: contiguous ingest, recovery from a fork staged while the crawler was down, `getStatus`; self-skips when Ogmios is unreachable or behind the tip, so it runs in both CI lanes).
+- **HarmonicLabs stack bumped**: `buildooor` 0.2.9, `cardano-ledger-ts` ^0.5.6, `cardano-costmodels-ts` ~1.6.1 (Plutus V3 cost model at `N_COST_MODEL_PLUTUS_V3` = 350, post-Plomin²).
+- **Vendored patches removed** — upstream releases contain both fixes: `keep-relevant.ts` (buildooor keepRelevant) and `auxiliary-data-patch.ts` (ledger-ts Conway tag-259 AuxiliaryData decode).
+- Dependency security pass: `axios` ^1.17.1, `fast-uri` ^3.1.5, approuter `body-parser` override — `npm audit` clean (prod + dev).
+
+### Fixed
+
+- Hardening pass from the full-branch review: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
+
+#### Wallet worker — payment safety (pre-RC review)
+
+- **HSM-backed wallet jobs now require the configured signing role.** `SubmitWalletJob` was gated on `authenticated-user` only, so any authenticated account could queue a value transfer with an arbitrary recipient and amount that the server-held HSM key would sign — bypassing the `hsm.requiresRole` gate the synchronous `SignWithHsm` path enforces. The role is now checked against both the instance's wallet config and the registered wallet row (403, new `ODATANO_FORBIDDEN` code).
+- **A crash around submit can no longer cause a duplicate payment.** New durable pre-submit state **`submitting`**: the signed CBOR and its hash are committed *before* the transaction can reach a backend, and the row stays non-terminal so it keeps holding its idempotency key. Interrupted submits are reconciled against the chain — the exact stored bytes are re-submitted, never a rebuild — instead of being failed as `PROCESS_RESTART`, which released the key and let the documented caller retry build and pay a *second* transaction.
+- **The per-wallet lease survives long builds.** Only one renewal happened before the build, so a build+sign exceeding `WORKER_LEASE_TTL_MS` (15s — routine with a multi-backend build plus an HSM round-trip) let another instance adopt the wallet while the first kept working. A heartbeat now renews for the whole execution, and ownership is fenced again immediately before the irreversible submit.
+- **Idempotency is enforced by the database, not by a lookup.** Unique constraint `(walletId, kind, dedupKey)` via `@assert.unique.dedup` — two concurrent retries of the same key could both read "no such job" and both insert. The loser of the race now returns the winner's job. `dedupKey` carries the caller key while the job owns it and the job's own ID otherwise, so keyless jobs never contend and terminal jobs release the key without depending on per-database NULL semantics.
+
+#### Chain crawler — reorg across a restart
+
+- **Chain-sync recovers from a fork it slept through.** Only a single intersection point (the cursor) was offered to Ogmios, so a cursor orphaned while the crawler was down produced `No intersection found` and killed the ingest pipeline. The crawler now offers a ladder of its own crawled ancestors — dense over the last 10 blocks, doubling out to −16384 — so the node intersects at the last common block and reports an ordinary `rollBackward`, which the existing reorg handling resolves. The dense head keeps shallow rollbacks (the common case) exact instead of rolling back further than necessary.
+- **A crashed crawler no longer stays down across restarts.** Every terminal error cleared `desiredRunning`, which no restart undoes — a dropped chain-sync socket (a routine node restart) silently disabled the pre-sync until an operator called `resumeCrawler`. Only unrecoverable configuration failures latch the cluster now; runtime failures leave `syncStatus: error` with `desiredRunning: true` so coming back up resumes.
+
+## [v1.11.0] - 08-08-2026: Coin-selection + error-handling improvements
+
+### Changed
+
+- Enhanced coin-selection logic and error handling in the Buildooor transaction path; Plutus V3 cost-model handling updated to the current parameter count (`N_COST_MODEL_PLUTUS_V3`).
+- Vendored `keep-relevant.ts` removed — buildooor 0.2.9 ships the fixed `keepRelevant` upstream.
+
+## [v1.10.0] - 16-07-2026: Deadlock guard + deferred submit
+
+### Added
+
+- **Deferred submit** for in-process consumers: `SubmitVerifiedTransaction`/HSM flows can persist the signed tx and hand the network submit to a detached transaction, with restart re-drive (`redriveInterruptedSubmissions`).
+- **Nested-transaction deadlock guard** (`srv/utils/tx-utils.ts`): `detachedTx` with pool-timeout diagnosis and abort fencing; `runWithoutAmbientTx` for CAP ambient-tx isolation.
+
 ## [v1.9.2] - 26-06-2026: Typed script-parameter application
 
 ### Added
