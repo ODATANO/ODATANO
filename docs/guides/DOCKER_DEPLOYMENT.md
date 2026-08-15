@@ -1,6 +1,6 @@
 # Docker Deployment
 
-**Version:** v2.0.0-rc.1 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.2 | **Last Updated:** August 2026
 
 ## What the stack contains
 
@@ -56,7 +56,7 @@ curl -O https://raw.githubusercontent.com/ODATANO/ODATANO/main/docker-compose.ym
 
 # Pin the version the compose file interpolates, and use the published image
 # instead of the local build by commenting out the `build:` block of `odatano`.
-echo "VERSION=2.0.0-rc.1" >> .env
+echo "VERSION=2.0.0-rc.2" >> .env
 echo "BLOCKFROST_API_KEY=your-key" >> .env
 
 docker compose up -d

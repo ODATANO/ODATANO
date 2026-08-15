@@ -17,8 +17,51 @@ type IndexFn<K = string> = (db: cds.Transaction, key: K) => Promise<unknown>;
 type ValidateFn = ((v: unknown) => boolean);
 
 /**
+ * Upper bound of the temporal window opened by {@link widenTemporalWindow}.
+ * Generous on purpose: it only has to outlast the slowest index-on-miss (chained
+ * backend timeouts of several calls) within ONE request.
+ */
+const TEMPORAL_WINDOW_SLACK_MS = 60 * 60 * 1000;
+
+/**
+ * Let this request see temporal slices that IT writes during index-on-miss.
+ *
+ * CAP filters temporal entities (Pools, Assets, Dreps, Addresses, Accounts, …)
+ * with `validFrom < $valid.to AND validTo > $valid.from`. The DB session reads
+ * both bounds from the request's `_` bag (`VALID-FROM` / `VALID-TO`) when the
+ * transaction begins (HANA) or on first use (sqlite) and otherwise defaults to
+ * `now` / `now + 1ms` — a window that is closed long before the backend fetch
+ * returns, so a slice stamped after the fetch would be invisible to the
+ * `req.query` re-read that honours `$expand` / `$select` (KNOWN_ISSUES #13).
+ *
+ * Only the UPPER bound is moved. No slice is ever future-dated (every mapper
+ * stamps `validFrom = now`), so the only additional rows this admits are the
+ * ones this very request writes; expired rows stay hidden (`validTo >
+ * $valid.from` is untouched). Explicit `sap-valid-*` query options are left
+ * alone. Must run before the handler's first DB statement.
+ */
+function widenTemporalWindow(req: Request): void {
+  const q = req.http?.req?.query as Record<string, unknown> | undefined;
+  if (q && (q['sap-valid-at'] || q['sap-valid-from'] || q['sap-valid-to'])) return;
+  const now = Date.now();
+  const from = new Date(now).toISOString();
+  const to = new Date(now + TEMPORAL_WINDOW_SLACK_MS).toISOString();
+  // The DB session context is built from the context the transaction was opened
+  // with — `req` for our `cds.tx(req)`, the root context if a generic handler got
+  // there first — so stamp both bags.
+  const r = req as unknown as { _?: Record<string, unknown>; context?: { _?: Record<string, unknown> } };
+  for (const bag of new Set([r._, r.context?._])) {
+    if (!bag) continue;
+    bag['VALID-FROM'] = from;
+    bag['VALID-TO'] = to;
+  }
+}
+
+/**
  * Factory: READ handler with index-on-miss behavior.
- * If a key is provided, checks cache first; indexes if missing.
+ * If a key is provided, checks cache first; indexes if missing — then runs the
+ * client's own query so `$expand` / `$select` are honoured on the keyed branch
+ * too (KNOWN_ISSUES #13: returning the bare row silently dropped them).
  * If no key, passes through to generic req.query.
  */
 function indexOnMissRead<K = string>(
@@ -39,10 +82,18 @@ function indexOnMissRead<K = string>(
 
     return handleRequest(req, async (db) => {
       if (key !== undefined && key !== null) {
+        widenTemporalWindow(req); // before the first DB statement — see doc comment
         // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
         const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
-        if (!existing) return await indexFn(db, key as K);
-        return existing;
+        // Populate the row (+ compositions) on a miss, then let CAP run the client's
+        // query — one extra SELECT per keyed read, but $expand/$select (and the
+        // temporal filter of the projection) apply exactly as on the un-keyed path.
+        const indexed = existing ? undefined : await indexFn(db, key as K);
+        const result = await db.run(req.query);
+        // Safety net: if the freshly written slice is still outside the session's
+        // temporal window (widening had no effect, e.g. the transaction was already
+        // open), degrade to the pre-#13 behaviour — bare row instead of a wrong 404.
+        return result ?? indexed ?? existing;
       }
       return db.run(req.query);
     });

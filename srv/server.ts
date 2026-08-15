@@ -663,7 +663,7 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
 export async function redriveInterruptedSubmissionsIfConfigured(): Promise<void> {
   if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
   try {
-    const { redriveInterruptedSubmissions } = await import('./blockchain/signing/submission-finalizer');
+    const { redriveInterruptedSubmissions } = require('./blockchain/signing/submission-finalizer') as typeof import('./blockchain/signing/submission-finalizer');
     const attempted = await redriveInterruptedSubmissions();
     if (attempted > 0) logger.info(`Re-drove ${attempted} interrupted deferred submission(s)`);
   } catch (err) {
