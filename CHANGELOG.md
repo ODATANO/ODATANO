@@ -7,9 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
-> Shipping first as **v2.0.0-rc.1** on the npm dist-tag `next` (10-08-2026).
-> `latest` stays on 1.x, and `^2.0.0` does not match a pre-release — install it
-> explicitly with `npm i @odatano/core@next` to try it.
+> Shipping first as **v2.0.0-rc.1**, published to npm as `latest` (14-08-2026) —
+> a plain `npm i @odatano/core` installs the RC. `^2.0.0` does not match a
+> pre-release, so pin `@odatano/core@2.0.0-rc.1` in `package.json`; consumers
+> that need to stay on the 1.x line pin `@odatano/core@^1.11.0`.
 
 ### ⚠ Breaking
 
