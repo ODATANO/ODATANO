@@ -6,7 +6,7 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 1921 (full run with all backends reachable; the Ogmios-dependent suites skip otherwise). Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
+- **Total Tests**: 1923 (full run with all backends reachable; the Ogmios-dependent suites skip otherwise). Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
 - **Total Test Suites**: 59 test files (44 unit + 15 integration)
 - **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%

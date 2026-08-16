@@ -495,8 +495,14 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('GET /TransactionMetadata(key) – read TransactionMetadata by composite key', async () => {
+            // The composite key is (tx_hash, id) where `id` IS the numeric metadata
+            // label, so it has to come from the data — a label the tx does not carry
+            // now yields 404 (it used to be answered with the tx's first row).
+            const { data: metadata } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const id = metadata.value[0].id;
+
             const { status, data } = await test.get(
-              `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${TEST_FIXTURES.txWithMetadata}',id=0)`
+              `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${TEST_FIXTURES.txWithMetadata}',id=${id})`
             );
 
             expect(data).to.have.property('label');
