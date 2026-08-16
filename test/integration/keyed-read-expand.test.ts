@@ -193,6 +193,67 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
   // visible to the $expand re-read (temporal window widening in indexOnMissRead)
   // ==========================================================================
 
+  // ==========================================================================
+  // COMPOSITE key (TransactionMetadata: id + tx_hash) — both keys must filter.
+  // The old handler filtered on the factory's single `reqKeyField` (tx_hash)
+  // only, so ANY id returned the tx's FIRST metadata row.
+  // ==========================================================================
+
+  describe('composite key: TransactionMetadata(id, tx_hash)', () => {
+    const LABEL_A = 674;
+    const LABEL_B = 1990;
+
+    beforeEach(async () => {
+      await cds.run(
+        INSERT.into('odatano.cardano.TransactionMetadata').entries([
+          { id: LABEL_A, tx_hash: SEEDED_TX_HASH, label: String(LABEL_A), payload: JSON.stringify({ msg: ['a'] }) },
+          { id: LABEL_B, tx_hash: SEEDED_TX_HASH, label: String(LABEL_B), payload: JSON.stringify({ msg: ['b'] }) },
+        ])
+      );
+    });
+
+    it('returns the row addressed by BOTH keys, not the first row of the tx', async () => {
+      const a = await test.get(`${SVC}/TransactionMetadata(id=${LABEL_A},tx_hash='${SEEDED_TX_HASH}')`);
+      expect(a.status).toBe(200);
+      expect(String(a.data.id)).toBe(String(LABEL_A));
+      expect(JSON.parse(a.data.payload).msg).toEqual(['a']);
+
+      const b = await test.get(`${SVC}/TransactionMetadata(id=${LABEL_B},tx_hash='${SEEDED_TX_HASH}')`);
+      expect(b.status).toBe(200);
+      expect(String(b.data.id)).toBe(String(LABEL_B));
+      expect(JSON.parse(b.data.payload).msg).toEqual(['b']);
+    });
+
+    it('honours $select on a composite-key read', async () => {
+      const { status, data } = await test.get(`${SVC}/TransactionMetadata(id=${LABEL_B},tx_hash='${SEEDED_TX_HASH}')?$select=id,label`);
+      expect(status).toBe(200);
+      expect(String(data.label)).toBe(String(LABEL_B));
+      expect(data.payload).toBeUndefined();
+    });
+
+    // KNOWN_ISSUES #15: the handler used to fall back to the row SELECT.one
+    // found for the factory's single key whenever the client's query matched
+    // nothing — so a request for a label the tx does not carry was answered
+    // with a SIBLING label and a 200. The client's query is now the only
+    // authority; no fallback row.
+    it('a label that does not exist on this tx yields 404, not a sibling row', async () => {
+      setupTxInfoMock([]);
+      const res = await test
+        .get(`${SVC}/TransactionMetadata(id=721,tx_hash='${SEEDED_TX_HASH}')`)
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(res.status).toBe(404);
+    });
+
+    // Same root cause on a single-key entity: a $filter that excludes the row
+    // must not be overridden by a fallback.
+    it('keyed read with a non-matching $filter yields 404, not the row', async () => {
+      const res = await test
+        .get(`${SVC}/Transactions('${SEEDED_TX_HASH}')?$filter=fee gt 999999999999`)
+        .catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('temporal entity: Addresses', () => {
     const ADDR = TEST_FIXTURES.addressWithFunds;
 

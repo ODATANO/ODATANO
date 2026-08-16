@@ -24,6 +24,10 @@ export default defineConfig({
         globals: true,
         environment: 'node',
         setupFiles: ['test/vitest.setup.ts'],
+        // Deletes the compiled `.js` twins first — CAP resolves service impls
+        // itself and prefers `.js`, so a stale build would be tested instead of
+        // the sources. See test/vitest.globalSetup.ts.
+        globalSetup: ['test/vitest.globalSetup.ts'],
         // Fork per test file; forks are killed after the run, which covers the
         // open handles that used to require jest's --forceExit.
         pool: 'forks',

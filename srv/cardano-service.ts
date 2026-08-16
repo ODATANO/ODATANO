@@ -88,12 +88,15 @@ function indexOnMissRead<K = string>(
         // Populate the row (+ compositions) on a miss, then let CAP run the client's
         // query — one extra SELECT per keyed read, but $expand/$select (and the
         // temporal filter of the projection) apply exactly as on the un-keyed path.
-        const indexed = existing ? undefined : await indexFn(db, key as K);
-        const result = await db.run(req.query);
-        // Safety net: if the freshly written slice is still outside the session's
-        // temporal window (widening had no effect, e.g. the transaction was already
-        // open), degrade to the pre-#13 behaviour — bare row instead of a wrong 404.
-        return result ?? indexed ?? existing;
+        if (!existing) await indexFn(db, key as K);
+        // The client's query is the ONLY authority on what comes back. Falling back
+        // to `existing` (or the indexer's return value) when it matches nothing
+        // answers a request the client never made — a second key that does not
+        // match, or an excluding $filter, would get a sibling row with a 200
+        // instead of a 404 (KNOWN_ISSUES #15). Non-temporal entities always see
+        // their fresh rows here; temporal ones rely on widenTemporalWindow above,
+        // and if that ever stops working the failure is a loud 404 covered by
+        // test/integration/keyed-read-expand.test.ts, not silently wrong data.
       }
       return db.run(req.query);
     });

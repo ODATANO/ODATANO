@@ -1,6 +1,6 @@
 # ODATANO Developer Guide
 
-**Version:** v2.0.0-rc.2 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.3 | **Last Updated:** August 2026
 
 ---
 
@@ -154,7 +154,7 @@ srv/
 
 db/schema.cds                   # 35 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
-test/                           # 59 test files / 1919 tests (44 unit + 15 integration, vitest)
+test/                           # 59 test files / 1921 tests (44 unit + 15 integration, vitest)
 ```
 ---
 

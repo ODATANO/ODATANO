@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v2.0.0-rc.2 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.3 | **Last Updated:** August 2026
 
 ---
 
@@ -772,7 +772,7 @@ invisible to existing HTTP clients.
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 59 test files / 1919 tests (44 unit + 15 integration, vitest)
+- **Test Docs:** [test/README.md](../../test/README.md) - 59 test files / 1921 tests (44 unit + 15 integration, vitest)
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/

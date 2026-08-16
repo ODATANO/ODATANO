@@ -9,13 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Shipping first as **v2.0.0-rc.1**, published to npm as `latest` (14-08-2026) —
 > a plain `npm i @odatano/core` installs the RC. `^2.0.0` does not match a
-> pre-release, so pin `@odatano/core@2.0.0-rc.2` in `package.json`; consumers
+> pre-release, so pin `@odatano/core@2.0.0-rc.3` in `package.json`; consumers
 > that need to stay on the 1.x line pin `@odatano/core@^1.11.0`.
 >
-> **v2.0.0-rc.2** (15-08-2026) adds the first two fixes from consumer
-> integration against rc.1 (KNOWN_ISSUES #13 keyed `$expand`/`$select`,
-> #14 `cds watch` re-drive) — see *Fixed* below. No schema change, no
-> `cds deploy` needed when coming from rc.1.
+> **v2.0.0-rc.2** (15-08-2026): keyed reads honour `$expand`/`$select`,
+> `cds watch` startup fix. **v2.0.0-rc.3** (16-08-2026): keyed reads no longer
+> answer with a row the query excludes. See *Fixed* below — no schema change,
+> no `cds deploy` needed when coming from rc.1 or rc.2.
 
 ### ⚠ Breaking
 
@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1919 tests across 59 files (44 unit + 15 integration).
+- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1921 tests across 59 files (44 unit + 15 integration).
 - **Integration suites for both v2.0 subsystems** — `test/integration/wallet-worker.test.ts` (real CAP + real SQLite, backends stubbed: guards the deployed `UNIQUE(walletId, kind, dedupKey)`, real transactions and the OData layer; needs no network or funds) and `test/integration/crawler.test.ts` (real Ogmios: contiguous ingest, recovery from a fork staged while the crawler was down, `getStatus`; self-skips when Ogmios is unreachable or behind the tip, so it runs in both CI lanes).
 - **HarmonicLabs stack bumped**: `buildooor` 0.2.9, `cardano-ledger-ts` ^0.5.6, `cardano-costmodels-ts` ~1.6.1 (Plutus V3 cost model at `N_COST_MODEL_PLUTUS_V3` = 350, post-Plomin²).
 - **Vendored patches removed** — upstream releases contain both fixes: `keep-relevant.ts` (buildooor keepRelevant) and `auxiliary-data-patch.ts` (ledger-ts Conway tag-259 AuxiliaryData decode).
@@ -50,8 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Keyed reads on index-on-miss entities honour `$expand` / `$select`** (KNOWN_ISSUES #13). `GET Transactions('<hash>')?$expand=inputs,outputs` (and every other keyed read served by `indexOnMissRead` — Blocks, Epochs, Pools, Accounts, Dreps, Assets, Addresses, Transactions, TransactionMetadata) returned the bare row and silently dropped the query options; only the collection form honoured them. The keyed branch now indexes on a miss and then runs the client's own query. Because temporal entities (Pools, Assets, Dreps, Addresses, Accounts) are filtered against a per-request window that CAP closes 1 ms after the request starts, the handler widens that window before its first DB statement so the slice it writes during the request is visible to the re-read; expired slices stay hidden. Composite-key reads (`TransactionMetadata(id=…,tx_hash=…)`) now honour both keys instead of returning the first metadata row of the tx.
-- **`cds watch` no longer logs `ERR_MODULE_NOT_FOUND` for the deferred-submit re-drive at every boot** (KNOWN_ISSUES #14). `redriveInterruptedSubmissionsIfConfigured` used an extensionless dynamic `import()`, which tsx/cjs cannot resolve, so the KNOWN_ISSUES #11 Layer-2 recovery never ran under `cds watch` (compiled builds were unaffected). Now a lazy `require`, resolved under tsx, tsc and vitest alike.
+- **Keyed reads no longer answer with a row the query excludes.** A keyed read whose query legitimately matched nothing — a composite key whose second value does not match (`TransactionMetadata(id=721,tx_hash='…')` for a label the transaction does not carry), or a `$filter` that excludes the row — fell back to the row found for the entity's main key and returned it with a 200. Such requests now return 404. Affects all keyed reads of `Blocks`, `Epochs`, `Pools`, `Accounts`, `Dreps`, `Assets`, `Addresses`, `Transactions` and `TransactionMetadata`.
+- **Keyed reads honour `$expand` / `$select`.** `GET Transactions('<hash>')?$expand=inputs,outputs` (and every other keyed read of `Blocks`, `Epochs`, `Pools`, `Accounts`, `Dreps`, `Assets`, `Addresses`, `Transactions`, `TransactionMetadata`) returned the bare row and dropped the query options; only the collection form honoured them. Keyed reads now index on a miss and then run the client's own query, so they behave exactly like the collection form. For temporal entities the handler widens the request's validity window before its first DB statement so the slice written during the request is visible to that query (expired slices stay hidden). Composite-key reads (`TransactionMetadata(id=…,tx_hash=…)`) honour both keys.
+- **`cds watch` no longer logs `ERR_MODULE_NOT_FOUND` at startup.** The boot-time re-drive of interrupted deferred submissions used an extensionless dynamic `import()` that tsx cannot resolve, so it never ran from TypeScript sources; compiled builds were unaffected. Now a lazy `require`.
 - Hardening pass from the full-branch review: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
 
 #### Wallet worker — payment safety (pre-RC review)
