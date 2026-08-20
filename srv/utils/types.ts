@@ -314,6 +314,21 @@ export type MintAction = {
   quantity: bigint;
   /** Optional redeemer data (integer). Defaults to 0 if not specified. */
   redeemer?: number;
+  /**
+   * Optional PER-ACTION minting policy (CBOR hex). When set, this action
+   * mints under THIS script instead of the request's top-level
+   * mintingPolicyScript, enabling multiple policies in one transaction.
+   * Passed as-is (a parameterized script must be pre-applied); the action's
+   * assetUnit must carry this script's policyId.
+   */
+  mintingPolicyScript?: string;
+  /**
+   * Optional PER-ACTION redeemer (parsed PlutusData JSON). Only valid
+   * together with mintingPolicyScript; falls back to the request's
+   * mintRedeemer when absent. Actions resolving to the SAME policy must
+   * agree on their redeemer (the ledger carries one redeemer per policy).
+   */
+  redeemerJson?: JSONValue;
 };
 
 /**

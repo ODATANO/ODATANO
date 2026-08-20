@@ -1,6 +1,6 @@
 # Docker Deployment
 
-**Version:** v2.0.0-rc.3 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.4 | **Last Updated:** August 2026
 
 ## What the stack contains
 

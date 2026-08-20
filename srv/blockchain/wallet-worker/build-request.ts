@@ -2,11 +2,11 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { BackendError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { validateJsonWithLimits, isAssetUnit } from '../../utils/validators';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs } from '../../utils/tx-request-parsers';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields } from '../../utils/tx-request-parsers';
 import { applyScriptParameters } from '../../utils/tx-build-helper';
 import { scriptHashToEnterpriseAddress } from '../../utils/mappers';
 import { MIN_FULL_ASSET_UNIT_LENGTH } from '../../utils/const';
-import type { JSONValue, TxBuildRequest } from '../../utils/types';
+import type { JSONValue, MintAction, TxBuildRequest } from '../../utils/types';
 import type { Network } from '../cardano-client';
 import type { WalletJobKindValue } from './job-store';
 
@@ -58,11 +58,12 @@ function parseScriptParams(raw: RawRequest): JSONValue[] | undefined {
   return parsed;
 }
 
-/** Mirrors the BuildMint/BuildPlutusSpend mint-action parsing (bigint quantities). */
-function parseMintActions(raw: RawRequest, allowBareNames: boolean): Array<{ assetUnit: string; quantity: bigint }> {
+/** Mirrors the BuildMint/BuildPlutusSpend mint-action parsing (bigint quantities,
+ * multi-policy per-action fields). */
+function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[] {
   const parsed = parseJsonField(raw, 'mintActionsJson');
   if (!Array.isArray(parsed)) fail('mintActionsJson must be a JSON array');
-  return parsed.map((rawAction: unknown) => {
+  return parsed.map((rawAction: unknown, i: number) => {
     if (!rawAction || typeof rawAction !== 'object') {
       fail('Each mint action must be an object with assetUnit and quantity');
     }
@@ -71,15 +72,36 @@ function parseMintActions(raw: RawRequest, allowBareNames: boolean): Array<{ ass
       fail(`Invalid quantity: "${String(action.quantity)}" — must be an integer string`);
     }
     if (typeof action.assetUnit !== 'string') fail('Each mint action must have an assetUnit string');
+    // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson.
+    const policyFields = parseMintActionPolicyFields(action, i);
+    if (policyFields.error) fail(policyFields.error);
+    let actionPolicyId: string | undefined;
+    if (policyFields.script) {
+      actionPolicyId = scriptHashOf(policyFields.script, `mintActions[${i}].mintingPolicyScript is not a valid Plutus script`);
+    }
     const bareAssetNameForExpansion =
-      allowBareNames &&
+      (allowBareNames || !!actionPolicyId) &&
       action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
       action.assetUnit.length % 2 === 0 &&
       /^[0-9a-fA-F]*$/.test(action.assetUnit);
     if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-      fail(`Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson is set)`);
+      fail(`Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`);
     }
-    return { assetUnit: action.assetUnit, quantity: BigInt(action.quantity as string) };
+    let assetUnit = action.assetUnit as string;
+    if (actionPolicyId) {
+      if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+        assetUnit = actionPolicyId + assetUnit;
+      } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
+        fail(`mintActions[${i}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`);
+      }
+    }
+    return {
+      assetUnit,
+      quantity: BigInt(action.quantity as string),
+      ...(typeof action.redeemer === 'number' ? { redeemer: action.redeemer } : {}),
+      ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
+      ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
+    };
   });
 }
 
@@ -96,8 +118,10 @@ function scriptHashOf(scriptHex: string, context: string): string {
  * parseAssetUnit silently discards the first 56 hex chars, so a mismatched prefix
  * would mint a truncated asset name.
  */
-function assertPolicyPrefix(actions: Array<{ assetUnit: string }>, policyId: string): void {
-  const mismatch = actions.find((a) => !a.assetUnit.toLowerCase().startsWith(policyId));
+function assertPolicyPrefix(actions: Array<{ assetUnit: string; mintingPolicyScript?: string }>, policyId: string): void {
+  // Actions with their own per-action script were already checked against THAT
+  // script's policy id during parsing.
+  const mismatch = actions.find((a) => !a.mintingPolicyScript && !a.assetUnit.toLowerCase().startsWith(policyId));
   if (mismatch) {
     fail(`assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`);
   }
@@ -180,6 +204,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
   const mintRedeemer = parseJsonField(raw, 'mintRedeemerJson');
   const forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
   const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
+  const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
 
   if (raw.lockOnScript && (!scriptParams || scriptParams.length === 0)) {
     fail('lockOnScript requires scriptParamsJson to derive script address');
@@ -202,6 +227,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
   delete clean.lockOnScript;
   delete clean.forceInputsJson;
   delete clean.referenceInputsJson;
+  delete clean.extraOutputsJson;
   if (parsedMetadata) clean.metadataJson = parsedMetadata; else delete clean.metadataJson;
 
   if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
@@ -244,6 +270,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
     mintRedeemer,
     forceInputs,
     referenceInputs,
+    extraOutputs,
   } as TxBuildRequest;
 }
 

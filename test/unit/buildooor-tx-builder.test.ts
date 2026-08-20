@@ -292,6 +292,125 @@ describe('BuildooorTxBuilder', () => {
   // _partitionForcedInputs — pure function tests
   // =========================================================================
 
+  describe('_buildMintEntries — per-action policy (multi-policy mint FR)', () => {
+    const parseScript = (hex: string) => (builder as any)._parsePlutusV3Script(hex, 'test');
+    const entriesOf = (actions: unknown[], defaultRedeemer?: unknown) =>
+      (builder as any)._buildMintEntries(actions, parseScript(VALID_PLUTUS_SCRIPT), defaultRedeemer);
+    const spendingHash = () => parseScript(VALID_SPENDING_SCRIPT).hash.toString();
+
+    it('per-action script and redeemer override the top-level ones', () => {
+      const entries = entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n },
+        {
+          assetUnit: spendingHash() + 'aa', quantity: 1n,
+          mintingPolicyScript: VALID_SPENDING_SCRIPT,
+          redeemerJson: { constructor: 0, fields: [] },
+        },
+      ]);
+      expect(entries[0].script.inline.hash.toString()).toBe(POLICY_ID);
+      expect(entries[1].script.inline.hash.toString()).toBe(spendingHash());
+      // distinct redeemers: the default (DataI 0) vs the per-action constr
+      expect(entries[0].script.redeemer).not.toEqual(entries[1].script.redeemer);
+    });
+
+    it('actions without per-action fields fall back to the default script and redeemer', () => {
+      const entries = entriesOf(
+        [{ assetUnit: ASSET_UNIT, quantity: 2n }],
+        { constructor: 0, fields: [] }
+      );
+      expect(entries[0].script.inline.hash.toString()).toBe(POLICY_ID);
+    });
+
+    it('rejects same-policy actions with different redeemers (one redeemer per policy)', () => {
+      expect(() => entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 1 } },
+        { assetUnit: POLICY_ID + 'bb', quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 2 } },
+      ])).toThrow(/different redeemers/);
+    });
+
+    it('accepts same-policy actions with an identical redeemer', () => {
+      const entries = entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 1 } },
+        { assetUnit: POLICY_ID + 'bb', quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 1 } },
+      ]);
+      expect(entries).toHaveLength(2);
+    });
+
+    it('key-order-swapped JSON redeemers compare equal (canonical CBOR)', () => {
+      const entries = entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { constructor: 0, fields: [] } },
+        { assetUnit: POLICY_ID + 'bb', quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { fields: [], constructor: 0 } },
+      ]);
+      expect(entries).toHaveLength(2);
+    });
+
+    it('a JSON {int:0} redeemer equals the DataI(0) fallback under one policy', () => {
+      const entries = entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n },
+        { assetUnit: POLICY_ID + 'bb', quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 0 } },
+      ]);
+      expect(entries).toHaveLength(2);
+    });
+
+    it('a per-action redeemer also conflicts with the default redeemer under one policy', () => {
+      expect(() => entriesOf([
+        { assetUnit: ASSET_UNIT, quantity: 1n },
+        { assetUnit: POLICY_ID + 'bb', quantity: 1n, mintingPolicyScript: VALID_PLUTUS_SCRIPT, redeemerJson: { int: 9 } },
+      ], { int: 1 })).toThrow(/different redeemers/);
+    });
+  });
+
+  describe('_extraOutputsFundingAfterMint (FR-2 on mint)', () => {
+    const OTHER_UNIT = 'a'.repeat(56) + 'cc';
+    const funding = (mintActions: unknown[], extraOutputs: unknown[]) =>
+      (builder as any)._extraOutputsFundingAfterMint(mintActions, extraOutputs);
+    const out = (assets?: Array<{ unit: string; quantity: string }>) =>
+      ({ address: TEST_ADDRESS, lovelaceAmount: '2000000', ...(assets ? { assets } : {}) });
+
+    it('sums the extra outputs lovelace', () => {
+      const result = funding([{ assetUnit: ASSET_UNIT, quantity: 1n }], [out(), out()]);
+      expect(result.lovelace).toBe(4000000n);
+      expect(result.assets).toBeUndefined();
+    });
+
+    it('a fully mint-covered unit is not requested from the wallet', () => {
+      const result = funding(
+        [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+        [out([{ unit: ASSET_UNIT, quantity: '1' }])]
+      );
+      expect(result.assets).toBeUndefined();
+    });
+
+    it('requests only the demand the mint does not cover', () => {
+      // mint 1, outputs place 2: 1 must come from the wallet
+      const result = funding(
+        [{ assetUnit: ASSET_UNIT, quantity: 1n }],
+        [out([{ unit: ASSET_UNIT, quantity: '2' }])]
+      );
+      expect(result.assets).toEqual([{ unit: ASSET_UNIT.toLowerCase(), quantity: '1' }]);
+    });
+
+    it('aggregates demand across outputs and mint quantity across actions', () => {
+      const result = funding(
+        [
+          { assetUnit: ASSET_UNIT, quantity: 2n },
+          { assetUnit: ASSET_UNIT, quantity: 1n },
+        ],
+        [out([{ unit: ASSET_UNIT, quantity: '2' }]), out([{ unit: ASSET_UNIT, quantity: '2' }])]
+      );
+      // demand 4, minted 3: request 1
+      expect(result.assets).toEqual([{ unit: ASSET_UNIT.toLowerCase(), quantity: '1' }]);
+    });
+
+    it('requests non-minted units in full and ignores burns', () => {
+      const result = funding(
+        [{ assetUnit: ASSET_UNIT, quantity: -1n }],
+        [out([{ unit: OTHER_UNIT, quantity: '3' }])]
+      );
+      expect(result.assets).toEqual([{ unit: OTHER_UNIT, quantity: '3' }]);
+    });
+  });
+
   describe('_partitionForcedInputs', () => {
     const partition = (utxos: UTxO[], forceInputs?: Array<{ txHash: string; outputIndex: number }>) =>
       (builder as any)._partitionForcedInputs(utxos, forceInputs);

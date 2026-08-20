@@ -41,7 +41,7 @@ import {
   TxMetadatumMap,
   TxMetadatumBytes
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
-import { DataI, dataFromCbor } from "@harmoniclabs/plutus-data";
+import { DataI, dataFromCbor, dataToCbor } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
 
@@ -301,13 +301,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Parse the minting policy script once
       const script = this._parsePlutusV3Script(req.mintingPolicyScript, 'mintingPolicyScript');
 
-      // Calculate total mint value for output (only positive quantities - mints, not burns)
+      // Calculate total mint value for output (only positive quantities - mints, not burns).
+      // Multi-policy mint FR: each action mints under ITS script (own or top-level).
       let mintValue = Value.lovelaces(0n);
-      for (const mintAction of req.mintActions) {
+      for (const [index, mintAction] of req.mintActions.entries()) {
         const quantity = BigInt(mintAction.quantity);
         if (quantity > 0n) {
+          const actionScript = this._mintActionScript(mintAction, script, index);
           const { assetName } = parseAssetUnit(mintAction.assetUnit);
-          mintValue = Value.add(mintValue, Value.singleAsset(script.hash, Buffer.from(assetName, 'hex'), quantity));
+          mintValue = Value.add(mintValue, Value.singleAsset(actionScript.hash, Buffer.from(assetName, 'hex'), quantity));
         }
       }
 
@@ -322,8 +324,18 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
 
-      // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from thin air)
-      const requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
+      // Coin selection: only need enough ADA from funding UTxOs (minted tokens come from
+      // thin air). Extra outputs (FR-2 on mint) add their lovelace plus, per unit, the
+      // demand the mint does NOT cover (e.g. minting 1 while placing 2 means 1 must come
+      // from the wallet).
+      let requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
+      if (req.extraOutputs && req.extraOutputs.length > 0) {
+        const { lovelace, assets } = this._extraOutputsFundingAfterMint(req.mintActions, req.extraOutputs);
+        requiredFundingValue = Value.add(
+          requiredFundingValue,
+          this._buildLedgerValue(lovelace, assets)
+        );
+      }
       const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       const inputs = [...forcedInputs, ...selectedFunding];
       logger.debug(`Coin selection: ${selectedFunding.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for mint`);
@@ -340,17 +352,27 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const resolvedInlineDatum = req.inlineDatum
         ? resolveIndexPlaceholders(req.inlineDatum, resolveCtx)
         : undefined;
+      const resolvedExtraOutputs = this._resolveExtraOutputPlaceholders(req.extraOutputs, resolveCtx);
 
-      // Build output — recipient gets the minted assets + min ADA
+      // Build output — recipient gets the minted assets + min ADA. When extra
+      // outputs are declared (FR-2 on mint) THEY carry the minted assets (each
+      // token on its own output with its own datum, e.g. datum-bound predicate
+      // tokens), so the primary output stays ADA(+datum)-only.
       let outputValue = Value.lovelaces(BigInt(req.lovelaceAmount));
-      outputValue = Value.add(outputValue, mintValue);
+      if (!resolvedExtraOutputs || resolvedExtraOutputs.length === 0) {
+        outputValue = Value.add(outputValue, mintValue);
+      }
       const refScript = this._parseReferenceScript(req.referenceScript);
       const outputs = [this._buildTxOut(recipientAddress, outputValue, resolvedInlineDatum, refScript)];
 
-      // Mint entries for the build args (uses pre-resolved redeemer). Note: Buildooor
-      // ignores caller-supplied execution units — the real units are stamped into the
+      // Append extra outputs, each independently min-ADA checked.
+      this._appendExtraOutputs(outputs, resolvedExtraOutputs);
+
+      // Mint entries for the build args (uses pre-resolved redeemers; per-action
+      // redeemers resolve their own placeholders). Note: Buildooor ignores
+      // caller-supplied execution units — the real units are stamped into the
       // redeemers post-build by _buildScriptTx.
-      const mints = this._buildMintEntries(req.mintActions, script, resolvedMintRedeemer);
+      const mints = this._buildMintEntries(req.mintActions, script, resolvedMintRedeemer, resolveCtx);
 
       // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
       const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
@@ -483,11 +505,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
       // If mints are present and no extraOutputs handle the minted assets, attach positive mints to the primary output.
       if (hasMint && (!resolvedExtraOutputs || resolvedExtraOutputs.length === 0)) {
-        for (const action of req.mintActions!) {
+        for (const [index, action] of req.mintActions!.entries()) {
           const qty = BigInt(action.quantity);
           if (qty > 0n) {
+            const actionScript = this._mintActionScript(action, mintScript!, index);
             const { assetName } = parseAssetUnit(action.assetUnit);
-            outputValue = Value.add(outputValue, Value.singleAsset(mintScript!.hash, Buffer.from(assetName, 'hex'), qty));
+            outputValue = Value.add(outputValue, Value.singleAsset(actionScript.hash, Buffer.from(assetName, 'hex'), qty));
           }
         }
       }
@@ -502,7 +525,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // caller-supplied execution units — the real units are stamped into the
       // redeemers post-build by _buildScriptTx.
       const mints = hasMint
-        ? this._buildMintEntries(req.mintActions!, mintScript!, resolvedMintRedeemer)
+        ? this._buildMintEntries(req.mintActions!, mintScript!, resolvedMintRedeemer, resolveCtx)
         : undefined;
 
       const scriptInput = {
@@ -893,20 +916,95 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /**
+   * Funding requirement contributed by extra outputs on a mint build:
+   * the summed lovelace of all entries plus, per asset unit, the demand the
+   * transaction's own positive mints do NOT cover. Minted quantities are
+   * aggregated per unit and subtracted from the aggregated output demand;
+   * only a positive remainder is requested from the wallet (a fully covered
+   * unit is not requested at all — it does not exist before this tx).
+   */
+  private _extraOutputsFundingAfterMint(
+    mintActions: MintAction[],
+    extraOutputs: NonNullable<TxBuildRequest['extraOutputs']>
+  ): { lovelace: bigint; assets?: Array<{ unit: string; quantity: string }> } {
+    const mintedByUnit = new Map<string, bigint>();
+    for (const action of mintActions) {
+      const quantity = BigInt(action.quantity);
+      if (quantity > 0n) {
+        const unit = action.assetUnit.toLowerCase();
+        mintedByUnit.set(unit, (mintedByUnit.get(unit) ?? 0n) + quantity);
+      }
+    }
+    const demandByUnit = new Map<string, bigint>();
+    let lovelace = 0n;
+    for (const extra of extraOutputs) {
+      lovelace += BigInt(extra.lovelaceAmount);
+      for (const asset of extra.assets ?? []) {
+        const unit = asset.unit.toLowerCase();
+        demandByUnit.set(unit, (demandByUnit.get(unit) ?? 0n) + BigInt(asset.quantity));
+      }
+    }
+    const assets: Array<{ unit: string; quantity: string }> = [];
+    for (const [unit, demand] of demandByUnit) {
+      const uncovered = demand - (mintedByUnit.get(unit) ?? 0n);
+      if (uncovered > 0n) assets.push({ unit, quantity: uncovered.toString() });
+    }
+    return { lovelace, ...(assets.length > 0 ? { assets } : {}) };
+  }
+
+  /**
+   * The script an individual mint action executes under: its own
+   * per-action policy when set (multi-policy mint FR), else the request's
+   * top-level policy script.
+   */
+  private _mintActionScript(action: MintAction, defaultScript: Script, index: number): Script {
+    if (!action.mintingPolicyScript) return defaultScript;
+    return this._parsePlutusV3Script(action.mintingPolicyScript, `mintActions[${index}].mintingPolicyScript`);
+  }
+
+  /**
    * Build the Buildooor mint-entry array shared by the mint-only flow and the
    * combined spend+mint flow (Buildooor ignores caller-supplied execution units;
    * they are stamped into the redeemers post-build by _buildScriptTx).
+   *
+   * Multi-policy mint FR: each action may carry its own policy script and
+   * redeemer; absent fields fall back to the request-level ones. The ledger
+   * carries ONE redeemer per policy, so actions resolving to the same policy
+   * must agree on their redeemer, checked here.
    */
-  private _buildMintEntries(mintActions: MintAction[], mintScript: Script, resolvedMintRedeemer: JSONValue | undefined) {
-    return mintActions.map(action => {
+  private _buildMintEntries(
+    mintActions: MintAction[],
+    mintScript: Script,
+    resolvedMintRedeemer: JSONValue | undefined,
+    resolveCtx?: Parameters<typeof resolveIndexPlaceholders>[1]
+  ) {
+    const redeemerByPolicy = new Map<string, string>();
+    return mintActions.map((action, index) => {
+      const script = this._mintActionScript(action, mintScript, index);
+      const actionRedeemer = action.redeemerJson !== undefined
+        ? (resolveCtx ? resolveIndexPlaceholders(action.redeemerJson, resolveCtx) : action.redeemerJson)
+        : resolvedMintRedeemer;
+      const redeemerData = actionRedeemer !== undefined
+        ? jsonToPlutusData(actionRedeemer)
+        : new DataI(action.redeemer ?? 0);
+      const policyId = script.hash.toString();
+      // Canonical comparison over the encoded PlutusData: JSON key order must
+      // not matter, and a JSON {int:0} equals the DataI(0) fallback.
+      const redeemerFingerprint = dataToCbor(redeemerData).toString();
+      const seen = redeemerByPolicy.get(policyId);
+      if (seen !== undefined && seen !== redeemerFingerprint) {
+        throw new Error(
+          `mint actions under policy ${policyId} carry different redeemers — the ledger allows one redeemer per policy; ` +
+          'split them into separate transactions or align the redeemers'
+        );
+      }
+      redeemerByPolicy.set(policyId, redeemerFingerprint);
       const { assetName } = parseAssetUnit(action.assetUnit);
       return {
-        value: Value.singleAsset(mintScript.hash, Buffer.from(assetName, 'hex'), BigInt(action.quantity)),
+        value: Value.singleAsset(script.hash, Buffer.from(assetName, 'hex'), BigInt(action.quantity)),
         script: {
-          inline: mintScript,
-          redeemer: resolvedMintRedeemer
-            ? jsonToPlutusData(resolvedMintRedeemer)
-            : new DataI(action.redeemer ?? 0)
+          inline: script,
+          redeemer: redeemerData
         }
       };
     });

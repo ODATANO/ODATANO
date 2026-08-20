@@ -9,13 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Shipping first as **v2.0.0-rc.1**, published to npm as `latest` (14-08-2026) —
 > a plain `npm i @odatano/core` installs the RC. `^2.0.0` does not match a
-> pre-release, so pin `@odatano/core@2.0.0-rc.3` in `package.json`; consumers
+> pre-release, so pin `@odatano/core@2.0.0-rc.4` in `package.json`; consumers
 > that need to stay on the 1.x line pin `@odatano/core@^1.11.0`.
 >
 > **v2.0.0-rc.2** (15-08-2026): keyed reads honour `$expand`/`$select`,
 > `cds watch` startup fix. **v2.0.0-rc.3** (16-08-2026): keyed reads no longer
 > answer with a row the query excludes. See *Fixed* below — no schema change,
 > no `cds deploy` needed when coming from rc.1 or rc.2.
+> **v2.0.0-rc.4** (20-08-2026): multi-policy mints (per-action
+> `mintingPolicyScript` + `redeemerJson` in `mintActionsJson`) and
+> `extraOutputsJson` on `BuildMintTransaction`. Additive; no schema change,
+> no `cds deploy` needed when coming from rc.1-rc.3.
 
 ### ⚠ Breaking
 
@@ -39,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broken observer cannot stall the crawler or a wallet job. Events are absent from `$metadata`
   (OData V4 has no event concept), so the change is additive for existing HTTP clients.
 - **KoiosBackend.getDrep** with the new Koios schema.
+- **Multi-policy mints** (rc.4) — `mintActionsJson` entries accept optional per-action `mintingPolicyScript` (CBOR hex, pre-applied) and `redeemerJson` (JSON-encoded PlutusData string); absent fields fall back to the top-level policy/redeemer. A bare asset name expands under the action's own policy id, and a full unit must carry it. Actions resolving to the same policy must carry the same redeemer. Applies to `BuildMintTransaction`, the combined spend+mint flow of `BuildPlutusSpendTransaction`, and the wallet-worker lane; per-action redeemers get `__INPUT_IDX__` placeholder resolution.
+- **`extraOutputsJson` on `BuildMintTransaction`** (rc.4) — same entry shape as on `BuildPlutusSpendTransaction` (`address`, `lovelaceAmount`, `assets`, `inlineDatumJson`, `referenceScriptHex`, max 32, per-entry min-ADA check). When present, the extra outputs carry the minted assets and the primary recipient output stays ADA(+datum)-only; coin selection requests the extra outputs' lovelace plus, per asset unit, the output demand the transaction's own mints do not cover.
 
 ### Changed
 

@@ -1,6 +1,6 @@
 # ODATANO Quick Start Guide
 
-**Version:** v2.0.0-rc.3 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.4 | **Last Updated:** August 2026
 
 This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 

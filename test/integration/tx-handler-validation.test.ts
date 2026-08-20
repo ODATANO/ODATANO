@@ -215,6 +215,33 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect(status).toBe(400);
     });
 
+    it('should reject a per-action redeemerJson without its mintingPolicyScript', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.assetUnit, quantity: '1', redeemerJson: '{"int":0}' }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject a per-action assetUnit that does not carry its own policy id', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        mintActionsJson: JSON.stringify([{
+          assetUnit: 'b'.repeat(56) + 'aa', quantity: '1',
+          mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        }]),
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
     it('should reject mint action when entry is not an object', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
@@ -348,6 +375,44 @@ describe('CardanoTransactionService Handler Validations', () => {
         scriptOutputIndex: 0,
         redeemerJson: '{"int": 0}',
         forceInputsJson: 'not-valid-json{{{',
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject an invalid per-action mintingPolicyScript in the combined spend+mint flow', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintActionsJson: JSON.stringify([{
+          assetUnit: TEST_FIXTURES.assetUnit, quantity: '1',
+          mintingPolicyScript: 'zz-not-hex',
+        }]),
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+
+      expect(status).toBe(400);
+    });
+
+    it('should reject a per-action assetUnit that does not carry its own policy id in the combined spend+mint flow', async () => {
+      const { status } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
+        senderAddress: TEST_FIXTURES.addressWithAssets,
+        recipientAddress: TEST_FIXTURES.addressWithAssets,
+        lovelaceAmount: '2000000',
+        validatorScript: TEST_FIXTURES.validSpendingScript,
+        scriptTxHash: 'a'.repeat(64),
+        scriptOutputIndex: 0,
+        redeemerJson: '{"int": 0}',
+        mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        mintActionsJson: JSON.stringify([{
+          assetUnit: 'b'.repeat(56) + 'aa', quantity: '1',
+          mintingPolicyScript: TEST_FIXTURES.validPlutusScript,
+        }]),
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
       expect(status).toBe(400);

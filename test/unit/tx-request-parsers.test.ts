@@ -24,6 +24,7 @@ import {
   parseRequiredSigners,
   parseAssetsArray,
   parseExtraOutputs,
+  parseMintActionPolicyFields,
   MAX_EXTRA_OUTPUTS,
 } from '../../srv/utils/tx-request-parsers';
 import { TEST_FIXTURES } from '../integration/test-fixtures';
@@ -174,5 +175,44 @@ describe('parseExtraOutputs', () => {
   it('rejects non-array JSON and non-object entries', () => {
     expect(parseExtraOutputs('"x"').error).toMatch(/must be a JSON array/);
     expect(parseExtraOutputs('[3]').error).toMatch(/must be an object/);
+  });
+});
+
+describe('parseMintActionPolicyFields (multi-policy mint)', () => {
+  const SCRIPT = TEST_FIXTURES.validPlutusScript;
+
+  it('returns empty fields for a plain action', () => {
+    expect(parseMintActionPolicyFields({ assetUnit: 'aa', quantity: '1' }, 0))
+      .toEqual({ script: undefined, redeemer: undefined });
+  });
+
+  it('parses a per-action script with a JSON-encoded redeemer', () => {
+    const result = parseMintActionPolicyFields({
+      mintingPolicyScript: SCRIPT,
+      redeemerJson: JSON.stringify({ constructor: 0, fields: [] }),
+    }, 1);
+    expect(result.error).toBeUndefined();
+    expect(result.script).toBe(SCRIPT);
+    expect(result.redeemer).toEqual({ constructor: 0, fields: [] });
+  });
+
+  it('rejects a non-hex per-action script', () => {
+    expect(parseMintActionPolicyFields({ mintingPolicyScript: 'zz' }, 2).error)
+      .toMatch(/mintActions\[2\].mintingPolicyScript/);
+  });
+
+  it('rejects a non-string redeemerJson', () => {
+    expect(parseMintActionPolicyFields({ mintingPolicyScript: SCRIPT, redeemerJson: { int: 1 } }, 0).error)
+      .toMatch(/must be a JSON string/);
+  });
+
+  it('rejects malformed redeemerJson content', () => {
+    expect(parseMintActionPolicyFields({ mintingPolicyScript: SCRIPT, redeemerJson: '{nope' }, 0).error)
+      .toMatch(/redeemerJson/);
+  });
+
+  it('rejects a redeemer without its script', () => {
+    expect(parseMintActionPolicyFields({ redeemerJson: '{}' }, 3).error)
+      .toMatch(/requires mintActions\[3\].mintingPolicyScript/);
   });
 });

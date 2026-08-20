@@ -175,3 +175,37 @@ export function parseExtraOutputs(
   }
   return { parsed: out };
 }
+
+/**
+ * Parse the optional PER-ACTION policy fields of a mintActionsJson entry
+ * (multi-policy mint FR): `mintingPolicyScript` (CBOR hex, applied as-is; a
+ * parameterized per-action script must be pre-applied by the caller) and
+ * `redeemerJson` (a JSON-encoded string, same convention as extraOutputs'
+ * inlineDatumJson). Absent fields fall back to the action's top-level
+ * script/redeemer at build time.
+ */
+export function parseMintActionPolicyFields(
+  entry: Record<string, unknown>,
+  i: number
+): { script?: string; redeemer?: JSONValue; error?: string } {
+  let script: string | undefined;
+  if (entry.mintingPolicyScript !== undefined && entry.mintingPolicyScript !== null) {
+    if (typeof entry.mintingPolicyScript !== 'string' || !isValidCbor(entry.mintingPolicyScript)) {
+      return { error: `mintActions[${i}].mintingPolicyScript must be even-length CBOR hex` };
+    }
+    script = entry.mintingPolicyScript;
+  }
+  let redeemer: JSONValue | undefined;
+  if (entry.redeemerJson !== undefined && entry.redeemerJson !== null) {
+    if (typeof entry.redeemerJson !== 'string') {
+      return { error: `mintActions[${i}].redeemerJson must be a JSON string` };
+    }
+    const jsonResult = validateJsonWithLimits(entry.redeemerJson, `mintActions[${i}].redeemerJson`);
+    if (!jsonResult.valid) return { error: jsonResult.error! };
+    redeemer = jsonResult.parsed as JSONValue;
+  }
+  if (redeemer !== undefined && script === undefined) {
+    return { error: `mintActions[${i}].redeemerJson requires mintActions[${i}].mintingPolicyScript` };
+  }
+  return { script, redeemer };
+}

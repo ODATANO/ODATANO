@@ -1,5 +1,8 @@
 using {odatano.cardano as db} from '../db/schema';
-using {Bech32, Lovelace} from '../db/types';
+using {
+    Bech32,
+    Lovelace
+} from '../db/types';
 
 
 /**
@@ -43,20 +46,21 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     @description: 'Projection for Transaction Build Output Assets'
     entity TransactionBuildOutputAssets as projection on db.TransactionBuildOutputAssets;
 
-            @readonly
-            @title      : 'Transaction Submissions'
-            @description: 'Projection for Transaction Submissions'
+    @readonly
+    @title      : 'Transaction Submissions'
+    @description: 'Projection for Transaction Submissions'
     entity TransactionSubmissions       as projection on db.TransactionSubmissions
         actions {
             @title      : 'Check Submission Status'
             @description: 'Check the status of a submitted transaction by querying the blockchain for confirmation'
             action CheckSubmissionStatus() returns TransactionSubmissions;
         };
+
     /**
      * TransactionSubmissions status flow:
-     *   pending ──[submit to chain]──→ submitted  (internal, in SubmitTransaction handler)
-     *   submitted ──[CheckSubmissionStatus]──→ confirmed | stays submitted  (conditional)
-     *   pending | submitted ──→ failed  (blockchain error)
+     *   pending -> [submit to chain] -> submitted  (internal, in SubmitTransaction handler)
+     *   submitted -> [CheckSubmissionStatus] confirmed | stays submitted  (conditional)
+     *   pending | submitted -> failed  (blockchain error)
      */
     annotate CardanoTransactionService.TransactionSubmissions with @flow.status: status actions {
         CheckSubmissionStatus                                      @from       : [ #submitted];
@@ -117,7 +121,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      validityStartMs: String,
                                      @title: 'Validity End (Posix ms)'
                                      @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
-                                     validityEndMs: String)  returns TransactionBuilds;
+                                     validityEndMs: String)   returns TransactionBuilds;
 
     @title      : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
@@ -136,7 +140,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                         changeAddress: Bech32,
                                         @title: 'Metadata JSON'
                                         @description: 'The JSON representation of the transaction metadata as string'
-                                        metadataJson: String)  returns TransactionBuilds;
+                                        metadataJson: String) returns TransactionBuilds;
 
     @title      : 'Build Multi-Asset Transaction'
     @description: 'Build a transaction to send native assets (tokens) along with ADA'
@@ -167,7 +171,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                       validityStartMs: String,
                                       @title: 'Validity End (Posix ms)'
                                       @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
-                                      validityEndMs: String) returns TransactionBuilds;
+                                      validityEndMs: String)  returns TransactionBuilds;
 
     @title      : 'Build Minting Transaction'
     @description: 'Build a transaction to mint or burn native assets'
@@ -182,10 +186,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @description: 'The amount of ADA to send with minted assets in lovelace'
                                 lovelaceAmount: Lovelace,
                                 @title: 'Mint Actions JSON'
-                                @description: 'JSON array of mint/burn actions (format: [{"assetUnit":"policyId+assetName","quantity":"amount"}])'
+                                @description: 'JSON array of mint/burn actions (format: [{"assetUnit":"policyId+assetName","quantity":"amount"}]). Multi-policy mints: each action may additionally carry its own "mintingPolicyScript" (CBOR hex, pre-applied) and "redeemerJson" (JSON-encoded PlutusData string), overriding the top-level policy/redeemer for that action. Actions resolving to the same policy must agree on their redeemer (the ledger carries one redeemer per policy).'
                                 mintActionsJson: String,
                                 @title: 'Minting Policy Script'
-                                @description: 'The minting policy script in CBOR hex format'
+                                @description: 'The minting policy script in CBOR hex format. Actions without a per-action mintingPolicyScript mint under this script.'
                                 mintingPolicyScript: String,
                                 @title: 'Change Address'
                                 @description: 'The Bech32 encoded address for returning change -defaults to sender address if not specified'
@@ -211,6 +215,9 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @title: 'Reference Inputs JSON'
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
                                 referenceInputsJson: String,
+                                @title: 'Extra Outputs JSON'
+                                @description: 'Optional JSON array of additional outputs [{address, lovelaceAmount, assets?, inlineDatumJson?, referenceScriptHex?}] appended after the primary recipient output. When present, the extra outputs carry the minted assets (declare each minted unit in an entry''s assets) and the primary output stays ADA-only — used to place each minted token on its own output with its own inline datum (e.g. datum-bound predicate tokens). Each entry is independently min-ADA checked.'
+                                extraOutputsJson: String,
                                 @title: 'Metadata JSON'
                                 @description: 'Optional transaction metadata as JSON (CIP-20 / label-674 etc.). Object keyed by numeric label string. Attached as auxiliary_data to the mint tx so chain-watchers can correlate off-chain context (receipt IDs, free-form notes).'
                                 metadataJson: String,
@@ -222,14 +229,14 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 validityStartMs: String,
                                 @title: 'Validity End (Posix ms)'
                                 @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
-                                validityEndMs: String)   returns TransactionBuilds;
+                                validityEndMs: String)        returns TransactionBuilds;
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
     action GetBuildDetails(
                            @title: 'Build Id'
                            @description: 'The unique identifier of the transaction build'
-                           buildId: UUID)                      returns TransactionBuilds;
+                           buildId: UUID)                     returns TransactionBuilds;
 
     @title      : 'Submit Transaction'
     @description: 'Submit a transaction to the Cardano network using a build ID and signed CBOR'
@@ -239,7 +246,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                              buildId: UUID,
                              @title: 'Signed Transaction CBOR'
                              @description: 'The CBOR of the signed transaction'
-                             signedTxCbor: String)             returns TransactionSubmissions;
+                             signedTxCbor: String)            returns TransactionSubmissions;
 
     @title      : 'Submit Signed Transaction'
     @description: 'Submit a signed transaction to the Cardano network'
@@ -249,7 +256,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                    signedTxCbor: String,
                                    @title: 'Network'
                                    @description: 'The Cardano network to submit the transaction to (e.g., mainnet, testnet)'
-                                   network: String(10))        returns TransactionSubmissions;
+                                   network: String(10))       returns TransactionSubmissions;
 
     @title      : 'Build Plutus Spend Transaction'
     @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'
@@ -326,13 +333,14 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     action SetCollateral(
                          @title: 'Address'
                          @description: 'The Bech32 encoded address to check and set up collateral for'
-                         address: Bech32)                   returns TransactionBuilds;
+                         address: Bech32)                     returns TransactionBuilds;
+
     @title      : 'Address Transaction Builds'
     @description: 'Projection for retrieving transaction builds by address'
     action GetTransactionBuildsByAddress(
                                          @title: 'Bech32 Address'
                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
-                                         address: Bech32)   returns array of AddressTransactionBuilds;
+                                         address: Bech32)     returns array of AddressTransactionBuilds;
 
     @title      : 'Derive Script Address'
     @description: 'Utility: Apply optional PlutusData parameters to a validator script and return its enterprise script address (bech32) and script hash (28-byte hex). Pure derivation, no transaction built, no blockchain call.'
@@ -346,19 +354,17 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                @title: 'Network'
                                @description: 'Optional network override (mainnet, preview, preprod). Defaults to the configured network.'
                                network: String(10))           returns {
-                                   scriptAddress: String(120);
-                                   scriptHash: String(56);
-                               };
+        scriptAddress : String(120);
+        scriptHash    : String(56);
+    };
 
     @title      : 'Extract Payment Key Hash'
     @description: 'Utility: Decode a Bech32 Cardano address and return its 28-byte payment credential hash (hex). Pure bech32 decoding — no blockchain call. Use to obtain the key hash for requiredSignersJson on Plutus actions.'
     action ExtractPaymentKeyHash(
                                  @title: 'Address'
                                  @description: 'The Bech32 encoded Cardano address (addr / addr_test)'
-                                 address: Bech32)              returns {
-                                     paymentKeyHash: String(56);
-                                 };
+                                 address: Bech32)             returns {
+        paymentKeyHash : String(56);
+    };
 
 }
-
-

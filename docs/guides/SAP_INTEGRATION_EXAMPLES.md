@@ -1,6 +1,6 @@
 # SAP Integration Examples
 
-**Version:** v2.0.0-rc.3 | **Last Updated:** August 2026
+**Version:** v2.0.0-rc.4 | **Last Updated:** August 2026
 
 This guide demonstrates how to integrate ODATANO with SAP systems, including OData consumption from S/4HANA, ABAP code templates, and enterprise use cases.
 

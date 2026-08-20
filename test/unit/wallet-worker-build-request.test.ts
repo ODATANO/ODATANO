@@ -230,6 +230,76 @@ describe('prepareWorkerBuildRequest: mint', () => {
       ...mintBase, metadataJson: JSON.stringify([1, 2]),
     }, 'preview'), /must be an object/);
   });
+
+  describe('multi-policy mint (per-action policy fields)', () => {
+    const secondScript = applyScriptParameters(PARAM_SCRIPT, [{ int: 5 }]);
+    const secondHash = hashOf(secondScript);
+
+    it('accepts per-action mintingPolicyScript + redeemerJson', () => {
+      const result = prepareWorkerBuildRequest('mint', {
+        ...mintBase,
+        mintActionsJson: JSON.stringify([
+          { assetUnit: scriptUnit('01'), quantity: '1' },
+          {
+            assetUnit: secondHash + '02', quantity: '1',
+            mintingPolicyScript: secondScript,
+            redeemerJson: JSON.stringify({ constructor: 0, fields: [] }),
+          },
+        ]),
+      }, 'preview') as Record<string, unknown>;
+      const actions = result.mintActions as Array<Record<string, unknown>>;
+      expect(actions[0]).not.toHaveProperty('mintingPolicyScript');
+      expect(actions[1].mintingPolicyScript).toBe(secondScript);
+      expect(actions[1].redeemerJson).toEqual({ constructor: 0, fields: [] });
+    });
+
+    it('expands a bare asset name with the PER-ACTION policy id', () => {
+      const result = prepareWorkerBuildRequest('mint', {
+        ...mintBase,
+        mintActionsJson: JSON.stringify([
+          { assetUnit: scriptUnit('01'), quantity: '1' },
+          { assetUnit: '02', quantity: '1', mintingPolicyScript: secondScript },
+        ]),
+      }, 'preview') as Record<string, unknown>;
+      const actions = result.mintActions as Array<{ assetUnit: string }>;
+      expect(actions[1].assetUnit).toBe(secondHash + '02');
+    });
+
+    it('rejects a per-action unit that does not carry its own policy id', () => {
+      expectRejects(() => prepareWorkerBuildRequest('mint', {
+        ...mintBase,
+        mintActionsJson: JSON.stringify([
+          { assetUnit: 'b'.repeat(56) + '02', quantity: '1', mintingPolicyScript: secondScript },
+        ]),
+      }, 'preview'), /does not start with its own policy id/);
+    });
+
+    it('rejects redeemerJson without a per-action script', () => {
+      expectRejects(() => prepareWorkerBuildRequest('mint', {
+        ...mintBase,
+        mintActionsJson: JSON.stringify([
+          { assetUnit: scriptUnit('01'), quantity: '1', redeemerJson: '{}' },
+        ]),
+      }, 'preview'), /requires mintActions\[0\].mintingPolicyScript/);
+    });
+
+    it('parses extraOutputsJson on mint (FR-2)', () => {
+      const result = prepareWorkerBuildRequest('mint', {
+        ...mintBase,
+        extraOutputsJson: JSON.stringify([{
+          address: ADDR, lovelaceAmount: '2000000',
+          assets: [{ unit: scriptUnit('01'), quantity: '1' }],
+          inlineDatumJson: JSON.stringify({ int: 1 }),
+        }]),
+      }, 'preview') as Record<string, unknown>;
+      expect(result.extraOutputs).toEqual([{
+        address: ADDR, lovelaceAmount: '2000000',
+        assets: [{ unit: scriptUnit('01'), quantity: '1' }],
+        inlineDatum: { int: 1 },
+      }]);
+      expect(result).not.toHaveProperty('extraOutputsJson');
+    });
+  });
 });
 
 describe('prepareWorkerBuildRequest: plutusSpend', () => {

@@ -8,8 +8,8 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
-import type { JSONValue, TxBuildPlutusSpendRequest } from './utils/types';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs } from './utils/tx-request-parsers';
+import type { JSONValue, MintAction, TxBuildPlutusSpendRequest } from './utils/types';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields } from './utils/tx-request-parsers';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -137,7 +137,7 @@ module.exports = (srv: cds.Service) => {
   });
   /**
    * Build a transaction with metadata
-   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, metadataJson, changeAddress)
+   * @param req - CDS request object
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
@@ -169,7 +169,7 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Build a multi-asset transaction
-   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, assetsJson, changeAddress)
+   * @param req CDS request object
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
@@ -193,11 +193,11 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must contain at least one asset', 'assetsJson');
     }
 
-    // Validation BEFORE handleRequest (convention) — build the clean request object up front
+    // Validation BEFORE handleRequest
     const cleanData = { ...req.data };
     delete cleanData.assetsJson;
 
-    // parse optional output datum (for locking assets at script addresses)
+    // parse optional output datum
     if (outputDatumJson) {
       const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
@@ -224,11 +224,11 @@ module.exports = (srv: cds.Service) => {
 
   /**
    * Build a minting transaction
-   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, changeAddress)
+   * @param req CDS request object
    * @returns {TransactionBuild} Transaction build details
    */
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, metadataJson, validityStartMs, validityEndMs } = req.data;
+    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, extraOutputsJson, metadataJson, validityStartMs, validityEndMs } = req.data;
 
     // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
@@ -245,22 +245,41 @@ module.exports = (srv: cds.Service) => {
     if (!Array.isArray(parsedMintActionsRaw)) {
       return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
     }
-    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }) => {
+    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }, actionIndex: number) => {
       if (!action || typeof action !== 'object') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
       }
-      // assetUnit is normally a full policyId+assetName hex. Exception (BUG 7):
-      // when scriptParamsJson is provided, a bare assetName (shorter than a full
-      // unit) is accepted here and expanded to policyId+assetName once the policy
-      // script is parameterized below — mirrors the expansion's own < MIN_FULL_ASSET_UNIT_LENGTH guard.
+      // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson.
+      const policyFields = parseMintActionPolicyFields(action as unknown as Record<string, unknown>, actionIndex);
+      if (policyFields.error) {
+        return rejectInvalid(req, 'BuildMintTransaction', policyFields.error, 'mintActionsJson');
+      }
+      let actionPolicyId: string | undefined;
+      if (policyFields.script) {
+        try {
+          actionPolicyId = Script.fromCbor(Buffer.from(policyFields.script, 'hex')).hash.toString();
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          return rejectInvalid(req, 'BuildMintTransaction', `mintActions[${actionIndex}].mintingPolicyScript is not a valid Plutus script: ${errMsg}`, 'mintActionsJson');
+        }
+      }
+
       const bareAssetNameForExpansion =
-        !!scriptParamsJson &&
+        (!!scriptParamsJson || !!actionPolicyId) &&
         typeof action.assetUnit === 'string' &&
         action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
         action.assetUnit.length % 2 === 0 &&
         /^[0-9a-fA-F]*$/.test(action.assetUnit);
       if (typeof action.assetUnit !== 'string' || (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson is set)`, 'mintActionsJson');
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`, 'mintActionsJson');
+      }
+      let assetUnit = action.assetUnit;
+      if (actionPolicyId) {
+        if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+          assetUnit = actionPolicyId + assetUnit;
+        } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
+          return rejectInvalid(req, 'BuildMintTransaction', `mintActions[${actionIndex}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`, 'mintActionsJson');
+        }
       }
       if (typeof action.quantity !== 'string') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
@@ -269,7 +288,13 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
       }
       try {
-        return { ...action, quantity: BigInt(action.quantity) };
+        return {
+          assetUnit,
+          quantity: BigInt(action.quantity),
+          ...((action as { redeemer?: number }).redeemer !== undefined ? { redeemer: (action as { redeemer?: number }).redeemer } : {}),
+          ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
+          ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
+        };
       } catch {
         return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}" — cannot parse as integer`, 'mintActionsJson');
       }
@@ -312,6 +337,12 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
+    // Parse and validate optional extraOutputsJson (FR-2 on mint: each minted
+    // token can sit on its own output with its own inline datum)
+    const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
+    if (extraOutputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', extraOutputsResult.error, 'extraOutputsJson');
+    const extraOutputs = extraOutputsResult.parsed;
+
     // Parse and validate optional forceInputsJson
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
@@ -322,9 +353,7 @@ module.exports = (srv: cds.Service) => {
     if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
     const referenceInputs = refInputsResult.parsed;
 
-    // Parse and validate optional metadataJson (auxiliary_data on the mint tx).
-    // validateTransactionInputs has already JSON-validated the string; re-parse here
-    // and enforce the label-object shape that the builder's metadata mapper expects.
+    // Parse and validate optional metadataJson
     let parsedMetadata: JSONValue | undefined;
     if (metadataJson) {
       try {
@@ -355,6 +384,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
       delete cleanData.referenceInputsJson;
+      delete cleanData.extraOutputsJson;
       if (parsedMetadata) {
         cleanData.metadataJson = parsedMetadata;
       } else {
@@ -400,15 +430,10 @@ module.exports = (srv: cds.Service) => {
         }
       }
 
-      // BUG 9 fix: the builder mints every action under the policy script's hash and
-      // parseAssetUnit silently discards the unit's first 56 hex chars. A bare asset name
-      // of 29-32 bytes is length-indistinguishable from a full unit, so a mismatched
-      // prefix would mint a truncated name. At this point every action holds a full
-      // unit (bare names were expanded above), so all of them must carry the policyId.
       if (effectivePolicyId) {
         const policyId = effectivePolicyId;
         const mismatch = parsedMintActions.find(
-          (action) => !action.assetUnit.toLowerCase().startsWith(policyId)
+          (action) => !action.mintingPolicyScript && !action.assetUnit.toLowerCase().startsWith(policyId)
         );
         if (mismatch) {
           return rejectInvalid(
@@ -428,7 +453,8 @@ module.exports = (srv: cds.Service) => {
         inlineDatum,
         mintRedeemer,
         forceInputs,
-        referenceInputs
+        referenceInputs,
+        extraOutputs
       });
 
       // Post-build: compute CIP-14 fingerprint and scriptAddress
@@ -438,12 +464,15 @@ module.exports = (srv: cds.Service) => {
 
         // CIP-14 asset fingerprint for the first minted asset. The unit is always a
         // full policyId+assetName here: bare names were expanded before the build and
-        // the BUG 9 prefix check rejected everything else (a 56-hex unit is an empty
-        // asset name, not a bare 28-byte name).
+        // the prefix checks rejected everything else (a 56-hex unit is an empty
+        // asset name, not a bare 28-byte name). The policy id comes from the UNIT,
+        // not from buildResult.scriptHash: with a per-action mintingPolicyScript the
+        // first action may mint under a different policy than the top-level script.
         if (parsedMintActions.length > 0) {
           const firstAssetUnit = parsedMintActions[0].assetUnit;
+          const firstPolicyId = firstAssetUnit.slice(0, POLICY_ID_HEX_LENGTH);
           const assetNameHex = firstAssetUnit.slice(POLICY_ID_HEX_LENGTH);
-          buildResult.fingerprint = computeCip14Fingerprint(policyId, assetNameHex);
+          buildResult.fingerprint = computeCip14Fingerprint(firstPolicyId, assetNameHex);
           updates.fingerprint = buildResult.fingerprint;
         }
 
@@ -536,9 +565,8 @@ module.exports = (srv: cds.Service) => {
     if (extraOutputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', extraOutputsResult.error, 'extraOutputsJson');
     const extraOutputs = extraOutputsResult.parsed;
 
-    // FR-1: Optional combined spend+mint parameters. mintActionsJson triggers the combined flow;
-    // mintingPolicyScript is required alongside it. mintRedeemerJson is optional.
-    let parsedMintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
+    // Optional combined spend+mint parameters
+    let parsedMintActions: MintAction[] | undefined;
     let parsedMintRedeemer: JSONValue | undefined;
     if (mintActionsJson) {
       if (!mintingPolicyScript) {
@@ -549,7 +577,7 @@ module.exports = (srv: cds.Service) => {
       if (!Array.isArray(mintJson.parsed)) {
         return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
       }
-      parsedMintActions = mintJson.parsed.map((rawAction: unknown) => {
+      parsedMintActions = mintJson.parsed.map((rawAction: unknown, actionIndex: number) => {
         if (!rawAction || typeof rawAction !== 'object') {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
         }
@@ -560,19 +588,45 @@ module.exports = (srv: cds.Service) => {
         if (typeof action.assetUnit !== 'string') {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must have assetUnit string', 'mintActionsJson');
         }
-        // same rule as BuildMintTransaction: full policyId+assetName unit, OR a bare
-        // assetName hex destined for policyId expansion (only possible when the policy
-        // is the script-params-applied validator — see expansion below)
+        // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson
+        // (same rules as BuildMintTransaction).
+        const policyFields = parseMintActionPolicyFields(action, actionIndex);
+        if (policyFields.error) {
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', policyFields.error, 'mintActionsJson');
+        }
+        let actionPolicyId: string | undefined;
+        if (policyFields.script) {
+          try {
+            actionPolicyId = Script.fromCbor(Buffer.from(policyFields.script, 'hex')).hash.toString();
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            return rejectInvalid(req, 'BuildPlutusSpendTransaction', `mintActions[${actionIndex}].mintingPolicyScript is not a valid Plutus script: ${errMsg}`, 'mintActionsJson');
+          }
+        }
+
         const bareAssetNameForExpansion =
-          !!scriptParamsJson &&
-          mintingPolicyScript === validatorScript &&
+          ((!!scriptParamsJson && mintingPolicyScript === validatorScript) || !!actionPolicyId) &&
           action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
           action.assetUnit.length % 2 === 0 &&
           /^[0-9a-fA-F]*$/.test(action.assetUnit);
         if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson is set and the policy equals the validator)`, 'mintActionsJson');
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when a per-action mintingPolicyScript is set, or scriptParamsJson is set and the policy equals the validator)`, 'mintActionsJson');
         }
-        return { assetUnit: action.assetUnit, quantity: BigInt(action.quantity) };
+        let assetUnit = action.assetUnit;
+        if (actionPolicyId) {
+          if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+            assetUnit = actionPolicyId + assetUnit;
+          } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
+            return rejectInvalid(req, 'BuildPlutusSpendTransaction', `mintActions[${actionIndex}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`, 'mintActionsJson');
+          }
+        }
+        return {
+          assetUnit,
+          quantity: BigInt(action.quantity),
+          ...(typeof action.redeemer === 'number' ? { redeemer: action.redeemer } : {}),
+          ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
+          ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
+        };
       });
       if (mintRedeemerJson) {
         const mrJson = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
@@ -636,8 +690,10 @@ module.exports = (srv: cds.Service) => {
           }
           if (mintPolicyId) {
             const policyId = mintPolicyId;
+            // Actions with their own per-action script were already checked
+            // against THAT script's policy id during parsing.
             const mismatch = parsedMintActions.find(
-              (action) => !action.assetUnit.toLowerCase().startsWith(policyId)
+              (action) => !action.mintingPolicyScript && !action.assetUnit.toLowerCase().startsWith(policyId)
             );
             if (mismatch) {
               return rejectInvalid(
@@ -1051,7 +1107,7 @@ module.exports = (srv: cds.Service) => {
       const paymentKeyHash = bytes.slice(1, 29).toString('hex');
       return { paymentKeyHash };
     } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = err instanceof Error ? err.message : String(err);
       return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${errMsg}`, 'address');
     }
   });
