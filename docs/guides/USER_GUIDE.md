@@ -781,5 +781,5 @@ invisible to existing HTTP clients.
 
 ---
 
-**Version:** v1.9\
+**Version:** v2.0.0-rc.5\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover
