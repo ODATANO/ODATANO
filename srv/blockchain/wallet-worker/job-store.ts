@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { CardanoWalletJobs, CardanoWorkerWallets } from '#cds-models/odatano/cardano';
 
 const { SELECT, INSERT, UPDATE } = cds.ql;
@@ -204,6 +204,21 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 /** The job that currently owns an idempotency key, or null when it is free. */
+/**
+ * The stored claim for a caller's idempotency key, SCOPED TO THE PRINCIPAL that
+ * submits. Two agents (two grants, two users) may both use `order-1` on the
+ * same wallet: each must get its own job, never a "deduplicated" answer that
+ * hands one the other's job id. A key from an owner-less caller (privileged
+ * test context) stays as-is; an owned key becomes a hash of owner + key, which
+ * fits the String(100) column whatever the owner id's length and never collides
+ * with a plain key. The caller-visible `idempotencyKey` column keeps the raw key.
+ */
+export function dedupKeyFor(owner: string | null | undefined, idempotencyKey: string): string {
+  const scope = owner?.trim() ?? '';
+  if (!scope) return idempotencyKey;
+  return `o:${createHash('sha256').update(`${scope} ${idempotencyKey}`).digest('hex').slice(0, 48)}`;
+}
+
 async function readDedupHolder(
   db: CapTransaction,
   walletId: string,
@@ -235,11 +250,13 @@ async function readDedupHolder(
  */
 export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promise<InsertJobResult> {
   const idempotencyKey = args.idempotencyKey ?? null;
+  // The claim is per principal: the same key from another owner is another job.
+  const claim = idempotencyKey ? dedupKeyFor(args.createdBy, idempotencyKey) : null;
 
-  if (idempotencyKey) {
+  if (claim) {
     // Fast path: an owner exists (by construction it is non-terminal). Terminal
     // jobs release their claim, so they never show up here.
-    const holder = await readDedupHolder(db, args.walletId, args.kind, idempotencyKey);
+    const holder = await readDedupHolder(db, args.walletId, args.kind, claim);
     if (holder) {
       if (holder.status !== 'failed' && holder.status !== 'cancelled') {
         return { jobId: holder.ID, status: holder.status, deduplicated: true };
@@ -260,7 +277,7 @@ export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promis
     idempotencyKey,
     // No key → the row's own ID: unique by construction, so keyless jobs never
     // contend for the constraint.
-    dedupKey: idempotencyKey ?? jobId,
+    dedupKey: claim ?? jobId,
     request: args.request,
     priority: args.priority ?? 100,
     notBefore: args.notBefore ?? null,
@@ -275,8 +292,8 @@ export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promis
   } catch (err) {
     // Lost the race: another transaction committed the same key first. Its job is
     // the one and only job for this key — hand it back instead of paying twice.
-    if (!idempotencyKey || !isUniqueViolation(err)) throw err;
-    const winner = await readDedupHolder(db, args.walletId, args.kind, idempotencyKey);
+    if (!claim || !isUniqueViolation(err)) throw err;
+    const winner = await readDedupHolder(db, args.walletId, args.kind, claim);
     if (!winner) throw err; // constraint fired for some other reason — do not mask it
     logger.info(`Concurrent submission for idempotency key "${idempotencyKey}" — returning job ${winner.ID}`);
     return { jobId: winner.ID, status: winner.status, deduplicated: true };
@@ -356,21 +373,35 @@ export async function releaseDedupClaim(db: CapTransaction, jobId: string): Prom
   await db.run(UPDATE.entity(CardanoWalletJobs).set({ dedupKey: jobId }).where({ ID: jobId }));
 }
 
+/**
+ * Move a job from one of `fromStatuses` to `set.status` and report whether THIS
+ * call did it. The guard is the conditional UPDATE; the answer is its affected
+ * row count (every @cap-js adapter returns a number). A second caller that
+ * finds the row already in the target state gets `false`: the transition, the
+ * wallet-stats bump and the terminal event belong to the first one only.
+ * Two trackers confirming the same job used to count it twice.
+ *
+ * Fallback for an adapter that returns something that is not a count: read
+ * the row back, and accept the target state only if the row was NOT already
+ * there before this call (checked with a pre-read in that branch).
+ */
 async function guardedTransition(
   db: CapTransaction,
   jobId: string,
   fromStatuses: WalletJobStatusValue[],
   set: Record<string, unknown>,
 ): Promise<boolean> {
-  await db.run(
+  const affected = await db.run(
     UPDATE.entity(CardanoWalletJobs)
       .set(set)
       .where({ ID: jobId, status: { in: fromStatuses } }),
   );
-  // Read-back verification: CAP adapters differ in affected-row return shapes,
-  // SELECT is consistent everywhere (same pattern as the crawler lease).
+  const n = typeof affected === 'number' ? affected : Number(affected);
+  if (Number.isFinite(n)) return n > 0;
+  // Unknown return shape: the row is in the target state AND that state is not
+  // one it could have been in before (the guard excludes it) means we moved it.
   const row = await getJobById(db, jobId);
-  return row?.status === set.status;
+  return row?.status === set.status && !fromStatuses.includes(set.status as WalletJobStatusValue);
 }
 
 /** pending → building. Increments the attempt counter. Returns false when lost. */

@@ -7,9 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
+### Added (rc.5) — agent grants
+
+- **`CardanoAgentService`** (`/odata/v4/cardano-agent/`): scoped, budgeted bearer
+  tokens for agents. `CreateAgentGrant` /
+  `RevokeAgentGrant` are Admin-only; the token `odat_…` is returned once and
+  stored as SHA-256. `AgentGrants` (Admin; a token sees its own row) and
+  `GetGrantStatus()` (token self-service: allow list, wallet, remaining budget,
+  expiry). New table `CardanoAgentGrants`.
+- **Token principal.** A request with `x-agent-token` runs as `agent:<grantId>`
+  with the single role `agent-grant`, never as the operator, so every
+  `@requires: 'Admin'` surface refuses it. Reads and compute-only actions are
+  always allowed; allow-listed actions (`Build*`, `SetCollateral`,
+  `CreateSigningRequest`, `VerifySignature`, `Submit*`, `CheckSubmissionStatus`,
+  `SubmitWalletJob`, `CancelJob`) cost one budget unit per UTC day; everything
+  else is 403. Wallet jobs are pinned to the grant's wallet (`walletId`
+  injected, `allowedJobKinds` narrowed) and scoped to the grant through
+  `createdBy = agent:<grantId>`.
+- **Transport lane** (`srv/utils/agent-token-auth.ts`), installed as
+  `cds.requires.auth.impl` by `activateAgentGrants()` — called from the plugin
+  (consumer apps) and from `srv/server.ts` (standalone `cds serve`) — when
+  `cds.requires.odatano-core.agentGrants.enabled` / `AGENT_GRANTS_ENABLED=true`
+  is set: admits the token header on the six service paths (unknown 401,
+  expired 410, 20 failed attempts per client per 15 min → 429) and delegates
+  every other request to the CAP strategy configured before
+  (`agentGrants.delegate`, default: the configured `auth.kind`). Off by default:
+  no behaviour change for existing consumers.
+- **Public API** for other packages: `issueAgentGrant()`, `revokeAgentGrantById()`,
+  `registerTransportLane()` (the seams `@odatano/x402` uses to sell grants and
+  add its payment lane), plus `hashAgentToken`, `AGENT_TOKEN_HEADER`,
+  `AGENT_ALLOWLISTABLE_ACTIONS`, `AGENT_ALWAYS_ALLOWED_EVENTS`.
+- Tests: `test/unit/agent-grants.test.ts`, `test/unit/agent-token-auth.test.ts`,
+  `test/integration/agent-grants.test.ts`. Verified live on the hosted preprod
+  instance (Ogmios backend): 36 end-to-end checks — issue, self-service status,
+  free reads, Admin gates, allow list, budget with refund and 429, revoke.
+
+### Fixed (rc.5)
+
+- **Dockerfile compiled into `dist/` but served from `srv/`.** `RUN npm run build`
+  emitted to `dist/` (tsconfig.json), while `cds serve srv` resolves each
+  service's `@impl` as `srv/<name>.js` and the runtime image has no TypeScript
+  loader. The image only ever worked because stale in-place `.js` twins from a
+  previous `build:plugin` sat in the build context; a clean checkout produced a
+  container that crashed with `Cannot find module '/app/srv/…-service'`. Now
+  `RUN npm run build:plugin` (in place, `tsconfig.build.json`).
+- **Polling could confirm a rolled-back transaction (wallet worker).** Once a
+  tx had been found at some height, the confirmation tracker stopped looking
+  it up and confirmed on the tip alone; without the crawler there is no reorg
+  signal, so a tx found at height 100, rolled back, with the tip reaching 102
+  became `confirmed` at depth 3. The polling path now re-reads the tx before
+  confirming any inclusion not seen in the current round: gone → the
+  confirmation point is cleared (same-CBOR re-submit as after a crawler reorg)
+  and the tip is re-learned; moved → re-anchored at the new height and judged
+  there.
+- **Repeated state transitions reported success (wallet worker).** The
+  guarded transition ignored the UPDATE's affected rows and only checked the
+  row's status afterwards, so `markConfirmed` twice returned `true` twice and
+  two trackers bumped `jobsConfirmed` to 2 for one job. Transitions now report
+  whether THIS call moved the row; the confirmation tracker emits the terminal
+  event and the stats bump only from the winner.
+- **Job deduplication crossed principal boundaries (wallet worker).** The
+  idempotency claim was (walletId, kind, key) regardless of who submitted, so
+  a second agent grant using `order-1` on the same wallet received the first
+  agent's job id as a "deduplicated" success and never got its own job. The
+  stored claim (`dedupKey`) is now scoped to the submitting principal
+  (`dedupKeyFor(createdBy, key)`: a hash of owner + key, plain key for an
+  owner-less caller); the caller-visible `idempotencyKey` is unchanged. Rows
+  written before this change keep their plain claim; a retry by an owned
+  principal creates a fresh job for them.
+- **Enabling agent grants discarded a host's own `auth.impl`.** Activation
+  replaced `cds.requires.auth.impl` and the lane then delegated to CAP's
+  built-in strategy for `kind`, so a custom gate (a consumer's own auth
+  middleware) stopped running for every non-token request, on every path. The
+  original impl is now kept as `agentGrantsDelegateImpl` and resolved like CAP
+  resolves it (relative to `cds.root`); the lane only adds the token path in
+  front of it. `agentGrants.delegate` accepts `custom` for that case and
+  defaults to it when a custom impl is configured.
+- **Budgeted actions deadlocked inside a `$batch` changeset.** The hook charged
+  the daily budget on a detached connection while the changeset's open
+  transaction held SQLite's single pooled connection: two `SubmitWalletJob`
+  parts in one atomicity group never returned. The hook now detects an
+  already-begun request transaction (`ready`/`dbc` on `cds.tx(req)`) and
+  charges on it; the changeset's rollback is then the refund. Plain requests
+  keep the detached charge (spend sticks, no lock across backend calls).
+- **A late refund reduced the wrong day's budget.** The refund selected the
+  window by the current date; a request charged at 23:59 and refused after
+  midnight gave its unit to the new day. `consumeDailyBudget` now returns the
+  charged window and the refund names it.
+- **Agent-grant hook wrote `lastUsedAt` fire-and-forget**, racing the request's
+  own transaction: on SQLite in WAL mode the handler's first UPSERT then failed
+  with `database is locked` (`SQLITE_BUSY_SNAPSHOT`), a 500 seen live on the
+  second build within a minute. Every write the hook makes is now awaited before
+  the handler runs; the budget refund on a refused request is deferred off the
+  failing request's tick.
+
 > Shipping first as **v2.0.0-rc.1**, published to npm as `latest` (14-08-2026) —
 > a plain `npm i @odatano/core` installs the RC. `^2.0.0` does not match a
-> pre-release, so pin `@odatano/core@2.0.0-rc.4` in `package.json`; consumers
+> pre-release, so pin `@odatano/core@2.0.0-rc.5` in `package.json`; consumers
 > that need to stay on the 1.x line pin `@odatano/core@^1.11.0`.
 >
 > **v2.0.0-rc.2** (15-08-2026): keyed reads honour `$expand`/`$select`,
@@ -20,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `mintingPolicyScript` + `redeemerJson` in `mintActionsJson`) and
 > `extraOutputsJson` on `BuildMintTransaction`. Additive; no schema change,
 > no `cds deploy` needed when coming from rc.1-rc.3.
+> **v2.0.0-rc.5** (07-09-2026): agent grants (`CardanoAgentService`, scoped
+> bearer tokens for agents, off by default) and wallet-worker fixes. Adds the
+> `CardanoAgentGrants` table: run `cds deploy` once when coming from rc.1-rc.4.
 
 ### ⚠ Breaking
 
@@ -27,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node.js >= 22.5** — required by `@cap-js/sqlite` v3 (`node:sqlite` floor).
 - **Numeric OData fields serialize as strings** — CAP 10 renders `Decimal`, `Int64` and `$count` values as JSON strings. API clients that parse these fields as JSON numbers must be adapted.
 - **XSUAA role separation** — the `$XSAPPNAME.Admin` scope (crawler/worker control) is no longer part of the `CardanoUser` role template or the app authorities; assign the new `CardanoAdmin` template explicitly. Existing `CardanoUser` role collections lose crawler/worker control on redeploy (intentional least-privilege fix).
-- **Database redeploy required** — 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`) plus a `dedupKey` column and its unique constraint on the jobs table. Consumers upgrading from 1.x must run `cds deploy`; without it the new services answer `no such table` and `getStatus`/`GetWorkerStatus` return 500. (Verified against a real 1.10 consumer project.)
+- **Database redeploy required** — 2.0 adds five tables (`CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants` — the last one since rc.5) plus a `dedupKey` column and its unique constraint on the jobs table. Consumers upgrading from 1.x must run `cds deploy`; without it the new services answer `no such table` and `getStatus`/`GetWorkerStatus` return 500. (Verified against a real 1.10 consumer project.)
 
 ### Added
 
@@ -48,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1923 tests across 59 files (44 unit + 15 integration).
+- **Test suite migrated from Jest to Vitest 4** (unit + integration projects, coverage via `@vitest/coverage-v8`). 1983 tests across 62 files (46 unit + 16 integration).
 - **Integration suites for both v2.0 subsystems** — `test/integration/wallet-worker.test.ts` (real CAP + real SQLite, backends stubbed: guards the deployed `UNIQUE(walletId, kind, dedupKey)`, real transactions and the OData layer; needs no network or funds) and `test/integration/crawler.test.ts` (real Ogmios: contiguous ingest, recovery from a fork staged while the crawler was down, `getStatus`; self-skips when Ogmios is unreachable or behind the tip, so it runs in both CI lanes).
 - **HarmonicLabs stack bumped**: `buildooor` 0.2.9, `cardano-ledger-ts` ^0.5.6, `cardano-costmodels-ts` ~1.6.1 (Plutus V3 cost model at `N_COST_MODEL_PLUTUS_V3` = 350, post-Plomin²).
 - **Vendored patches removed** — upstream releases contain both fixes: `keep-relevant.ts` (buildooor keepRelevant) and `auxiliary-data-patch.ts` (ledger-ts Conway tag-259 AuxiliaryData decode).

@@ -294,4 +294,85 @@ describe('ConfirmationTracker: polling path', () => {
     expect(onFinal).not.toHaveBeenCalled();
     expect(tracker.size()).toBe(1);
   });
+
+  it('re-validates an inclusion found in an earlier round and does NOT confirm a rolled-back tx', async () => {
+    // Crawler off: no reorg event will ever come. Round 1 finds the tx at 100
+    // (tip 100, depth 3 not reached). Then the tx is gone (rolled back) and the
+    // tip advances to 102 — depth alone would say "confirmed".
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValueOnce({ height: 100, hash: 't1', slot: 900 });
+    client.getTransaction.mockResolvedValueOnce({ hash: TX_HASH, slot: 500, blockHeight: 100 });
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 3, resubmitOnRollback: true });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.confirmedHeight).toBe(100);
+
+    client.getLatestBlock.mockResolvedValueOnce({ height: 102, hash: 't2', slot: 950 });
+    client.getTransaction.mockRejectedValueOnce(new NotFoundError('Transaction', 'test'));
+    await tracker.pollOnce();
+
+    const job = (await getJobById(db, jobId))!;
+    expect(job.status).toBe('submitted');
+    expect(job.confirmedHeight).toBeNull();
+    expect(onFinal).not.toHaveBeenCalled();
+    // Same signed CBOR re-submitted, never a rebuild.
+    expect(client.submitTransaction).toHaveBeenCalledWith('cafe01');
+    expect(tracker.size()).toBe(1);
+
+    // Re-included later at a new height: confirmed once THAT height is deep enough.
+    client.getLatestBlock.mockResolvedValueOnce({ height: 103, hash: 't3', slot: 960 });
+    client.getTransaction.mockResolvedValueOnce({ hash: TX_HASH, slot: 955, blockHeight: 103 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.status).toBe('submitted'); // 103-103+1 = 1 < 3
+
+    client.getLatestBlock.mockResolvedValueOnce({ height: 105, hash: 't5', slot: 980 });
+    client.getTransaction.mockResolvedValueOnce({ hash: TX_HASH, slot: 955, blockHeight: 103 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.status).toBe('confirmed');
+    expect(onFinal).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirms a tx that moved to another block at the new height, not the old one', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValueOnce({ height: 100, hash: 't1', slot: 900 });
+    client.getTransaction.mockResolvedValueOnce({ hash: TX_HASH, slot: 500, blockHeight: 100 });
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: null });
+    (tracker as unknown as { running: boolean }).running = true;
+    await tracker.pollOnce();
+
+    // Tip 103 would confirm height 100; the re-check finds the tx at 102 now.
+    client.getLatestBlock.mockResolvedValueOnce({ height: 103, hash: 't3', slot: 960 });
+    client.getTransaction.mockResolvedValueOnce({ hash: TX_HASH, slot: 940, blockHeight: 102 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.confirmedHeight).toBe(102);
+    expect((await getJobById(db, jobId))!.status).toBe('submitted');
+    expect(onFinal).not.toHaveBeenCalled();
+  });
+
+  it('emits the terminal event only from the tracker that performed the transition', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+    client.getTransaction.mockResolvedValue({ hash: TX_HASH, slot: 500, blockHeight: 100 });
+    const first = makeTracker(client, { confirmationDepth: 3 });
+    const second = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    for (const { tracker } of [first, second]) {
+      tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: null });
+      (tracker as unknown as { running: boolean }).running = true;
+    }
+
+    await first.tracker.pollOnce();
+    await second.tracker.pollOnce();
+
+    expect(first.onFinal).toHaveBeenCalledTimes(1);
+    expect(second.onFinal).not.toHaveBeenCalled();
+    expect(second.tracker.size()).toBe(0); // dropped, the job is done either way
+    const wallet = tables.get('odatano.cardano.CardanoWorkerWallets')!.find(w => w.walletId === 'w1')!;
+    expect(Number(wallet.jobsConfirmed)).toBe(1);
+  });
 });

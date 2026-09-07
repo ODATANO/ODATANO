@@ -20,16 +20,30 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
   (cds.env.requires as { kinds?: Record<string, unknown> }).kinds = {};
 }
 
+/** The schema and the six CDS services this package ships, package-qualified. */
+const PLUGIN_MODEL = [
+  '@odatano/core/db/schema',
+  '@odatano/core/srv/cardano-service',
+  '@odatano/core/srv/cardano-tx-service',
+  '@odatano/core/srv/cardano-sign-service',
+  '@odatano/core/srv/cardano-indexer-service',
+  '@odatano/core/srv/cardano-worker-service',
+  '@odatano/core/srv/cardano-agent-service'
+];
+
+/** Relative `@impl` values used in the CDS files (rewritten in plugin mode, see below). */
+const IMPL_PATHS = [
+  'srv/cardano-service',
+  'srv/cardano-tx-service',
+  'srv/cardano-sign-service',
+  'srv/cardano-indexer-service',
+  'srv/cardano-worker-service',
+  'srv/cardano-agent-service'
+];
+
 (cds.env.requires as { kinds?: Record<string, unknown> }).kinds!['odatano-core'] = {
   impl: '@odatano/core',
-  model: [
-    '@odatano/core/db/schema',
-    '@odatano/core/srv/cardano-service',
-    '@odatano/core/srv/cardano-tx-service',
-    '@odatano/core/srv/cardano-sign-service',
-    '@odatano/core/srv/cardano-indexer-service',
-    '@odatano/core/srv/cardano-worker-service'
-  ]
+  model: [...PLUGIN_MODEL]
 };
 
 // CRITICAL: Also set model directly on the requires entry.
@@ -37,17 +51,20 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
 // so the model array on the kind is never merged. Set it directly.
 const req = (cds.env.requires as Record<string, { model?: string[] } | undefined>)['odatano-core'];
 if (req) {
-  req.model = [
-    '@odatano/core/db/schema',
-    '@odatano/core/srv/cardano-service',
-    '@odatano/core/srv/cardano-tx-service',
-    '@odatano/core/srv/cardano-sign-service',
-    '@odatano/core/srv/cardano-indexer-service',
-    '@odatano/core/srv/cardano-worker-service'
-  ];
+  req.model = [...PLUGIN_MODEL];
 }
 
 logger.debug('Plugin registered');
+
+/**
+ * Agent grants (AGENT_GRANTS_DESIGN.md). Off by default; switched on by
+ * cds.requires.odatano-core.agentGrants.enabled / AGENT_GRANTS_ENABLED=true.
+ * Has to run at plugin load, before CAP builds its middlewares (the auth impl
+ * is swapped here). srv/server.ts makes the same call for standalone mode, where
+ * this file is never loaded; the call is idempotent and never throws.
+ */
+(require('../srv/utils/agent-grants-config') as typeof import('../srv/utils/agent-grants-config'))
+  .activateAgentGrants();
 
 /**
  * Rewrite @impl paths for plugin mode.
@@ -60,16 +77,9 @@ cds.on('loaded', (model) => {
   if (path.resolve(cds.root) === pluginRoot) return;
   const defs = (model as { definitions?: Record<string, { '@impl'?: string }> }).definitions ?? {};
   for (const def of Object.values(defs)) {
-    if (def['@impl'] === 'srv/cardano-service') {
-      def['@impl'] = '@odatano/core/srv/cardano-service';
-    } else if (def['@impl'] === 'srv/cardano-tx-service') {
-      def['@impl'] = '@odatano/core/srv/cardano-tx-service';
-    } else if (def['@impl'] === 'srv/cardano-sign-service') {
-      def['@impl'] = '@odatano/core/srv/cardano-sign-service';
-    } else if (def['@impl'] === 'srv/cardano-indexer-service') {
-      def['@impl'] = '@odatano/core/srv/cardano-indexer-service';
-    } else if (def['@impl'] === 'srv/cardano-worker-service') {
-      def['@impl'] = '@odatano/core/srv/cardano-worker-service';
+    const impl = def['@impl'];
+    if (impl && IMPL_PATHS.includes(impl)) {
+      def['@impl'] = `@odatano/core/${impl}`;
     }
   }
 });

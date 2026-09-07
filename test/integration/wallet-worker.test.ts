@@ -140,13 +140,15 @@ describe('wallet worker (integration: real CAP + real SQLite)', () => {
     expect(first.data.deduplicated).to.equal(false);
 
     // Bypass the read fast-path: insert a second row with the same claim directly.
-    // The UNIQUE(walletId, kind, dedupKey) constraint must reject it.
+    // The UNIQUE(walletId, kind, dedupKey) constraint must reject it. The claim
+    // is scoped to the submitting principal (alice), see dedupKeyFor.
+    const { dedupKeyFor } = require('../../srv/blockchain/wallet-worker/job-store') as typeof import('../../srv/blockchain/wallet-worker/job-store');
     let rejected = false;
     try {
       await cds.tx((tx) => tx.run(
         cds.ql.INSERT.into('odatano.cardano.CardanoWalletJobs').entries({
           ID: cds.utils.uuid(), walletId: WALLET, kind: 'simpleAda', status: 'pending',
-          idempotencyKey: key, dedupKey: key, request: REQUEST, attempt: 0, maxAttempts: 3,
+          idempotencyKey: key, dedupKey: dedupKeyFor('alice', key), request: REQUEST, attempt: 0, maxAttempts: 3,
         }),
       ));
     } catch {
@@ -156,6 +158,27 @@ describe('wallet worker (integration: real CAP + real SQLite)', () => {
 
     const rows = await cds.tx((tx) => tx.run(SELECT.from('odatano.cardano.CardanoWalletJobs')));
     expect(rows).to.have.length(1);
+  });
+
+  it('scopes the idempotency key to the caller: alice and bob get their own jobs for the same key', async () => {
+    await startWorker();
+    const key = 'order-1';
+    const alice = await POST('/odata/v4/cardano-worker/SubmitWalletJob',
+      { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: key }, asAlice);
+    const bob = await POST('/odata/v4/cardano-worker/SubmitWalletJob',
+      { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: key }, asBob);
+
+    // bob must never be handed alice's job as a "deduplicated" success.
+    expect(bob.data.deduplicated).to.equal(false);
+    expect(bob.data.jobId).to.not.equal(alice.data.jobId);
+    const rows = await cds.tx((tx) => tx.run(SELECT.from('odatano.cardano.CardanoWalletJobs')));
+    expect(rows).to.have.length(2);
+    expect(rows.map((r: { idempotencyKey: string }) => r.idempotencyKey)).to.deep.equal([key, key]);
+
+    // alice retrying is still deduplicated onto her own job.
+    const again = await POST('/odata/v4/cardano-worker/SubmitWalletJob',
+      { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: key }, asAlice);
+    expect(again.data).to.include({ jobId: alice.data.jobId, deduplicated: true });
   });
 
   it('returns the same job for a repeated idempotency key', async () => {

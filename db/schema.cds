@@ -1631,3 +1631,75 @@ entity CardanoWalletJobs {
         @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled)'
         finishedAt     : Timestamp;
 }
+
+/**
+ * Agent grants (v2.0): scoped bearer capabilities an Admin hands to an agent
+ * instead of a full user. The token is a capability, not an identity — it is
+ * stored as SHA-256 only, and a request carrying it runs as the principal
+ * `agent:<ID>` with the role `agent-grant`, never as the operator. Enforcement
+ * (allow list, wallet pinning, daily budget) lives in srv/utils/agent-grants.ts;
+ * the transport lane that admits `x-agent-token` in srv/utils/agent-token-auth.ts.
+ * Admin-only table: creation and revocation happen through CardanoAgentService
+ * actions, a token request may read its own row only.
+ */
+@title      : 'Agent Grants'
+@description: 'Scoped, budgeted bearer capabilities for agents (token stored as SHA-256 only)'
+entity CardanoAgentGrants {
+
+        @title      : 'Grant Id (Key)'
+    key ID              : UUID;
+
+        @title      : 'Operator'
+        @description: 'User id of the Admin that issued the grant (audit; the token never runs as this user)'
+        userId          : String(200) not null;
+
+        @title      : 'Agent Label'
+        @description: 'Human-readable agent name, informational'
+        agentLabel      : String(100);
+
+        @title      : 'Token Hash'
+        @description: 'SHA-256 of the bearer token; the token itself is shown once and never stored'
+        tokenHash       : String(64) not null;
+
+        @title      : 'Allowed Actions'
+        @description: 'JSON array of allow-listed action names (builds, signing-request lifecycle, submits, wallet jobs)'
+        allowedActions  : LargeString not null;
+
+        @title      : 'Wallet Id'
+        @description: 'Worker wallet this grant is pinned to; required for SubmitWalletJob / CancelJob, injected into those requests'
+        walletId        : String(50);
+
+        @title      : 'Allowed Job Kinds'
+        @description: 'JSON array of WalletJobKind values the grant may queue; null = every kind'
+        allowedJobKinds : LargeString;
+
+        @title      : 'Max Jobs Per Day'
+        @description: 'Daily budget of allow-listed action calls (UTC day); null = unlimited'
+        maxJobsPerDay   : Integer;
+
+        @title      : 'Jobs Used Today'
+        @description: 'Budget consumed inside budgetWindow'
+        jobsUsedToday   : Integer default 0;
+
+        @title      : 'Budget Window'
+        @description: 'UTC day YYYY-MM-DD the counter belongs to'
+        budgetWindow    : String(10);
+
+        @title      : 'Valid Until'
+        @description: 'Expiry; null = no expiry'
+        validUntil      : Timestamp;
+
+        @title      : 'Is Active'
+        @description: 'False once revoked; a revoked token is an unknown token'
+        isActive        : Boolean default true;
+
+        @title      : 'Revoked At'
+        revokedAt       : Timestamp;
+
+        @title      : 'Created At'
+        createdAt       : Timestamp;
+
+        @title      : 'Last Used At'
+        @description: 'Last request admitted under this token (updated at most once a minute)'
+        lastUsedAt      : Timestamp;
+}

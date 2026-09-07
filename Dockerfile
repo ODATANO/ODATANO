@@ -27,8 +27,13 @@ COPY . .
 # (sqlite is node:sqlite, blake2b is wasm, esbuild is dev-only).
 RUN npm rebuild pkcs11js || echo "pkcs11js native build skipped (optional; HSM unavailable in this image)"
 
-# Generate CDS types and compile TypeScript
-RUN npm run build
+# Generate CDS types and compile TypeScript IN PLACE (tsconfig.build.json, outDir "."):
+# `cds serve srv` resolves each service's @impl as srv/<name>.js next to its .cds,
+# and the runtime image has no TypeScript loader (devDependencies are pruned below).
+# `npm run build` would emit into dist/, which nothing serves; the image only
+# worked before because stale in-place .js twins happened to be in the build
+# context (2026-09-05).
+RUN npm run build:plugin
 
 # Deploy database
 RUN npm run db:deploy

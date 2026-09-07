@@ -48,6 +48,7 @@ import {
   markSubmitting,
   markSubmitted,
   markConfirmed,
+  dedupKeyFor,
   markFailed,
   markCancelled,
   requeueForRetry,
@@ -250,6 +251,50 @@ describe('job-store: insertJob + idempotency', () => {
     // One job, one payment — the loser adopts the winner instead of inserting.
     expect(result).toEqual({ jobId: 'winner-job', status: 'pending', deduplicated: true });
     expect(db.tables.get(JOBS)).toHaveLength(1);
+  });
+
+  it('scopes the idempotency key to the submitting principal: two owners, same key, two jobs', async () => {
+    const db = makeStore();
+    const agentA = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'order-1', createdBy: 'agent:aaaa' });
+    const agentB = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'order-1', createdBy: 'agent:bbbb' });
+
+    // Neither is a dedup of the other; each owns a job.
+    expect(agentB.deduplicated).toBe(false);
+    expect(agentB.jobId).not.toBe(agentA.jobId);
+    expect(db.tables.get(JOBS)).toHaveLength(2);
+
+    // The same owner retrying IS deduplicated, and the claims differ per owner
+    // while the caller-visible key is kept verbatim for both.
+    const retry = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}', idempotencyKey: 'order-1', createdBy: 'agent:aaaa' });
+    expect(retry).toEqual({ jobId: agentA.jobId, status: 'pending', deduplicated: true });
+    const rows = db.tables.get(JOBS)!;
+    expect(rows.map(r => r.idempotencyKey)).toEqual(['order-1', 'order-1']);
+    expect(rows[0]!.dedupKey).not.toBe(rows[1]!.dedupKey);
+    expect(rows[0]!.dedupKey).toBe(dedupKeyFor('agent:aaaa', 'order-1'));
+    expect(String(rows[0]!.dedupKey).length).toBeLessThanOrEqual(100);
+  });
+
+  it('dedupKeyFor keeps an owner-less key verbatim and hashes an owned one deterministically', () => {
+    expect(dedupKeyFor(null, 'k1')).toBe('k1');
+    expect(dedupKeyFor('', 'k1')).toBe('k1');
+    expect(dedupKeyFor('alice', 'k1')).toBe(dedupKeyFor('alice', 'k1'));
+    expect(dedupKeyFor('alice', 'k1')).not.toBe(dedupKeyFor('bob', 'k1'));
+    expect(dedupKeyFor('alice', 'k1')).not.toBe('k1');
+  });
+
+  it('reports a transition as done by THIS call only: the second markConfirmed is false', async () => {
+    const db = makeStore();
+    const { jobId } = await insertJob(db as never, { walletId: 'w1', kind: 'mint', request: '{}' });
+    await markBuilding(db as never, jobId, 1);
+    await markSubmitting(db as never, jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'cafe', fee: '1' });
+    await markSubmitted(db as never, jobId, 'a'.repeat(64));
+
+    expect(await markConfirmed(db as never, jobId)).toBe(true);
+    // Already confirmed: the row is in the target state, but this call moved nothing.
+    expect(await markConfirmed(db as never, jobId)).toBe(false);
+    // Same for a competing terminal transition.
+    expect(await markFailed(db as never, jobId, 'X', new Error('late'))).toBe(false);
+    expect(db.tables.get(JOBS)![0]!.status).toBe('confirmed');
   });
 
   it('propagates a non-uniqueness insert failure instead of reporting a dedup', async () => {

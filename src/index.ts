@@ -25,6 +25,25 @@ export {
 
 // Re-export HSM signer for programmatic access
 export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
+
+// Agent grants (v2.0, AGENT_GRANTS_DESIGN.md): the programmatic seams other
+// packages build on — @odatano/x402 sells grants through issueAgentGrant and
+// adds its payment lane through registerTransportLane.
+export {
+  issueAgentGrant,
+  revokeAgentGrantById,
+  hashAgentToken,
+  AGENT_TOKEN_HEADER,
+  AGENT_TOKEN_PREFIX,
+  AGENT_ROLE,
+  AGENT_ALLOWLISTABLE_ACTIONS,
+  AGENT_ALWAYS_ALLOWED_EVENTS,
+} from '../srv/utils/agent-grants';
+export type { IssueAgentGrantInput, IssuedAgentGrant, AgentGrantStatus } from '../srv/utils/agent-grants';
+export { registerTransportLane } from '../srv/utils/agent-token-auth';
+export type { TransportLane, LaneOutcome } from '../srv/utils/agent-token-auth';
+export { loadAgentGrantsConfig } from '../srv/utils/agent-grants-config';
+export type { AgentGrantsConfig } from '../srv/utils/agent-grants-config';
 export type { HsmConfig, HsmSignResult } from '../srv/utils/types';
 
 // Re-export pure CBOR utilities (no CAP round-trip needed)

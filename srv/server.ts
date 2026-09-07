@@ -11,6 +11,7 @@ import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 import type { WorkerWalletConfig } from './blockchain/wallet-worker/signers';
+import { activateAgentGrants } from './utils/agent-grants-config';
 
 import { env } from 'process';
 
@@ -109,6 +110,16 @@ async function initializeAppContext(
     cardanoTxBuilder,
   };
 }
+
+/** Agent-grant feature switch (AGENT_GRANTS_DESIGN.md); lives in its own module so src/plugin.ts can read it at load. */
+export { loadAgentGrantsConfig, activateAgentGrants } from './utils/agent-grants-config';
+
+// Standalone mode (`cds serve` / `cds watch` in this project): CAP loads
+// cds-plugin.js only from dependencies, so src/plugin.ts never runs here and
+// agent grants would stay off regardless of AGENT_GRANTS_ENABLED. bin/serve.js
+// imports this file before cds.server() instantiates the middlewares, so the
+// auth impl can still be swapped. Idempotent: a no-op after the plugin's call.
+activateAgentGrants();
 
 /**
  * Get the application context (must be called after bootstrap)

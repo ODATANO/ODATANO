@@ -98,6 +98,7 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 | CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
 | CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (v2.0, off by default) |
 | CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (v2.0, off by default) |
+| CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants: scoped bearer tokens for agents (v2.0, off by default) |
 
 Both v2.0 services also publish **CAP events**, so a consumer can subscribe instead of polling —
 in-process, no broker required:
@@ -106,6 +107,36 @@ in-process, no broker required:
 (await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
 (await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
 ```
+
+## Agent grants (v2.0, off by default)
+
+Hand an agent a **scoped, budgeted token** instead of a user. Design and rationale:
+[AGENT_GRANTS_DESIGN.md](AGENT_GRANTS_DESIGN.md).
+
+```bash
+AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.enabled
+AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating non-token requests (default: configured kind)
+```
+
+1. An **Admin** issues a grant (`POST /odata/v4/cardano-agent/CreateAgentGrant`): an allow list of
+   actions, optionally a worker `walletId` (required for `SubmitWalletJob`/`CancelJob`), allowed job
+   kinds, a daily budget and an expiry. The response carries the token `odat_…` **once**; the
+   server stores only its SHA-256.
+2. The agent sends `x-agent-token: odat_…` on any of the six service paths. It runs as the principal
+   `agent:<grantId>` with the single role `agent-grant`, never as the operator: every
+   `@requires: 'Admin'` surface (pause/resume, HSM signing, grant administration) refuses it by
+   construction. Reads and compute-only actions are always allowed; allow-listed actions each cost
+   one budget unit per UTC day (a build is the service an agent buys); everything else is 403.
+   Wallet jobs are pinned to the grant's wallet and visible only to the grant that queued them.
+3. `GET /odata/v4/cardano-agent/GetGrantStatus()` tells the agent what it may do and how much budget
+   is left; `RevokeAgentGrant` turns the token into an unknown token immediately.
+
+Grantable: `Build*`, `SetCollateral`, `CreateSigningRequest`, `VerifySignature`, `Submit*`,
+`CheckSubmissionStatus`, `SubmitWalletJob`, `CancelJob`. Never: `SignWithHsm*`, `Pause*`/`Resume*`,
+`pauseCrawler`/`resumeCrawler`, grant administration.
+
+Programmatic seams for other packages (`@odatano/x402` sells grants against a 402 payment):
+`issueAgentGrant()`, `revokeAgentGrantById()`, `registerTransportLane()` from `@odatano/core`.
 
 ## Requirements
 
