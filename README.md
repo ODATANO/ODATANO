@@ -110,8 +110,7 @@ in-process, no broker required:
 
 ## Agent grants (v2.0, off by default)
 
-Hand an agent a **scoped, budgeted token** instead of a user. Design and rationale:
-[AGENT_GRANTS_DESIGN.md](AGENT_GRANTS_DESIGN.md).
+Hand an agent a **scoped, budgeted token** instead of a user.
 
 ```bash
 AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.enabled
