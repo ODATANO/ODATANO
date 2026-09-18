@@ -101,7 +101,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/odata/v4/cardano-odata/$$metadata"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004/odata/v4/cardano-indexer/getLiveness()"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -4,8 +4,10 @@ import {
   createInteractionContext,
   createTransactionSubmissionClient,
   createLedgerStateQueryClient,
-  createChainSynchronizationClient
+  createChainSynchronizationClient,
+  Method
 } from '@cardano-ogmios/client';
+import { bech32 } from 'bech32';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
@@ -31,7 +33,7 @@ import {
 
 import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint } from './cardano-backend';
 
-import { EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
+import { BECH32_MAX_LENGTH, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
@@ -109,6 +111,47 @@ function ogmiosValueToLovelaceString(value: OgmiosRewardAccountSummary['rewards'
   return lovelace === undefined ? '0' : String(lovelace);
 }
 
+/**
+ * Ogmios v6 `queryLedgerState/delegateRepresentatives` summary (local wire type —
+ * `@cardano-ogmios/schema` is only a transitive dependency, same trade-off as the
+ * other Ogmios* interfaces in this file). Only the `registered` variant carries an
+ * id; the `noConfidence` / `abstain` pseudo-DReps have none and are never returned
+ * for a credential-filtered query.
+ */
+interface OgmiosDrepSummary {
+  type: 'registered' | 'noConfidence' | 'abstain';
+  id?: string;
+  from?: 'verificationKey' | 'script';
+  mandate?: { epoch?: number };
+  stake?: { ada?: { lovelace?: number | bigint } };
+  deposit?: { ada?: { lovelace?: number | bigint } };
+}
+
+/** Minimal JSON-RPC envelope seen by the raw `Method()` handler. */
+interface OgmiosRpcEnvelope<T> {
+  method?: string;
+  result?: T;
+  error?: { code?: number; message?: string };
+}
+
+/**
+ * Decode a CIP-129 DRep ID (`drep1…`, 29 bytes) into its credential hash and
+ * type. Header byte: high nibble 0x2 = DRep, low nibble 0x2 = key hash /
+ * 0x3 = script hash. The validators already enforce HRP + length before the
+ * request reaches a backend, so this only has to split the payload.
+ */
+export function decodeDrepId(drepId: string): { hashHex: string; isScript: boolean } {
+  const decoded = bech32.decode(drepId, BECH32_MAX_LENGTH);
+  const bytes = Buffer.from(bech32.fromWords(decoded.words));
+  if (decoded.prefix !== 'drep' || bytes.length !== 29) {
+    throw new NotFoundError('Drep', 'ogmios');
+  }
+  return {
+    hashHex: bytes.subarray(1).toString('hex'),
+    isScript: (bytes[0] & 0x0f) === 0x03,
+  };
+}
+
 /** Resolve Ogmios ledger tip which may be 'origin' (genesis block) or a point */
 export function resolveOgmiosTip(tip: 'origin' | { slot: number; id: string }): { slot: number; hash: string } {
   return tip === 'origin' ? { slot: 0, hash: '' } : { slot: tip.slot, hash: tip.id };
@@ -170,7 +213,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
     'getTransaction',
     'getTransactionMetadata',
     'getAddressTransactions',
-    'getDrep',
+    // getDrep is NOT listed: served from the live ledger state via
+    // queryLedgerState/delegateRepresentatives (Ogmios ≥ 6.4).
     'getAssetInfo',
     'getAddress',
     'getNetworkInformation',
@@ -406,13 +450,70 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
   }
 
   /**
-   * Get specific Drep Data (not supported for Ogmios)
-   * @param _drepId drep id
+   * Get DRep data from the live ledger state (`queryLedgerState/delegateRepresentatives`).
+   *
+   * The client package (6.14) ships the schema types but no wrapper for this query,
+   * so it goes through the exported `Method()` primitive on our interaction context —
+   * the same building block the client uses for `stakePools` & co.
+   *
+   * Semantics vs. Blockfrost/Koios: Ogmios only lists REGISTERED DReps, so a retired
+   * or unknown DRep is a NotFoundError here (never `retired: true`), and there is no
+   * last-activity epoch — `expired` is derived from the mandate epoch instead.
+   * Routing keeps `getDrep` historical-preferred; this is the Ogmios-only fallback.
+   *
+   * @param drepId CIP-129 bech32 DRep ID (`drep1…`)
    * @returns {Promise<DrepData>} drep data
    */
-  async getDrep(_drepId: string): Promise<DrepData> {
+  async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
-      throw new ProviderUnavailableError('DRep queries not supported by Ogmios backend', this.name);
+      await this.ensureConnected();
+      if (!this.context) {
+        throw new ProviderUnavailableError('Ogmios interaction context not available', this.name);
+      }
+
+      const { hashHex, isScript } = decodeDrepId(drepId);
+
+      const [summaries, currentEpoch] = await Promise.all([
+        Method<
+          { method: 'queryLedgerState/delegateRepresentatives'; params: { keys?: string[]; scripts?: string[] } },
+          OgmiosRpcEnvelope<OgmiosDrepSummary[]> & { method: string },
+          OgmiosDrepSummary[]
+        >(
+          {
+            method: 'queryLedgerState/delegateRepresentatives',
+            params: isScript ? { scripts: [hashHex] } : { keys: [hashHex] },
+          },
+          {
+            handler: (response, resolve, reject) => {
+              if (response.error) {
+                reject(new Error(response.error.message ?? `Ogmios error ${response.error.code ?? ''}`.trim()));
+              } else {
+                resolve(Array.isArray(response.result) ? response.result : []);
+              }
+            },
+          },
+          this.context
+        ),
+        this.stateQueryClient!.epoch(),
+      ]);
+
+      // Filter by id: the query is already credential-scoped, but never trust a
+      // broader answer (abstain/noConfidence rows carry no id and are dropped here).
+      const drep = summaries.find((s) => s.type === 'registered' && s.id?.toLowerCase() === hashHex);
+      if (!drep) throw new NotFoundError('Drep', this.name);
+
+      const mandateEpoch = drep.mandate?.epoch;
+      return {
+        drepId,
+        hex: hashHex,
+        amount: ogmiosValueToLovelaceString(drep.stake),
+        hasScript: isScript || drep.from === 'script',
+        // Ogmios reports the mandate (expiry) epoch, not the last activity — keep 0,
+        // matching what the Koios mapper does since its schema change.
+        lastActiveEpoch: 0,
+        expired: typeof mandateEpoch === 'number' && mandateEpoch < Number(currentEpoch),
+        retired: false,
+      };
     }, this.name);
   }
 

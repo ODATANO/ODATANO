@@ -7,20 +7,50 @@ import path from 'path';
  * src/plugin.ts reads it at plugin load, before any blockchain module may be
  * required.
  *
- *   cds:  "odatano-core": { "agentGrants": { "enabled": true, "delegate": "mocked" } }
+ *   cds:  "odatano-core": { "agentGrants": { "enabled": true, "delegate": "mocked", "adminRateLimit": 10 } }
  *   env:  AGENT_GRANTS_ENABLED=true  AGENT_GRANTS_DELEGATE=mocked|basic|jwt|xsuaa|ias|dummy
+ *         AGENT_GRANT_ADMIN_RATE_LIMIT=10
  *
  * `delegate` names the CAP auth strategy that keeps authenticating every
  * request WITHOUT an `x-agent-token` header (the transport lane only adds the
  * token path next to it). Default: the configured `cds.requires.auth.kind`.
+ *
+ * `adminRateLimit` is the number of grant-administration calls
+ * (CreateAgentGrant, UpdateAgentGrant, RotateAgentGrantToken, RevokeAgentGrant)
+ * one principal may make per hour; NIGHTGATE's `NIGHTGATE_GRANT_ADMIN_RATE_LIMIT`.
+ * A gateway that mints for everybody (ODATANO ACCESS) raises it.
  */
 export interface AgentGrantsConfig {
   enabled: boolean;
   /** CAP auth kind the transport middleware delegates to for non-token requests. */
   delegate: string;
+  /** Grant administration calls per principal per hour (integer >= 1). */
+  adminRateLimit: number;
 }
 
 export const AGENT_GRANTS_DELEGATES: readonly string[] = ['mocked', 'basic', 'jwt', 'xsuaa', 'ias', 'dummy'];
+
+export const AGENT_GRANT_ADMIN_RATE_LIMIT_DEFAULT = 10;
+
+/**
+ * The admin rate limit: `agentGrants.adminRateLimit`, then
+ * `AGENT_GRANT_ADMIN_RATE_LIMIT`, default 10. An unusable value (not an
+ * integer, below 1) is logged once and falls back to the default — a typo in
+ * this knob must not switch the whole feature off, unlike a wrong delegate.
+ */
+export function loadGrantAdminRateLimit(env: Record<string, string | undefined> = process.env): number {
+  const cfg = envRecord();
+  const raw = cfg.adminRateLimit !== undefined ? cfg.adminRateLimit : env.AGENT_GRANT_ADMIN_RATE_LIMIT;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return AGENT_GRANT_ADMIN_RATE_LIMIT_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    cds.log('ODATANO').warn(
+      `AGENT_GRANT_ADMIN_RATE_LIMIT "${String(raw)}" is not an integer >= 1; using ${AGENT_GRANT_ADMIN_RATE_LIMIT_DEFAULT}`
+    );
+    return AGENT_GRANT_ADMIN_RATE_LIMIT_DEFAULT;
+  }
+  return n;
+}
 
 function envRecord(): Record<string, unknown> {
   const requires = (cds.env?.requires ?? {}) as Record<string, unknown>;
@@ -70,7 +100,7 @@ export function loadAgentGrantsConfig(env: Record<string, string | undefined> = 
   if (enabled && delegate === 'custom' && !customAuthImpl(auth)) {
     throw new Error('agentGrants.delegate "custom" needs a custom cds.requires.auth.impl to delegate to');
   }
-  return { enabled, delegate };
+  return { enabled, delegate, adminRateLimit: loadGrantAdminRateLimit(env) };
 }
 
 /**

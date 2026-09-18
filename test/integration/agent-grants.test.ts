@@ -73,6 +73,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     // issues more than that, so every test starts with a fresh window.
     __resetGrantRateLimiterForTests();
     await cds.tx(async (tx) => {
+      await tx.run(DELETE.from('odatano.cardano.CardanoAgentGrantUsage'));
       await tx.run(DELETE.from('odatano.cardano.CardanoAgentGrants'));
       await tx.run(DELETE.from('odatano.cardano.CardanoWalletJobs'));
       await tx.run(DELETE.from('odatano.cardano.CardanoWorkerWallets'));
@@ -235,5 +236,141 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     const { data } = await GET(`${WORKER}/GetWorkerStatus()`);
     expect(data).to.have.property('running');
     await expectStatus(GET(`${AGENT}/AgentGrants`, asBob), 403);
+  });
+
+  // ---- lifecycle parity with NIGHTGATE (rc.6) ------------------------------------
+
+  const GRANTS = 'odatano.cardano.CardanoAgentGrants';
+  const NOBODY = '00000000-0000-4000-8000-000000000000';
+
+  it('rotates the token: the old one is unknown from the next request, the new one carries the same grant and budget', async () => {
+    const issued = await issue({ allowedActions: ['VerifySignature'], maxJobsPerDay: 3 });
+    await cds.tx((tx) => tx.run(cds.ql.UPDATE.entity(GRANTS).set({ budgetWindow: new Date().toISOString().slice(0, 10), jobsUsedToday: 2 }).where({ ID: issued.grantId })));
+
+    const { data: rotated } = await POST(`${AGENT}/RotateAgentGrantToken`, { grantId: issued.grantId });
+    expect(rotated.grantId).to.equal(issued.grantId);
+    expect(rotated.token).to.match(/^odat_[0-9a-f]{64}$/);
+    expect(rotated.token).to.not.equal(issued.token);
+
+    await expectStatus(GET(`${AGENT}/GetGrantStatus()`, withToken(issued.token)), 401);
+    const { data: status } = await GET(`${AGENT}/GetGrantStatus()`, withToken(rotated.token));
+    expect(status.grantId).to.equal(issued.grantId);
+    expect(Number(status.jobsUsedToday)).to.equal(2);
+
+    // Admin only; never for a token; 404 once revoked.
+    await expectStatus(POST(`${AGENT}/RotateAgentGrantToken`, { grantId: issued.grantId }, asBob), 403);
+    await expectStatus(POST(`${AGENT}/RotateAgentGrantToken`, { grantId: issued.grantId }, withToken(rotated.token)), 403);
+    await POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId });
+    await expectStatus(POST(`${AGENT}/RotateAgentGrantToken`, { grantId: issued.grantId }), 404);
+    await expectStatus(POST(`${AGENT}/RotateAgentGrantToken`, { grantId: NOBODY }), 404);
+  });
+
+  it('updates a grant partially, clears with an explicit null, keeps the wallet immutable, 404 unknown, 409 GRANT_REVOKED', async () => {
+    const issued = await issue({
+      allowedActions: ['BuildSimpleAdaTransaction', 'SubmitWalletJob'], walletId: WALLET, allowedJobKinds: ['simpleAda'], maxJobsPerDay: 3, agentLabel: 'before',
+    });
+    const row = () => cds.tx((tx) => tx.run(SELECT.one.from(GRANTS).where({ ID: issued.grantId })));
+
+    // Absent parameters stay: only label and budget change.
+    const { data: u } = await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'after', maxJobsPerDay: 9 });
+    expect(u.grantId).to.equal(issued.grantId);
+    expect(u.updated).to.have.members(['agentLabel', 'maxJobsPerDay']);
+    let r = await row();
+    expect(r.agentLabel).to.equal('after');
+    expect(Number(r.maxJobsPerDay)).to.equal(9);
+    expect(JSON.parse(r.allowedJobKinds)).to.deep.equal(['simpleAda']);
+    expect(r.walletId).to.equal(WALLET);
+
+    // An explicit null clears; the token sees the new shape.
+    await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedJobKinds: null, maxJobsPerDay: null });
+    r = await row();
+    expect(r.allowedJobKinds).to.equal(null);
+    expect(r.maxJobsPerDay).to.equal(null);
+    const { data: status } = await GET(`${AGENT}/GetGrantStatus()`, withToken(issued.token));
+    expect(status.agentLabel).to.equal('after');
+    expect(status.maxJobsPerDay).to.equal(null);
+
+    // Merged-row validation and immutability.
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: [] }), 400);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: ['PauseWorker'] }), 400);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, validUntil: '2000-01-01T00:00:00Z' }), 400);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, walletId: 'other' }), 400);
+    expect((await row()).walletId).to.equal(WALLET);
+
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, asBob), 403);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, withToken(issued.token)), 403);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: NOBODY, agentLabel: 'x' }), 404);
+
+    await POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId });
+    const body = await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }), 409);
+    expect(body?.error?.code).to.equal('GRANT_REVOKED');
+  });
+
+  it('records usage per service and action, refunds a refused call, and narrows a token to its own grant', async () => {
+    const issued = await issue({ allowedActions: ['SubmitWalletJob'], walletId: WALLET, maxJobsPerDay: 5 });
+    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'u1' }, withToken(issued.token));
+    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'u2' }, withToken(issued.token));
+    // Invalid requestJson → 400 from the handler → budget and usage unit refunded (off the request's tick).
+    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: 'not json' }, withToken(issued.token)), 400);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const since = new Date(Date.now() - 86_400_000).toISOString();
+    const until = new Date(Date.now() + 60_000).toISOString();
+    const usageUrl = (grantId: string) => `${AGENT}/GetGrantUsage(grantId=${grantId},since=${since},until=${until})`;
+
+    const { data: usage } = await GET(usageUrl(issued.grantId));
+    expect(usage.grantId).to.equal(issued.grantId);
+    expect(usage.calls).to.deep.equal([{ service: 'CardanoWorkerService', action: 'SubmitWalletJob', count: 2, refunded: 1 }]);
+    expect(Number(usage.total)).to.equal(2);
+    expect(Number(usage.jobsUsedToday)).to.equal(2);
+    expect(Number(usage.maxJobsPerDay)).to.equal(5);
+
+    // Defaults: since/until may be left out (until = now, since = 30 days back).
+    const { data: defaults } = await GET(`${AGENT}/GetGrantUsage(grantId=${issued.grantId})`);
+    expect(Number(defaults.total)).to.equal(2);
+
+    // The token: its own grant yes, a foreign one is not found, bob sees nothing, the window is capped.
+    const { data: own } = await GET(usageUrl(issued.grantId), withToken(issued.token));
+    expect(Number(own.total)).to.equal(2);
+    const other = await issue({ allowedActions: ['VerifySignature'] });
+    await expectStatus(GET(usageUrl(other.grantId), withToken(issued.token)), 404);
+    await expectStatus(GET(usageUrl(issued.grantId), asBob), 403);
+    await expectStatus(GET(usageUrl(NOBODY)), 404);
+    await expectStatus(GET(`${AGENT}/GetGrantUsage(grantId=${issued.grantId},since=2020-01-01T00:00:00Z,until=${until})`), 400);
+
+    // Revoked grants keep their history.
+    await POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId });
+    const { data: after } = await GET(usageUrl(issued.grantId));
+    expect(Number(after.total)).to.equal(2);
+  });
+
+  it('applies the configurable admin rate limit to all four administration actions', async () => {
+    process.env.AGENT_GRANT_ADMIN_RATE_LIMIT = '3';
+    __resetGrantRateLimiterForTests();
+    try {
+      const issued = await issue({ allowedActions: ['VerifySignature'] });
+      await POST(`${AGENT}/RotateAgentGrantToken`, { grantId: issued.grantId });
+      await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'third' });
+      await expectStatus(POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId }), 429);
+      // Reads are not administration.
+      const { data } = await GET(`${AGENT}/AgentGrants`);
+      expect(data.value[0].isActive).to.equal(true);
+    } finally {
+      delete process.env.AGENT_GRANT_ADMIN_RATE_LIMIT;
+      __resetGrantRateLimiterForTests();
+    }
+  });
+
+  it('answers the liveness probe on the indexer service without touching backends', async () => {
+    const { status, data } = await GET('/odata/v4/cardano-indexer/getLiveness()');
+    expect(status).to.equal(200);
+    expect(data.status).to.equal('alive');
+    expect(data).to.include.keys('status', 'timestamp', 'uptime', 'version', 'network');
+    expect(['preview', 'preprod', 'mainnet']).to.include(data.network);
+    expect(data.version).to.equal(require('../../package.json').version);
+    // A token may probe too (always-allowed, no budget).
+    const issued = await issue({ allowedActions: ['VerifySignature'], maxJobsPerDay: 1 });
+    const { data: viaToken } = await GET('/odata/v4/cardano-indexer/getLiveness()', withToken(issued.token));
+    expect(viaToken.status).to.equal('alive');
   });
 });

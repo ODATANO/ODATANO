@@ -31,7 +31,11 @@ export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
 // adds its payment lane through registerTransportLane.
 export {
   issueAgentGrant,
+  updateAgentGrant,
+  rotateAgentGrantToken,
   revokeAgentGrantById,
+  getGrantUsage,
+  resolveUsageWindow,
   hashAgentToken,
   AGENT_TOKEN_HEADER,
   AGENT_TOKEN_PREFIX,
@@ -39,7 +43,17 @@ export {
   AGENT_ALLOWLISTABLE_ACTIONS,
   AGENT_ALWAYS_ALLOWED_EVENTS,
 } from '../srv/utils/agent-grants';
-export type { IssueAgentGrantInput, IssuedAgentGrant, AgentGrantStatus } from '../srv/utils/agent-grants';
+export type {
+  IssueAgentGrantInput,
+  IssuedAgentGrant,
+  AgentGrantStatus,
+  UpdateAgentGrantInput,
+  UpdateAgentGrantResult,
+  RotatedAgentGrant,
+  AgentGrantUsage,
+  GrantUsageCall,
+  UsageWindow,
+} from '../srv/utils/agent-grants';
 export { registerTransportLane } from '../srv/utils/agent-token-auth';
 export type { TransportLane, LaneOutcome } from '../srv/utils/agent-token-auth';
 export { loadAgentGrantsConfig } from '../srv/utils/agent-grants-config';

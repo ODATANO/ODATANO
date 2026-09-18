@@ -78,12 +78,20 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
     it('POST /GetDrepById - get drep information', async () => {
 
+      // Served from the live ledger state (queryLedgerState/delegateRepresentatives,
+      // Ogmios >= 6.4). Only REGISTERED DReps are listed: a retired one is a 404.
       const response = await test.post('/odata/v4/cardano-odata/GetDrepById', {
         drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0'
       }).catch(err => err.response);
 
-      expect(response.status).to.equal(503); // Ogmios does not support Drep queries
-      expect(response.data).to.have.property('error');
+      expect([200, 404]).to.include(response.status);
+      if (response.status === 200) {
+        expect(response.data).to.have.property('drepId', 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0');
+        expect(response.data).to.have.property('hasScript');
+        expect(response.data).to.have.property('expired');
+      } else {
+        expect(response.data).to.have.property('error');
+      }
     });
 
     it('POST /GetPoolById - get stake pool information', async () => {

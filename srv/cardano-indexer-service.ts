@@ -4,6 +4,7 @@ import { rejectInvalid } from './utils/errors';
 import { isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
 import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
+import { buildLiveness } from './utils/liveness';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 
 const logger = cds.log('CardanoIndexerService');
@@ -14,6 +15,9 @@ const logger = cds.log('CardanoIndexerService');
  * cursor and starts/stops the crawler.
  */
 module.exports = (srv: cds.Service) => {
+
+  // getLiveness — unauthenticated probe (@requires: 'any'); no handleRequest, no app context.
+  srv.on('getLiveness', async () => buildLiveness());
 
   // getStatus — live run state + sync progress (numeric fields as strings, CAP-10 aligned)
   srv.on('getStatus', async (req: Request) => {

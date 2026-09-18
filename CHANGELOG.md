@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
+### Added (rc.6) — agent-grant lifecycle, Ogmios DRep
+
+- **Agent grants: rotate, update and usage history; grant admin rate limit
+  configurable; unauthenticated liveness.** `CardanoAgentService` gains
+  `RotateAgentGrantToken` (fresh token, old one unknown from the next request),
+  `UpdateAgentGrant` (label, allow list, job kinds, daily budget, expiry;
+  absent = untouched, explicit `null` = cleared; wallet binding immutable;
+  `409 GRANT_REVOKED` on a revoked grant) and `GetGrantUsage(grantId, since,
+  until)` (admitted calls per service and action over up to 366 days, from the
+  new `CardanoAgentGrantUsage` counters — run `cds deploy`). Semantics mirror
+  NIGHTGATE's agent grants so a gateway drives both products with one code
+  path. `AGENT_GRANT_ADMIN_RATE_LIMIT` / `agentGrants.adminRateLimit` (default
+  10/h per principal) now covers all four administration actions.
+  `CardanoIndexerService.getLiveness()` answers without credentials
+  (`@requires: 'any'`); the Docker `HEALTHCHECK` and compose probe use it.
+- **DRep lookup via Ogmios.** `OgmiosBackend.getDrep` now queries the live
+  ledger state (`queryLedgerState/delegateRepresentatives`, Ogmios ≥ 6.4)
+  instead of declaring the method unsupported, so `GetDRepById` works on an
+  Ogmios-only setup. Routing is unchanged (Blockfrost/Koios first). Ogmios only
+  lists registered DReps: a retired DRep is a 404 there, `expired` is derived
+  from the mandate epoch, `lastActiveEpoch` is 0.
+
 ### Added (rc.5) — agent grants
 
 - **`CardanoAgentService`** (`/odata/v4/cardano-agent/`): scoped, budgeted bearer

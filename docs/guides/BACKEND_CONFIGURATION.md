@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** v2.0.0-rc.5 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.6 | **Last Updated:** September 2026
 
 ## Architecture Overview
 
@@ -91,7 +91,10 @@ Used for **indexed/historical data**:
 - `getBlock(hash)` - Block data
 - `getTransaction(hash)` - Transaction details
 - `getTransactionMetadata(hash)` - Transaction metadata
-- `getDrep(drepId)` - DRep information
+- `getDrep(drepId)` - DRep information. Ogmios (≥ 6.4) serves this too via the live
+  ledger state as a fallback: only *registered* DReps are found (a retired DRep is a
+  404, never `retired: true`), `expired` is derived from the mandate epoch and
+  `lastActiveEpoch` is 0.
 
 If multiple historical backends are configured, they are tried in order with automatic failover.
 

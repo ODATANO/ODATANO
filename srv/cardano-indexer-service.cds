@@ -61,6 +61,26 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     function getStatus() returns CrawlerStatus;
 
+    @title      : 'Liveness'
+    type Liveness {
+        status    : String;    // 'alive'
+        timestamp : Timestamp;
+        uptime    : Integer;   // seconds since process start
+        version   : String;    // @odatano/core version
+        network   : String;    // configured network
+    }
+
+    // Public override (see VerifyDataSignature in cardano-sign-service.cds): a
+    // liveness probe carries no credentials. 200 as long as the process answers —
+    // no backend or DB probe, no secrets, no backend names, no API key state. That
+    // stays with getStatus and the backend health entities, which remain
+    // authenticated. Mirrors NIGHTGATE's `/api/v1/indexer/getLiveness()`, so a
+    // gateway probes both products the same way.
+    @title      : 'Get Liveness'
+    @description: 'Unauthenticated liveness probe: 200 while the process answers. Docker HEALTHCHECK and upstream probes use this instead of the service document.'
+    @requires   : 'any'
+    function getLiveness() returns Liveness;
+
     @title      : 'Pause Crawler'
     @description: 'Stop the crawler (closes the chain-sync stream). Resume continues from the cursor.'
     @requires   : 'Admin'

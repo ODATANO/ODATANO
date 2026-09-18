@@ -1703,3 +1703,36 @@ entity CardanoAgentGrants {
         @description: 'Last request admitted under this token (updated at most once a minute)'
         lastUsedAt      : Timestamp;
 }
+
+/**
+ * Daily per-action counters of admitted calls under a grant (feeds
+ * CardanoAgentService.GetGrantUsage). Written by the enforcement hook next to
+ * the daily budget: `calls + 1` when a call is admitted, `refunded + 1` when the
+ * handler then refuses its input. Not exposed as an entity — the function is
+ * the contract. A few dozen rows per grant and day at most; no retention job yet.
+ */
+entity CardanoAgentGrantUsage {
+
+        @title      : 'Grant'
+    key grant    : Association to CardanoAgentGrants;
+
+        @title      : 'Day'
+        @description: 'UTC day YYYY-MM-DD the call was admitted on'
+    key day      : String(10);
+
+        @title      : 'Service'
+        @description: 'CAP service name (CardanoTransactionService, CardanoSignService, ...)'
+    key service  : String(60);
+
+        @title      : 'Action'
+        @description: 'Action name (BuildSimpleAdaTransaction, SubmitTransaction, ...)'
+    key action   : String(100);
+
+        @title      : 'Calls'
+        @description: 'Admitted calls (budget charged where the grant has one)'
+        calls    : Integer default 0;
+
+        @title      : 'Refunded'
+        @description: 'Admitted calls whose handler refused the input (400..428); their unit was given back'
+        refunded : Integer default 0;
+}

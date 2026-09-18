@@ -116,6 +116,7 @@ Hand an agent a **scoped, budgeted token** instead of a user. Design and rationa
 ```bash
 AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.enabled
 AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating non-token requests (default: configured kind)
+AGENT_GRANT_ADMIN_RATE_LIMIT=10      # grant administration calls per principal per hour (or agentGrants.adminRateLimit)
 ```
 
 1. An **Admin** issues a grant (`POST /odata/v4/cardano-agent/CreateAgentGrant`): an allow list of
@@ -130,20 +131,38 @@ AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating n
    Wallet jobs are pinned to the grant's wallet and visible only to the grant that queued them.
 3. `GET /odata/v4/cardano-agent/GetGrantStatus()` tells the agent what it may do and how much budget
    is left; `RevokeAgentGrant` turns the token into an unknown token immediately.
+4. Lifecycle (Admin, same semantics as NIGHTGATE's agent grants so a gateway drives both with one
+   code path): `UpdateAgentGrant` changes label, allow list, job kinds, daily budget or expiry
+   (absent = untouched, explicit `null` = cleared; the wallet binding is immutable, 409
+   `GRANT_REVOKED` on a revoked grant); `RotateAgentGrantToken` returns a fresh token once, the old
+   one is unknown from the next request; `GetGrantUsage(grantId, since, until)` lists admitted calls
+   per service and action over up to 366 days (an Admin for any grant, a token for its own). All
+   administration calls share the per-principal hourly rate limit above.
 
 Grantable: `Build*`, `SetCollateral`, `CreateSigningRequest`, `VerifySignature`, `Submit*`,
 `CheckSubmissionStatus`, `SubmitWalletJob`, `CancelJob`. Never: `SignWithHsm*`, `Pause*`/`Resume*`,
 `pauseCrawler`/`resumeCrawler`, grant administration.
 
 Programmatic seams for other packages (`@odatano/x402` sells grants against a 402 payment):
-`issueAgentGrant()`, `revokeAgentGrantById()`, `registerTransportLane()` from `@odatano/core`.
+`issueAgentGrant()`, `updateAgentGrant()`, `rotateAgentGrantToken()`, `revokeAgentGrantById()`,
+`getGrantUsage()`, `registerTransportLane()` from `@odatano/core`.
+
+## Liveness probe
+
+`GET /odata/v4/cardano-indexer/getLiveness()` answers `200 { status: "alive", timestamp, uptime,
+version, network }` **without credentials** (`@requires: 'any'`) as long as the process runs — no
+backend or DB probe, no secrets. The Docker `HEALTHCHECK`, compose and upstream probes use it
+instead of the service document, so a wrong operator password no longer reads as "ODATANO down".
+Readiness (crawler, worker, backends) stays authenticated: `getStatus()`, `GetWorkerStatus()`,
+`GetNetworkInformation`.
 
 ## Requirements
 
 - **Node.js >= 22.5** and **@sap/cds >= 10** (peer dependency). CAP 9 hosts cannot load `@odatano/core@2`.
-- Upgrading a consumer from 1.x: run **`cds deploy`**. 2.0 adds four tables (`CardanoSyncState`,
-  `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`) plus a `dedupKey` column; without
-  the redeploy the new services answer `no such table` while the old ones keep working.
+- Upgrading a consumer from 1.x: run **`cds deploy`**. 2.0 adds six tables (`CardanoSyncState`,
+  `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants`,
+  `CardanoAgentGrantUsage`) plus a `dedupKey` column; without the redeploy the new services answer
+  `no such table` while the old ones keep working.
 
 ## Documentation
 

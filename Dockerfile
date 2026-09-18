@@ -73,11 +73,12 @@ USER node
 # Expose port
 EXPOSE 4004
 
-# Health check — the index page is served unauthenticated; $metadata is NOT
-# (mocked/XSUAA auth returns 401 for anonymous requests, which would leave the
-# container permanently "unhealthy").
+# Health check — CardanoIndexerService.getLiveness() is @requires: 'any', so it
+# answers without credentials under mocked/basic/XSUAA auth alike. The service
+# document and $metadata are NOT (401 for anonymous requests would leave the
+# container permanently "unhealthy"). Process liveness only: no backend/DB probe.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:4004/ || exit 1
+  CMD wget --quiet --tries=1 --spider "http://localhost:4004/odata/v4/cardano-indexer/getLiveness()" || exit 1
 
 # Start service - serve all CDS files explicitly
 CMD ["node", "node_modules/@sap/cds/bin/serve.js", "srv"]

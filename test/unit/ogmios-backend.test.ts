@@ -13,11 +13,13 @@ vi.mock('@sap/cds', () => {
 vi.mock('@cardano-ogmios/client', () => ({
   createInteractionContext: vi.fn(),
   createLedgerStateQueryClient: vi.fn(),
-  createTransactionSubmissionClient: vi.fn()
+  createTransactionSubmissionClient: vi.fn(),
+  Method: vi.fn()
 }));
 
-import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight } from '../../srv/blockchain/backends/ogmios-backend';
-import { BackendInitError } from '../../srv/utils/errors';
+import { Method } from '@cardano-ogmios/client';
+import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId } from '../../srv/blockchain/backends/ogmios-backend';
+import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
   const NETWORK = 'preview' as const;
@@ -615,6 +617,133 @@ describe('OgmiosBackend', () => {
     });
   });
 
+  describe('decodeDrepId', () => {
+    // CIP-129: 0x22 = DRep key hash, 0x23 = DRep script hash, then the 28-byte hash
+    const HASH = 'ab'.repeat(28);
+    const KEY_DREP = 'drep1y246h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2caa85du';
+    const SCRIPT_DREP = 'drep1yw46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2ca0h9dm';
+
+    it('splits a key-hash DRep ID into hash + isScript=false', () => {
+      expect(decodeDrepId(KEY_DREP)).toEqual({ hashHex: HASH, isScript: false });
+    });
+
+    it('splits a script-hash DRep ID into hash + isScript=true', () => {
+      expect(decodeDrepId(SCRIPT_DREP)).toEqual({ hashHex: HASH, isScript: true });
+    });
+
+    it('rejects a payload that is not 29 bytes', () => {
+      expect(() => decodeDrepId('drep1test')).toThrow();
+    });
+  });
+
+  describe('getDrep — queryLedgerState/delegateRepresentatives via Method()', () => {
+    const HASH = 'ab'.repeat(28);
+    const KEY_DREP = 'drep1y246h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2caa85du';
+    const SCRIPT_DREP = 'drep1yw46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2ca0h9dm';
+    // An OPEN socket: ensureConnected() otherwise treats the context as dead and
+    // reconnects through the mocked createInteractionContext (which returns nothing).
+    const CONTEXT = { socket: { readyState: 1, OPEN: 1 } };
+
+    /** Drive the backend's own `handler` with a fake JSON-RPC envelope. */
+    function mockRpc(envelope: Record<string, unknown>) {
+      vi.mocked(Method).mockReset();
+      vi.mocked(Method).mockImplementation((req: any, res: any) => new Promise((resolve, reject) => {
+        res.handler({ method: req.method, ...envelope }, resolve, reject);
+      }) as any);
+    }
+
+    function makeBackend(currentEpoch = 250) {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { epoch: vi.fn().mockResolvedValue(currentEpoch) };
+      (backend as any).context = CONTEXT;
+      (backend as any).isShutdown = false;
+      return backend;
+    }
+
+    it('is no longer declared unsupported', () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      expect(backend.unsupportedMethods.has('getDrep')).toBe(false);
+    });
+
+    it('queries by key hash and maps a registered DRep', async () => {
+      mockRpc({ result: [{
+        type: 'registered', id: HASH, from: 'verificationKey',
+        mandate: { epoch: 300 },
+        stake: { ada: { lovelace: 123456789n } },
+        deposit: { ada: { lovelace: 500000000n } },
+      }] });
+
+      const result = await makeBackend(250).getDrep(KEY_DREP);
+
+      expect(vi.mocked(Method)).toHaveBeenCalledTimes(1);
+      const [req, , ctx] = vi.mocked(Method).mock.calls[0] as any[];
+      expect(req).toEqual({
+        method: 'queryLedgerState/delegateRepresentatives',
+        params: { keys: [HASH] },
+      });
+      expect(ctx).toBe(CONTEXT);
+      expect(result).toEqual({
+        drepId: KEY_DREP,
+        hex: HASH,
+        amount: '123456789',
+        hasScript: false,
+        lastActiveEpoch: 0,
+        expired: false,
+        retired: false,
+      });
+    });
+
+    it('queries by script hash and reports hasScript', async () => {
+      mockRpc({ result: [{ type: 'registered', id: HASH, from: 'script', mandate: { epoch: 300 }, stake: { ada: { lovelace: 1n } } }] });
+
+      const result = await makeBackend(250).getDrep(SCRIPT_DREP);
+
+      const [req] = vi.mocked(Method).mock.calls[0] as any[];
+      expect(req.params).toEqual({ scripts: [HASH] });
+      expect(result.hasScript).toBe(true);
+      expect(result.amount).toBe('1');
+    });
+
+    it('derives expired from a mandate epoch before the current epoch', async () => {
+      mockRpc({ result: [{ type: 'registered', id: HASH, from: 'verificationKey', mandate: { epoch: 200 } }] });
+
+      const result = await makeBackend(250).getDrep(KEY_DREP);
+
+      expect(result.expired).toBe(true);
+      expect(result.amount).toBe('0');
+    });
+
+    it('throws NotFoundError when the ledger lists no registered DRep for the credential', async () => {
+      mockRpc({ result: [] });
+
+      await expect(makeBackend().getDrep(KEY_DREP)).rejects.toThrow(NotFoundError);
+    });
+
+    it('ignores abstain/noConfidence rows and rows with a different id', async () => {
+      mockRpc({ result: [
+        { type: 'abstain', stake: { ada: { lovelace: 9n } } },
+        { type: 'registered', id: 'cd'.repeat(28), from: 'verificationKey', mandate: { epoch: 300 } },
+      ] });
+
+      await expect(makeBackend().getDrep(KEY_DREP)).rejects.toThrow(NotFoundError);
+    });
+
+    it('surfaces a JSON-RPC error envelope as a rejection', async () => {
+      mockRpc({ error: { code: 3000, message: 'query unavailable in current era' } });
+
+      await expect(makeBackend().getDrep(KEY_DREP)).rejects.toThrow(/unavailable in current era/);
+    });
+
+    it('rejects when no interaction context is available', async () => {
+      mockRpc({ result: [] });
+      const backend = makeBackend();
+      (backend as any).context = null;
+
+      await expect(backend.getDrep(KEY_DREP)).rejects.toThrow(/context not available/);
+      expect(vi.mocked(Method)).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getPool', () => {
     it('should return pool data for valid pool', async () => {
       const mockStateQueryClient = {
@@ -824,7 +953,6 @@ describe('OgmiosBackend', () => {
       ['getBlock', (b: any) => b.getBlock('a'.repeat(64))],
       ['getTransaction', (b: any) => b.getTransaction('a'.repeat(64))],
       ['getTransactionMetadata', (b: any) => b.getTransactionMetadata('a'.repeat(64))],
-      ['getDrep', (b: any) => b.getDrep('drep1test')],
       ['getAssetInfo', (b: any) => b.getAssetInfo('a'.repeat(56) + '74657374')],
       ['getAddressTransactions', (b: any) => b.getAddressTransactions('addr_test1qtest')],
     ])('%s rejects (declared unsupported) rather than returning data', async (method, call) => {

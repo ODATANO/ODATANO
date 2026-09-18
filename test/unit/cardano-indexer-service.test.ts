@@ -162,3 +162,22 @@ describe('CardanoIndexerService.resumeCrawler', () => {
     expect(result).toBe(true); // isCrawlerRunning
   });
 });
+
+describe('CardanoIndexerService.getLiveness', () => {
+  it('answers process facts only — no cursor read, no app context, no handleRequest', async () => {
+    const handlers = boot();
+    const body = (await handlers.getLiveness({})) as { status: string; timestamp: string; uptime: number; version: string; network: string };
+
+    expect(body.status).toBe('alive');
+    expect(new Date(body.timestamp).toISOString()).toBe(body.timestamp);
+    expect(Number.isInteger(body.uptime) && body.uptime >= 0).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    expect(body.version).toBe((require('../../package.json') as { version: string }).version);
+    expect(['preview', 'preprod', 'mainnet']).toContain(body.network);
+    expect(Object.keys(body).sort()).toEqual(['network', 'status', 'timestamp', 'uptime', 'version']);
+
+    expect(readCursorMock).not.toHaveBeenCalled();
+    expect(serverMock.getCardanoClient).not.toHaveBeenCalled();
+    expect(serverMock.getCardanoIndexer).not.toHaveBeenCalled();
+  });
+});

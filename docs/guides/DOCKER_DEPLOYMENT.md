@@ -1,6 +1,6 @@
 # Docker Deployment
 
-**Version:** v2.0.0-rc.5 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.6 | **Last Updated:** September 2026
 
 ## What the stack contains
 
@@ -69,14 +69,15 @@ docker compose up -d
 
 The container ships an empty SQLite database. **When upgrading a 1.x deployment to 2.0, run
 `cds deploy` against the mounted database** — 2.0 adds `CardanoSyncState`, `CardanoReorgLog`,
-`CardanoWorkerWallets`, `CardanoWalletJobs` and a `dedupKey` column. Without it the crawler and
-worker endpoints answer `no such table` while the older services keep working.
+`CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants`, `CardanoAgentGrantUsage` (rc.6) and
+a `dedupKey` column. Without it the crawler, worker and agent endpoints answer `no such table` while
+the older services keep working.
 
 ### Health probes
 
 ```bash
 curl http://localhost:1337/health                                    # Ogmios: 200 near tip, 202 while syncing
-curl http://localhost:4004/odata/v4/cardano-odata/\$metadata          # API liveness (compose healthcheck)
+curl http://localhost:4004/odata/v4/cardano-indexer/getLiveness\(\)    # API liveness, no credentials (Docker/compose healthcheck)
 curl http://localhost:4004/odata/v4/cardano-indexer/getStatus\(\)      # crawler cursor + progress (if enabled)
 curl http://localhost:4004/odata/v4/cardano-worker/GetWorkerStatus\(\) # worker state + queue depth (if enabled)
 ```
