@@ -1,11 +1,39 @@
 # Changelog
 
+## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
+
+### Fixed (unreleased, after rc.7)
+
+- `getLiveness()` and `VerifyDataSignature` were anonymous only under
+  `NODE_ENV=development`. CAP treats a service WITHOUT a service-level
+  `@requires` as `authenticated-user` in production before it looks at the
+  operation, so the rc.7 element-level layout still answered 401 to anonymous
+  probes on a production container (the hosted odatano-preprod runs in
+  development mode, which is why it worked there). Both services now carry
+  `@requires: 'any'` at the service level; every element keeps its own
+  requirement, nothing else changes for callers. The model test pins it.
+
 All notable changes to ODATANO will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
+### Fixed (rc.7)
+
+- **`getLiveness()` and `VerifyDataSignature` answered 401 under basic/XSUAA
+  auth.** CAP checks a service-level `@requires` before the operation's own
+  annotation, so an operation's `@requires: 'any'` never applied: the rc.6
+  Docker `HEALTHCHECK` flagged the container unhealthy, and the anonymous
+  CIP-30 verify behind wallet login only ever worked under mocked auth.
+  `CardanoIndexerService` and `CardanoSignService` now carry the
+  `authenticated-user` requirement on each entity and operation instead of on
+  the service (pause/resume stay Admin, HSM actions keep `hsm.requiresRole`);
+  auto-exposed entities remain unreachable directly (405) and guarded via
+  navigation. Nothing else changes for callers.
+- **SQLite busy timeout.** `cds.requires.db.client.timeout = 5000` (node:sqlite
+  `DatabaseSync` option): a second connection on the same file — the previous
+  test file's process still winding down, a detached write — now waits up to
+  5 s instead of failing at once with `database is locked`.
 
 ### Added (rc.6) — agent-grant lifecycle, Ogmios DRep
 

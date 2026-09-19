@@ -10,10 +10,17 @@ using {Bech32} from '../db/types';
  * - Submitting verified transactions to the blockchain and tracking submission status
  * - Providing actions for signing with a Hardware Security Module (HSM) and retrieving HSM status
  *
- * Security note: see CardanoODataService (cardano-service.cds) for the rationale
- * on service-level auth without per-resource ownership enforcement.
+ * Security note: see CardanoODataService (cardano-service.cds) for the rationale on auth
+ * without per-resource ownership enforcement. Deliberately NO service-level @requires:
+ * CAP checks it on every request BEFORE the operation annotation, which silenced the
+ * `any` on VerifyDataSignature (anonymous callers got the 401 challenge first). The
+ * requirement therefore sits on each element; VerifyDataSignature alone is public.
  */
-@requires: 'authenticated-user'
+// Service-level 'any' on purpose: CAP authorizes the service BEFORE the operation and
+// treats a service without a service-level @requires as authenticated-user under
+// NODE_ENV=production, which would 401 the anonymous operation below despite its own
+// 'any'. Every element carries its requirement; the service itself refuses nothing.
+@requires: 'any'
 service CardanoSignService @(impl: './cardano-sign-service') {
 
     // ---------------------------------------------------------------------------
@@ -22,31 +29,37 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     @readonly
     @title      : 'Signature Verifications'
     @description: 'Projection for Signature Verifications - stores verification results'
+    @requires   : 'authenticated-user'
     entity SignatureVerifications as projection on db.SignatureVerifications;
 
     @readonly
     @title      : 'Address Signing Requests'
     @description: 'Projection for retrieving signing requests by address'
+    @requires   : 'authenticated-user'
     entity AddressSigningRequests as projection on db.AddressSigningRequests;
 
     @readonly
     @title      : 'Transaction Builds'
     @description: 'Projection for Transaction Builds - needed by CreateSigningRequest to look up build details'
+    @requires   : 'authenticated-user'
     entity TransactionBuilds      as projection on db.TransactionBuilds;
 
 
     @readonly
     @title      : 'Transaction Submissions'
     @description: 'Projection for Transaction Submissions - stores submission results'
+    @requires   : 'authenticated-user'
     entity TransactionSubmissions as projection on db.TransactionSubmissions;
 
             @readonly
             @title      : 'Signing Requests'
             @description: 'Projection for Signing Requests - tracks signing workflow'
+    @requires   : 'authenticated-user'
     entity SigningRequests as projection on db.SigningRequests;
 
     @title      : 'Verify Signature'
     @description: 'Verify the signature of a signed transaction. Stores the verification result for audit trail.'
+    @requires   : 'authenticated-user'
     action VerifySignature(
                            @title: 'Signing Request ID'
                            @description: 'The unique identifier of the signing request'
@@ -66,6 +79,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Submit Verified Transaction'
     @description: 'Verify and submit a signed transaction in one step. Updates the signing request status and creates submission record.'
+    @requires   : 'authenticated-user'
     action SubmitVerifiedTransaction(
                                      @title: 'Signing Request ID'
                                      @description: 'The unique identifier of the signing request'
@@ -118,6 +132,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Create Signing Request'
     @description: 'Create a signing request for external signing. Returns transaction details, signing instructions, and CLI commands. The request is persisted for audit trail.'
+    @requires   : 'authenticated-user'
     action CreateSigningRequest(
                                 @title: 'Build ID'
                                 @description: 'The unique identifier of the transaction build'
@@ -128,6 +143,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Get Signing Request'
     @description: 'Retrieve an existing signing request by ID'
+    @requires   : 'authenticated-user'
     action GetSigningRequest(
                              @title: 'Signing Request ID'
                              @description: 'The unique identifier of the signing request'
@@ -135,6 +151,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Address Signing Requests'
     @description: 'Projection for retrieving signing requests by address'
+    @requires   : 'authenticated-user'
     action GetSigningRequestsByAddress(
                                        @title: 'Bech32 Address'
                                        @description: 'The Bech32 encoded address to retrieve signing requests for'
@@ -146,6 +163,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Sign with HSM'
     @description: 'Sign a transaction using the configured Hardware Security Module. Creates a signing request, signs with the HSM, and verifies the signature. Returns the signing request with status verified.'
+    @requires   : 'authenticated-user'
     action SignWithHsm(
                        @title: 'Build ID'
                        @description: 'The unique identifier of the transaction build to sign'
@@ -156,6 +174,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Sign and Submit with HSM'
     @description: 'Sign a transaction using the HSM and submit it to the blockchain in one atomic operation. Returns the transaction submission details.'
+    @requires   : 'authenticated-user'
     action SignAndSubmitWithHsm(
                                 @title: 'Build ID'
                                 @description: 'The unique identifier of the transaction build to sign and submit'
@@ -169,6 +188,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @title      : 'Get HSM Status'
     @description: 'Check the current status of the HSM connection and key availability.'
+    @requires   : 'authenticated-user'
     action GetHsmStatus()                               returns {
         @title: 'Connected'        @description: 'Whether the HSM session is active'  connected                                                    : Boolean;
         @title: 'Key ID'           @description: 'The PKCS#11 key identifier in use'  keyId                                                        : String;

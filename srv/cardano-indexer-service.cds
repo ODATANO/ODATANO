@@ -8,18 +8,31 @@ using {odatano.cardano as db} from '../db/schema';
  * - status function + pause/resume actions delegating to the crawler singleton
  *
  * Security note: see CardanoODataService (cardano-service.cds) for the rationale on
- * service-level auth. pause/resume are operational actions — gate behind a dedicated
- * Admin scope. Read-only status and audit data remain available to authenticated users.
+ * auth. pause/resume are operational actions — gate behind a dedicated Admin scope.
+ * Read-only status and audit data remain available to authenticated users.
+ *
+ * Deliberately NO service-level @requires: CAP checks a service-level requirement
+ * on every request BEFORE the operation's own annotation, so an operation-level
+ * `@requires: 'any'` can never open a single function on an otherwise
+ * authenticated service (anonymous callers get the 401 challenge first). The
+ * requirement therefore sits on each element, and getLiveness() alone is 'any' —
+ * the same layout as NIGHTGATE's indexer service.
  */
-@requires: 'authenticated-user'
+// Service-level 'any' on purpose: CAP authorizes the service BEFORE the operation and
+// treats a service without a service-level @requires as authenticated-user under
+// NODE_ENV=production, which would 401 the anonymous operation below despite its own
+// 'any'. Every element carries its requirement; the service itself refuses nothing.
+@requires: 'any'
 service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     @readonly
+    @requires   : 'authenticated-user'
     @title      : 'Sync State'
     @description: 'Singleton crawl cursor — pre-sync progress, tip lag, status, errors'
     entity SyncState as projection on db.CardanoSyncState;
 
     @readonly
+    @requires   : 'authenticated-user'
     @title      : 'Reorg Log'
     @description: 'Audit trail of chain rollbacks handled by the crawler'
     entity ReorgLog  as projection on db.CardanoReorgLog;
@@ -59,6 +72,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         blocksRolledBack : Integer;
     }
 
+    @requires   : 'authenticated-user'
     function getStatus() returns CrawlerStatus;
 
     @title      : 'Liveness'
@@ -70,12 +84,11 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         network   : String;    // configured network
     }
 
-    // Public override (see VerifyDataSignature in cardano-sign-service.cds): a
-    // liveness probe carries no credentials. 200 as long as the process answers —
-    // no backend or DB probe, no secrets, no backend names, no API key state. That
-    // stays with getStatus and the backend health entities, which remain
-    // authenticated. Mirrors NIGHTGATE's `/api/v1/indexer/getLiveness()`, so a
-    // gateway probes both products the same way.
+    // Anonymous on purpose: a liveness probe carries no credentials. 200 as long
+    // as the process answers — no backend or DB probe, no secrets, no backend
+    // names, no API key state. Readiness stays with getStatus and the worker
+    // status, which remain authenticated. Mirrors NIGHTGATE's
+    // `/api/v1/indexer/getLiveness()`, so a gateway probes both products the same way.
     @title      : 'Get Liveness'
     @description: 'Unauthenticated liveness probe: 200 while the process answers. Docker HEALTHCHECK and upstream probes use this instead of the service document.'
     @requires   : 'any'
