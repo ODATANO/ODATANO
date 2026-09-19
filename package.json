@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.8",
+  "version": "2.0.0-rc.9",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -56,6 +56,7 @@
     "@cap-js/cds-test": "^0.4.1",
     "@cap-js/cds-typer": "^0.40.0",
     "@cap-js/cds-types": "^0.18.0",
+    "@cap-js/postgres": "^3.1.1",
     "@cap-js/sqlite": "^3",
     "@sap/cds": "^10",
     "@sap/cds-dk": "^10",

@@ -39,9 +39,10 @@ RUN npm run build:plugin
 RUN npm run db:deploy
 
 # Remove devDependencies to reduce image size and avoid plugin conflicts.
-# @cap-js/sqlite is a devDependency of the npm package (consumers pick their own
-# DB adapter), but THIS image serves from sqlite — re-add it after the prune,
-# otherwise cds-serve crashes at startup with MODULE_NOT_FOUND.
+# @cap-js/sqlite and @cap-js/postgres are devDependencies of the npm package
+# (consumers pick their own DB adapter), but THIS image serves from one of them
+# (ODATANO_DB_URL selects PostgreSQL): re-add both after the prune, otherwise
+# cds-serve crashes at startup with MODULE_NOT_FOUND.
 # `npm pkg delete devDependencies` is REQUIRED before the install: with the dev
 # block still in the manifest, a plain install reinstalls every devDependency
 # (vitest, eslint, typescript, ...), while `--omit=dev` drops the requested
@@ -49,7 +50,7 @@ RUN npm run db:deploy
 # sidesteps both failure modes; the edited package.json only lives in the image.
 RUN npm prune --omit=dev \
  && npm pkg delete devDependencies \
- && npm install --no-save --ignore-scripts @cap-js/sqlite@^3
+ && npm install --no-save --ignore-scripts @cap-js/sqlite@^3 @cap-js/postgres@^3
 
 # Add metadata labels
 LABEL org.opencontainers.image.version="${VERSION}" \
@@ -67,7 +68,8 @@ ENV APP_VERSION=${VERSION}
 # startup dies with "attempt to write a readonly database".
 RUN chown node:node /app /app/*.sqlite* 2>/dev/null || chown node:node /app
 
-RUN chmod +x /app/docker/entrypoint.sh
+# /data holds the SQLite file on a fresh volume; the runtime user must own it.
+RUN chmod +x /app/docker/entrypoint.sh && mkdir -p /data && chown node:node /data
 
 # Run as non-root user for security
 USER node

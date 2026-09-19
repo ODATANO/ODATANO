@@ -1,6 +1,6 @@
 # Docker Deployment
 
-**Version:** v2.0.0-rc.7 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.9 | **Last Updated:** September 2026
 
 ## What the stack contains
 
@@ -65,13 +65,42 @@ docker compose up -d
 `VERSION` is the supported way to select the tag — `image: odatano:${VERSION:-0.1.0}` reads it from
 `.env`. Hardcoding a tag into the compose file is not necessary.
 
-### Database schema
+### Authentication
 
-The container ships an empty SQLite database. **When upgrading a 1.x deployment to 2.0, run
-`cds deploy` against the mounted database** — 2.0 adds `CardanoSyncState`, `CardanoReorgLog`,
-`CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants`, `CardanoAgentGrantUsage` (rc.6) and
-a `dedupKey` column. Without it the crawler, worker and agent endpoints answer `no such table` while
-the older services keep working.
+The image runs `NODE_ENV=production` with HTTP basic auth through `@odatano/cap-auth`
+(`docker/cds-config.mjs`, `docker/entrypoint.sh`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ODATANO_HTTP_PASSWORD` | required | Password of the operator user |
+| `ODATANO_HTTP_USER` | `odatano` | Operator user |
+| `ODATANO_HTTP_ROLES` | `Admin` | Comma-separated roles of the operator |
+| `ODATANO_AUTH` | `basic` | `dummy` = unauthenticated, local testing only |
+
+Anonymous requests reach only `getLiveness()` and `VerifyDataSignature`; everything else is
+challenged. Agent tokens (`x-agent-token`, `AGENT_GRANTS_ENABLED=true`) pass on the service paths.
+
+### Database
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`); the schema is deployed on every boot (additive evolution, `ODATANO_DB_DEPLOY=never` skips it) |
+| `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set; seeded on the first boot from the schema the image build deployed |
+
+Moving an existing SQLite deployment to PostgreSQL: stop the service, then run the image's
+`migrate` mode once against the freshly created database and start the service with
+`ODATANO_DB_URL` set:
+
+```bash
+docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite
+```
+
+It deploys the schema, copies every table through CAP and verifies the row counts.
+
+**Upgrading a 1.x SQLite deployment to 2.0** still needs the schema delta on the mounted file
+(2.0 adds `CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`,
+`CardanoAgentGrants`, `CardanoAgentGrantUsage` and a `dedupKey` column): migrating to PostgreSQL
+as above is the simplest way to get it, since the deploy there is additive.
 
 ### Health probes
 

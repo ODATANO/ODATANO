@@ -2,6 +2,19 @@
 
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
+### Added (rc.9)
+
+- PostgreSQL in the image: `ODATANO_DB_URL=postgres://user:pw@host:5432/db`
+  (`sslmode=disable|require|verify-full`) selects `@cap-js/postgres`; the
+  entrypoint waits for the listener and deploys the schema on every boot
+  (CAP's additive evolution; `ODATANO_DB_DEPLOY=never` skips it). Without a
+  URL the image stays on SQLite at `ODATANO_DB_PATH` (default
+  `/data/db.sqlite`, seeded on the first boot). `migrate` mode copies a
+  SQLite file into a freshly deployed PostgreSQL through CAP
+  (`docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite`;
+  `scripts/migrate-sqlite-to-postgres.mjs`, row counts verified). The
+  mapping is pinned in `test/unit/docker-cds-config.test.ts`.
+
 ### Changed (rc.8)
 
 - Transport auth moves to `@odatano/cap-auth`. With agent grants enabled the

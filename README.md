@@ -90,6 +90,8 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 > Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
 >
 > The Docker image runs `NODE_ENV=production` with HTTP basic auth via `@odatano/cap-auth` (`ODATANO_HTTP_PASSWORD` required, user `ODATANO_HTTP_USER` default `odatano`, roles `ODATANO_HTTP_ROLES` default `Admin`; 20 failed attempts per 15 min per client address and user, then 429). `ODATANO_AUTH=dummy` disables authentication for local testing only. `getLiveness()` and `VerifyDataSignature` stay anonymous.
+>
+> Database of the image: `ODATANO_DB_URL=postgres://user:pw@host:5432/db` selects PostgreSQL (schema deployed on every boot); otherwise SQLite at `ODATANO_DB_PATH` (default `/data/db.sqlite`). `docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite` copies an existing SQLite file into a freshly deployed PostgreSQL.
 
 ## Services
 

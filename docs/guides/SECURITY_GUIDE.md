@@ -1,6 +1,6 @@
 # ODATANO Security & Authentication Guide
 
-**Version:** v2.0.0-rc.7 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.9 | **Last Updated:** September 2026
 
 ---
 
