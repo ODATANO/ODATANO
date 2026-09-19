@@ -1,8 +1,8 @@
 /**
- * Transport lanes (AGENT_GRANTS_DESIGN.md §3): the `x-agent-token` lane admits a
- * token on the six service paths and authenticates it; everything else goes to
- * the delegate (CAP's configured strategy), which is stubbed here. Token
- * resolution is stubbed at the module boundary; its own tests live in
+ * The `x-agent-token` lane (AGENT_GRANTS_DESIGN.md §3) inside the
+ * @odatano/cap-auth middleware with a stub delegate: a token on the six
+ * service paths is authenticated here, everything else is the delegate's.
+ * Token resolution is stubbed at the module boundary; its own tests live in
  * agent-grants.test.ts.
  */
 
@@ -18,15 +18,13 @@ vi.mock('../../srv/utils/agent-grants', async (importOriginal) => {
 });
 
 import cds from '@sap/cds';
+import path from 'node:path';
+import { createTransportAuth, registerTransportLane, transportLanes, __resetTransportLanesForTests, type AuthMiddleware } from '@odatano/cap-auth';
 import {
-  __resetTransportLanesForTests,
+  __resetAgentTokenLaneForTests,
   __setAgentServicePathsForTests,
-  createAgentTokenAuth,
+  agentTokenLane,
   inAgentLane,
-  registerTransportLane,
-  resolveCustomImpl,
-  transportLanes,
-  type AuthMiddleware,
 } from '../../srv/utils/agent-token-auth';
 import { AGENT_ROLE, AGENT_TOKEN_HEADER, AGENT_TOKEN_PREFIX, type AgentGrantRow } from '../../srv/utils/agent-grants';
 
@@ -62,7 +60,6 @@ function fakeRes() {
     set(name: string, value: string) { res.headers[name] = value; return res; },
     json(body: unknown) { res.body = body; },
     setHeader(name: string, value: string) { res.headers[name] = value; },
-    // The lane answers JSON; a delegate (the custom-auth fixture) may end with plain text.
     end(body?: string) {
       if (!body) { res.body = undefined; return; }
       try { res.body = JSON.parse(body); } catch { res.body = body; }
@@ -78,17 +75,20 @@ let auth: AuthMiddleware;
 
 beforeEach(() => {
   __resetTransportLanesForTests();
+  __resetAgentTokenLaneForTests();
   __setAgentServicePathsForTests(SERVICE_PATHS);
   grantsMock.resolveAgentToken.mockReset();
   grantsMock.resolveAgentToken.mockResolvedValue({ ok: false, status: 401, message: 'invalid agent token' });
   delegate = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
-  auth = createAgentTokenAuth({ kind: 'mocked', agentGrantsDelegate: 'mocked' }, delegate as unknown as AuthMiddleware);
+  registerTransportLane(agentTokenLane);
+  auth = createTransportAuth({ kind: 'mocked' }, delegate as unknown as AuthMiddleware);
 });
 
 describe('inAgentLane', () => {
   it('matches the service root and paths below it, never lookalike prefixes', () => {
     expect(inAgentLane('/odata/v4/cardano-odata', SERVICE_PATHS)).toBe(true);
     expect(inAgentLane('/odata/v4/cardano-odata/Blocks', SERVICE_PATHS)).toBe(true);
+    expect(inAgentLane('/odata/v4/cardano-odata?$top=1', SERVICE_PATHS)).toBe(true);
     expect(inAgentLane('/odata/v4/cardano-agent/GetGrantStatus()', SERVICE_PATHS)).toBe(true);
     expect(inAgentLane('/odata/v4/cardano-odata-evil/Blocks', SERVICE_PATHS)).toBe(false);
     expect(inAgentLane('/odata/v4/other', SERVICE_PATHS)).toBe(false);
@@ -97,8 +97,13 @@ describe('inAgentLane', () => {
 });
 
 describe('agent-token lane', () => {
+  it('runs after the built-in basic lane', () => {
+    expect(transportLanes()).toEqual(['agent-token']);
+    expect((auth as unknown as { lanes: readonly string[] }).lanes).toEqual(['basic', 'agent-token']);
+  });
+
   it('delegates a request without the header untouched', async () => {
-    const req = fakeReq('/odata/v4/cardano-odata/Blocks', { authorization: 'Basic YWxpY2U6' });
+    const req = fakeReq('/odata/v4/cardano-odata/Blocks');
     const next = vi.fn();
     await auth(req, fakeRes(), next);
     expect(delegate).toHaveBeenCalledTimes(1);
@@ -125,6 +130,7 @@ describe('agent-token lane', () => {
     await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }), res401, vi.fn());
     expect(res401.statusCode).toBe(401);
     expect((res401.body as { error: { message: string } }).error.message).toBe('invalid agent token');
+    expect(res401.headers['WWW-Authenticate']).toBeUndefined();
 
     grantsMock.resolveAgentToken.mockResolvedValue({ ok: false, status: 410, message: 'agent grant expired' });
     const res410 = fakeRes();
@@ -149,7 +155,6 @@ describe('agent-token lane', () => {
     await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), res, vi.fn());
     expect(res.statusCode).toBe(429);
     expect(res.headers['Retry-After']).toBeDefined();
-    // Another client is unaffected.
     const other = fakeRes();
     const next = vi.fn();
     await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.10'), other, next);
@@ -165,50 +170,33 @@ describe('agent-token lane', () => {
     expect(next).not.toHaveBeenCalled();
     expect(delegate).not.toHaveBeenCalled();
   });
-});
 
-describe('registerTransportLane (the seam @odatano/x402 uses)', () => {
-  it('runs registered lanes after the built-in one and lets a lane decline', async () => {
-    const paid = new cds.User({ id: 'payer:abc', roles: ['x402-payer'] } as never);
-    registerTransportLane({
-      name: 'x402',
-      match: (req) => typeof req.headers['payment-signature'] === 'string',
-      authenticate: async (req) => (req.headers['payment-signature'] === 'good' ? { user: paid } : null),
-    });
-    expect(transportLanes()).toEqual(['agent-token', 'x402']);
-
-    const good = fakeReq('/odata/v4/cardano-odata/Blocks', { 'payment-signature': 'good' });
+  it('wrong basic credentials never reach the token lane', async () => {
+    __resetTransportLanesForTests();
+    registerTransportLane(agentTokenLane);
+    const withUsers = createTransportAuth({ kind: 'basic', users: { op: { password: 'pw' } } }, delegate as unknown as AuthMiddleware);
+    grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
+    const res = fakeRes();
     const next = vi.fn();
-    await auth(good, fakeRes(), next);
-    expect(next).toHaveBeenCalled();
-    expect((good.user as cds.User).id).toBe('payer:abc');
-    expect(delegate).not.toHaveBeenCalled();
-
-    const declined = fakeReq('/odata/v4/cardano-odata/Blocks', { 'payment-signature': 'bad' });
-    await auth(declined, fakeRes(), vi.fn());
-    expect(delegate).toHaveBeenCalledTimes(1);
-  });
-
-  it('replaces a lane registered under the same name', () => {
-    const lane = { name: 'x402', match: () => false, authenticate: async () => null };
-    registerTransportLane(lane);
-    registerTransportLane({ ...lane });
-    expect(transportLanes()).toEqual(['agent-token', 'x402']);
+    await withUsers(fakeReq('/odata/v4/cardano-odata/', { authorization: 'Basic ' + Buffer.from('op:wrong').toString('base64'), [AGENT_TOKEN_HEADER]: TOKEN }), res, next);
+    expect(res.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+    expect(grantsMock.resolveAgentToken).not.toHaveBeenCalled();
   });
 });
 
 describe('a host with its own auth.impl keeps it as the delegate', () => {
   // The fixture rejects everything without x-host-key. Before agent grants were
   // switched on it answered 401 to such requests; it must still do so after,
-  // on ODATANO paths and on foreign ones — the lane only adds the token path.
-  const options = { kind: 'mocked', agentGrantsDelegate: 'custom', agentGrantsDelegateImpl: 'test/fixtures/custom-auth.cjs', hostKey: 'sesame' };
+  // on ODATANO paths and on foreign ones: the lane only adds the token path.
+  const options = { kind: 'mocked', delegateImpl: 'test/fixtures/custom-auth.cjs', hostKey: 'sesame' };
 
-  it('resolves the configured impl relative to cds.root like CAP does', () => {
-    expect(resolveCustomImpl('test/fixtures/custom-auth.cjs', process.cwd())).toMatch(/custom-auth\.cjs$/);
+  beforeEach(() => {
+    (cds as unknown as { root: string }).root = path.resolve(__dirname, '../..');
   });
 
   it('runs the custom gate for every non-token request', async () => {
-    const wrapped = createAgentTokenAuth(options);
+    const wrapped = createTransportAuth(options);
 
     const refused = fakeRes();
     const next1 = vi.fn();
@@ -231,7 +219,7 @@ describe('a host with its own auth.impl keeps it as the delegate', () => {
 
   it('still admits a valid agent token on the service paths in front of the custom gate', async () => {
     grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
-    const wrapped = createAgentTokenAuth(options);
+    const wrapped = createTransportAuth(options);
     const req = fakeReq('/odata/v4/cardano-agent/GetGrantStatus()', { [AGENT_TOKEN_HEADER]: TOKEN });
     const next = vi.fn();
     await wrapped(req, fakeRes(), next);

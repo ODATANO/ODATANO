@@ -92,9 +92,10 @@ services:
       - FALLBACK_TIMEOUT_MS=15000
       - INDEX_TTL_MS=600000
       - LOG_LEVEL=info
-      - NODE_ENV=development
+      - NODE_ENV=production
+      - ODATANO_HTTP_PASSWORD=${ODATANO_HTTP_PASSWORD:?set ODATANO_HTTP_PASSWORD}
+      - AGENT_GRANTS_ENABLED=${AGENT_GRANTS_ENABLED:-false}
       - PORT=4004
-      - CDS_REQUIRES_AUTH=mocked
     depends_on:
       ogmios:
         # waits until Ogmios answers /health (connected to node) — not full sync

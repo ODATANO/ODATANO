@@ -67,6 +67,8 @@ ENV APP_VERSION=${VERSION}
 # startup dies with "attempt to write a readonly database".
 RUN chown node:node /app /app/*.sqlite* 2>/dev/null || chown node:node /app
 
+RUN chmod +x /app/docker/entrypoint.sh
+
 # Run as non-root user for security
 USER node
 
@@ -80,5 +82,6 @@ EXPOSE 4004
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD wget --quiet --tries=1 --spider "http://localhost:4004/odata/v4/cardano-indexer/getLiveness()" || exit 1
 
-# Start service - serve all CDS files explicitly
-CMD ["node", "node_modules/@sap/cds/bin/serve.js", "srv"]
+# Start service: the entrypoint builds CDS_CONFIG (auth) from the environment and
+# execs node as PID 1 (docker/cds-config.mjs, docker/entrypoint.sh).
+ENTRYPOINT ["/app/docker/entrypoint.sh"]

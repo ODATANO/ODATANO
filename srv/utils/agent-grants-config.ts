@@ -1,5 +1,4 @@
 import cds from '@sap/cds';
-import path from 'path';
 
 /**
  * Agent-grant feature switch. Read from `cds.requires.odatano-core.agentGrants`
@@ -65,8 +64,8 @@ export function configuredAuth(): Record<string, unknown> {
   return (auth ?? {}) as Record<string, unknown>;
 }
 
-/** Our own middleware module, recognisable in `auth.impl` so activation stays idempotent. */
-const OUR_IMPL = 'agent-token-auth';
+/** The transport middleware, recognisable in `auth.impl` so activation stays idempotent. */
+const OUR_IMPL = 'cap-auth';
 
 /**
  * A custom `cds.requires.auth.impl` the host configured before us (anything
@@ -121,9 +120,10 @@ const ACTIVATED = Symbol.for('odatano.agentGrants.activated');
  *    middlewares — the last moment `cds.requires.auth.impl` can still change).
  *
  * When enabled:
- *  - the transport auth becomes srv/utils/agent-token-auth, which admits the
- *    `x-agent-token` header on the six service paths and delegates every other
- *    request to the strategy that was configured before (kept as the delegate);
+ *  - the transport auth becomes @odatano/cap-auth (unless the host runs it
+ *    already) with the `x-agent-token` lane of srv/utils/agent-token-auth
+ *    registered; every other request goes to the strategy that was configured
+ *    before (CAP's own for `kind`, or the host's custom impl as `delegateImpl`);
  *  - each of the six services gets the enforcement hook once it is served.
  *
  * Never throws: a misconfiguration is logged and the feature stays off, so a
@@ -144,15 +144,19 @@ export function activateAgentGrants(): boolean {
     if (!current.includes(OUR_IMPL)) {
       // A host's own auth.impl is preserved as the delegate: the lane only adds
       // the token path in front of it, it never replaces the host's gate.
+      // The absolute path: in plugin mode cds.root is the consumer app, which
+      // need not resolve this package's dependency.
       const original = customAuthImpl(auth);
       (cds.env.requires as Record<string, unknown>).auth = {
         ...auth,
-        kind: auth.kind ?? agentGrants.delegate,
-        impl: path.join(__dirname, OUR_IMPL),
-        agentGrantsDelegate: agentGrants.delegate,
-        ...(original ? { agentGrantsDelegateImpl: original } : {})
+        kind: agentGrants.delegate === 'custom' ? auth.kind : agentGrants.delegate,
+        impl: require.resolve('@odatano/cap-auth'),
+        ...(original ? { delegateImpl: original } : {})
       };
     }
+    const { registerTransportLane } = require('@odatano/cap-auth') as typeof import('@odatano/cap-auth');
+    const { agentTokenLane } = require('./agent-token-auth') as typeof import('./agent-token-auth');
+    registerTransportLane(agentTokenLane);
     cds.on('serving', (srv) => {
       const { AGENT_SERVICE_NAMES, attachAgentGrantEnforcement } =
         require('./agent-grants') as typeof import('./agent-grants');

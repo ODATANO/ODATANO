@@ -2,7 +2,27 @@
 
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
-### Fixed (unreleased, after rc.7)
+### Changed (rc.8)
+
+- Transport auth moves to `@odatano/cap-auth`. With agent grants enabled the
+  plugin sets `cds.requires.auth.impl` to that package (a host's own impl is
+  kept as its `delegateImpl`) and registers the `x-agent-token` lane from
+  `srv/utils/agent-token-auth.ts`; the package runs its basic lane
+  (timing-safe compare, failure throttle), the registered lanes, then CAP's
+  own strategy for `kind`, and sends no terminal 401 of its own. The lane
+  registry, delegate loader and `agentGrantsDelegate*` options leave this
+  package; `registerTransportLane` and the lane types are re-exported from
+  `@odatano/cap-auth`. The contract table runs against the real server
+  (`test/integration/transport-auth-contract.test.ts`).
+- The Docker image runs `NODE_ENV=production` with HTTP basic auth
+  (`ODATANO_HTTP_PASSWORD`, `ODATANO_HTTP_USER` default `odatano`,
+  `ODATANO_HTTP_ROLES` default `Admin`, `ODATANO_AUTH=dummy` for local
+  testing) through `docker/cds-config.mjs` and `docker/entrypoint.sh` (node
+  as PID 1). `getLiveness()` and `VerifyDataSignature` stay anonymous;
+  everything else challenges. The compose file no longer sets
+  `CDS_REQUIRES_AUTH=mocked`.
+
+### Fixed (rc.8)
 
 - `getLiveness()` and `VerifyDataSignature` were anonymous only under
   `NODE_ENV=development`. CAP treats a service WITHOUT a service-level

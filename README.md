@@ -88,6 +88,8 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 > **Heads-up.** `cds serve` uses CAP's mocked auth: `@requires: 'authenticated-user'` accepts any Basic-Auth header against a mock user (`alice`, `bob`, …) — passwords are not checked. Anonymous requests get 401, but anyone reaching the port can authenticate.
 >
 > Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
+>
+> The Docker image runs `NODE_ENV=production` with HTTP basic auth via `@odatano/cap-auth` (`ODATANO_HTTP_PASSWORD` required, user `ODATANO_HTTP_USER` default `odatano`, roles `ODATANO_HTTP_ROLES` default `Admin`; 20 failed attempts per 15 min per client address and user, then 429). `ODATANO_AUTH=dummy` disables authentication for local testing only. `getLiveness()` and `VerifyDataSignature` stay anonymous.
 
 ## Services
 

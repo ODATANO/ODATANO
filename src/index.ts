@@ -54,8 +54,8 @@ export type {
   GrantUsageCall,
   UsageWindow,
 } from '../srv/utils/agent-grants';
-export { registerTransportLane } from '../srv/utils/agent-token-auth';
-export type { TransportLane, LaneOutcome } from '../srv/utils/agent-token-auth';
+export { registerTransportLane } from '@odatano/cap-auth';
+export type { TransportLane, LaneOutcome } from '@odatano/cap-auth';
 export { loadAgentGrantsConfig } from '../srv/utils/agent-grants-config';
 export type { AgentGrantsConfig } from '../srv/utils/agent-grants-config';
 export type { HsmConfig, HsmSignResult } from '../srv/utils/types';
