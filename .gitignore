@@ -99,15 +99,4 @@ RELEASE_NOTES_*.md
 docs/release-*.md
 
 # Local review/PR working files (upstream PR texts live in the fork PRs)
-REVIEW_PLAN.md
-BUILDOOOR_*.md
-LEDGERTS_*.md
-repro-*.js
-feature_req.md
-KNOWN_ISSUES.md
-CAP10_MIGRATION_PLAN.md
-CRAWLER_DESIGN.md
-WALLET_WORKER_DESIGN.md
-SUBMIT_DETACH_DESIGN.md
-AGENT_GRANTS_DESIGN.md
-docs/reviews/
+/local_docs/*

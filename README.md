@@ -1,4 +1,9 @@
-![alt text](docs/assets/odatano_logo/logo_odatano_white.png)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-core-logo-on-dark.svg">
+    <img src="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-core-logo.svg" alt="ODATANO CORE" height="84">
+  </picture>
+</p>
 
 # Enterprise OData Services for the Cardano Blockchain
 
