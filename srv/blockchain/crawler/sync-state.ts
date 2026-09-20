@@ -241,11 +241,32 @@ export async function releaseCrawlerLease(
   }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
 }
 
-/** Persist the pause/resume intent shared by every app instance. */
+/**
+ * Persist the pause/resume intent shared by every app instance. Resuming also clears
+ * the error streak: the operator says the cause is fixed, and a stale streak would
+ * otherwise keep the standby backoff at its cap for the first retry.
+ */
 export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunning: boolean): Promise<void> {
   const set: Record<string, unknown> = { desiredRunning };
-  if (!desiredRunning) set.syncStatus = 'stopped';
+  if (desiredRunning) set.consecutiveErrors = 0;
+  else set.syncStatus = 'stopped';
   await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
+}
+
+/**
+ * Latch the cluster off because of a poison block (a block whose data the database
+ * deterministically rejects). Deliberately NOT lease-scoped, unlike releaseCrawlerLease:
+ * the poison is a property of the block, not of the instance that observed it, and
+ * that instance may have lost its lease while the failure was being recorded. Only
+ * an operator's resumeCrawler brings the crawler back.
+ */
+export async function latchPoisonBlock(db: CapTransaction, message: string): Promise<void> {
+  await db.run(UPDATE.entity(CardanoSyncState).set({
+    desiredRunning: false,
+    syncStatus: 'error',
+    lastError: message.slice(0, 500),
+    lastErrorAt: new Date().toISOString(),
+  }).where({ ID: SINGLETON_ID }));
 }
 
 /**

@@ -52,7 +52,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
 
 import type { Mock } from 'vitest';
 import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler/crawler';
-import { startCrawler, stopCrawler, isCrawlerRunning, getCrawler } from '../../srv/blockchain/crawler';
+import { startCrawler, stopCrawler, isCrawlerRunning, getCrawler, standbyDelayMs } from '../../srv/blockchain/crawler';
 import type { ChainSyncCallbacks, ChainSyncHandle } from '../../srv/blockchain/backends/cardano-backend';
 import type { BlockData } from '../../srv/utils/types';
 
@@ -104,6 +104,7 @@ async function settle(pred: () => boolean, max = 200) {
 beforeEach(() => {
   dbRun.mockReset();
   vi.restoreAllMocks();
+  CardanoCrawler.resetPoisonMemory();
 });
 
 // ---------------------------------------------------------------------------
@@ -503,6 +504,111 @@ describe('CardanoCrawler.persistBlock', () => {
 });
 
 // ---------------------------------------------------------------------------
+// poison block: the same block failing across restarts with an error that is
+// deterministic for its data (PostgreSQL rejecting a value) latches the crawler off
+// ---------------------------------------------------------------------------
+
+describe('CardanoCrawler poison block', () => {
+  const persist = (crawler: CardanoCrawler, b: BlockData) =>
+    (crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> }).persistBlock(b, []);
+  const poisonUpdates = () =>
+    updatesWith(s => typeof s.lastError === 'string' && s.lastError.startsWith('poison block'));
+
+  function failingCrawler(err: Error = new Error('unsupported Unicode escape sequence')) {
+    const indexBlockFull = vi.fn().mockRejectedValue(err);
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    (crawler as unknown as { running: boolean }).running = true;
+    return crawler;
+  }
+
+  it('never latches on transient failures, however often the same block fails', async () => {
+    // A DB outage, a statement timeout or an exhausted pool fails the same block on
+    // every restart too — but a restart fixes those (halt() contract: no latch).
+    cursorExists();
+    for (let i = 0; i < 12; i++) {
+      expect(await persist(failingCrawler(new Error('connect ETIMEDOUT 10.0.0.5:5432')), block())).toBe(false);
+    }
+    expect(updatesWith(s => s.desiredRunning === false)).toHaveLength(0);
+    expect(poisonUpdates()).toHaveLength(0);
+  });
+
+  it.each([
+    ['PostgreSQL bigint overflow', new Error('value "17802948329108123211" is out of range for type bigint')],
+    ['HANA value too large', new Error('inserted value too large for column: assetName')],
+    ['mapper RangeError', new RangeError('The number 1e+21 cannot be converted to a BigInt because it is not an integer')],
+  ])('counts %s as deterministic for the block', async (_name, err) => {
+    cursorExists();
+    for (let i = 0; i < 5; i++) await persist(failingCrawler(err), block());
+    expect(poisonUpdates().length).toBeGreaterThan(0);
+  });
+
+  it('keeps the memory when the latch cannot be written and retries after the next restart', async () => {
+    cursorExists();
+    const base = dbRun.getMockImplementation()!;
+    let latchWrites = 0;
+    dbRun.mockImplementation(async (q) => {
+      const set = q.set as Record<string, unknown> | undefined;
+      if (q._op === 'UPDATE' && typeof set?.lastError === 'string' && set.lastError.startsWith('poison block') && ++latchWrites === 1) {
+        throw new Error('connection reset'); // DB blip exactly when the latch is written
+      }
+      return base(q);
+    });
+    for (let i = 0; i < 6; i++) await persist(failingCrawler(), block());
+    expect(poisonUpdates().map(q => String((q.set as Record<string, unknown>).lastError))).toEqual([
+      expect.stringContaining('failed 5x'),
+      expect.stringContaining('failed 6x'), // count continued, not restarted from 1
+    ]);
+  });
+
+  it('does NOT latch on the first failures (a restart may still fix a transient cause)', async () => {
+    cursorExists();
+    for (let i = 0; i < 4; i++) {
+      expect(await persist(failingCrawler(), block())).toBe(false); // each call = one crawler restart
+    }
+    expect(updatesWith(s => s.desiredRunning === false)).toHaveLength(0);
+    expect(updatesWith(s => typeof s.lastError === 'string' && s.lastError.startsWith('poison block'))).toHaveLength(0);
+  });
+
+  it('latches the crawler off after the threshold and names the block in lastError', async () => {
+    cursorExists();
+    for (let i = 0; i < 5; i++) await persist(failingCrawler(), block());
+    expect(updatesWith(s => s.desiredRunning === false).length).toBeGreaterThan(0);
+    const poison = updatesWith(s => typeof s.lastError === 'string' && s.lastError.startsWith('poison block'));
+    expect(poison.length).toBeGreaterThan(0);
+    expect(String(poison[0].set && (poison[0].set as Record<string, unknown>).lastError)).toContain('blk'.padEnd(64, '1'));
+    expect(String((poison[0].set as Record<string, unknown>).lastError)).toContain('unsupported Unicode escape sequence');
+  });
+
+  it('resets the count when a different block fails or the block finally persists', async () => {
+    cursorExists();
+    for (let i = 0; i < 3; i++) await persist(failingCrawler(), block());
+    await persist(failingCrawler(), block({ hash: 'other'.padEnd(64, '2') })); // different hash → count restarts at 1
+    for (let i = 0; i < 3; i++) await persist(failingCrawler(), block());
+    expect(updatesWith(s => s.desiredRunning === false)).toHaveLength(0);
+
+    // success clears the memory: 4 more failures afterwards do not latch either
+    const ok = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn() });
+    (ok as unknown as { running: boolean }).running = true;
+    expect(await persist(ok, block())).toBe(true);
+    for (let i = 0; i < 4; i++) await persist(failingCrawler(), block());
+    expect(updatesWith(s => s.desiredRunning === false)).toHaveLength(0);
+  });
+});
+
+describe('standby backoff', () => {
+  it('keeps the 5 s cadence for a healthy standby and backs off exponentially on an error streak', () => {
+    expect(standbyDelayMs(0)).toBe(5_000);
+    expect(standbyDelayMs(1)).toBe(5_000);
+    expect(standbyDelayMs(2)).toBe(10_000);
+    expect(standbyDelayMs(3)).toBe(20_000);
+    expect(standbyDelayMs(6)).toBe(160_000);
+    expect(standbyDelayMs(7)).toBe(300_000); // capped at 5 min
+    expect(standbyDelayMs(82)).toBe(300_000);
+    expect(standbyDelayMs(Number.NaN)).toBe(5_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // pagination reorg recovery
 // ---------------------------------------------------------------------------
 
@@ -604,6 +710,72 @@ describe('crawler singleton lifecycle', () => {
     await stopCrawler();
     expect(isCrawlerRunning()).toBe(false);
     expect(getCrawler()).toBeNull();
+  });
+
+  it('a healthy leader\'s standby tick ignores the shared error streak (no backoff, no restart)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Cursor carries a long streak (e.g. Ogmios reconnects) while the leader still runs.
+      const state: Record<string, unknown> = { ...CURSOR_ROW, consecutiveErrors: '8' };
+      dbRun.mockImplementation(async (q) => {
+        if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...state };
+        if (q._op === 'UPDATE' && q.entity.endsWith('CardanoSyncState')) { Object.assign(state, q.set as Record<string, unknown>); return 1; }
+        return undefined;
+      });
+      const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
+      const deps = {
+        client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
+        indexer: { indexBlockFull: vi.fn() },
+        network: 'preview',
+        config: CONFIG,
+      };
+      await startCrawler(deps as never);
+      await settle(() => openChainSync.mock.calls.length > 0);
+      const timers = vi.spyOn(globalThis, 'setTimeout');
+
+      await vi.advanceTimersByTimeAsync(5_000); // standby tick on the running leader
+      await settle(() => timers.mock.calls.some(c => c[1] === 5_000));
+
+      expect(openChainSync).toHaveBeenCalledTimes(1);
+      expect(timers.mock.calls.some(c => c[1] === 300_000)).toBe(false);
+      await stopCrawler();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off from the cursor streak only after the local crawler halted with an error', async () => {
+    vi.useFakeTimers();
+    try {
+      const state: Record<string, unknown> = { ...CURSOR_ROW, consecutiveErrors: '8' };
+      dbRun.mockImplementation(async (q) => {
+        if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...state };
+        if (q._op === 'UPDATE' && q.entity.endsWith('CardanoSyncState')) { Object.assign(state, q.set as Record<string, unknown>); return 1; }
+        return undefined;
+      });
+      const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
+      const deps = {
+        client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
+        indexer: { indexBlockFull: vi.fn() },
+        network: 'preview',
+        config: CONFIG,
+      };
+      await startCrawler(deps as never);
+      await settle(() => openChainSync.mock.calls.length > 0);
+      const failed = getCrawler()!;
+      await (failed as unknown as { halt: (s: string) => Promise<void> }).halt('error'); // e.g. persist failure
+      expect(failed.haltedWithError()).toBe(true);
+      const timers = vi.spyOn(globalThis, 'setTimeout');
+
+      await vi.advanceTimersByTimeAsync(5_000); // tick sees the local failure → restart + backoff
+      await settle(() => timers.mock.calls.some(c => c[1] === 300_000));
+
+      expect(openChainSync).toHaveBeenCalledTimes(2); // restarted once…
+      expect(timers.mock.calls.some(c => c[1] === 300_000)).toBe(true); // …next attempt in 5 min (streak 8)
+      await stopCrawler();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not restart from a standby timer callback invalidated by stopCrawler', async () => {

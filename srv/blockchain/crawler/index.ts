@@ -20,6 +20,20 @@ let standbyTimer: ReturnType<typeof setTimeout> | null = null;
 let standbyGeneration = 0;
 
 const STANDBY_RETRY_MS = 5_000;
+const STANDBY_MAX_BACKOFF_MS = 5 * 60_000;
+
+/**
+ * Delay before the next standby start attempt. A healthy standby (a lease loser, or
+ * the leader's own no-op tick) retries every 5 s. Only after the crawler in THIS
+ * process halted with an error does the shared cursor's consecutiveErrors drive an
+ * exponential backoff (5 s, 10 s, 20 s ... capped at 5 min), so a block the crawler
+ * cannot persist no longer re-syncs the chain-sync stream every 5 s. A standby that
+ * never held the lease is not slowed down by the leader's streak: failover stays 5 s.
+ */
+export function standbyDelayMs(consecutiveErrors: number): number {
+  if (!Number.isFinite(consecutiveErrors) || consecutiveErrors <= 1) return STANDBY_RETRY_MS;
+  return Math.min(STANDBY_MAX_BACKOFF_MS, STANDBY_RETRY_MS * 2 ** Math.min(consecutiveErrors - 1, 10));
+}
 
 export interface StartCrawlerDeps {
   client: CardanoClient;
@@ -118,18 +132,35 @@ function serializeLifecycle(operation: () => Promise<void>): Promise<void> {
 }
 
 /** Keep non-leader instances warm so an expired/released lease fails over automatically. */
-function scheduleStandby(generation: number): void {
+function scheduleStandby(generation: number, delayMs = STANDBY_RETRY_MS): void {
   if (standbyTimer || !standbyDeps) return;
   standbyTimer = setTimeout(() => {
     standbyTimer = null;
     if (generation !== standbyGeneration) return;
     const deps = standbyDeps;
     if (!deps) return;
+    // Local evidence only, taken BEFORE the attempt replaces `active`.
+    const failedHere = active?.haltedWithError() ?? false;
     void startCrawlerAttempt(deps, false, generation)
       .catch((err) => logger.error('standby lease attempt failed:', err))
-      .finally(() => {
-        if (generation === standbyGeneration) scheduleStandby(generation);
+      .then(() => nextStandbyDelay(failedHere))
+      .then((delay) => {
+        if (generation === standbyGeneration) scheduleStandby(generation, delay);
       });
-  }, STANDBY_RETRY_MS);
+  }, delayMs);
   standbyTimer.unref?.();
+}
+
+/**
+ * Backoff from the shared cursor's error streak after a local failure; the base delay
+ * otherwise — a healthy tick costs no DB round-trip.
+ */
+async function nextStandbyDelay(failedHere: boolean): Promise<number> {
+  if (!failedHere) return STANDBY_RETRY_MS;
+  try {
+    const cursor = await cds.tx((tx) => readCursor(tx));
+    return standbyDelayMs(cursor?.consecutiveErrors ?? 0);
+  } catch {
+    return STANDBY_RETRY_MS;
+  }
 }

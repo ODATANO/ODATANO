@@ -1,6 +1,6 @@
 # ODATANO Developer Guide
 
-**Version:** v2.0.0-rc.9 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.10 | **Last Updated:** September 2026
 
 ---
 

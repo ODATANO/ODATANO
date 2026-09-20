@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] - rc.10
+
+### Fixed
+
+- PostgreSQL: asset names containing a NUL byte or invalid UTF-8 halted the
+  crawler ("unsupported Unicode escape sequence"). `decodeAssetName()` now
+  returns the hex form for such names (`assetNameHex` was always exact), and a
+  db-level sanitizer strips U+0000 from every row this plugin writes — crawler
+  and lazy paths alike.
+- PostgreSQL: metadata labels >= 2^63 overflowed the int64 key
+  `TransactionMetadata.id` and halted the crawler. Labels now map into int64
+  exactly (two's complement, exact beyond 2^53); `label` keeps the original
+  text. Non-numeric labels are skipped with a warning instead of producing an
+  invalid key.
+- Crawler restart loop: a block whose persist keeps failing no longer restarts
+  the crawler every 5 s. The standby delay backs off (5 s → 5 min) after a local
+  failure, and a block that PostgreSQL/HANA/SQLite deterministically rejects
+  5 restarts in a row latches the crawler off with `lastError = "poison block
+  …"`; `resumeCrawler()` continues once the cause is fixed. Transient failures
+  (DB outage, timeouts) never latch.
+
+### Notes
+
+- Metadata rows for labels above 2^53 indexed by an earlier rc build carry a
+  rounded `id`; re-indexing such a transaction writes the exact key beside it.
+  Delete those rows before re-crawling if you need a clean table (they are
+  rare: standard labels are far below 2^53).
+
 ## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
 
 ### Added (rc.9)

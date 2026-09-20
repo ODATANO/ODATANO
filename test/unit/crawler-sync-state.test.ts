@@ -37,6 +37,7 @@ import {
   renewCrawlerLease,
   releaseCrawlerLease,
   setCrawlerDesiredRunning,
+  latchPoisonBlock,
   isCrawlerLeaseActive,
 } from '../../srv/blockchain/crawler/sync-state';
 
@@ -173,6 +174,25 @@ describe('sync-state: cluster lease', () => {
 
     await expect(tryAcquireCrawlerLease(db as never, 'owner', new Date(), 15_000)).resolves.toBe(false);
     expect(state).toMatchObject({ desiredRunning: false, syncStatus: 'stopped' });
+  });
+
+  it('resume clears the error streak (standby backoff starts over) but keeps lastError', async () => {
+    const { db, state } = stateDb({ ...base, desiredRunning: false, consecutiveErrors: 12, lastError: 'poison block …' });
+    await setCrawlerDesiredRunning(db as never, true);
+
+    expect(state).toMatchObject({ desiredRunning: true, consecutiveErrors: 0, lastError: 'poison block …' });
+  });
+
+  it('latchPoisonBlock pauses the cluster even when another instance holds the lease', async () => {
+    // The poison is a property of the block, not of the observer — a lease that moved
+    // while the failure was recorded must not make the latch silently a no-op.
+    const { db, state } = stateDb({ ...base, leaseOwner: 'owner-b', leaseUntil: '2099-01-01T00:00:00.000Z' });
+    await latchPoisonBlock(db as never, 'poison block abc @41 failed 5x: unsupported Unicode escape sequence');
+
+    expect(state).toMatchObject({ desiredRunning: false, syncStatus: 'error', leaseOwner: 'owner-b' });
+    expect(state.lastError).toContain('poison block abc');
+    expect(typeof state.lastErrorAt).toBe('string');
+    await expect(tryAcquireCrawlerLease(db as never, 'owner-a', new Date('2100-01-01T00:00:00.000Z'), 15_000)).resolves.toBe(false);
   });
 });
 

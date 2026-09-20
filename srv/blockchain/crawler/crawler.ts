@@ -32,6 +32,7 @@ import {
   tryAcquireCrawlerLease,
   renewCrawlerLease,
   releaseCrawlerLease,
+  latchPoisonBlock,
   CRAWLER_LEASE_TTL_MS,
   MAX_CONSECUTIVE_ERRORS,
   type CrawlPoint,
@@ -86,6 +87,33 @@ export interface CrawlerConfig {
 export class CardanoCrawler {
   /** Transient-failure retries per block before giving up. */
   private static readonly PERSIST_RETRIES = 3;
+  /**
+   * A block whose persist keeps failing across crawler restarts is a poison block
+   * (e.g. data PostgreSQL rejects). After this many failed persistBlock() calls for
+   * the same hash the crawler latches off (desiredRunning=false) instead of
+   * restarting forever; an operator fixes the cause and calls resumeCrawler().
+   */
+  private static readonly POISON_BLOCK_THRESHOLD = 5;
+  /** Process-wide, survives instance restarts: the block currently failing and how often. */
+  private static poison: { hash: string; failures: number } | null = null;
+  /**
+   * Database errors that are deterministic for the block's data — the same bytes fail
+   * the same way on every restart. Only these count towards the poison-block latch:
+   * a DB outage, a statement timeout or an exhausted pool fails the same block too,
+   * but a restart fixes those, and latching on them would disable the pre-sync for
+   * good (the contract of halt()).
+   */
+  private static readonly DATA_REJECTION_PATTERNS: readonly RegExp[] = [
+    /unsupported unicode escape sequence/i, // PostgreSQL: U+0000 inside a JSON document
+    /invalid byte sequence for encoding/i,  // PostgreSQL: bytes that are not valid UTF-8
+    /out of range for type/i,               // PostgreSQL: bigint / integer overflow
+    /invalid input syntax for type/i,       // PostgreSQL: NaN or text in a numeric column
+    /value too long for type/i,             // PostgreSQL: varchar(n) exceeded
+    /numeric value out of range/i,          // HANA / SQL-92
+    /inserted value too large for column/i, // HANA
+    /string or blob too big/i,              // SQLite
+    /datatype mismatch/i,                   // SQLite
+  ];
   /** Timeout for direct backend calls (the crawler bypasses the client's resilience layer). */
   private static readonly CALL_TIMEOUT_MS = 60_000;
 
@@ -118,6 +146,11 @@ export class CardanoCrawler {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** True once the crawler halted because of a failure (not via stop() or a lost lease). */
+  haltedWithError(): boolean {
+    return !this.running && this.finalStatus === 'error';
   }
 
   /**
@@ -556,6 +589,7 @@ export class CardanoCrawler {
             isAtTip ? 'synced' : 'syncing',
           );
         });
+        if (CardanoCrawler.poison?.hash === block.hash) CardanoCrawler.poison = null;
         // Notify observers (wallet-worker confirmation tracker) AFTER the commit —
         // listener failures are swallowed inside emitBlockIndexed.
         emitBlockIndexed({
@@ -583,7 +617,25 @@ export class CardanoCrawler {
           await this.sleep(1000 * attempt);
           continue;
         }
-        logger.error(`persistBlock failed for ${block.hash} after ${attempt} attempts — stopping crawler (resume re-syncs from cursor):`, err);
+        const dataRejection = CardanoCrawler.isDataRejection(err);
+        const failures = dataRejection ? CardanoCrawler.notePersistFailure(block.hash) : 0;
+        if (failures >= CardanoCrawler.POISON_BLOCK_THRESHOLD) {
+          const cause = err instanceof Error ? err.message : String(err);
+          const message = `poison block ${block.hash} @${block.height ?? '?'} failed ${failures}x: ${cause}`;
+          logger.error(`persistBlock failed for ${block.hash} (height ${block.height}) ${failures}x across restarts — poison block, latching the crawler off. Fix the cause, then resumeCrawler():`, err);
+          // Lease-independent on purpose (see latchPoisonBlock). The memory is only
+          // forgotten once the latch is durable, so a failed write is retried after
+          // the next restart instead of restarting the count from one.
+          const latched = await cds.tx((tx) => latchPoisonBlock(tx, message)).then(
+            () => true,
+            (e: unknown) => { logger.error('poison-block latch could not be written — retried after the next restart:', e); return false; },
+          );
+          if (latched) CardanoCrawler.poison = null;
+          await this.halt('error', true);
+          return false;
+        }
+        const perBlock = dataRejection ? ` (${failures}/${CardanoCrawler.POISON_BLOCK_THRESHOLD} for this block)` : '';
+        logger.error(`persistBlock failed for ${block.hash} after ${attempt} attempts${perBlock} — stopping crawler (resume re-syncs from cursor):`, err);
         await this.halt('error');
         return false;
       }
@@ -706,6 +758,26 @@ export class CardanoCrawler {
         }
       }
     })();
+  }
+
+  /** Whether a persist error is deterministic for the block's data (see DATA_REJECTION_PATTERNS). */
+  static isDataRejection(err: unknown): boolean {
+    // RangeError: BigInt / number conversions in the mappers; SyntaxError: JSON of the block
+    if (err instanceof RangeError || err instanceof SyntaxError) return true;
+    const message = err instanceof Error ? err.message : String(err);
+    return CardanoCrawler.DATA_REJECTION_PATTERNS.some((p) => p.test(message));
+  }
+
+  /** Count final persist failures per block hash (a different hash resets the count). */
+  private static notePersistFailure(hash: string): number {
+    const p = CardanoCrawler.poison;
+    CardanoCrawler.poison = p && p.hash === hash ? { hash, failures: p.failures + 1 } : { hash, failures: 1 };
+    return CardanoCrawler.poison.failures;
+  }
+
+  /** Test seam: forget the poison-block memory (process-wide state). */
+  static resetPoisonMemory(): void {
+    CardanoCrawler.poison = null;
   }
 
   /** Record state only while this instance still owns the lease. */

@@ -2,7 +2,7 @@ import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
-import { normalizeCostModels } from '../../utils/mappers';
+import { normalizeCostModels, decodeAssetName } from '../../utils/mappers';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
   Transaction,
@@ -345,10 +345,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           url?: string | null;
           logo?: string | null;
         } | null }).metadata ?? null;
-        const decodeUtf8 = (hex: string | null | undefined): string | null => {
-          if (!hex) return null;
-          try { return Buffer.from(hex, 'hex').toString('utf8'); } catch { return null; }
-        };
+        const decodeUtf8 = (hex: string | null | undefined): string | null => (hex ? decodeAssetName(hex) : null);
 
         return {
           unit: a.asset,

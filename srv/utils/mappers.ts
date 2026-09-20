@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import { TextDecoder } from 'node:util';
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
 import { safeJSON } from '@cardano-ogmios/client';
@@ -542,14 +543,16 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
-    const numericId = Number(lbl.label);
-    // Metadata labels are uint64; the exact value is kept in the `label` string.
-    // The numeric `id` key (now Integer64) is exact up to 2^53 — warn beyond that.
-    if (!Number.isSafeInteger(numericId)) {
-      logger.warn(`Metadata label ${lbl.label} exceeds safe-integer range — numeric id key may lose precision (string label is exact)`);
+    const id = metadataIdFor(lbl.label);
+    if (id === null) {
+      // A NaN key would fail the whole bulk write (PostgreSQL: "invalid input syntax
+      // for type bigint") and, in the crawler, count towards the poison-block latch.
+      logger.warn(`Metadata label ${JSON.stringify(lbl.label)} of tx ${lbl.txHash} is not a uint64 — row skipped`);
+      continue;
     }
     rows.push({
-      id: numericId,
+      // uint64 label → int64 key, exact (see metadataIdFor); `label` keeps the original string
+      id: id as unknown as number,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
       // Ogmios' parser deliberately exposes numeric metadata as native bigint.
@@ -559,6 +562,33 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
     });
   }
   return rows;
+}
+
+/**
+ * Metadata labels are uint64, the `TransactionMetadata.id` key is Integer64 (int64).
+ * Labels >= 2^63 are mapped through two's complement (BigInt.asIntN) so they stay
+ * unique and in range – preprod tx ee4f7c88… carries label 17802948329108123211,
+ * which PostgreSQL rejected as "out of range for type bigint" and halted the
+ * crawler. Beyond 2^53 the value is passed as a decimal string so that no
+ * precision is lost on the way to the database (CAP accepts strings for
+ * Integer64); `label` always keeps the original text.
+ *
+ * @returns the int64 key, or null when the label is not a non-negative integer
+ *   (the caller skips the row — a NaN key would fail the whole bulk write)
+ */
+export function metadataIdFor(label: string | number): number | string | null {
+  let big: bigint;
+  if (typeof label === 'number') {
+    if (!Number.isFinite(label)) return null;
+    big = BigInt(Math.trunc(label));
+  } else {
+    const text = String(label).trim();
+    if (!/^\d+$/.test(text)) return null;
+    big = BigInt(text);
+  }
+  const wrapped = BigInt.asIntN(64, big);
+  const safe = wrapped >= BigInt(Number.MIN_SAFE_INTEGER) && wrapped <= BigInt(Number.MAX_SAFE_INTEGER);
+  return safe ? Number(wrapped) : wrapped.toString();
 }
 
 /** 
@@ -949,9 +979,35 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
  * @returns {string} UTF-8 string or original hex if conversion fails
  */
 function hexToUtf8(hex: string): string {
-  if (!hex) return hex;
+  return decodeAssetName(hex);
+}
 
-  return Buffer.from(hex, 'hex').toString('utf8');
+// ignoreBOM: a leading U+FEFF is part of the asset name's bytes and must survive the
+// round trip (Buffer.toString('utf8') kept it; TextDecoder's default drops it).
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/**
+ * Decode an asset name (hex bytes) into its display string.
+ *
+ * Asset names are arbitrary bytes. When they are not valid UTF-8, or when they
+ * contain U+0000, the hex form is returned unchanged: PostgreSQL rejects NUL in
+ * `text` and in the JSON documents @cap-js/postgres uses for bulk INSERT/UPSERT
+ * ("unsupported Unicode escape sequence"), which halted the crawler on preprod
+ * block 4281919 (asset name ending in 0x00). SQLite accepted the same bytes
+ * silently. `assetNameHex` always keeps the exact bytes, so nothing is lost.
+ *
+ * @param hex - asset name as hex string
+ * @returns UTF-8 text, or the hex string when the bytes are not clean text
+ */
+export function decodeAssetName(hex: string): string {
+  if (!hex) return hex;
+  let text: string;
+  try {
+    text = strictUtf8.decode(Buffer.from(hex, 'hex'));
+  } catch {
+    return hex;
+  }
+  return text.includes('\u0000') ? hex : text;
 }
 
 /** 

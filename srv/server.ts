@@ -6,6 +6,7 @@ import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
 import { ConfigError, ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
+import { installDbSanitizer } from './utils/db-sanitize';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
@@ -85,6 +86,10 @@ async function initializeAppContext(
   // Create CardanoTransactionBuilder with the client
   const cardanoTxBuilder = new CardanoTransactionBuilder(cardanoClient);
   await cardanoTxBuilder.init(protocolParams);
+
+  // PostgreSQL rejects U+0000 in text/JSON. One db-level `before` hook covers every
+  // write of this plugin — crawler bulk UPSERTs and the lazy indexing paths alike.
+  if (installDbSanitizer()) logger.debug('DB NUL sanitizer installed');
 
   // Create CardanoIndexer with client and transaction builder
   const cardanoIndexer = new CardanoIndexer(cardanoClient, cardanoTxBuilder);

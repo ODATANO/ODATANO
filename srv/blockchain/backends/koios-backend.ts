@@ -3,7 +3,7 @@ import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequ
 import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, isPostgrestServerErrorCode } from '../../utils/errors';
-import { normalizeCostModels } from '../../utils/mappers';
+import { normalizeCostModels, decodeAssetName } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 
@@ -680,10 +680,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
           ? (mintMeta['721'] ?? mintMeta) as JSONValue
           : null;
 
-        const decodeUtf8 = (hex: string | null | undefined): string | null => {
-          if (!hex) return null;
-          try { return Buffer.from(hex, 'hex').toString('utf8'); } catch { return null; }
-        };
+        const decodeUtf8 = (hex: string | null | undefined): string | null => (hex ? decodeAssetName(hex) : null);
 
         const mintCnt = typeof a.mint_cnt === 'number' ? a.mint_cnt : 0;
         const burnCnt = typeof a.burn_cnt === 'number' ? a.burn_cnt : 0;

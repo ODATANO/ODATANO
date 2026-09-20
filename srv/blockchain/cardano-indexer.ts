@@ -648,7 +648,9 @@ export class CardanoIndexer {
     // Backfill chain-sync inputs (empty address/amount) from local outputs
     await this.resolveInputs(tx, txs);
 
-    // Accumulate rows across the whole block, then one bulk UPSERT per table
+    // Accumulate rows across the whole block, then one bulk UPSERT per table.
+    // NUL safety (PostgreSQL rejects U+0000 in text/JSON) is enforced for every write
+    // of this plugin by the db-level hook in srv/utils/db-sanitize.ts, not per call site.
     const txRows = txs.map(t => mapTransaction(t));
     const inputRows = txs.flatMap(t => mapTransactionInputs(t.hash, t.inputs ?? []));
     const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(t.hash, t.inputs ?? []));

@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v2.0.0-rc.9 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.10 | **Last Updated:** September 2026
 
 ---
 
@@ -781,5 +781,5 @@ invisible to existing HTTP clients.
 
 ---
 
-**Version:** v2.0.0-rc.9\
+**Version:** v2.0.0-rc.10\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover
