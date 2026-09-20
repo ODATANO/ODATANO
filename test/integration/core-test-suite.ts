@@ -244,15 +244,35 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       // Epochs
       // ============================================================================
       describe('Epochs Entity Tests', () => {
-        // Dynamically resolve epoch numbers from the live network to avoid flaky tests
+        // Dynamically resolve epoch numbers from the live network to avoid flaky tests.
+        // Backends occasionally have gaps for single historical epochs (e.g. Blockfrost
+        // preview answered 404 for epoch 1416 while 1415/1417 were fine), so we probe
+        // downwards from the preferred offset and take the first epoch the backend serves.
+        // Rows indexed by the probe are wiped by the beforeEach reset before any test runs.
         let recentEpoch: number;
         let coldEpoch: number;
-        // Koios returns empty arrays intermittently for historical epochs — skip cold indexing
+
+        const EPOCH_PROBE_WINDOW = 5;
+
+        async function findAvailableEpoch(start: number, exclude: number[] = []): Promise<number> {
+          const failures: string[] = [];
+          for (let epoch = start; epoch > start - EPOCH_PROBE_WINDOW && epoch >= 0; epoch--) {
+            if (exclude.includes(epoch)) continue;
+            try {
+              const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: epoch });
+              if (status === 200) return epoch;
+              failures.push(`${epoch}: HTTP ${status}`);
+            } catch (err) {
+              failures.push(`${epoch}: ${(err as Error).message}`);
+            }
+          }
+          throw new Error(`No epoch available on ${backendConfig.backendName} within [${start - EPOCH_PROBE_WINDOW + 1}, ${start}] — ${failures.join('; ')}`);
+        }
 
         beforeAll(async () => {
           const { data: latest } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
-          recentEpoch = latest.epoch - 5;
-          coldEpoch = latest.epoch - 10;
+          recentEpoch = await findAvailableEpoch(latest.epoch - 5);
+          coldEpoch = await findAvailableEpoch(latest.epoch - 10, [recentEpoch]);
         });
 
         describe('READ Epochs Entity', () => {
