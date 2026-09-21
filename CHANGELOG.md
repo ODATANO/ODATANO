@@ -1,6 +1,45 @@
 # Changelog
 
-## [Unreleased] - rc.10
+## [v2.0.0-rc.11] - phase-2 fees, over-deep chain-sync frames
+
+### Fixed
+
+- Phase-2-invalid transactions carried the fee declared in the transaction body.
+  The ledger charges the collateral instead, so `Transactions.fee` and the
+  derived `Blocks.fees` understated every failed script transaction — 127 of
+  them over a preprod backfill from 2026-01-01, 287 185 600 lovelace, and the
+  only divergence in an otherwise byte-identical comparison against
+  cardano-db-sync. `mapOgmiosTx` now takes the body's `total_collateral` where
+  it declares one, and `CardanoIndexer.applyCollateralFees()` derives the rest
+  from the resolved collateral inputs minus the collateral return. A collateral
+  input that cannot be resolved (produced before the crawl start) keeps the
+  declared fee and is logged, rather than summing short. Only the Ogmios
+  chain-sync path was affected; Blockfrost and Koios pass through untouched.
+- A chain-sync frame nested deeper than the client's parser can handle no longer
+  ends the process. `@cardano-ogmios/client` parses every frame with a recursive
+  descent parser plus an equally recursive `sanitize`; preprod block 5183974
+  carries a native script nested 10 774 levels deep (205 kB as JSON), and the
+  `RangeError` surfaced as an unhandled rejection from a socket handler nobody
+  awaits — the server died, Docker restarted it, the crawler hit the same block
+  again, 53 times in seven minutes, and `lastError` stayed empty throughout. The
+  frame guard wraps `safeJSON.parse`: the fast path is unchanged, an overflowing
+  frame has integers beyond 2^53 rewritten as strings and is parsed with V8's
+  iterative `JSON.parse`, and the guard never throws. A frame that survives
+  neither parser becomes a `ChainSyncFrameError` naming the block; with
+  `source: 'auto'` the crawler fetches that block through the paginating backend
+  and resumes chain-sync instead of halting. It still halts under
+  `source: 'ogmios'`, without a paginating backend, or when the frame named no
+  block.
+
+### Notes
+
+- Transactions indexed by an earlier build keep the declared fee; only blocks
+  crawled from this version on carry the collateral. Re-crawl the affected
+  blocks, or correct the rows in place — a phase-2 failure is the only
+  transaction the crawler stores without a regular input, which identifies the
+  set without consulting another indexer.
+
+## [v2.0.0-rc.10] - PostgreSQL hardening
 
 ### Fixed
 

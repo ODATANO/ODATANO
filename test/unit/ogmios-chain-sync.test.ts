@@ -35,6 +35,9 @@ const captured: {
 }));
 
 vi.mock('@cardano-ogmios/client', () => ({
+  // the frame guard wraps this on every openChainSync; these tests drive the message
+  // handlers directly, so a plain parser is enough to stand in for it
+  safeJSON: { parse: (raw: unknown) => JSON.parse(String(raw)) },
   createInteractionContext: vi.fn(async (
     onError: (err: Error) => void,
     onClose: (code: number, reason: Buffer) => void,
@@ -267,6 +270,57 @@ describe('OgmiosBackend.openChainSync', () => {
       dataHash: '3'.repeat(64),
       isCollateral: true,
     })]);
+  });
+
+  it('charges the declared total_collateral, not the body fee, when spends=collaterals', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.spends = 'collaterals';
+    tx.collaterals = [{ transaction: { id: '1'.repeat(64) }, index: 2 }];
+    tx.collateralReturn = { address: 'addr_test1return', value: { ada: { lovelace: 1_500_000n } } };
+    tx.totalCollateral = { ada: { lovelace: 3_000_000n } };
+
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    const mapped = rolled[0].txs[0];
+    // The ledger took the collateral; the body's 170_000 was never collected.
+    expect(mapped.fee).toBe('3000000');
+    expect(mapped.spendsCollaterals).toBe(true);
+    expect(mapped.totalCollateral).toBe('3000000');
+    expect(rolled[0].block.fees).toBe('3000000');
+  });
+
+  it('leaves the body fee for the indexer when a phase-2 failure declares no total_collateral', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.spends = 'collaterals';
+    tx.collaterals = [{ transaction: { id: '1'.repeat(64) }, index: 2 }];
+
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    const mapped = rolled[0].txs[0];
+    // Nothing better is known here — the collateral inputs are bare references at map time.
+    expect(mapped.fee).toBe('170000');
+    expect(mapped.spendsCollaterals).toBe(true);
+    expect(mapped.totalCollateral).toBeNull();
+  });
+
+  it('keeps the declared fee on a successful transaction that only declares collateral', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.collaterals = [{ transaction: { id: '1'.repeat(64) }, index: 2 }];
+    tx.totalCollateral = { ada: { lovelace: 3_000_000n } };
+
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    const mapped = rolled[0].txs[0];
+    // Collateral is only declared here, never consumed — the fee is the fee.
+    expect(mapped.fee).toBe('170000');
+    expect(mapped.spendsCollaterals).toBe(false);
+    expect(rolled[0].block.fees).toBe('170000');
   });
 
   it('passes tip=undefined when the node reports an origin tip', async () => {

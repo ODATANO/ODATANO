@@ -63,8 +63,27 @@ export interface Transaction {
   blockHeight: number;
   slot: number;
   index: number;
+  /**
+   * What the ledger charged. For an ordinary transaction that is the fee declared in the
+   * body; for a phase-2 failure (`spendsCollaterals`) it is the collateral consumed, which
+   * is what the sender actually paid — the declared fee was never collected.
+   */
   fee: Lovelace | string;
   deposit: Lovelace | string;
+  /**
+   * Phase-2 validity as the ledger applied it. True when the script phase failed: the
+   * declared inputs and outputs were not applied, the collateral inputs were consumed and
+   * only the collateral return was produced. Only the Ogmios chain-sync path reports it;
+   * the historical backends leave it undefined.
+   */
+  spendsCollaterals?: boolean;
+  /**
+   * `total_collateral` from the transaction body, when it declares one. The ledger requires
+   * it to equal the collateral actually consumed, so it is the exact value for `fee` on a
+   * phase-2 failure without resolving a single input. Null when the body omits it — the
+   * charge then has to be derived from the resolved collateral inputs minus the return.
+   */
+  totalCollateral?: Lovelace | string | null;
   /** Tx size in bytes; null when the source cannot provide it (Ogmios chain-sync). */
   size: number | null;
   blockTime: number;

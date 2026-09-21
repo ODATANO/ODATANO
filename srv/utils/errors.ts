@@ -576,7 +576,35 @@ export class ConfigError extends Error {
   }
 }
 
-/** 
+/**
+ * ChainSyncFrameError - Ogmios delivered a frame the client cannot turn into an object.
+ *
+ * Raised by the frame guard (see `backends/ogmios-frame-guard.ts`) once the client's parser
+ * and the depth-safe fallback have both failed. The block is named so `lastError` points at
+ * it instead of leaving an empty status behind, and so the crawler can take that one block
+ * through the paginating backend instead of waiting on a stream that will never deliver it.
+ */
+export class ChainSyncFrameError extends BackendError {
+  /** Constructor
+   * @param height block height the frame belonged to, when it could be read off the raw text
+   * @param id block hash, when readable
+   * @param reason why the frame could not be parsed
+   */
+  constructor(
+    public readonly height: number | null,
+    public readonly id: string | null,
+    reason: string
+  ) {
+    super(
+      `Ogmios chain-sync frame for block ${height ?? '?'} ${id ?? ''} could not be parsed: ${reason}`,
+      503,
+      ERROR_CODES.PROVIDER_UNAVAILABLE,
+      'ogmios'
+    );
+  }
+}
+
+/**
  * BackendInitError - Error initializing a specific backend
  * Captures backend name and original error
  */

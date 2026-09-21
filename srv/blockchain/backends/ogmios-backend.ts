@@ -10,7 +10,8 @@ import {
 import { bech32 } from 'bech32';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { BackendInitError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { installOgmiosFrameGuard } from './ogmios-frame-guard';
 import { normalizeCostModels } from '../../utils/mappers';
 import {
   Transaction,
@@ -182,6 +183,8 @@ interface OgmiosChainSyncTx {
   outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string }[];
   collateralReturn?: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string };
   fee?: { ada: { lovelace: number | bigint } };
+  /** `total_collateral` from the body — optional there, so absent on many phase-2 failures. */
+  totalCollateral?: { ada: { lovelace: number | bigint } };
   metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
 }
 interface OgmiosPraosBlock {
@@ -988,6 +991,16 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
         logger.error('[OgmiosBackend] chain-sync onError callback failed:', callbackError);
       }
     };
+
+    // A frame the client's own parser cannot handle never reaches this class: it throws
+    // inside the library's socket handler, where nothing awaits it, and ends the process.
+    // The guard intercepts that and routes the unusable frame here instead, as an ordinary
+    // stream error naming the block. Installed per open (one stream at a time) and
+    // idempotent, so reopening only swaps the callback.
+    installOgmiosFrameGuard(({ height, id, reason }) => {
+      void reportStreamError(new ChainSyncFrameError(height, id, reason));
+    });
+
     const contextPromise = createInteractionContext(
       (err) => {
         logger.error(`[OgmiosBackend] chain-sync context error: ${err.message}`);
@@ -1102,6 +1115,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
    * Map an Ogmios Praos block into our BlockData + its transactions. Block-level
    * fees are the sum of per-tx fees; epoch/epochSlot are derived from the slot via
    * the network's Shelley anchor (same config the tx-builder uses).
+   *
+   * A phase-2 failure whose body declares no `total_collateral` still carries its
+   * declared fee here, because the collateral inputs are not resolved yet. The indexer
+   * corrects both the transaction and this sum in applyCollateralFees().
    */
   private mapOgmiosBlock(block: OgmiosPraosBlock): { block: BlockData; txs: Transaction[] } {
     const txs = (block.transactions ?? []).map((t, i) => this.mapOgmiosTx(t, block, i));
@@ -1133,7 +1150,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
    * and metadata are mapped fully; inputs are kept as bare references (address/amount
    * resolved downstream by the indexer). `spends` selects the ledger-applied
    * partition: a phase-2-invalid transaction consumes collaterals and creates only
-   * its collateral-return output, never its declared regular inputs/outputs.
+   * its collateral-return output, never its declared regular inputs/outputs. The fee
+   * follows that partition too — see the `spendsCollaterals` branch below.
    */
   private mapOgmiosTx(tx: OgmiosChainSyncTx, block: OgmiosPraosBlock, index: number): Transaction {
     const mapInput = (
@@ -1185,13 +1203,22 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
         }))
       : [];
 
+    // A phase-2 failure does not pay the fee declared in the body — the ledger consumes
+    // the collateral instead. `total_collateral` is that amount and the ledger enforces
+    // the equality, so prefer it; the body omits it often enough that the indexer derives
+    // the rest from the resolved collateral inputs once it has them.
+    const declaredFee = (tx.fee?.ada?.lovelace ?? 0).toString();
+    const totalCollateral = tx.totalCollateral ? tx.totalCollateral.ada.lovelace.toString() : null;
+
     return {
       hash: tx.id,
       blockHash: block.id,
       blockHeight: block.height,
       slot: block.slot,
       index,
-      fee: (tx.fee?.ada?.lovelace ?? 0).toString(),
+      fee: spendsCollaterals ? (totalCollateral ?? declaredFee) : declaredFee,
+      spendsCollaterals,
+      totalCollateral,
       deposit: '0',
       // null = unknown (chain-sync doesn't surface the serialized size) — matches the
       // lazy path's `size ?? null` convention; 0 would masquerade as a real size

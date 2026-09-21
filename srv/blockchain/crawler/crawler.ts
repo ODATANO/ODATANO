@@ -3,7 +3,7 @@ import type { CardanoClient } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { ChainSyncBackend, ChainSyncHandle, ChainPoint, PaginatingBackend } from '../backends/cardano-backend';
 import type { BlockData, Transaction } from '../../utils/types';
-import { ProviderUnavailableError } from '../../utils/errors';
+import { ChainSyncFrameError, ProviderUnavailableError } from '../../utils/errors';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { emitBlockIndexed, emitReorg } from './hooks';
 import {
@@ -128,6 +128,14 @@ export class CardanoCrawler {
   /** Chain-sync callback promises outlive openChainSync(); stop() explicitly drains them. */
   private readonly inFlightCallbacks = new Set<Promise<unknown>>();
   private haltPromise: Promise<void> | null = null;
+  /**
+   * Set when a chain-sync frame could not be parsed at all. The stream cannot deliver that
+   * block, so the ingest loop takes it through the paginating backend and then reopens
+   * chain-sync — see runIngestPipeline().
+   */
+  private frameFailure: ChainSyncFrameError | null = null;
+  /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
+  private streamEnded: (() => void) | null = null;
   private finalStatus: CrawlSyncStatusValue = 'stopped';
   /** Set only by an unrecoverable halt — clears desiredRunning so restarts stay down. */
   private latchOnHalt = false;
@@ -238,6 +246,7 @@ export class CardanoCrawler {
     if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
+    this.streamEnded?.(); // release the ingest loop — beginHalt awaits the pipeline below
     this.leaseWake?.();
     for (const cancel of [...this.callCancels]) cancel();
     if (this.haltPromise) return;
@@ -272,7 +281,23 @@ export class CardanoCrawler {
   private async runIngestPipeline(): Promise<void> {
     const chainSync = this.config.source !== 'pagination' ? this.client.getChainSyncBackend() : null;
     if (chainSync) {
-      await this.runChainSync(chainSync);
+      // One pass per chain-sync stream. A frame the client's parser cannot turn into an
+      // object ends the stream without ending the crawler: pagination fetches that one
+      // block over HTTP, and chain-sync takes over again as soon as it is behind the
+      // cursor. Any other stream error still halts, as it always did.
+      while (this.running) {
+        const streamEnd = new Promise<void>((resolve) => { this.streamEnded = resolve; });
+        await this.runChainSync(chainSync);
+        if (!this.chainSyncHandle) return; // open refused, halted, or stop() raced us
+        await streamEnd;
+
+        const failure = this.takeFrameFailure();
+        if (!this.running || failure?.height == null) return;
+        logger.warn(
+          `chain-sync cannot deliver block ${failure.height} — switching to pagination until it is behind the cursor`
+        );
+        await this.runPagination(failure.height + 1);
+      }
       return;
     }
     if (this.config.source === 'ogmios') {
@@ -345,6 +370,12 @@ export class CardanoCrawler {
       }),
       onError: (err) => this.trackCallback(async () => {
         if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) return;
+        // A frame the client's parser cannot handle is a fault of that one block, not of the
+        // crawler or the node — pagination can still fetch it, so degrade instead of halting.
+        if (err instanceof ChainSyncFrameError && this.canDegradeToPagination(err)) {
+          await this.degradeToPagination(err);
+          return;
+        }
         // The stream is stalled (mapping/callback failure) — record and halt cleanly
         // so the cursor status shows 'error' instead of a healthy-looking hang.
         const streak = await this.recordCrawlerError(err);
@@ -360,6 +391,45 @@ export class CardanoCrawler {
     }
     this.chainSyncHandle = handle;
     logger.info(`Crawler running (chain-sync) from ${points[0].hash} (+${points.length - 1} fallback intersection point(s))`);
+  }
+
+  /** Read and clear the pending frame failure, so each stream starts from a clean slate. */
+  private takeFrameFailure(): ChainSyncFrameError | null {
+    const failure = this.frameFailure;
+    this.frameFailure = null;
+    return failure;
+  }
+
+  /**
+   * Can this unparseable frame be worked around by fetching the block over HTTP instead?
+   *
+   * Requires a height to walk to, a paginating backend to walk with, and an operator who has
+   * not pinned the source to 'ogmios' — that setting means chain-sync only, and silently
+   * degrading to the weaker pagination reorg handling would defeat the point of it.
+   */
+  private canDegradeToPagination(err: ChainSyncFrameError): boolean {
+    return err.height != null
+      && this.config.source !== 'ogmios'
+      && !!this.client.getPaginatingBackend();
+  }
+
+  /**
+   * End the chain-sync stream and hand control back to the ingest loop, which continues on
+   * pagination past the offending block. Records the error first, so `lastError` names the
+   * block rather than leaving the empty status a crashed process used to leave behind.
+   */
+  private async degradeToPagination(err: ChainSyncFrameError): Promise<void> {
+    const streak = await this.recordCrawlerError(err);
+    if (streak < 0) { await this.halt('stopped'); return; }
+    logger.error('Chain-sync frame unusable — continuing on pagination:', err.message);
+
+    this.frameFailure = err;
+    const handle = this.chainSyncHandle;
+    this.chainSyncHandle = null;
+    if (handle) {
+      try { await handle.close(); } catch (e) { logger.warn('chain-sync close failed:', e); }
+    }
+    this.streamEnded?.();
   }
 
   /**
@@ -427,7 +497,13 @@ export class CardanoCrawler {
   // Pagination (Blockfrost/Koios) — fallback
   // ---------------------------------------------------------------------------
 
-  private async runPagination(): Promise<void> {
+  /**
+   * @param untilHeight when set, return as soon as the cursor has reached it instead of
+   *   looping forever. Used to walk past a block the chain-sync stream cannot deliver and
+   *   then hand back to it — pagination is roughly seven times slower, so staying on it
+   *   for the rest of a backfill would be a poor trade.
+   */
+  private async runPagination(untilHeight?: number): Promise<void> {
     const backend = this.client.getPaginatingBackend();
     if (!backend) {
       logger.error('No paginating backend available — cannot crawl without Ogmios or Blockfrost/Koios');
@@ -448,6 +524,11 @@ export class CardanoCrawler {
         if (!cursor?.lastBlockHash) {
           logger.error('Pagination refused: cursor has no resume block hash.');
           await this.halt('error', true); // broken precondition: a restart cannot fix it
+          return;
+        }
+
+        if (untilHeight != null && cursor.lastHeight >= untilHeight) {
+          logger.info(`pagination reached block ${cursor.lastHeight} — handing back to chain-sync`);
           return;
         }
 

@@ -643,10 +643,13 @@ export class CardanoIndexer {
         .filter((row): row is Epoch => row !== undefined);
       if (epochRows.length) await tx.run(UPSERT.into(Epoch).entries(epochRows));
     }
-    await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
-
-    // Backfill chain-sync inputs (empty address/amount) from local outputs
+    // Backfill chain-sync inputs (empty address/amount) from local outputs, then settle
+    // the fee of any phase-2 failure. Both run before the block row is written, because a
+    // corrected fee changes the block's fee total.
     await this.resolveInputs(tx, txs);
+    this.applyCollateralFees(blockData, txs);
+
+    await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
 
     // Accumulate rows across the whole block, then one bulk UPSERT per table.
     // NUL safety (PostgreSQL rejects U+0000 in text/JSON) is enforced for every write
@@ -730,7 +733,67 @@ export class CardanoIndexer {
     }
   }
 
-  /** 
+  /**
+   * Settle the fee of phase-2-invalid transactions and the block total that follows from it.
+   *
+   * A failed script phase does not pay the fee declared in the body: the ledger consumes the
+   * collateral instead, i.e. the collateral inputs minus the collateral return. The Ogmios
+   * mapper already uses the body's `total_collateral` when it declares one; what is left are
+   * the transactions without it, and those need the collateral inputs that resolveInputs()
+   * has just filled in.
+   *
+   * A collateral input the crawler cannot resolve — spent from an output produced before the
+   * crawl start, so no row exists locally — would make the sum silently too small. The
+   * declared fee is kept in that case and the transaction is logged: a value that is wrong in
+   * a known, named way beats one that looks derived but is short by an unknown amount.
+   *
+   * Only the chain-sync path sets `spendsCollaterals`; Blockfrost and Koios transactions carry
+   * it as undefined and pass through untouched.
+   */
+  private applyCollateralFees(blockData: BlockData, txs: ProviderTransaction[]): void {
+    const lovelaceOf = (amount: Amount[] | undefined): bigint =>
+      BigInt(amount?.find(a => a.unit === 'lovelace')?.quantity ?? '0');
+
+    let corrected = false;
+    for (const t of txs) {
+      // totalCollateral set = the mapper already put the charged amount in `fee`
+      if (!t.spendsCollaterals || t.totalCollateral != null) continue;
+
+      const collateral = (t.inputs ?? []).filter(i => i.isCollateral);
+      if (!collateral.length) continue; // nothing to derive from — leave the declared fee
+
+      const unresolved = collateral.find(i => !i.address);
+      if (unresolved) {
+        logger.warn(
+          `collateral fee for ${t.hash}: input ${unresolved.txHash}#${unresolved.outputIndex} is not indexed ` +
+          `— keeping the declared fee ${t.fee}, which understates what the ledger charged`
+        );
+        continue;
+      }
+
+      const consumed = collateral.reduce((sum, i) => sum + lovelaceOf(i.amount), 0n);
+      const returned = (t.outputs ?? [])
+        .filter(o => o.isCollateral)
+        .reduce((sum, o) => sum + lovelaceOf(o.amount), 0n);
+      const charged = consumed - returned;
+      if (charged < 0n) {
+        logger.warn(
+          `collateral fee for ${t.hash}: return ${returned} exceeds collateral ${consumed} ` +
+          `— keeping the declared fee ${t.fee}`
+        );
+        continue;
+      }
+
+      t.fee = charged.toString();
+      corrected = true;
+    }
+
+    if (corrected) {
+      blockData.fees = txs.reduce((sum, t) => sum + BigInt(t.fee || 0), 0n).toString();
+    }
+  }
+
+  /**
    * Index & return the epoch information data
    * @param tx CAP transaction object
    * @param epochNumber epoch number

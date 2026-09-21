@@ -55,6 +55,7 @@ import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler
 import { startCrawler, stopCrawler, isCrawlerRunning, getCrawler, standbyDelayMs } from '../../srv/blockchain/crawler';
 import type { ChainSyncCallbacks, ChainSyncHandle } from '../../srv/blockchain/backends/cardano-backend';
 import type { BlockData } from '../../srv/utils/types';
+import { ChainSyncFrameError } from '../../srv/utils/errors';
 
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 1000, startBlockHash: 'start'.padEnd(64, '0'), startHeight: 10,
@@ -457,6 +458,145 @@ describe('CardanoCrawler pagination path', () => {
 // ---------------------------------------------------------------------------
 // persistBlock retries
 // ---------------------------------------------------------------------------
+
+describe('CardanoCrawler chain-sync frame failure', () => {
+  /** A cursor whose lastHeight follows the writes, so a bounded pagination run can finish. */
+  function statefulCursor(startHeight = 40) {
+    let lastHeight = startHeight;
+    let lastHash = CURSOR_ROW.lastBlockHash;
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) {
+        return { ...CURSOR_ROW, lastHeight: String(lastHeight), lastBlockHash: lastHash };
+      }
+      if (q._op === 'UPDATE') {
+        const set = q.set as Record<string, unknown>;
+        if (set.lastHeight != null) { lastHeight = Number(set.lastHeight); lastHash = String(set.lastBlockHash); }
+      }
+      return undefined;
+    });
+  }
+
+  /** Both sources available — the shape an 'auto' deployment actually has. */
+  function hybridClient(over: Partial<Record<string, Mock>> = {}) {
+    let callbacks: ChainSyncCallbacks | undefined;
+    const close = vi.fn();
+    const openChainSync = vi.fn(async (_from: unknown, cbs: ChainSyncCallbacks): Promise<ChainSyncHandle> => {
+      callbacks = cbs;
+      return { close };
+    });
+    const backend = {
+      getBlockByHeight: vi.fn(),
+      getNextBlocks: vi.fn().mockResolvedValue([]),
+      getBlockTransactions: vi.fn().mockResolvedValue([]),
+      ...over,
+    };
+    const client = {
+      getChainSyncBackend: () => ({ openChainSync }),
+      getPaginatingBackend: () => backend,
+      getLatestBlock: vi.fn().mockResolvedValue(block({ height: 100, slot: 10000, hash: 'tip'.padEnd(64, '3') })),
+    };
+    return { client, backend, openChainSync, close, cbs: () => callbacks! };
+  }
+
+  const frameError = (height: number | null = 41) =>
+    new ChainSyncFrameError(height, height === null ? null : 'b41'.padEnd(64, '0'), 'Maximum call stack size exceeded');
+
+  it('walks past the unusable block on pagination and hands back to chain-sync', async () => {
+    statefulCursor();
+    const indexBlockFull = vi.fn();
+    const { client, openChainSync, close, cbs } = hybridClient({
+      getNextBlocks: vi.fn()
+        .mockResolvedValueOnce([
+          block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100 }),
+          block({ height: 42, hash: 'b42'.padEnd(64, '0'), slot: 4200 }),
+        ])
+        .mockResolvedValue([]),
+    });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(frameError());
+    await settle(() => openChainSync.mock.calls.length > 1, 2000);
+
+    expect(close).toHaveBeenCalled();                 // the stream goes, the crawler stays
+    expect(indexBlockFull).toHaveBeenCalledTimes(2);  // 41 and 42 came over HTTP instead
+    expect(openChainSync).toHaveBeenCalledTimes(2);   // and chain-sync took over again
+    expect(crawler.isRunning()).toBe(true);
+    await crawler.stop();
+  });
+
+  it('records the failure so lastError names the block instead of leaving it blank', async () => {
+    statefulCursor();
+    const { client, openChainSync, cbs } = hybridClient({
+      getNextBlocks: vi.fn()
+        .mockResolvedValueOnce([block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100 }),
+                                block({ height: 42, hash: 'b42'.padEnd(64, '0'), slot: 4200 })])
+        .mockResolvedValue([]),
+    });
+    const crawler = makeCrawler(client);
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(frameError());
+    await settle(() => openChainSync.mock.calls.length > 1, 2000);
+
+    // the crashed process used to leave an empty lastError behind — that was the worst part
+    expect(updatesWith(s => typeof s.lastError === 'string' && s.lastError.includes('41')).length)
+      .toBeGreaterThan(0);
+    await crawler.stop();
+  });
+
+  it("halts instead of degrading when the operator pinned the source to 'ogmios'", async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = hybridClient();
+    const crawler = makeCrawler(client, { ...CONFIG, source: 'ogmios' });
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(frameError());
+    await settle(() => !crawler.isRunning());
+
+    // 'ogmios' means chain-sync only — degrading to the weaker pagination reorg handling
+    // behind the operator's back would defeat the setting
+    expect(crawler.isRunning()).toBe(false);
+    expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+    expect(openChainSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('halts when no paginating backend can fetch the block instead', async () => {
+    cursorExists();
+    let callbacks: ChainSyncCallbacks | undefined;
+    const openChainSync = vi.fn(async (_f: unknown, cbs: ChainSyncCallbacks): Promise<ChainSyncHandle> => {
+      callbacks = cbs;
+      return { close: vi.fn() };
+    });
+    const client = { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: () => null };
+    const crawler = makeCrawler(client);
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await callbacks!.onError!(frameError());
+    await settle(() => !crawler.isRunning());
+
+    expect(crawler.isRunning()).toBe(false);
+    expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+  });
+
+  it('halts when the frame was too broken to even name a block', async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = hybridClient();
+    const crawler = makeCrawler(client);
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(frameError(null)); // no height → nothing to walk to
+    await settle(() => !crawler.isRunning());
+
+    expect(crawler.isRunning()).toBe(false);
+    expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+  });
+});
 
 describe('CardanoCrawler.persistBlock', () => {
   it('rejects a partial backend transaction list without advancing the cursor', async () => {

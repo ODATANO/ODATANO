@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** v2.0.0-rc.10 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.11 | **Last Updated:** September 2026
 
 ## Architecture Overview
 

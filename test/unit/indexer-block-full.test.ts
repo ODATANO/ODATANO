@@ -288,3 +288,87 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
     expect(inputRows[0].address_address).toBe('addrKnown');
   });
 });
+
+describe('CardanoIndexer.applyCollateralFees (via indexBlockFull)', () => {
+  /** Collateral input resolvable from the DB mock: prev#0 = addrPrev holding 7 ADA. */
+  const collateralIn = { address: '', amount: [], txHash: 'prev'.padEnd(64, '0'), outputIndex: 0, isCollateral: true };
+  const collateralReturn = (quantity: string, hash: string) => ({
+    address: 'addrReturn', amount: [{ unit: 'lovelace', quantity }],
+    txHash: hash, outputIndex: 1, dataHash: null, inlineDatum: null, isCollateral: true,
+  });
+  const feeOf = (hash: string) =>
+    (upsertsFor('Transactions')[0].entries as Array<Record<string, unknown>>).find(r => r.hash === hash)!.fee;
+  const blockFees = () => (upsertsFor('Block')[0].entries as Record<string, unknown>).fees;
+
+  it('charges collateral minus collateral return when the body declared no total_collateral', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'f1'.padEnd(64, '0');
+    const failed = tx(hash, {
+      spendsCollaterals: true, totalCollateral: null,
+      inputs: [{ ...collateralIn }],
+      outputs: [collateralReturn('2000000', hash)],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [failed]);
+
+    expect(feeOf(hash)).toBe('5000000'); // 7 ADA collateral − 2 ADA returned, not the declared 170000
+    expect(blockFees()).toBe('5000000'); // the block total follows the corrected fee
+  });
+
+  it('keeps the declared fee when a collateral input cannot be resolved', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'f2'.padEnd(64, '0');
+    const failed = tx(hash, {
+      spendsCollaterals: true, totalCollateral: null,
+      // produced before the crawl start → no local output row, so the sum would be short
+      inputs: [{ address: '', amount: [], txHash: 'unknown'.padEnd(64, '0'), outputIndex: 5, isCollateral: true }],
+      outputs: [collateralReturn('2000000', hash)],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [failed]);
+
+    expect(feeOf(hash)).toBe('170000');
+    expect(blockFees()).toBe('340000'); // untouched — no correction happened
+  });
+
+  it('leaves a fee the mapper already settled from total_collateral alone', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'f3'.padEnd(64, '0');
+    const failed = tx(hash, {
+      fee: '3000000', spendsCollaterals: true, totalCollateral: '3000000',
+      inputs: [{ ...collateralIn }],
+      outputs: [collateralReturn('2000000', hash)],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [failed]);
+
+    expect(feeOf(hash)).toBe('3000000'); // NOT re-derived as 5000000 from the resolved inputs
+    expect(blockFees()).toBe('340000');
+  });
+
+  it('does not touch a successful transaction that merely declares collateral', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'f4'.padEnd(64, '0');
+    const ok = tx(hash, {
+      spendsCollaterals: false, totalCollateral: '3000000',
+      inputs: [{ ...collateralIn }],
+      outputs: [],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [ok]);
+
+    expect(feeOf(hash)).toBe('170000');
+    expect(blockFees()).toBe('340000');
+  });
+
+  it('leaves the Blockfrost/Koios path alone (no phase-2 information at all)', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'f5'.padEnd(64, '0');
+    const lazy = tx(hash, { inputs: [{ address: 'addrKnown', amount: [{ unit: 'lovelace', quantity: '7000000' }], txHash: 'x'.padEnd(64, '0'), outputIndex: 0, isCollateral: true }] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [lazy]);
+
+    expect(feeOf(hash)).toBe('170000');
+    expect(blockFees()).toBe('340000');
+  });
+});
