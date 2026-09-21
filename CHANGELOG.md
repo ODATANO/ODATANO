@@ -1,5 +1,23 @@
 # Changelog
 
+## [v2.0.0-rc.13] - pool saturation unit
+
+### Fixed
+
+- Koios reports `live_saturation` in percent, Blockfrost as a fraction, and both
+  values were passed through unchanged into a `Decimal(5, 4)` column. Every pool
+  at or above 10 % saturation overflowed the column, and because a snapshot
+  writes all pools in one statement, `CRAWLER_EPOCH_SNAPSHOTS` never wrote a
+  single row on a Koios backend — it retried every 30 seconds instead. The Koios
+  mapper now converts to the fraction the model expects (75.42 % -> 0.7542),
+  which also corrects `Pools.liveSaturation` on the lazy read path.
+
+### Notes
+
+- `Pools` rows written from Koios before this release hold percent values until
+  their temporal slice expires and is re-read. `PoolEpochSnapshots` was empty on
+  those deployments, so nothing has to be corrected there.
+
 ## [v2.0.0-rc.12] - crawler coverage for analytics
 
 ### Added

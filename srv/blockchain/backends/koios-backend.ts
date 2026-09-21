@@ -630,7 +630,12 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       liveStake: poolData.live_stake || '0',
       liveSize: poolData.live_size || 0,
       liveDelegators: poolData.live_delegators || 0,
-      liveSaturation: poolData.live_saturation || 0,
+      // Koios reports saturation in PERCENT (75.42 = 75.42 %), Blockfrost as a
+      // fraction (0.7542). PoolData is a fraction everywhere — and the columns
+      // behind it are Decimal(5, 4) — so convert here. Passing the percent value
+      // through overflows the column for any pool at or above 10 % and takes the
+      // whole epoch snapshot down with it.
+      liveSaturation: (Number(poolData.live_saturation) || 0) / 100,
       activeStake: poolData.active_stake || '0',
       activeSize: poolData.active_size || 0,
       pledge: poolData.pledge || '0',

@@ -225,6 +225,7 @@ export interface PoolData {
   blocksEpoch: number;
   liveStake: string;
   liveSize: number;
+  /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. */
   liveSaturation: number;
   liveDelegators: number;
   activeStake: string;

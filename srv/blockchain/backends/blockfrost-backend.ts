@@ -318,6 +318,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           liveStake: poolData.live_stake || '0',
           liveSize: poolData.live_size,
           liveDelegators: poolData.live_delegators,
+          // Blockfrost already reports a fraction (0.7542 = 75.42 %), which is the
+          // canonical unit — see the conversion in KoiosBackend._mapKoiosPool.
           liveSaturation: poolData.live_saturation,
           activeStake: poolData.active_stake || '0',
           activeSize: poolData.active_size,

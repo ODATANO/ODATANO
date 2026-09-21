@@ -1,6 +1,6 @@
 # Lazy On-Demand Indexing (Architecture Concept)
 
-**Version:** v2.0.0-rc.12 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.13 | **Last Updated:** September 2026
 
 ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
 

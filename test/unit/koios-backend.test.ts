@@ -423,6 +423,51 @@ describe('KoiosBackend', () => {
     });
   });
 
+  describe('getPool', () => {
+    const POOL_ID = 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r';
+
+    // Koios reports live_saturation in percent, Blockfrost as a fraction. The
+    // canonical PoolData is a fraction, and the columns behind it are
+    // Decimal(5, 4) — a percent value of 75.42 overflows them.
+    it('converts the percent saturation Koios reports into a fraction', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
+        .reply(200, [{
+          pool_id_bech32: POOL_ID,
+          vrf_key_hash: 'vrf',
+          block_count: 11,
+          live_stake: '1000000',
+          live_size: 0.0012,
+          live_delegators: 4,
+          live_saturation: 75.42,
+          active_stake: '900000',
+          active_size: 0.0011,
+          pledge: '5000000',
+          margin: 0.02,
+          fixed_cost: '340000000',
+          reward_addr: 'stake1',
+        }]);
+
+      const result = await backend.getPool(POOL_ID);
+
+      expect(result.liveSaturation).toBeCloseTo(0.7542, 10);
+      expect(result.liveSaturation).toBeLessThan(10); // fits Decimal(5, 4)
+      // fractions the provider already reports as fractions stay untouched
+      expect(result.liveSize).toBe(0.0012);
+      expect(result.margin).toBe(0.02);
+    });
+
+    it('defaults a missing saturation to 0 instead of NaN', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
+        .reply(200, [{ pool_id_bech32: POOL_ID, vrf_key_hash: 'vrf', block_count: 0 }]);
+
+      const result = await backend.getPool(POOL_ID);
+
+      expect(result.liveSaturation).toBe(0);
+    });
+  });
+
   describe('getEpoch', () => {
     it('should return epoch data for a valid epoch number', async () => {
       const epochResponse = [{
@@ -1057,7 +1102,7 @@ describe('KoiosBackend', () => {
       const ids = Array.from({ length: 60 }, (_, i) => `pool1${i}`);
       const rows = (batch: string[]) => batch.map(id => ({
         pool_id_bech32: id, vrf_key_hash: 'vrf', block_count: 3, live_stake: '10',
-        live_size: 0.1, live_delegators: 2, live_saturation: 0.4, active_stake: '9',
+        live_size: 0.1, live_delegators: 2, live_saturation: 40, active_stake: '9',
         active_size: 0.09, pledge: '5', margin: 0.02, fixed_cost: '340000000',
         reward_addr: 'stake1',
       }));
@@ -1070,6 +1115,8 @@ describe('KoiosBackend', () => {
 
       expect(pools).toHaveLength(60); // 50 + 10, two requests
       expect(pools[0]).toMatchObject({ poolId: 'pool10', blocksMinted: 3, liveStake: '10', blocksEpoch: 0 });
+      // Koios percent -> canonical fraction
+      expect(pools[0].liveSaturation).toBeCloseTo(0.4, 10);
     });
 
     it('pages /drep_list and resolves DReps through the shared drep mapper', async () => {

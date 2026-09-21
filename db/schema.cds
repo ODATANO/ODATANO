@@ -170,7 +170,7 @@ entity Pools : temporal {
         liveSize       : Decimal(5, 4);
 
         @title      : 'Live Saturation'
-        @description: 'Current live saturation as fraction of ideal size'
+        @description: 'Current live saturation as fraction of ideal size (1.0 = 100% saturated)'
         liveSaturation : Decimal(5, 4);
 
         @title      : 'Live Delegators'
@@ -239,7 +239,7 @@ entity PoolEpochSnapshots {
         liveSize       : Decimal(5, 4);
 
         @title      : 'Live Saturation'
-        @description: 'Live saturation as fraction of ideal size'
+        @description: 'Live saturation as fraction of ideal size (1.0 = 100% saturated)'
         liveSaturation : Decimal(5, 4);
 
         @title      : 'Live Delegators'
