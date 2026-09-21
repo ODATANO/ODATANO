@@ -428,3 +428,49 @@ describe('OgmiosBackend.openChainSync', () => {
     expect(captured.socket.terminate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('OgmiosBackend chain-sync — mint/burn field', () => {
+  beforeEach(() => {
+    captured.handlers = undefined;
+    captured.opts = undefined;
+  });
+
+  const POLICY = 'p'.repeat(56);
+  const NAME_HEX = '746f6b656e';
+
+  it('maps the mint field with its sign preserved (negative = burn)', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.mint = { [POLICY]: { [NAME_HEX]: 1000n, '': -25n } };
+
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    expect(rolled[0].txs[0].mint).toEqual([
+      { unit: `${POLICY}${NAME_HEX}`, quantity: '1000' },
+      { unit: POLICY, quantity: '-25' },
+    ]);
+  });
+
+  it('reports an empty mint (not undefined) for a transaction that mints nothing', async () => {
+    const { rolled } = await openStream();
+
+    await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, vi.fn());
+
+    // [] means "the source knows there was no mint" — undefined would make the indexer
+    // fall back to the input/output delta, which chain-sync inputs cannot support
+    expect(rolled[0].txs[0].mint).toEqual([]);
+  });
+
+  it('reports NO mint for a phase-2 failure — the declared mint is never applied', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.spends = 'collaterals';
+    tx.mint = { [POLICY]: { [NAME_HEX]: 1000n } };
+
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    expect(rolled[0].txs[0].mint).toBeUndefined();
+  });
+});

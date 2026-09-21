@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, isChainSyncBackend, isPaginatingBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -650,6 +650,20 @@ export class CardanoClient {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     for (const b of candidates) {
       if (b && !this.uninitializedBackends.has(b) && isChainSyncBackend(b)) return b;
+    }
+    return null;
+  }
+
+  /**
+   * Get a backend that can enumerate the full pool/DRep set (Koios), or null. Used by the
+   * crawler's epoch-boundary snapshots; without one they stay off rather than degrade into
+   * thousands of single requests (see EnumeratingBackend).
+   * Skips backends whose init() failed (see getChainSyncBackend).
+   */
+  getEnumeratingBackend(): EnumeratingBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isEnumeratingBackend(b)) return b;
     }
     return null;
   }

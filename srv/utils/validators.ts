@@ -141,7 +141,7 @@ export function isTxHash(s: unknown): s is string {
 }
 
 /**
- * Asset unit: concatenation of policy ID (56 hex chars) + asset name (0-128 hex chars)
+ * Asset unit: concatenation of policy ID (56 hex chars) + asset name (0-64 hex chars)
  * @param s - The raw value to validate against asset unit format
  * @returns { boolean } true if v is a valid asset unit false otherwise
  */
@@ -149,7 +149,7 @@ export function isAssetUnit(s: unknown): s is string {
   if (typeof s !== "string") return false;
   const t = s.trim();
 
-  // Regex ensures: 56-192 hex chars, even length, valid hex
+  // Regex ensures: 56-120 hex chars, even length, valid hex
   return ASSET_UNIT_REGEX.test(t);
 }
 

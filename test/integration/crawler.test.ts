@@ -104,6 +104,11 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
         batchSize: 20,
         confirmationDepth: 3,
         pollIntervalMs: 20000,
+        // analytics coverage: the free by-products on, the provider-billed ones off
+        assetHistory: true,
+        assetCatalogue: 'bare',
+        assetEnrichRate: 2,
+        epochSnapshots: false,
       },
     }, true);
   }
@@ -145,6 +150,46 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
     const ref = await blockfrost(`/blocks/${sample.height}`);
     expect(sample.hash).to.equal(ref.hash);
     expect(Number(sample.slot)).to.equal(Number(ref.slot));
+  });
+
+  it('catalogues every native asset it sees and records the range\'s mint/burn events', async (ctx: Ctx) => {
+    if (!ready) return ctx.skip();
+
+    await crawl();
+    const reached = await waitForHeight(target);
+    expect(reached, 'crawler did not reach the target tip').to.be.at.least(target);
+
+    // Every unit that appears on an output must have a catalogue row — that is the
+    // FR's acceptance criterion, checked with no API traffic against the instance.
+    const outputUnits = await rows(
+      SELECT.from('odatano.cardano.TransactionOutputAssets').columns('unit'),
+    );
+    const distinct = [...new Set(outputUnits.map((r) => String(r.unit)))];
+    if (distinct.length === 0) return ctx.skip(); // an asset-free range proves nothing
+
+    const assets = await rows(SELECT.from('odatano.cardano.Assets').columns('unit', 'policyId', 'fingerprint'));
+    const catalogued = new Set(assets.map((a) => String(a.unit)));
+    for (const unit of distinct) {
+      expect(catalogued.has(unit), `no Assets row for ${unit}`).to.equal(true);
+    }
+    // the bare row is derived, not empty
+    const sample = assets.find((a) => a.unit === distinct[0])!;
+    expect(String(sample.policyId)).to.equal(distinct[0].slice(0, 56));
+    expect(String(sample.fingerprint)).to.match(/^asset1/);
+
+    // Mint/burn: every recorded event must belong to a transaction of the crawled
+    // range, and its quantity must be a positive amount with the sign in `action`.
+    const history = await rows(
+      SELECT.from('odatano.cardano.AssetHistory').columns('unit', 'txHash', 'action', 'quantity'),
+    );
+    for (const row of history) {
+      expect(['mint', 'burn']).to.contain(String(row.action));
+      expect(BigInt(String(row.quantity)) > 0n, `non-positive quantity for ${row.unit}`).to.equal(true);
+      const tx = await rows(
+        SELECT.from('odatano.cardano.Transactions').columns('hash').where({ hash: row.txHash }),
+      );
+      expect(tx.length, `AssetHistory row for an unknown tx ${row.txHash}`).to.equal(1);
+    }
   });
 
   it('recovers from a fork it slept through instead of dying on "No intersection found"', async (ctx: Ctx) => {

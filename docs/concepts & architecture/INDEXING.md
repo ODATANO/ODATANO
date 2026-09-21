@@ -1,6 +1,6 @@
 # Lazy On-Demand Indexing (Architecture Concept)
 
-**Version:** v2.0.0-rc.11 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.12 | **Last Updated:** September 2026
 
 ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
 
@@ -37,6 +37,8 @@ Mutable blockchain state that can change over time. Uses CAP's `temporal` aspect
 Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by `INDEX_TTL_MS`.
 
 - **Transactions / Blocks / Epochs**: Confirmed, immutable chain data
+- **AssetHistory**: Mint/burn events, keyed (unit, txHash)
+- **PoolEpochSnapshots / DrepEpochSnapshots** (v2.0): One dated observation per pool/DRep per epoch
 - **Pools / Dreps**: Registration data
 - **TransactionBuildInputs/Outputs/Assets** (M2): Build details
 - **TransactionSubmissionErrors**: Failed submission records
@@ -67,6 +69,38 @@ A rollback deletes everything after the fork point in one transaction, rewinds t
 a `CardanoReorgLog` row. Two sources: Ogmios chain-sync (native `rollBackward`) and Blockfrost/Koios
 pagination (parent-hash comparison). Enable with `CRAWLER_ENABLED=true` plus a start point; see the
 [User Guide](../guides/USER_GUIDE.md).
+
+**Analytics coverage (v2.0).** Beyond blocks and transactions, the crawler fills three tables that
+the lazy path would otherwise only populate by accident — whatever somebody happened to request:
+
+| Table | Source | Cost |
+|---|---|---|
+| `AssetHistory` | the ledger's mint field (Ogmios `mint`, Koios `assets_minted`) or, for Blockfrost, Σ outputs − Σ inputs per unit | none — data the block already carries |
+| `Assets` | a bare row per unseen unit: policyId, assetNameHex, decoded name, CIP-14 fingerprint | none (`CRAWLER_ASSET_CATALOGUE=bare`, the default) |
+| `PoolEpochSnapshots` / `DrepEpochSnapshots` | full pool/DRep set, once per epoch, **only while at the chain tip** | ~100 batched Koios requests per epoch, opt-in |
+
+A bare `Assets` row is stamped `validFrom === validTo`, i.e. born expired. CAP's temporal filter
+therefore hides it from OData reads, so the first keyed read is still a miss and the lazy path
+enriches it with supply and registry data — while a consumer reading the database directly already
+sees the complete catalogue (and excludes the placeholders with `validTo > validFrom`). Both
+stamps are the fixed epoch-zero sentinel, never `now`: `Assets` is temporal and keyed
+`(validFrom, unit)`, so a wall-clock stamp would make the same unit a new row on every sighting
+and could collide with a slice the lazy path writes in the same millisecond — inside the crawler's
+block transaction that means a failed block. With the sentinel the bare row is one fixed,
+idempotent row per unit that no enriched slice can ever alias or be overwritten by.
+
+Mint/burn is skipped, and logged, for a transaction whose consumed inputs cannot all be resolved
+(an output created before the crawl start): a delta that is short by an unknown amount would look
+like a mint that never happened. Phase-2 failures contribute nothing — the ledger applies no mint
+when the script phase failed. Reorgs remove mint rows with their transactions; the epoch snapshots
+are keyed by epoch rather than block and are deliberately left in place, dated by `snapshotSlot`.
+
+Epoch snapshots are taken **only while the crawl is at the chain tip**. Koios `/pool_info` and
+`/drep_info` answer with the pool and DRep set as it is now and take no epoch parameter, so a
+snapshot written during a backfill would carry today's stake and vote power under a historical
+epoch number — a table that reads as a time series but is a constant. The crawler therefore
+compares the block's epoch with the epoch of the reported tip and skips the epoch otherwise.
+Backfilled ranges carry no snapshots; the range crawled live does.
 
 **Consequence for consumers:** within the pre-synced range, reads never touch a backend — that is
 the point of the feature, and the reason the range carries no TTL.

@@ -311,3 +311,33 @@ export function isPaginatingBackend(backend: CardanoBackend): backend is Paginat
     && typeof b.getNextBlocks === 'function'
     && typeof b.getBlockTransactions === 'function';
 }
+
+/**
+ * Backend that can enumerate the full stake-pool and DRep set and fetch them in batches —
+ * what the crawler's epoch-boundary snapshots need (v2.0 analytics coverage).
+ *
+ * Koios only, and deliberately so: it lists ids (`/pool_list`, `/drep_list`) and resolves
+ * them in batches (`POST /pool_info`, `POST /drep_info`), which turns a mainnet snapshot of
+ * ~3 200 pools into a handful of requests. Blockfrost can list ids but has no batch info
+ * endpoint, so the same snapshot would be thousands of single requests — the snapshots stay
+ * off rather than being served that way (same rule as GetUTxOsByCredential).
+ */
+export interface EnumeratingBackend extends CardanoBackend {
+  /** All known stake-pool ids (bech32). */
+  getPoolIds(): Promise<string[]>;
+  /** Resolve a batch of pool ids. Ids the backend does not know are omitted, not faked. */
+  getPools(poolIds: string[]): Promise<PoolData[]>;
+  /** All known DRep ids (bech32). */
+  getDrepIds(): Promise<string[]>;
+  /** Resolve a batch of DRep ids. Ids the backend does not know are omitted. */
+  getDreps(drepIds: string[]): Promise<DrepData[]>;
+}
+
+/** Type guard: can this backend enumerate pools and DReps? */
+export function isEnumeratingBackend(backend: CardanoBackend): backend is EnumeratingBackend {
+  const b = backend as EnumeratingBackend;
+  return typeof b.getPoolIds === 'function'
+    && typeof b.getPools === 'function'
+    && typeof b.getDrepIds === 'function'
+    && typeof b.getDreps === 'function';
+}

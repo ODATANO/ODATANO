@@ -17,6 +17,7 @@ const { createTestContext, resetAppContext, shutdownAppContext } =
   require('../../srv/server') as typeof import('../../srv/server');
 import { TEST_FIXTURES, SCRIPT_UTXO_TX_HASH, SCRIPT_UTXO_OUTPUT_INDEX, mockScriptTxInfo, mockUtxosAdaOnly } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxInfoMock, teardownKoiosMocks, nock } from './mock-helpers';
+import { mapBareAsset } from '../../srv/utils/mappers';
 
 const { INSERT } = cds.ql;
 
@@ -312,6 +313,47 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
       // re-indexed from the (mocked) backend, not the stale row (utxoCount 99)
       expect(String(data.utxoCount)).toBe(String(mockUtxosAdaOnly.length));
       expect(data.utxos).toHaveLength(mockUtxosAdaOnly.length);
+    });
+  });
+  describe('temporal entity: Assets — the crawler\'s bare catalogue row', () => {
+    // A bare row written by the crawler is stamped validFrom === validTo, so it is
+    // invisible to a keyed read and the lazy path still enriches it. This is what the
+    // whole "bare catalogue" design rests on (FR "crawler coverage for analytics").
+    const POLICY = 'a1'.repeat(28);
+    const NAME_HEX = Buffer.from('SUNDAE').toString('hex');
+    const UNIT = POLICY + NAME_HEX;
+
+    function setupAssetMocks() {
+      nock('https://preview.koios.rest')
+        .post('/api/v1/asset_info')
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: NAME_HEX,
+          asset_name_ascii: 'SUNDAE',
+          fingerprint: 'asset1enriched000000000000000000000000000',
+          total_supply: '2000000000',
+          mint_cnt: 3,
+          burn_cnt: 1,
+          minting_tx_hash: 'e'.repeat(64),
+          creation_time: 1700000000,
+          token_registry_metadata: { name: 'Sundae', ticker: 'SUNDAE', decimals: 6 },
+        }])
+        .persist();
+    }
+
+    it('a born-expired bare row is enriched on the first keyed read, not served as is', async () => {
+      setupAssetMocks();
+      await cds.run(
+        // exactly what mapBareAsset writes: born expired at the fixed epoch-zero sentinel
+        INSERT.into('odatano.cardano.Assets').entries(mapBareAsset(UNIT)!)
+      );
+
+      const { status, data } = await test.get(`${SVC}/Assets('${UNIT}')`);
+
+      expect(status).toBe(200);
+      // the registry fields the bare row could not know are now filled in
+      expect(data.registryTicker).toBe('SUNDAE');
+      expect(String(data.totalSupply)).toBe('2000000000');
     });
   });
 });

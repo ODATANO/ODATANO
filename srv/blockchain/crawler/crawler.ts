@@ -5,6 +5,7 @@ import type { ChainSyncBackend, ChainSyncHandle, ChainPoint, PaginatingBackend }
 import type { BlockData, Transaction } from '../../utils/types';
 import { ChainSyncFrameError, ProviderUnavailableError } from '../../utils/errors';
 import { chunk, IN_CHUNK } from '../../utils/collections';
+import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { emitBlockIndexed, emitReorg } from './hooks';
 import {
   Blocks,
@@ -21,6 +22,7 @@ import {
   // carries a trailing underscore — that's the CQL-target class, like Blocks/Transactions
   TransactionMetadata_ as TransactionMetadata,
   CardanoReorgLog,
+  PoolEpochSnapshots,
 } from '#cds-models/odatano/cardano';
 import {
   ensureSyncStateSingleton,
@@ -67,6 +69,22 @@ export interface CrawlerConfig {
   confirmationDepth: number;
   /** Poll cadence when caught up / on transient errors (pagination path). */
   pollIntervalMs: number;
+  /**
+   * Analytics coverage of the crawl (FR "crawler coverage for analytics"). All three are
+   * by-products of blocks the crawler already holds, except `assetCatalogue: 'enrich'` and
+   * `epochSnapshots`, which do talk to a provider.
+   */
+  /** Write mint/burn rows into AssetHistory. Free — no provider call. */
+  assetHistory: boolean;
+  /**
+   * `off` — nothing; `bare` — one Assets row per unit from block data alone (free);
+   * `enrich` — additionally resolve supply/registry data in the background, rate limited.
+   */
+  assetCatalogue: 'off' | 'bare' | 'enrich';
+  /** Units per second the background enrichment resolves (`assetCatalogue: 'enrich'` only). */
+  assetEnrichRate: number;
+  /** Snapshot every pool and DRep at each epoch boundary. Requires an enumerating backend (Koios). */
+  epochSnapshots: boolean;
 }
 
 /**
@@ -116,6 +134,18 @@ export class CardanoCrawler {
   ];
   /** Timeout for direct backend calls (the crawler bypasses the client's resilience layer). */
   private static readonly CALL_TIMEOUT_MS = 60_000;
+  /**
+   * Epoch snapshots are ~100 batched provider requests on mainnet, so they get a wider
+   * bound than an ordinary call — still bounded, and cancelled by beginHalt.
+   */
+  private static readonly SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
+  /**
+   * Backoff after a failed snapshot attempt, doubling up to the cap. Without it a provider
+   * outage would re-trigger a full pool/DRep enumeration on every single block for the rest
+   * of the epoch — the marker is only set on success, by design.
+   */
+  private static readonly SNAPSHOT_RETRY_BASE_MS = 30_000;
+  private static readonly SNAPSHOT_RETRY_MAX_MS = 10 * 60_000;
 
   private running = false;
   private chainSyncHandle: ChainSyncHandle | null = null;
@@ -139,6 +169,12 @@ export class CardanoCrawler {
   private finalStatus: CrawlSyncStatusValue = 'stopped';
   /** Set only by an unrecoverable halt — clears desiredRunning so restarts stay down. */
   private latchOnHalt = false;
+  /** Epoch whose pool/DRep snapshot this process has settled, and the in-flight attempt. */
+  private snapshotedEpoch: number | null = null;
+  private snapshotInFlight: Promise<void> | null = null;
+  /** Consecutive snapshot failures and the earliest time the next attempt may run. */
+  private snapshotFailures = 0;
+  private snapshotRetryAfter = 0;
   private leaseHeld = false;
   private leaseHeartbeat: Promise<void> | null = null;
   private leaseWake: (() => void) | null = null;
@@ -193,6 +229,12 @@ export class CardanoCrawler {
     }
 
     this.running = true;
+    // Hand the analytics coverage to the indexer before the first block is written.
+    this.indexer.configureCrawlCoverage({
+      assetHistory: this.config.assetHistory,
+      assetCatalogue: this.config.assetCatalogue,
+      assetEnrichRate: this.config.assetEnrichRate,
+    });
     this.startLeaseHeartbeat();
 
     // A pipeline crash (e.g. chain-sync intersection not found after downtime) must
@@ -245,6 +287,8 @@ export class CardanoCrawler {
     // Once a real failure was observed, a concurrent shutdown must not hide it.
     if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
+    // Background asset enrichment belongs to the crawl — it must not outlive it.
+    this.indexer.stopAssetEnrichment();
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
     this.streamEnded?.(); // release the ingest loop — beginHalt awaits the pipeline below
     this.leaseWake?.();
@@ -681,6 +725,7 @@ export class CardanoCrawler {
           tipSlot: tip?.slot ?? null,
           tipHeight: tip?.height ?? null,
         });
+        this.maybeSnapshotEpoch(block, tip);
         return true;
       } catch (err) {
         if (err instanceof CrawlerLeaseLostError) {
@@ -721,6 +766,85 @@ export class CardanoCrawler {
         return false;
       }
     }
+  }
+
+  /** Epoch a slot belongs to, from the network's Shelley anchor (same math as the Ogmios mapper). */
+  private epochOfSlot(slot: number): number {
+    const cfg = EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK]
+      ?? EPOCH_CONFIG_BY_NETWORK.preview;
+    return cfg.shelleyStartEpoch + Math.floor((slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
+  }
+
+  /**
+   * Take the epoch snapshot of pools and DReps once per epoch, detached from the block that
+   * triggered it (v2.0 analytics coverage, opt-in via `epochSnapshots`).
+   *
+   * ONLY AT THE TIP. The providers that can enumerate the pool and DRep set report their
+   * CURRENT state — Koios `/pool_info` and `/drep_info` take no epoch parameter. Snapshotting
+   * while the crawl is still backfilling would therefore write today's stake and vote power
+   * under every historical epoch number it passes: a table that reads as a time series but is
+   * a constant. So the block's epoch must be the epoch the reported tip is in; otherwise the
+   * epoch is skipped, permanently and by design. Backfilled ranges have no snapshots, live
+   * ones do.
+   *
+   * Detached on purpose: the snapshot is a few thousand rows plus ~100 provider requests, and
+   * the crawl must not wait for it or fail because of it. It is tracked as an in-flight
+   * callback, so a shutdown still drains it, and bounded by a timeout that beginHalt cancels.
+   *
+   * "Once per epoch" survives a restart: the process-local marker only skips work, the
+   * authority is a `PoolEpochSnapshots` row for that epoch — so a crawler restarted right
+   * after a boundary still records the epoch, and one restarted mid-epoch does not redo it.
+   * A failed attempt leaves the marker unset and backs off (see SNAPSHOT_RETRY_BASE_MS).
+   */
+  private maybeSnapshotEpoch(block: BlockData, tip?: ChainPoint): void {
+    if (!this.config.epochSnapshots || block.epoch == null) return;
+    if (this.snapshotedEpoch === block.epoch || this.snapshotInFlight) return;
+
+    // No tip reported = we cannot prove we are live, so we do not pretend to be.
+    if (tip == null) {
+      logger.debug(`epoch ${block.epoch} snapshot skipped: no chain tip reported for this block`);
+      return;
+    }
+    const tipEpoch = this.epochOfSlot(tip.slot);
+    if (block.epoch !== tipEpoch) {
+      logger.debug(
+        `epoch ${block.epoch} snapshot skipped: still backfilling (tip is in epoch ${tipEpoch}) — ` +
+        `the pool/DRep set can only be observed as it is now, never as it was`
+      );
+      return;
+    }
+
+    if (Date.now() < this.snapshotRetryAfter) return;
+
+    const epoch = block.epoch;
+    const at = { slot: block.slot ?? 0, time: block.time ?? 0 };
+    this.snapshotInFlight = this.trackCallback(async () => {
+      const existing = await cds.tx((tx) =>
+        tx.run(SELECT.one.from(PoolEpochSnapshots).columns('epoch').where({ epoch }))
+      );
+      if (!existing) {
+        await this.withTimeout(
+          this.indexer.snapshotEpoch(epoch, at),
+          `snapshotEpoch(${epoch})`,
+          CardanoCrawler.SNAPSHOT_TIMEOUT_MS,
+        );
+      }
+      this.snapshotedEpoch = epoch;
+      this.snapshotFailures = 0;
+      this.snapshotRetryAfter = 0;
+    })
+      .catch((err: unknown) => {
+        // Never fatal: the crawl keeps its data, the epoch is retried on a later block —
+        // but not on the very next one, or an outage would re-enumerate per block.
+        this.snapshotFailures++;
+        const backoff = Math.min(
+          CardanoCrawler.SNAPSHOT_RETRY_BASE_MS * 2 ** (this.snapshotFailures - 1),
+          CardanoCrawler.SNAPSHOT_RETRY_MAX_MS,
+        );
+        this.snapshotRetryAfter = Date.now() + backoff;
+        if (this.running) logger.error(`epoch ${epoch} snapshot failed (retry in ${backoff} ms):`, err);
+      })
+      .finally(() => { this.snapshotInFlight = null; });
   }
 
   /**

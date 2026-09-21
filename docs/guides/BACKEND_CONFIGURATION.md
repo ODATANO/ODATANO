@@ -1,6 +1,6 @@
 # Backend Configuration Guide
 
-**Version:** v2.0.0-rc.11 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.12 | **Last Updated:** September 2026
 
 ## Architecture Overview
 
@@ -97,6 +97,17 @@ Used for **indexed/historical data**:
   `lastActiveEpoch` is 0.
 
 If multiple historical backends are configured, they are tried in order with automatic failover.
+
+### Capabilities Only One Backend Has
+
+Some operations are not routed with failover at all, because only one backend can serve them
+correctly. They fail with `ProviderUnavailableError` when that backend is not configured:
+
+| Operation | Backend | Why |
+|---|---|---|
+| `GetUTxOsByCredential` | Koios | Native `POST /credential_utxos`. Blockfrost has no credential-keyed endpoint; a fallback would silently miss bech32 variants of the same payment credential. |
+| Transaction-builder script evaluation | Ogmios | Only `evaluateTransaction` gives script execution units for Plutus builds. |
+| Crawler epoch snapshots (`CRAWLER_EPOCH_SNAPSHOTS`) | Koios | Needs the full pool/DRep set: `/pool_list` + batched `POST /pool_info` (and the DRep equivalents) turn a mainnet snapshot into ~100 requests. Blockfrost lists pool ids but has no batch info endpoint, so the same snapshot would be thousands of single requests — the snapshots log a warning and stay off instead. Koios answers with the set as it is *now*, so snapshots are only taken while the crawl is at the chain tip. |
 
 ### Fallback Behavior
 - If Ogmios is unavailable, historical backends handle live queries too

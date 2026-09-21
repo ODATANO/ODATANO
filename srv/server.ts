@@ -25,7 +25,18 @@ const CRAWLER_LIMITS = {
   batchSize: { min: 1, max: 100 },
   confirmationDepth: { min: 0, max: 2160 },
   pollIntervalMs: { min: 1000, max: 3_600_000 },
+  assetEnrichRate: { min: 1, max: 20 },
 } as const;
+
+const VALID_ASSET_CATALOGUE_MODES = ['off', 'bare', 'enrich'] as const;
+
+/** Parse a boolean crawler flag that defaults to `fallback` when unset. */
+function crawlerBoolean(raw: unknown, name: string, fallback: boolean): boolean {
+  if (raw === undefined || raw === null) return fallback;
+  if (raw === true || raw === 'true') return true;
+  if (raw === false || raw === 'false') return false;
+  throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be true or false.`);
+}
 
 /** Parse an integer without allowing JavaScript's lossy/implicit coercions. */
 function crawlerInteger(
@@ -490,7 +501,33 @@ export function loadCrawlerConfigFromEnv(): CrawlerConfig {
     throw new ConfigError(`Invalid CRAWLER_SOURCE "${source}". Must be one of: ogmios, pagination, auto.`);
   }
 
-  return { enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs };
+  // Analytics coverage. Mint/burn and the bare catalogue are on by default: both are
+  // by-products of a block the crawler already holds and add no provider traffic. The two
+  // that do cost network — background enrichment and the epoch snapshots — are opt-in.
+  const assetHistory = crawlerBoolean(
+    c.assetHistory ?? env.CRAWLER_ASSET_HISTORY, 'CRAWLER_ASSET_HISTORY', true,
+  );
+  const assetCatalogue = (c.assetCatalogue ?? env.CRAWLER_ASSET_CATALOGUE ?? 'bare') as CrawlerConfig['assetCatalogue'];
+  if (!VALID_ASSET_CATALOGUE_MODES.includes(assetCatalogue)) {
+    throw new ConfigError(
+      `Invalid CRAWLER_ASSET_CATALOGUE "${assetCatalogue}". Must be one of: ${VALID_ASSET_CATALOGUE_MODES.join(', ')}.`
+    );
+  }
+  const assetEnrichRate = crawlerInteger(
+    c.assetEnrichRate ?? env.CRAWLER_ASSET_ENRICH_RATE,
+    'CRAWLER_ASSET_ENRICH_RATE',
+    CRAWLER_LIMITS.assetEnrichRate.min,
+    CRAWLER_LIMITS.assetEnrichRate.max,
+    2,
+  )!;
+  const epochSnapshots = crawlerBoolean(
+    c.epochSnapshots ?? env.CRAWLER_EPOCH_SNAPSHOTS, 'CRAWLER_EPOCH_SNAPSHOTS', false,
+  );
+
+  return {
+    enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs,
+    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots,
+  };
 }
 
 /**

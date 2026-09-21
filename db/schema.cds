@@ -202,12 +202,118 @@ entity Pools : temporal {
         rewardAccount  : String;
 }
 
+@title      : 'Pool Epoch Snapshot Entity'
+@description: 'Stake-pool state as observed once per epoch by the chain crawler. Non-temporal: each row is a dated observation, not a cached slice, so the crawled range is a true time series. Written only when the crawler runs with epochSnapshots enabled, an enumerating backend (Koios) is configured, and the crawl is at the chain tip — the provider reports the pool set as it is now, so an epoch passed during a backfill is skipped rather than filled with current figures.'
+entity PoolEpochSnapshots {
+
+        @title      : 'Pool Id (Key)'
+        @description: 'Unique stake pool identifier'
+    key poolId         : Bech32;
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+    key epoch          : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block that triggered the snapshot'
+        snapshotSlot   : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the block that triggered the snapshot'
+        snapshotTime   : Integer64;
+
+        @title      : 'Blocks Minted'
+        @description: 'Total number of blocks minted by the pool'
+        blocksMinted   : Integer;
+
+        @title      : 'Blocks in Epoch'
+        @description: 'Number of blocks minted in the epoch that was running at snapshot time'
+        blocksEpoch    : Integer;
+
+        @title      : 'Live Stake'
+        @description: 'Live stake delegated to the pool'
+        liveStake      : Lovelace;
+
+        @title      : 'Live Size'
+        @description: 'Live size as fraction of total active stake'
+        liveSize       : Decimal(5, 4);
+
+        @title      : 'Live Saturation'
+        @description: 'Live saturation as fraction of ideal size'
+        liveSaturation : Decimal(5, 4);
+
+        @title      : 'Live Delegators'
+        @description: 'Number of live delegators'
+        liveDelegators : Integer;
+
+        @title      : 'Active Stake'
+        @description: 'Active stake delegated to the pool'
+        activeStake    : Lovelace;
+
+        @title      : 'Active Size'
+        @description: 'Active size as fraction'
+        activeSize     : Decimal(5, 4);
+
+        @title      : 'Pledge'
+        @description: 'Pool pledge in lovelace'
+        pledge         : Lovelace;
+
+        @title      : 'Margin'
+        @description: 'Pool margin as fraction'
+        margin         : Decimal(5, 4);
+
+        @title      : 'Fixed Cost'
+        @description: 'Pool fixed cost in lovelace'
+        fixedCost      : Lovelace;
+}
+
+@title      : 'Drep Epoch Snapshot Entity'
+@description: 'DRep state as observed once per epoch by the chain crawler. Non-temporal, tip-only, same reasoning as PoolEpochSnapshots.'
+entity DrepEpochSnapshots {
+
+        @title      : 'Drep Id (Key)'
+        @description: 'Unique drep identifier'
+    key drepId          : Bech32;
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+    key epoch           : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block that triggered the snapshot'
+        snapshotSlot    : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the block that triggered the snapshot'
+        snapshotTime    : Integer64;
+
+        @title      : 'Vote Power'
+        @description: 'Amount of vote power in lovelace'
+        amount          : Lovelace;
+
+        @title      : 'Has Script'
+        @description: 'Indicates if drep is a script drep'
+        hasScript       : Boolean;
+
+        @title      : 'Last Active Epoch'
+        @description: 'Epoch number of last activity'
+        lastActiveEpoch : Integer;
+
+        @title      : 'Retired'
+        @description: 'Indicates if drep is retired'
+        retired         : Boolean;
+
+        @title      : 'Expired'
+        @description: 'Indicates if drep is expired'
+        expired         : Boolean;
+}
+
 @title      : 'Asset Entity'
 @description: 'Native-asset information entity (supply, mint history, CIP-25 + CIP-26 metadata)'
 entity Assets : temporal {
 
         @title      : 'Asset Unit (Key)'
-        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-128 hex)'
+        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex, the 32-byte ledger cap)'
     key unit              : AssetUnit;
 
         @title      : 'Policy ID'

@@ -1,5 +1,42 @@
 # Changelog
 
+## [v2.0.0-rc.12] - crawler coverage for analytics
+
+### Added
+
+- The crawler now fills the tables analytics needs, not only blocks and
+  transactions:
+  - `AssetHistory` — every mint and burn of the crawled range, taken from the
+    ledger's mint field (Ogmios, Koios) or the output-minus-input delta
+    (Blockfrost). On by default, no provider call (`CRAWLER_ASSET_HISTORY`).
+  - `Assets` — one row per native-asset unit seen, derived from the unit itself:
+    policyId, assetNameHex, decoded name, CIP-14 fingerprint. Supply and
+    registry data are still filled in by the lazy path on first read. On by
+    default, no provider call (`CRAWLER_ASSET_CATALOGUE=bare`); `enrich`
+    resolves the registry in the background.
+  - `PoolEpochSnapshots` / `DrepEpochSnapshots` — new read-only entities, one
+    dated observation per pool and DRep per epoch, so stake and governance read
+    as a time series instead of current state. Taken only while the crawl is at
+    the chain tip, because the enumerating providers report the set as it is now
+    and take no epoch parameter. Off by default (`CRAWLER_EPOCH_SNAPSHOTS`),
+    requires Koios.
+- `EnumeratingBackend` capability (full pool/DRep listing), implemented by Koios.
+
+### Fixed
+
+- Blockfrost inputs now carry `isCollateral` / `isReference`. The mapper filled
+  two field names nothing reads, so a reference input was indistinguishable from
+  a consumed one and `TransactionInputs.isReference` was always false.
+- A phase-2 failure fetched through Blockfrost now reports the collateral the
+  ledger charged as its fee, not the declared fee that was never collected —
+  the correction the chain-sync path has had since rc.11.
+
+### Notes
+
+- Ranges crawled by an earlier build keep their empty `AssetHistory` and
+  `Assets` tables until they are crawled again. `CRAWLER_ASSET_CATALOGUE=off`
+  with `CRAWLER_ASSET_HISTORY=false` restores rc.11 behaviour.
+
 ## [v2.0.0-rc.11] - phase-2 fees, over-deep chain-sync frames
 
 ### Fixed

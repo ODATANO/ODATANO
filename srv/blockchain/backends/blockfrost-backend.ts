@@ -156,6 +156,9 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           fee: tx.fees,
           deposit: tx.deposit,
           size: tx.size,
+          // `spends === 'collaterals'` in Ogmios terms: the script phase failed, so the
+          // ledger applied neither the declared inputs/outputs nor the declared mint.
+          spendsCollaterals: tx.valid_contract === false,
           inputs: txUtxos.inputs.map(input => ({
             address: input.address,
             txHash: input.tx_hash,
@@ -164,8 +167,10 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
             dataHash: input.data_hash,
             inlineDatum: inlineDatumToHex(input.inline_datum),
             referenceScriptHash: input.reference_script_hash,
-            collateral: input.collateral,
-            reference: input.reference,
+            // TxInputLine's names — these were mapped as `collateral`/`reference` before,
+            // which nothing reads, so every consumer saw a reference input as a consumed one.
+            isCollateral: input.collateral === true,
+            isReference: input.reference === true,
           })),
           outputs: txUtxos.outputs.map(output => ({
             address: output.address,

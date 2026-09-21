@@ -1,6 +1,6 @@
 # ODATANO Quick Start Guide
 
-**Version:** v2.0.0-rc.11 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.12 | **Last Updated:** September 2026
 
 This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
 
@@ -419,7 +419,7 @@ See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete ex
 ## Testing
 
 ```bash
-# All tests (62 files / 1983 tests: 46 unit + 16 integration, vitest)
+# All tests (69 files: 52 unit / 1479 tests + 17 integration, vitest)
 npm test
 
 # Coverage report

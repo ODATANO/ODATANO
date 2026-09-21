@@ -852,3 +852,82 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
     await expect(backend.isUtxoUnspent(TX, 0)).rejects.toThrow(ProviderUnavailableError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// getTransaction — the flags every consumer of a Transaction reads (rc.12)
+// ---------------------------------------------------------------------------
+
+describe('BlockfrostBackend getTransaction — input flags and phase-2 validity', () => {
+  const TX = 'a'.repeat(64);
+  const POLICY = 'b1'.repeat(28);
+  const UNIT = POLICY + '746f6b656e';
+
+  /** Wire a Blockfrost mock whose /txs and /txs/utxos answers the test supplies. */
+  function backendFor(tx: Record<string, unknown>, utxos: Record<string, unknown>) {
+    BlockFrostAPI.mockImplementation(function () { return {
+      txs: vi.fn().mockResolvedValue(tx),
+      txsUtxos: vi.fn().mockResolvedValue(utxos),
+      txsMetadata: vi.fn().mockResolvedValue([]),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'h' }),
+      options: { requestTimeout: 0 },
+    }; });
+    return new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+  }
+
+  const txBody = (over: Record<string, unknown> = {}) => ({
+    hash: TX, block: 'c'.repeat(64), block_height: 10, block_time: 1700000000, slot: 500,
+    index: 0, fees: '170000', deposit: '0', size: 300, valid_contract: true, ...over,
+  });
+
+  const input = (over: Record<string, unknown> = {}) => ({
+    address: 'addr_test1in', amount: [{ unit: 'lovelace', quantity: '5000000' }],
+    tx_hash: 'd'.repeat(64), output_index: 0, data_hash: null, inline_datum: null,
+    reference_script_hash: null, collateral: false, ...over,
+  });
+
+  it('maps collateral and reference onto the TxInputLine names the indexer reads', async () => {
+    // Blockfrost calls them `collateral`/`reference`; nothing in the codebase reads those,
+    // so a reference input used to arrive indistinguishable from a consumed one.
+    const backend = backendFor(txBody(), {
+      hash: TX,
+      inputs: [
+        input(),
+        input({ output_index: 1, collateral: true }),
+        input({ output_index: 2, reference: true, amount: [{ unit: UNIT, quantity: '1' }] }),
+      ],
+      outputs: [],
+    });
+    await backend.init();
+
+    const tx = await backend.getTransaction(TX);
+
+    expect(tx.inputs.map(i => [i.isCollateral, i.isReference])).toEqual([
+      [false, false],
+      [true, false],
+      [false, true],
+    ]);
+  });
+
+  it('reports a phase-2 failure through spendsCollaterals', async () => {
+    const backend = backendFor(txBody({ valid_contract: false }), {
+      hash: TX, inputs: [input({ collateral: true })], outputs: [],
+    });
+    await backend.init();
+
+    expect((await backend.getTransaction(TX)).spendsCollaterals).toBe(true);
+  });
+
+  it('leaves spendsCollaterals false for an ordinary transaction', async () => {
+    const backend = backendFor(txBody(), { hash: TX, inputs: [input()], outputs: [] });
+    await backend.init();
+
+    expect((await backend.getTransaction(TX)).spendsCollaterals).toBe(false);
+  });
+
+  it('has no mint field — the indexer must fall back to the input/output delta', async () => {
+    const backend = backendFor(txBody(), { hash: TX, inputs: [input()], outputs: [] });
+    await backend.init();
+
+    expect((await backend.getTransaction(TX)).mint).toBeUndefined();
+  });
+});

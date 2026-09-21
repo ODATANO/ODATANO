@@ -972,4 +972,133 @@ describe('KoiosBackend', () => {
       expect(await backend.isUtxoUnspent(TX, 1.5)).toBe(false);
     });
   });
+  // =========================================================================
+  // Crawler analytics coverage: mint field + pool/DRep enumeration
+  // =========================================================================
+  describe('getBlockTransactions — assets_minted', () => {
+    const BLOCK = 'b'.repeat(64);
+    const TX = 'c'.repeat(64);
+    const POLICY = 'a1'.repeat(28);
+
+    const txInfoRow = (over: Record<string, unknown> = {}) => ({
+      tx_hash: TX,
+      block_hash: BLOCK,
+      block_height: 100,
+      tx_timestamp: 1700000000,
+      absolute_slot: 5000,
+      tx_block_index: 0,
+      fee: '170000',
+      deposit: '0',
+      tx_size: 300,
+      inputs: [],
+      outputs: [],
+      ...over,
+    });
+
+    function mockBlockTxs(row: Record<string, unknown>) {
+      nock(KOIOS_BASE_URL).post('/api/v1/block_txs').reply(200, [{ tx_hashes: [TX] }]);
+      nock(KOIOS_BASE_URL).post('/api/v1/tx_info').reply(200, [row]);
+    }
+
+    it('maps assets_minted into the signed mint field', async () => {
+      mockBlockTxs(txInfoRow({
+        assets_minted: [
+          { policy_id: POLICY, asset_name: '746f6b656e', quantity: '1000' },
+          { policy_id: POLICY, asset_name: null, quantity: '-25' },
+        ],
+      }));
+
+      const [tx] = await backend.getBlockTransactions(BLOCK);
+
+      expect(tx.mint).toEqual([
+        { unit: `${POLICY}746f6b656e`, quantity: '1000' },
+        { unit: POLICY, quantity: '-25' },
+      ]);
+    });
+
+    it('leaves mint undefined when Koios does not report the field', async () => {
+      mockBlockTxs(txInfoRow());
+
+      const [tx] = await backend.getBlockTransactions(BLOCK);
+
+      // undefined, not [] — the indexer must fall back to the input/output delta
+      // rather than read "no mint" into a gap in the response
+      expect(tx.mint).toBeUndefined();
+    });
+
+    it('reports an empty mint list as an empty array', async () => {
+      mockBlockTxs(txInfoRow({ assets_minted: [] }));
+
+      const [tx] = await backend.getBlockTransactions(BLOCK);
+
+      expect(tx.mint).toEqual([]);
+    });
+  });
+
+  describe('EnumeratingBackend — pool and DRep sets', () => {
+    it('pages /pool_list until a short page and collects the bech32 ids', async () => {
+      const full = Array.from({ length: 1000 }, (_, i) => ({ pool_id_bech32: `pool1${i}` }));
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/pool_list')
+        .query({ select: 'pool_id_bech32', limit: '1000', offset: '0' })
+        .reply(200, full);
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/pool_list')
+        .query({ select: 'pool_id_bech32', limit: '1000', offset: '1000' })
+        .reply(200, [{ pool_id_bech32: 'pool1last' }]);
+
+      const ids = await backend.getPoolIds();
+
+      expect(ids).toHaveLength(1001);
+      expect(ids.at(-1)).toBe('pool1last');
+    });
+
+    it('resolves pools in batches of 50 and maps them like getPool', async () => {
+      const ids = Array.from({ length: 60 }, (_, i) => `pool1${i}`);
+      const rows = (batch: string[]) => batch.map(id => ({
+        pool_id_bech32: id, vrf_key_hash: 'vrf', block_count: 3, live_stake: '10',
+        live_size: 0.1, live_delegators: 2, live_saturation: 0.4, active_stake: '9',
+        active_size: 0.09, pledge: '5', margin: 0.02, fixed_cost: '340000000',
+        reward_addr: 'stake1',
+      }));
+      nock(KOIOS_BASE_URL).post('/api/v1/pool_info').reply(200, (_uri, body) =>
+        rows((body as { _pool_bech32_ids: string[] })._pool_bech32_ids));
+      nock(KOIOS_BASE_URL).post('/api/v1/pool_info').reply(200, (_uri, body) =>
+        rows((body as { _pool_bech32_ids: string[] })._pool_bech32_ids));
+
+      const pools = await backend.getPools(ids);
+
+      expect(pools).toHaveLength(60); // 50 + 10, two requests
+      expect(pools[0]).toMatchObject({ poolId: 'pool10', blocksMinted: 3, liveStake: '10', blocksEpoch: 0 });
+    });
+
+    it('pages /drep_list and resolves DReps through the shared drep mapper', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/drep_list')
+        .query({ select: 'drep_id', limit: '1000', offset: '0' })
+        .reply(200, [{ drep_id: 'drep1a' }, { drep_id: 'drep1b' }]);
+      nock(KOIOS_BASE_URL).post('/api/v1/drep_info').reply(200, [
+        { drep_id: 'drep1a', hex: 'aa', amount: '100', has_script: false, drep_status: 'registered', active: true },
+        { drep_id: 'drep1b', hex: 'bb', amount: '200', has_script: true, drep_status: 'retired', active: false },
+      ]);
+
+      const ids = await backend.getDrepIds();
+      const dreps = await backend.getDreps(ids);
+
+      expect(ids).toEqual(['drep1a', 'drep1b']);
+      expect(dreps).toEqual([
+        { drepId: 'drep1a', hex: 'aa', amount: '100', hasScript: false, lastActiveEpoch: 0, expired: false, retired: false },
+        { drepId: 'drep1b', hex: 'bb', amount: '200', hasScript: true, lastActiveEpoch: 0, expired: false, retired: true },
+      ]);
+    });
+
+    it('returns an empty set rather than throwing when a list endpoint is empty', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/pool_list')
+        .query({ select: 'pool_id_bech32', limit: '1000', offset: '0' })
+        .reply(200, []);
+
+      expect(await backend.getPoolIds()).toEqual([]);
+    });
+  });
 });

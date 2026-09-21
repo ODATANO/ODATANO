@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
-import { CardanoBackend, PaginatingBackend } from './cardano-backend';
+import { CardanoBackend, PaginatingBackend, EnumeratingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, isPostgrestServerErrorCode } from '../../utils/errors';
 import { normalizeCostModels, decodeAssetName } from '../../utils/mappers';
@@ -67,6 +67,12 @@ interface KoiosTxInfo {
   metadata?: Record<string, unknown> | null;
   inputs: KoiosTxIO[];
   outputs: KoiosTxIO[];
+  /**
+   * Net mint/burn of the transaction (`_assets: true`), quantity signed — negative is a burn.
+   * Absent on older Koios versions; the indexer then derives the delta from inputs/outputs,
+   * which is exact here because Koios resolves every input's `asset_list`.
+   */
+  assets_minted?: Array<{ policy_id?: string; asset_name?: string | null; quantity?: string | number }> | null;
 }
 
 
@@ -119,7 +125,7 @@ function sortAddressTxsDesc<T extends { block_height?: number | string | null; b
  * KoiosBackend Implementation for CardanoBackend Interface
  * Implements the CardanoBackend interface using Koios API with Axios
  */
-export class KoiosBackend implements CardanoBackend, PaginatingBackend {
+export class KoiosBackend implements CardanoBackend, PaginatingBackend, EnumeratingBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   private network: Network;
@@ -605,29 +611,33 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
           throw new NotFoundError('Pool', this.name);
         }
 
-        const poolData = data[0];
-        return {
-          poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || poolId,
-          vrfKeyHash: poolData.vrf_key_hash,
-          blocksMinted: poolData.block_count,
-          // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
-          // (the epoch NUMBER) was mapped here before, which is a different
-          // semantic than Blockfrost's blocks_epoch. 0 = not available.
-          blocksEpoch: 0,
-          liveStake: poolData.live_stake || '0',
-          liveSize: poolData.live_size || 0,
-          liveDelegators: poolData.live_delegators || 0,
-          liveSaturation: poolData.live_saturation || 0,
-          activeStake: poolData.active_stake || '0',
-          activeSize: poolData.active_size || 0,
-          pledge: poolData.pledge || '0',
-          margin: poolData.margin || 0,
-          fixedCost: poolData.fixed_cost || '0',
-          rewardAccount: poolData.reward_addr,
-        };
+        return this._mapKoiosPool(data[0], poolId);
       },
       this.name
     );
+  }
+
+  /** Map one Koios /pool_info row to the canonical PoolData. */
+  private _mapKoiosPool(poolData: Record<string, any>, fallbackId: string): PoolData { // eslint-disable-line @typescript-eslint/no-explicit-any
+    return {
+      poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || fallbackId,
+      vrfKeyHash: poolData.vrf_key_hash,
+      blocksMinted: poolData.block_count,
+      // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
+      // (the epoch NUMBER) was mapped here before, which is a different
+      // semantic than Blockfrost's blocks_epoch. 0 = not available.
+      blocksEpoch: 0,
+      liveStake: poolData.live_stake || '0',
+      liveSize: poolData.live_size || 0,
+      liveDelegators: poolData.live_delegators || 0,
+      liveSaturation: poolData.live_saturation || 0,
+      activeStake: poolData.active_stake || '0',
+      activeSize: poolData.active_size || 0,
+      pledge: poolData.pledge || '0',
+      margin: poolData.margin || 0,
+      fixedCost: poolData.fixed_cost || '0',
+      rewardAccount: poolData.reward_addr,
+    };
   }
 
   /**
@@ -773,28 +783,32 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
           throw new NotFoundError('Drep', this.name);
         }
 
-        const drepData = data[0];
-        // Koios changed the /drep_info schema (observed 2026-07): the old
-        // `expired`/`retired`/`last_active_epoch` fields were replaced by
-        // `drep_status` ('registered' | 'retired'), `active` (boolean) and
-        // `expires_epoch_no`. Read the old fields first (mainnet/preprod may
-        // lag the migration), then derive from the new ones.
-        const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
-        const expired: boolean = drepData.expired ?? (drepData.active === false && !retired);
-        return {
-          drepId: drepData.drep_id,
-          hex: drepData.hex,
-          amount: drepData.amount,
-          hasScript: drepData.has_script,
-          // The new schema no longer reports the last-activity epoch (only
-          // `expires_epoch_no`, which has different semantics) — keep 0 there.
-          lastActiveEpoch: drepData.last_active_epoch ?? 0,
-          expired,
-          retired,
-        };
+        return this._mapKoiosDrep(data[0]);
       },
       this.name
     );
+  }
+
+  /** Map one Koios /drep_info row to the canonical DrepData. */
+  private _mapKoiosDrep(drepData: Record<string, any>): DrepData { // eslint-disable-line @typescript-eslint/no-explicit-any
+    // Koios changed the /drep_info schema (observed 2026-07): the old
+    // `expired`/`retired`/`last_active_epoch` fields were replaced by
+    // `drep_status` ('registered' | 'retired'), `active` (boolean) and
+    // `expires_epoch_no`. Read the old fields first (mainnet/preprod may
+    // lag the migration), then derive from the new ones.
+    const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
+    const expired: boolean = drepData.expired ?? (drepData.active === false && !retired);
+    return {
+      drepId: drepData.drep_id,
+      hex: drepData.hex,
+      amount: drepData.amount,
+      hasScript: drepData.has_script,
+      // The new schema no longer reports the last-activity epoch (only
+      // `expires_epoch_no`, which has different semantics) — keep 0 there.
+      lastActiveEpoch: drepData.last_active_epoch ?? 0,
+      expired,
+      retired,
+    };
   }
 
   /** 
@@ -1212,6 +1226,100 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // EnumeratingBackend — full pool/DRep set for the crawler's epoch snapshots
+  // ---------------------------------------------------------------------------
+
+  /** Rows per page when listing ids (PostgREST caps a response at 1000 rows). */
+  private static readonly LIST_PAGE_SIZE = 1000;
+  /** Ids resolved per /pool_info / /drep_info request. */
+  private static readonly INFO_BATCH_SIZE = 50;
+  /**
+   * Refuse to page forever if an endpoint keeps returning full pages — 500 pages is
+   * 500 000 ids, far beyond any real pool or DRep set.
+   */
+  private static readonly LIST_MAX_PAGES = 500;
+
+  /**
+   * Page through a PostgREST list endpoint and collect one id column. Stops on the first
+   * short page, so a complete set costs exactly ceil(n / 1000) + 1 requests.
+   */
+  private async listAllIds(path: string, column: string, label: string): Promise<string[]> {
+    const ids: string[] = [];
+    for (let page = 0; page < KoiosBackend.LIST_MAX_PAGES; page++) {
+      const offset = page * KoiosBackend.LIST_PAGE_SIZE;
+      const { data } = await this.getWithRetryOn42804(
+        `${path}?select=${column}&limit=${KoiosBackend.LIST_PAGE_SIZE}&offset=${offset}`,
+        {},
+        label,
+      );
+      if (!Array.isArray(data) || data.length === 0) return ids;
+      for (const row of data) {
+        const id = (row as Record<string, unknown>)[column];
+        if (typeof id === 'string' && id) ids.push(id);
+      }
+      if (data.length < KoiosBackend.LIST_PAGE_SIZE) return ids;
+    }
+    logger.warn(`${label}: stopped after ${KoiosBackend.LIST_MAX_PAGES} pages — the list may be truncated`);
+    return ids;
+  }
+
+  /**
+   * All stake-pool ids known to Koios (bech32), including retired ones — a snapshot that
+   * silently dropped retiring pools would misreport the epoch's pool set.
+   */
+  async getPoolIds(): Promise<string[]> {
+    return handleBackendRequest(
+      () => this.listAllIds('/pool_list', 'pool_id_bech32', 'getPoolIds'),
+      this.name,
+    );
+  }
+
+  /**
+   * Resolve pool ids in batches. Ids Koios does not return are omitted rather than
+   * substituted with empty rows — a missing pool is better than an invented one.
+   */
+  async getPools(poolIds: string[]): Promise<PoolData[]> {
+    return handleBackendRequest(
+      async () => {
+        const out: PoolData[] = [];
+        for (let i = 0; i < poolIds.length; i += KoiosBackend.INFO_BATCH_SIZE) {
+          const batch = poolIds.slice(i, i + KoiosBackend.INFO_BATCH_SIZE);
+          const { data } = await this.api.post('/pool_info', { _pool_bech32_ids: batch });
+          if (!Array.isArray(data)) continue;
+          for (const row of data) out.push(this._mapKoiosPool(row, ''));
+        }
+        return out;
+      },
+      this.name,
+    );
+  }
+
+  /** All DRep ids known to Koios (bech32). */
+  async getDrepIds(): Promise<string[]> {
+    return handleBackendRequest(
+      () => this.listAllIds('/drep_list', 'drep_id', 'getDrepIds'),
+      this.name,
+    );
+  }
+
+  /** Resolve DRep ids in batches; unknown ids are omitted (see getPools). */
+  async getDreps(drepIds: string[]): Promise<DrepData[]> {
+    return handleBackendRequest(
+      async () => {
+        const out: DrepData[] = [];
+        for (let i = 0; i < drepIds.length; i += KoiosBackend.INFO_BATCH_SIZE) {
+          const batch = drepIds.slice(i, i + KoiosBackend.INFO_BATCH_SIZE);
+          const { data } = await this.api.post('/drep_info', { _drep_ids: batch });
+          if (!Array.isArray(data)) continue;
+          for (const row of data) out.push(this._mapKoiosDrep(row));
+        }
+        return out;
+      },
+      this.name,
+    );
+  }
+
   /**
    * Get the full transaction list of a block in block order via /block_txs → /tx_info
    * batch. Handles both the current flattened shape ({tx_hash} per row) and the older
@@ -1279,6 +1387,16 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend {
       index: tx.tx_block_index ?? 0,
       fee: tx.fee || '0',
       deposit: tx.deposit || '0',
+      // undefined (not []) when Koios does not report the field at all — the indexer then
+      // falls back to the input/output delta instead of reading "no mint" into a gap.
+      mint: Array.isArray(tx.assets_minted)
+        ? tx.assets_minted
+            .filter((a) => a?.policy_id && a.quantity != null)
+            .map((a) => ({
+              unit: `${a.policy_id}${a.asset_name ?? ''}`,
+              quantity: String(a.quantity),
+            }))
+        : undefined,
       size: tx.tx_size,
       inputs: tx.inputs.map((input: KoiosTxIO) => {
         const amount: Amount[] = [

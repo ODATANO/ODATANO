@@ -155,7 +155,7 @@ export const HEX_56_REGEX = /^[a-f0-9]{56}$/;
 export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
 
 /**
- * Asset unit Regex - policy ID (56 hex chars) + asset name (0-128 hex chars)
+ * Asset unit Regex - policy ID (56 hex chars) + asset name (0-64 hex chars)
  */
 export const ASSET_UNIT_REGEX = /^[a-f0-9]{56}([a-f0-9]{2}){0,32}$/; // policy ID (56) + asset name (0-32 bytes per ledger rules -> 0-64 hex chars, even length; total ≤ 120 = String(120) key column)
 

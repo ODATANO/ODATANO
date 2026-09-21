@@ -7,6 +7,8 @@
 
 type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
 const runs: Q[] = [];
+/** Units the `Assets` table already holds, as the catalogue's existence check sees them. */
+let knownAssets: string[] = [];
 const mockTx = {
   run: vi.fn(async (q: Q) => {
     runs.push(q);
@@ -16,6 +18,10 @@ const mockTx = {
     }
     if (q._op === 'SELECT.many' && q.entity === 'TransactionOutputAssets') {
       return [{ output_tx_hash: 'prev'.padEnd(64, '0'), output_outputIndex: 0, unit: 'lovelace', asset_quantity: '7000000' }];
+    }
+    // asset catalogue: nothing known yet unless a test says otherwise (see knownAssets)
+    if (q._op === 'SELECT.many' && q.entity === 'AssetsTable') {
+      return knownAssets.map(unit => ({ unit }));
     }
     return undefined;
   }),
@@ -49,8 +55,14 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   TransactionMetadata: 'TransactionMetadata', NetworkInformation: 'NetworkInformation',
   UTxOAssets: 'UTxOAssets', Block: 'Block', Epoch: 'Epoch', Accounts: 'Accounts',
   Pools: 'Pools', Dreps: 'Dreps', Assets: 'Assets', AssetHistory: 'AssetHistory',
+  PoolEpochSnapshots: 'PoolEpochSnapshots', DrepEpochSnapshots: 'DrepEpochSnapshots',
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
+}));
+
+// DB-level entity: the asset catalogue's existence check reads past the temporal filter
+vi.mock('#cds-models/odatano/cardano', () => ({
+  Assets: 'AssetsTable',
 }));
 
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -67,6 +79,7 @@ vi.mock('#cds-models/CardanoSignService', () => ({
 
 import type { Mock } from 'vitest';
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
+import { BARE_ASSET_STAMP } from '../../srv/utils/mappers';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
 const blockData = (over: Partial<BlockData> = {}): BlockData => ({
@@ -89,6 +102,7 @@ function makeIndexer(getEpoch: Mock = vi.fn().mockRejectedValue(new Error('no ep
 
 beforeEach(() => {
   runs.length = 0;
+  knownAssets = [];
   mockTx.run.mockClear();
 });
 
@@ -370,5 +384,234 @@ describe('CardanoIndexer.applyCollateralFees (via indexBlockFull)', () => {
 
     expect(feeOf(hash)).toBe('170000');
     expect(blockFees()).toBe('340000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mint/burn history (FR "crawler coverage for analytics")
+// ---------------------------------------------------------------------------
+
+const POLICY = 'a1'.repeat(28);
+const UNIT_A = `${POLICY}${Buffer.from('TOKA').toString('hex')}`;
+const UNIT_B = `${POLICY}${Buffer.from('TOKB').toString('hex')}`;
+
+/** Output line carrying native assets. */
+const out = (txHash: string, index: number, amount: Array<{ unit: string; quantity: string }>, isCollateral = false) => ({
+  address: 'addrOut', amount, txHash, outputIndex: index, dataHash: null, inlineDatum: null, isCollateral,
+});
+
+const historyRows = () => (upsertsFor('AssetHistory')[0]?.entries ?? []) as Array<Record<string, unknown>>;
+
+describe('CardanoIndexer.indexBlockFull — mint/burn history', () => {
+  it("takes the ledger's own mint field when the backend reports one", async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm1'.padEnd(64, '0');
+    const minted = tx(hash, {
+      // the delta would say something else — the native field must win
+      mint: [{ unit: UNIT_A, quantity: '1000' }, { unit: UNIT_B, quantity: '-25' }],
+      outputs: [out(hash, 0, [{ unit: 'lovelace', quantity: '2000000' }, { unit: UNIT_A, quantity: '999' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [minted]);
+
+    expect(historyRows()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ unit: UNIT_A, txHash: hash, action: 'mint', quantity: '1000' }),
+      expect.objectContaining({ unit: UNIT_B, txHash: hash, action: 'burn', quantity: '25' }),
+    ]));
+    // blockTime/blockHeight come from the block the crawler already holds
+    expect(historyRows()[0]).toMatchObject({ blockTime: 1700000000, blockHeight: 50 });
+  });
+
+  it('derives the delta from outputs minus inputs when the backend has no mint field', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm2'.padEnd(64, '0');
+    const derived = tx(hash, {
+      inputs: [{ address: 'addrIn', amount: [{ unit: UNIT_A, quantity: '400' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0 }],
+      outputs: [out(hash, 0, [{ unit: 'lovelace', quantity: '2000000' }, { unit: UNIT_A, quantity: '700' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [derived]);
+
+    expect(historyRows()).toEqual([
+      expect.objectContaining({ unit: UNIT_A, action: 'mint', quantity: '300' }),
+    ]);
+  });
+
+  it('records a burn when the delta is negative, and nothing when assets only move', async () => {
+    const { indexer } = makeIndexer();
+    const burn = tx('m3'.padEnd(64, '0'), {
+      inputs: [{ address: 'addrIn', amount: [{ unit: UNIT_A, quantity: '400' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0 }],
+      outputs: [out('m3'.padEnd(64, '0'), 0, [{ unit: UNIT_A, quantity: '100' }])],
+    });
+    const move = tx('m4'.padEnd(64, '0'), {
+      inputs: [{ address: 'addrIn', amount: [{ unit: UNIT_B, quantity: '5' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 1 }],
+      outputs: [out('m4'.padEnd(64, '0'), 0, [{ unit: UNIT_B, quantity: '5' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [burn, move]);
+
+    expect(historyRows()).toEqual([
+      expect.objectContaining({ unit: UNIT_A, txHash: 'm3'.padEnd(64, '0'), action: 'burn', quantity: '300' }),
+    ]);
+  });
+
+  // The two exclusions below only bite on the delta path, i.e. on Blockfrost — which since
+  // rc.12 maps `collateral`/`reference` onto these TxInputLine names instead of dropping them.
+  it('ignores collateral declared by a transaction whose script phase succeeded', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm8'.padEnd(64, '0');
+    const withCollateral = tx(hash, {
+      inputs: [
+        { address: 'addrIn', amount: [{ unit: UNIT_A, quantity: '100' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0 },
+        { address: 'addrColl', amount: [{ unit: UNIT_A, quantity: '40' }], txHash: 'coll'.padEnd(64, '0'), outputIndex: 0, isCollateral: true },
+      ],
+      outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '100' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [withCollateral]);
+
+    // the collateral was never consumed — counting it would report a phantom 40 burn
+    expect(historyRows()).toHaveLength(0);
+  });
+
+  it('ignores reference inputs — they are read, never consumed', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm5'.padEnd(64, '0');
+    const withRef = tx(hash, {
+      inputs: [
+        { address: 'addrIn', amount: [{ unit: UNIT_A, quantity: '100' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0 },
+        { address: 'addrRef', amount: [{ unit: UNIT_A, quantity: '900' }], txHash: 'ref'.padEnd(64, '0'), outputIndex: 0, isReference: true },
+      ],
+      outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '100' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [withRef]);
+
+    // counting the reference input would have reported a 900 burn
+    expect(historyRows()).toHaveLength(0);
+  });
+
+  it('records nothing for a phase-2 failure — the ledger applies no mint', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm6'.padEnd(64, '0');
+    const failed = tx(hash, {
+      spendsCollaterals: true,
+      inputs: [{ address: 'addrColl', amount: [{ unit: UNIT_A, quantity: '50' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0, isCollateral: true }],
+      outputs: [out(hash, 1, [{ unit: 'lovelace', quantity: '1000000' }], true)],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [failed]);
+
+    expect(historyRows()).toHaveLength(0);
+  });
+
+  it('skips a transaction whose consumed input could not be resolved', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'm7'.padEnd(64, '0');
+    const unresolved = tx(hash, {
+      // chain-sync bare reference to an output created before the crawl start:
+      // resolveInputs() finds nothing locally, so address stays empty
+      inputs: [{ address: '', amount: [], txHash: 'old'.padEnd(64, '0'), outputIndex: 3 }],
+      outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '777' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [unresolved]);
+
+    // a 777 "mint" here would be an artefact of the missing input, not a fact
+    expect(historyRows()).toHaveLength(0);
+  });
+
+  it('writes no AssetHistory statement at all when the block mints nothing', async () => {
+    const { indexer } = makeIndexer();
+    await indexer.indexBlockFull(mockTx as never, blockData({ txCount: 0 }), []);
+    expect(upsertsFor('AssetHistory')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Asset catalogue (bare rows)
+// ---------------------------------------------------------------------------
+
+const assetWrites = () => upsertsFor('AssetsTable');
+const assetSelects = () => runs.filter(q => q._op === 'SELECT.many' && q.entity === 'AssetsTable');
+
+describe('CardanoIndexer.indexBlockFull — asset catalogue', () => {
+  it('writes a bare row for every unseen unit, with fingerprint and decoded name', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'c1'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: 'lovelace', quantity: '1' }, { unit: UNIT_A, quantity: '5' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const rows = assetWrites()[0].entries as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1); // lovelace is not a catalogue entry
+    expect(rows[0]).toMatchObject({ unit: UNIT_A, policyId: POLICY, assetName: 'TOKA' });
+    expect(rows[0].fingerprint).toMatch(/^asset1/);
+    // born expired at the fixed sentinel, so the lazy path still treats the first keyed
+    // read as a miss AND no mapAsset() slice can ever share the (validFrom, unit) key
+    expect(rows[0].validFrom).toBe(BARE_ASSET_STAMP);
+    expect(rows[0].validTo).toBe(BARE_ASSET_STAMP);
+  });
+
+  it('never rewrites a unit the table already holds — an enriched row must survive', async () => {
+    const { indexer } = makeIndexer();
+    knownAssets = [UNIT_A];
+    const hash = 'c2'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '5' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(assetWrites()).toHaveLength(0);
+  });
+
+  it('memoizes a unit it has written, so the next block costs no SELECT', async () => {
+    const { indexer } = makeIndexer();
+    const t1 = tx('c3'.padEnd(64, '0'), { outputs: [out('c3'.padEnd(64, '0'), 0, [{ unit: UNIT_A, quantity: '5' }])] });
+    const t2 = tx('c4'.padEnd(64, '0'), { outputs: [out('c4'.padEnd(64, '0'), 0, [{ unit: UNIT_A, quantity: '6' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t1]);
+    const selectsAfterFirst = assetSelects().length;
+    await indexer.indexBlockFull(mockTx as never, blockData({ hash: 'blk2'.padEnd(64, '9') }), [t2]);
+
+    expect(assetSelects()).toHaveLength(selectsAfterFirst);
+    expect(assetWrites()).toHaveLength(1);
+  });
+
+  it('catalogues units seen on the input side too', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'c5'.padEnd(64, '0');
+    const t = tx(hash, {
+      inputs: [{ address: 'addrIn', amount: [{ unit: UNIT_B, quantity: '3' }], txHash: 'src'.padEnd(64, '0'), outputIndex: 0 }],
+      outputs: [out(hash, 0, [{ unit: UNIT_B, quantity: '3' }])],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const rows = assetWrites()[0].entries as Array<Record<string, unknown>>;
+    expect(rows.map(r => r.unit)).toEqual([UNIT_B]);
+  });
+
+  it('writes nothing when the catalogue is switched off', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off' });
+    const hash = 'c6'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '5' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(assetWrites()).toHaveLength(0);
+    expect(assetSelects()).toHaveLength(0);
+  });
+
+  it('writes no mint rows when mint/burn coverage is switched off', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: false, assetCatalogue: 'bare' });
+    const hash = 'c7'.padEnd(64, '0');
+    const t = tx(hash, { mint: [{ unit: UNIT_A, quantity: '10' }], outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '10' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(upsertsFor('AssetHistory')).toHaveLength(0);
+    expect(assetWrites()).toHaveLength(1); // catalogue is independent of it
   });
 });

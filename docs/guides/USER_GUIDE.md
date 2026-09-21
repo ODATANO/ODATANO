@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v2.0.0-rc.11 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.12 | **Last Updated:** September 2026
 
 ---
 
@@ -661,6 +661,41 @@ POST /odata/v4/cardano-indexer/pauseCrawler
 POST /odata/v4/cardano-indexer/resumeCrawler
 ```
 
+### What the crawl fills beyond blocks and transactions
+
+A pre-synced range is meant to be a dataset, not a by-product of whoever happened to call the API,
+so the crawler also fills the tables that analytics need:
+
+| Table | What lands there | Default |
+|---|---|---|
+| `AssetHistory` | every mint and burn in the range, one row per (unit, transaction) | on |
+| `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint | on (`bare`) |
+| `PoolEpochSnapshots`, `DrepEpochSnapshots` | every pool and DRep once per epoch — only while the crawl is at the chain tip | off |
+
+```jsonc
+"crawler": {
+  "assetHistory": true,        // mint/burn rows — derived from the block, no provider call
+  "assetCatalogue": "bare",    // "off" | "bare" (free) | "enrich" (adds registry name/ticker/decimals)
+  "assetEnrichRate": 2,        // units per second, "enrich" only
+  "epochSnapshots": false      // pool/DRep snapshots — requires a Koios backend
+}
+```
+
+The two defaults cost nothing: both are derived from data the crawler already holds. `"enrich"` and
+`epochSnapshots` talk to a provider and are therefore opt-in; `epochSnapshots` needs Koios, because
+it is the only backend that can enumerate the full pool and DRep set in batches.
+
+`epochSnapshots` only records an epoch while the crawl has caught up to the chain tip. Koios
+reports the pool and DRep set as it is *now* — there is no historical variant — so an epoch the
+crawler merely passes through while backfilling is skipped rather than filled with today's numbers
+under yesterday's epoch number. If you want snapshots for a past range, there is nothing the crawl
+can reconstruct; run the crawler live from the point you care about.
+
+A catalogue row written by the crawl carries what the unit itself encodes, not supply or registry
+metadata — those arrive the first time someone reads that asset through the API (or continuously
+with `"enrich"`). Setting `assetCatalogue` to `"off"` and `assetHistory` to `false` restores the
+pre-2.0.0-rc.12 behaviour exactly.
+
 **Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10). See `CRAWLER_DESIGN.md` for the architecture.
 
 ---
@@ -772,7 +807,7 @@ invisible to existing HTTP clients.
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 62 test files / 1983 tests (46 unit + 16 integration, vitest)
+- **Test Docs:** [test/README.md](../../test/README.md) - 69 test files (52 unit / 1479 tests + 17 integration, vitest)
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/
@@ -781,5 +816,5 @@ invisible to existing HTTP clients.
 
 ---
 
-**Version:** v2.0.0-rc.11\
+**Version:** v2.0.0-rc.12\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

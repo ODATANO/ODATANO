@@ -21,6 +21,8 @@ import {
   Accounts,
   Pools,
   Dreps,
+  PoolEpochSnapshots,
+  DrepEpochSnapshots,
   Assets,
   AssetHistory,
   Account,
@@ -48,6 +50,10 @@ import {
   AddressSigningRequests,
 } from '#cds-models/CardanoSignService';
 
+// DB-level entity: the catalogue's existence check must bypass the temporal filter that the
+// service projection carries (see ensureAssetRows).
+import { Assets as AssetsTable } from '#cds-models/odatano/cardano';
+
 import {
   mapTransaction,
   mapTransactionInputs,
@@ -62,9 +68,12 @@ import {
   mapEpoch,
   mapAccount,
   mapAsset,
+  mapBareAsset,
   mapAssetHistory,
   mapDrep,
   mapPool,
+  mapPoolSnapshot,
+  mapDrepSnapshot,
   mapTransactionMetadata,
   mapAddressUtxoAssets,
   mapBuildResult,
@@ -77,7 +86,7 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine } from '../utils/types';
+import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
@@ -123,6 +132,75 @@ export class CardanoIndexer {
   }>();
   private crawlEpochCurrent: number | null = null;
   private crawlEpochPrevious: number | null = null;
+
+  /**
+   * Analytics coverage of the crawl path (v2.0, FR "crawler coverage for analytics"). The
+   * defaults mirror the crawler config defaults, so an indexer the crawler never configured
+   * (unit tests, the lazy-only path) behaves exactly like a configured one.
+   */
+  private crawlAssetHistory = true;
+  private crawlAssetCatalogue: 'off' | 'bare' | 'enrich' = 'bare';
+
+  /** Units known to have an `Assets` row, so a repeat sighting costs no DB round-trip. */
+  private static readonly ASSET_MEMO_CAP = 200_000;
+  private assetMemo = new Set<string>();
+
+  /**
+   * Background registry enrichment (`assetCatalogue: 'enrich'`). Bare rows are queued here and
+   * resolved at a fixed rate OUTSIDE the block transaction, so a mint storm can slow the queue
+   * but never the crawl. Above the cap the oldest entries are dropped: the unit keeps its bare
+   * row and is still enriched by the lazy path on its first API read.
+   */
+  private static readonly ENRICH_QUEUE_CAP = 50_000;
+  private enrichQueue: string[] = [];
+  private enrichTimer: ReturnType<typeof setInterval> | null = null;
+  private enrichRate = 2;
+
+  /**
+   * Adopt the crawler's coverage settings. Called once from the crawler's start path; the
+   * lazy request path never touches these.
+   */
+  configureCrawlCoverage(coverage: {
+    assetHistory: boolean;
+    assetCatalogue: 'off' | 'bare' | 'enrich';
+    assetEnrichRate?: number;
+  }): void {
+    this.crawlAssetHistory = coverage.assetHistory;
+    this.crawlAssetCatalogue = coverage.assetCatalogue;
+    this.enrichRate = coverage.assetEnrichRate ?? this.enrichRate;
+    if (coverage.assetCatalogue !== 'enrich') this.stopAssetEnrichment();
+  }
+
+  /**
+   * Drain the enrichment queue at `enrichRate` units per second, one `indexAsset()` per tick in
+   * its own transaction. The timer is unref'd, so it never holds the process open, and a failing
+   * unit (404 from every backend, provider outage) is dropped rather than retried — its bare row
+   * stays and the lazy path can still enrich it later.
+   */
+  private startAssetEnrichment(): void {
+    if (this.enrichTimer || this.crawlAssetCatalogue !== 'enrich') return;
+    const intervalMs = Math.max(1, Math.round(1000 / Math.max(1, this.enrichRate)));
+    this.enrichTimer = setInterval(() => {
+      const unit = this.enrichQueue.shift();
+      if (unit === undefined) {
+        this.stopAssetEnrichment();
+        return;
+      }
+      void cds.tx((tx) => this.indexAsset(tx as CapTransaction, unit)).catch((err: unknown) => {
+        logger.debug(`asset enrichment for ${unit} failed (bare row kept):`, err);
+      });
+    }, intervalMs);
+    this.enrichTimer.unref?.();
+  }
+
+  /** Stop the enrichment loop and forget what is still queued (shutdown, crawler halt, mode change). */
+  stopAssetEnrichment(): void {
+    if (this.enrichTimer) {
+      clearInterval(this.enrichTimer);
+      this.enrichTimer = null;
+    }
+    this.enrichQueue = [];
+  }
 
   /**
    * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block
@@ -660,6 +738,9 @@ export class CardanoIndexer {
     const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
     const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
     const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
+    // Mint/burn is derived from rows already in hand — keyed (unit, txHash), so a re-crawl is
+    // idempotent and a reorg removes these rows with their transactions (crawler handleReorg).
+    const assetHistoryRows = this.crawlAssetHistory ? this.buildAssetHistoryRows(blockData, txs) : [];
 
     if (txRows.length) await tx.run(UPSERT.into(Transactions).entries(txRows));
     if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
@@ -667,8 +748,19 @@ export class CardanoIndexer {
     if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
     if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
     if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+    if (assetHistoryRows.length) await tx.run(UPSERT.into(AssetHistory).entries(assetHistoryRows));
 
-    logger.debug(`indexBlockFull: block ${blockData.hash} — ${txs.length} txs, ${outputRows.length} outputs`);
+    // Catalogue last: it reads what the block just wrote conceptually, and a block without
+    // native assets costs nothing here. Collecting the units is skipped entirely when the
+    // catalogue is off — this runs once per block.
+    const newAssets = this.crawlAssetCatalogue === 'off'
+      ? 0
+      : await this.ensureAssetRows(tx, this.collectBlockUnits(txs, assetHistoryRows));
+
+    logger.debug(
+      `indexBlockFull: block ${blockData.hash} — ${txs.length} txs, ${outputRows.length} outputs, ` +
+      `${assetHistoryRows.length} mint/burn, ${newAssets} new assets`
+    );
   }
 
   /**
@@ -747,8 +839,10 @@ export class CardanoIndexer {
    * declared fee is kept in that case and the transaction is logged: a value that is wrong in
    * a known, named way beats one that looks derived but is short by an unknown amount.
    *
-   * Only the chain-sync path sets `spendsCollaterals`; Blockfrost and Koios transactions carry
-   * it as undefined and pass through untouched.
+   * Applies to every backend that reports phase-2 validity — the chain-sync path (`spends`)
+   * and Blockfrost (`valid_contract`), whose declared `fees` are likewise never collected on a
+   * failed script phase. Koios carries `spendsCollaterals` as undefined and passes through
+   * untouched.
    */
   private applyCollateralFees(blockData: BlockData, txs: ProviderTransaction[]): void {
     const lovelaceOf = (amount: Amount[] | undefined): bigint =>
@@ -791,6 +885,214 @@ export class CardanoIndexer {
     if (corrected) {
       blockData.fees = txs.reduce((sum, t) => sum + BigInt(t.fee || 0), 0n).toString();
     }
+  }
+
+  /**
+   * Mint/burn rows for a whole block, as a by-product of data the crawler already holds —
+   * no provider round-trip (v2.1 analytics coverage).
+   *
+   * Two sources, in this order:
+   *  1. `t.mint` — the ledger's own mint field, reported natively by Ogmios (`mint`) and
+   *     Koios (`assets_minted`). Authoritative: it needs no resolved inputs and states the
+   *     net per unit directly.
+   *  2. Σ outputs − Σ inputs per unit, for backends without that field (Blockfrost), whose
+   *     inputs all carry their full `amount` so the delta is exact.
+   *
+   * The delta path excludes what the ledger does not consume or produce: reference inputs are
+   * read, never spent, and collateral only moves when the script phase failed — which applies
+   * no mint at all, so those transactions are skipped outright. Both exclusions rest on
+   * `isReference` / `isCollateral` / `spendsCollaterals`, which every backend that can reach
+   * this branch has to set — Blockfrost does since rc.12. A transaction with even one
+   * unresolvable consumed input (an output created before the crawl start, so no local row) is
+   * skipped and logged rather than reported with a delta that is short by an unknown amount —
+   * the same discipline as applyCollateralFees() above.
+   */
+  private buildAssetHistoryRows(blockData: BlockData, txs: ProviderTransaction[]): AssetHistory[] {
+    const entries: AssetHistoryEntryProviderData[] = [];
+    let skipped = 0;
+
+    for (const t of txs) {
+      let net: Map<string, bigint>;
+
+      if (t.mint) {
+        // A phase-2 failure never reaches here with a mint: the Ogmios mapper reports none.
+        net = new Map();
+        for (const m of t.mint) {
+          if (m.unit === 'lovelace') continue;
+          net.set(m.unit, (net.get(m.unit) ?? 0n) + BigInt(m.quantity));
+        }
+      } else {
+        if (t.spendsCollaterals) continue; // no mint is applied when the script phase failed
+
+        const consumed = (t.inputs ?? []).filter(i => !i.isReference && !i.isCollateral);
+        const unresolved = consumed.find(i => !i.address);
+        if (unresolved) {
+          logger.warn(
+            `mint delta for ${t.hash}: input ${unresolved.txHash}#${unresolved.outputIndex} is not indexed ` +
+            `— skipping, mint/burn of this transaction is not recorded`
+          );
+          skipped++;
+          continue;
+        }
+
+        net = new Map();
+        const add = (amount: Amount[] | undefined, sign: bigint): void => {
+          for (const a of amount ?? []) {
+            if (a.unit === 'lovelace') continue;
+            net.set(a.unit, (net.get(a.unit) ?? 0n) + sign * BigInt(a.quantity));
+          }
+        };
+        for (const o of (t.outputs ?? []).filter(o => !o.isCollateral)) add(o.amount, 1n);
+        for (const i of consumed) add(i.amount, -1n);
+      }
+
+      for (const [unit, quantity] of net) {
+        if (quantity === 0n) continue;
+        entries.push({
+          unit,
+          txHash: t.hash,
+          action: quantity > 0n ? 'mint' : 'burn',
+          quantity: (quantity < 0n ? -quantity : quantity).toString(),
+          blockTime: blockData.time ?? null,
+          blockHeight: blockData.height ?? null,
+        });
+      }
+    }
+
+    if (skipped) {
+      logger.warn(`block ${blockData.hash}: mint/burn not recorded for ${skipped} transaction(s) with unresolved inputs`);
+    }
+    return mapAssetHistory(entries) as AssetHistory[];
+  }
+
+  /**
+   * Keep the `Assets` catalogue complete for every unit the crawl meets, from the data already
+   * in hand — no provider call (FR "crawler coverage for analytics", variant "bare row").
+   *
+   * `Assets` is temporal, so its key is `(validFrom, unit)` and a row is a slice. The bare row
+   * therefore carries the fixed epoch-zero stamp (`BARE_ASSET_STAMP`), which no wall-clock slice
+   * from mapAsset() can ever alias: the write cannot overwrite enriched registry data, and it
+   * stays a single idempotent row per unit. That makes UPSERT safe — and safe is what it has to
+   * be, because this runs inside the crawler's block transaction, where a unique-key violation
+   * from a lazy-path write racing us would take the whole block down with it (and on PostgreSQL
+   * poison the transaction beyond any catch).
+   *
+   * The existence check is then only an optimization — it keeps a settled catalogue from
+   * rewriting every unit of every block. It runs against the DB-LEVEL entity on purpose: the
+   * service projection carries the temporal filter (`validFrom < $valid.to AND validTo >
+   * $valid.from`), which hides precisely the born-expired rows this check is looking for.
+   */
+  private async ensureAssetRows(tx: CapTransaction, units: Set<string>): Promise<number> {
+    if (this.crawlAssetCatalogue === 'off' || !units.size) return 0;
+
+    const unknown = [...units].filter(u => !this.assetMemo.has(u));
+    if (!unknown.length) return 0;
+
+    const missing: string[] = [];
+    for (const unitChunk of chunk(unknown, IN_CHUNK)) {
+      const rows = await tx.run(
+        SELECT.from(AssetsTable).columns('unit').where({ unit: { in: unitChunk } })
+      ) as Array<{ unit: string }>;
+      const known = new Set(rows.map(r => r.unit));
+      for (const unit of unitChunk) {
+        if (known.has(unit)) this.noteAssetSeen(unit);
+        else missing.push(unit);
+      }
+    }
+    if (!missing.length) return 0;
+
+    const rows = missing.map(mapBareAsset).filter((r): r is NonNullable<typeof r> => r !== null);
+    // Chunked like the lookup above: a mint-storm block can carry thousands of fresh units,
+    // and one statement per 500 rows keeps every driver's bind-variable cap out of reach.
+    for (const rowChunk of chunk(rows, IN_CHUNK)) {
+      await tx.run(UPSERT.into(AssetsTable).entries(rowChunk));
+    }
+    // Memoize every unit we looked up, including the ones mapBareAsset rejected — re-deciding
+    // that a malformed unit is unmappable on every block would cost a SELECT each time.
+    for (const unit of missing) this.noteAssetSeen(unit);
+
+    if (this.crawlAssetCatalogue === 'enrich' && rows.length) {
+      for (const row of rows) {
+        if (this.enrichQueue.length >= CardanoIndexer.ENRICH_QUEUE_CAP) this.enrichQueue.shift();
+        this.enrichQueue.push(row.unit!);
+      }
+      this.startAssetEnrichment();
+    }
+    return rows.length;
+  }
+
+  /**
+   * Remember a unit as present in the catalogue. Insertion-ordered Set → the oldest entries
+   * are evicted first once the cap is reached, which keeps a long backfill's memory flat while
+   * hot policies stay memoized. Losing an entry costs one SELECT, never a wrong write.
+   */
+  private noteAssetSeen(unit: string): void {
+    if (this.assetMemo.has(unit)) return;
+    if (this.assetMemo.size >= CardanoIndexer.ASSET_MEMO_CAP) {
+      const oldest = this.assetMemo.values().next();
+      if (!oldest.done) this.assetMemo.delete(oldest.value);
+    }
+    this.assetMemo.add(unit);
+  }
+
+  /**
+   * Snapshot every stake pool and DRep at an epoch boundary (v2.0 analytics coverage).
+   *
+   * Runs in its OWN transaction, called by the crawler after a block commit — never inside the
+   * block's write transaction: a few thousand rows would inflate an otherwise small atomic
+   * write, and a snapshot failure would fail the block and burn its persist retries.
+   *
+   * Writes two things per entity: the dated snapshot row (authoritative, never expires) and a
+   * refresh of the live temporal row, so `Pools` / `Dreps` also stop being empty on a crawled
+   * instance. Needs an enumerating backend (Koios); without one it is a logged no-op.
+   *
+   * @param epoch the epoch the snapshot is taken for
+   * @param at    slot and block time of the block that triggered the boundary
+   * @returns counts actually written, for the caller's log
+   */
+  async snapshotEpoch(epoch: number, at: { slot: number; time: number }): Promise<{ pools: number; dreps: number }> {
+    const backend = this.client.getEnumeratingBackend();
+    if (!backend) {
+      logger.warn(`epoch ${epoch} snapshot skipped: no backend can enumerate pools/DReps (Koios required)`);
+      return { pools: 0, dreps: 0 };
+    }
+
+    // Network first, DB second — the provider round-trips must not run with a write lock held.
+    const [poolData, drepData] = await Promise.all([
+      backend.getPoolIds().then(ids => backend.getPools(ids)),
+      backend.getDrepIds().then(ids => backend.getDreps(ids)),
+    ]);
+
+    const poolSnapshots = poolData.map(p => mapPoolSnapshot(p, epoch, at));
+    const drepSnapshots = drepData.map(d => mapDrepSnapshot(d, epoch, at));
+    const poolRows = poolData.map(p => mapPool(p, this.client.max_age_ms));
+    const drepRows = drepData.map(d => mapDrep(d, this.client.max_age_ms));
+
+    await cds.tx(async (tx) => {
+      // Chunked so a mainnet-sized set cannot exceed a driver's bind-variable cap.
+      for (const rows of chunk(poolSnapshots, IN_CHUNK)) await tx.run(UPSERT.into(PoolEpochSnapshots).entries(rows));
+      for (const rows of chunk(drepSnapshots, IN_CHUNK)) await tx.run(UPSERT.into(DrepEpochSnapshots).entries(rows));
+      for (const rows of chunk(poolRows, IN_CHUNK)) await tx.run(UPSERT.into(Pools).entries(rows));
+      for (const rows of chunk(drepRows, IN_CHUNK)) await tx.run(UPSERT.into(Dreps).entries(rows));
+    });
+
+    logger.info(`epoch ${epoch} snapshot: ${poolSnapshots.length} pools, ${drepSnapshots.length} DReps`);
+    return { pools: poolSnapshots.length, dreps: drepSnapshots.length };
+  }
+
+  /** Every native-asset unit a block touches: outputs, consumed inputs and mint/burn rows. */
+  private collectBlockUnits(txs: ProviderTransaction[], assetHistoryRows: AssetHistory[]): Set<string> {
+    const units = new Set<string>();
+    for (const t of txs) {
+      for (const o of t.outputs ?? []) {
+        for (const a of o.amount ?? []) if (a.unit !== 'lovelace') units.add(a.unit);
+      }
+      for (const i of t.inputs ?? []) {
+        for (const a of i.amount ?? []) if (a.unit !== 'lovelace') units.add(a.unit);
+      }
+    }
+    for (const row of assetHistoryRows) if (row.unit) units.add(row.unit);
+    return units;
   }
 
   /**

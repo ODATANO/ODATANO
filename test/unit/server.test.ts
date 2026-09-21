@@ -168,6 +168,10 @@ describe('server.ts', () => {
       'CRAWLER_BATCH_SIZE',
       'CRAWLER_CONFIRMATION_DEPTH',
       'CRAWLER_POLL_INTERVAL_MS',
+      'CRAWLER_ASSET_HISTORY',
+      'CRAWLER_ASSET_CATALOGUE',
+      'CRAWLER_ASSET_ENRICH_RATE',
+      'CRAWLER_EPOCH_SNAPSHOTS',
     ];
     const originalEnv: Record<string, string | undefined> = {};
     let previousCoreConfig: unknown;
@@ -211,6 +215,11 @@ describe('server.ts', () => {
         batchSize: 20,
         confirmationDepth: 3,
         pollIntervalMs: 20_000,
+        // analytics coverage: the free by-products on, the provider-billed ones off
+        assetHistory: true,
+        assetCatalogue: 'bare',
+        assetEnrichRate: 2,
+        epochSnapshots: false,
       });
     });
 
@@ -223,6 +232,10 @@ describe('server.ts', () => {
       env.CRAWLER_BATCH_SIZE = '100';
       env.CRAWLER_CONFIRMATION_DEPTH = '0';
       env.CRAWLER_POLL_INTERVAL_MS = '1000';
+      env.CRAWLER_ASSET_HISTORY = 'false';
+      env.CRAWLER_ASSET_CATALOGUE = 'enrich';
+      env.CRAWLER_ASSET_ENRICH_RATE = '20';
+      env.CRAWLER_EPOCH_SNAPSHOTS = 'true';
 
       expect(loadCrawlerConfigFromEnv()).toEqual({
         enabled: true,
@@ -233,6 +246,10 @@ describe('server.ts', () => {
         batchSize: 100,
         confirmationDepth: 0,
         pollIntervalMs: 1000,
+        assetHistory: false,
+        assetCatalogue: 'enrich',
+        assetEnrichRate: 20,
+        epochSnapshots: true,
       });
     });
 
@@ -241,6 +258,26 @@ describe('server.ts', () => {
       setCdsCrawlerConfig({ enabled: false });
 
       expect(loadCrawlerConfigFromEnv().enabled).toBe(false);
+    });
+
+    it('rejects an unknown asset-catalogue mode', () => {
+      env.CRAWLER_ASSET_CATALOGUE = 'full';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow('Invalid CRAWLER_ASSET_CATALOGUE');
+    });
+
+    it.each(['CRAWLER_ASSET_HISTORY', 'CRAWLER_EPOCH_SNAPSHOTS'])('rejects a non-boolean %s', (key) => {
+      env[key] = 'sometimes';
+      expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);
+    });
+
+    it('lets CDS config override the coverage knobs, including explicit false', () => {
+      env.CRAWLER_ASSET_HISTORY = 'true';
+      setCdsCrawlerConfig({ assetHistory: false, assetCatalogue: 'off', epochSnapshots: true });
+
+      const config = loadCrawlerConfigFromEnv();
+      expect(config.assetHistory).toBe(false);
+      expect(config.assetCatalogue).toBe('off');
+      expect(config.epochSnapshots).toBe(true);
     });
 
     it('rejects non-boolean enabled values', () => {
@@ -278,6 +315,9 @@ describe('server.ts', () => {
       ['CRAWLER_POLL_INTERVAL_MS', '999'],
       ['CRAWLER_POLL_INTERVAL_MS', '3600001'],
       ['CRAWLER_POLL_INTERVAL_MS', '1.5'],
+      ['CRAWLER_ASSET_ENRICH_RATE', '0'],
+      ['CRAWLER_ASSET_ENRICH_RATE', '21'],
+      ['CRAWLER_ASSET_ENRICH_RATE', '2.5'],
     ])('rejects invalid %s=%s', (key, value) => {
       env[key] = value;
       expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);

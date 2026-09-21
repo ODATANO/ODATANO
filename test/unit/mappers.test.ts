@@ -20,6 +20,11 @@ import {
   mapDrep,
   normalizeCostModels,
   scriptHashToEnterpriseAddress,
+  mapBareAsset,
+  BARE_ASSET_STAMP,
+  mapPoolSnapshot,
+  mapDrepSnapshot,
+  computeCip14Fingerprint,
 } from '../../srv/utils/mappers';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 
@@ -558,4 +563,98 @@ describe('mappers', () => {
       expect(mapAssetHistory([])).toEqual([]);
     });
   });
+// ==========================================================================
+// mapBareAsset / mapPoolSnapshot / mapDrepSnapshot — crawler analytics coverage
+// ==========================================================================
+describe('crawler analytics mappers', () => {
+  const POLICY = 'a1'.repeat(28);
+  const UNIT = POLICY + Buffer.from('SUNDAE').toString('hex');
+
+  describe('mapBareAsset', () => {
+    it('derives policy, name and CIP-14 fingerprint from the unit alone', () => {
+      const row = mapBareAsset(UNIT)!;
+      expect(row).toMatchObject({
+        unit: UNIT,
+        policyId: POLICY,
+        assetNameHex: Buffer.from('SUNDAE').toString('hex'),
+        assetName: 'SUNDAE',
+      });
+      expect(row.fingerprint).toBe(computeCip14Fingerprint(POLICY, Buffer.from('SUNDAE').toString('hex')));
+    });
+
+    it('leaves everything a provider would have to answer null', () => {
+      const row = mapBareAsset(UNIT)!;
+      expect(row.totalSupply).toBeNull();
+      expect(row.mintOrBurnCount).toBeNull();
+      expect(row.registryTicker).toBeNull();
+      expect(row.onchainMetadata).toBeNull();
+    });
+
+    it('is born expired at the fixed sentinel, not at "now"', () => {
+      const row = mapBareAsset(UNIT)!;
+      // born expired -> hidden by CAP's temporal filter, so the lazy path still enriches it
+      expect(row.validTo).toBe(row.validFrom);
+      // fixed, so the same unit is one idempotent row and can never collide with the
+      // wall-clock (validFrom, unit) key of a mapAsset() slice inside the block transaction
+      expect(row.validFrom).toBe(BARE_ASSET_STAMP);
+      expect(mapBareAsset(UNIT)!.validFrom).toBe(row.validFrom);
+    });
+
+    it('handles a nameless asset (policy only)', () => {
+      const row = mapBareAsset(POLICY)!;
+      expect(row.assetNameHex).toBe('');
+      expect(row.assetName).toBe('');
+      expect(row.fingerprint).toMatch(/^asset1/);
+    });
+
+    it('keeps the hex when the name is not clean UTF-8', () => {
+      const nameHex = 'ff00ff';
+      const row = mapBareAsset(POLICY + nameHex)!;
+      expect(row.assetName).toBe(nameHex);
+    });
+
+    it('rejects what is not a native-asset unit', () => {
+      expect(mapBareAsset('lovelace')).toBeNull();
+      expect(mapBareAsset('tooshort')).toBeNull();
+      expect(mapBareAsset(POLICY + 'zz')).toBeNull();
+      // beyond the ledger's 32-byte asset-name cap
+      expect(mapBareAsset(POLICY + 'ab'.repeat(33))).toBeNull();
+      // odd-length name: not a whole number of bytes, so not a unit
+      expect(mapBareAsset(POLICY + 'abc')).toBeNull();
+    });
+  });
+
+  describe('mapPoolSnapshot / mapDrepSnapshot', () => {
+    const at = { slot: 123456, time: 1700000000 };
+
+    it('dates a pool observation by epoch and slot instead of stamping validity', () => {
+      const row = mapPoolSnapshot({
+        poolId: 'pool1abc', vrfKeyHash: 'vrf', blocksMinted: 42, blocksEpoch: 2,
+        liveStake: '1000000', liveSize: 0.01, liveSaturation: 0.5, liveDelegators: 7,
+        activeStake: '900000', activeSize: 0.009, pledge: '500000', margin: '0.03',
+        fixedCost: '340000000', rewardAccount: 'stake1',
+      } as any, 512, at);
+
+      expect(row).toMatchObject({
+        poolId: 'pool1abc', epoch: 512, snapshotSlot: 123456, snapshotTime: 1700000000,
+        blocksMinted: 42, liveStake: '1000000', liveSaturation: 0.5, margin: 0.03,
+      });
+      expect((row as Record<string, unknown>).validFrom).toBeUndefined();
+      expect((row as Record<string, unknown>).validTo).toBeUndefined();
+    });
+
+    it('dates a DRep observation the same way', () => {
+      const row = mapDrepSnapshot({
+        drepId: 'drep1xyz', hex: 'ab', amount: '250000', hasScript: false,
+        lastActiveEpoch: 511, retired: false, expired: false,
+      } as any, 512, at);
+
+      expect(row).toMatchObject({
+        drepId: 'drep1xyz', epoch: 512, snapshotSlot: 123456, snapshotTime: 1700000000,
+        amount: '250000', retired: false, expired: false,
+      });
+      expect((row as Record<string, unknown>).validTo).toBeUndefined();
+    });
+  });
+});
 });

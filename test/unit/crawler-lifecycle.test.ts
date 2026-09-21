@@ -48,6 +48,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionMetadata_: 'odatano.cardano.TransactionMetadata',
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
+  PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
 }));
 
 import type { Mock } from 'vitest';
@@ -60,6 +61,7 @@ import { ChainSyncFrameError } from '../../srv/utils/errors';
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 1000, startBlockHash: 'start'.padEnd(64, '0'), startHeight: 10,
   source: 'auto', batchSize: 5, confirmationDepth: 3, pollIntervalMs: 10,
+  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: false,
 };
 
 const CURSOR_ROW = {
@@ -90,7 +92,7 @@ function cursorExists() {
   });
 }
 
-function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn() }) {
+function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() }) {
   const crawler = new CardanoCrawler(client as never, indexer as never, 'preview', config);
   // collapse retry/poll sleeps so loops run instantly
   vi.spyOn(crawler as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
@@ -193,7 +195,7 @@ describe('CardanoCrawler chain-sync path', () => {
     cursorExists();
     const indexBlockFull = vi.fn();
     const { client, openChainSync, cbs } = chainSyncClient();
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
 
@@ -307,7 +309,7 @@ describe('CardanoCrawler chain-sync path', () => {
     let releasePersist!: () => void;
     const persistGate = new Promise<void>((resolve) => { releasePersist = resolve; });
     const indexBlockFull = vi.fn(async () => persistGate);
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
 
@@ -399,7 +401,7 @@ describe('CardanoCrawler pagination path', () => {
         ])
         .mockResolvedValue([]), // subsequent rounds: nothing new → idle sleep
     });
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (crawler as unknown as { sleep: Mock }).sleep = vi.fn(async () => { void crawler.stop(); }); // fire-and-forget: stop() awaits the pipeline, awaiting it from inside the pipeline's sleep would deadlock
 
     await crawler.start();
@@ -512,7 +514,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
         ])
         .mockResolvedValue([]),
     });
-    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
 
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
@@ -602,7 +604,7 @@ describe('CardanoCrawler.persistBlock', () => {
   it('rejects a partial backend transaction list without advancing the cursor', async () => {
     cursorExists();
     const indexBlockFull = vi.fn();
-    const crawler = makeCrawler({}, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler({}, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (crawler as unknown as { running: boolean }).running = true;
 
     await expect((crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })
@@ -616,7 +618,7 @@ describe('CardanoCrawler.persistBlock', () => {
     const indexBlockFull = vi.fn()
       .mockRejectedValueOnce(new Error('SQLITE_BUSY'))
       .mockResolvedValueOnce(undefined);
-    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (crawler as unknown as { running: boolean }).running = true;
 
     const ok = await (crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })
@@ -630,7 +632,7 @@ describe('CardanoCrawler.persistBlock', () => {
   it("stops with 'error' only after exhausting the bounded retries", async () => {
     cursorExists();
     const indexBlockFull = vi.fn().mockRejectedValue(new Error('disk full'));
-    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (crawler as unknown as { running: boolean }).running = true;
 
     const ok = await (crawler as unknown as { persistBlock: (b: BlockData, t: unknown[]) => Promise<boolean> })
@@ -656,7 +658,7 @@ describe('CardanoCrawler poison block', () => {
 
   function failingCrawler(err: Error = new Error('unsupported Unicode escape sequence')) {
     const indexBlockFull = vi.fn().mockRejectedValue(err);
-    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn() });
+    const crawler = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (crawler as unknown as { running: boolean }).running = true;
     return crawler;
   }
@@ -727,7 +729,7 @@ describe('CardanoCrawler poison block', () => {
     expect(updatesWith(s => s.desiredRunning === false)).toHaveLength(0);
 
     // success clears the memory: 4 more failures afterwards do not latch either
-    const ok = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn() });
+    const ok = makeCrawler({ getChainSyncBackend: () => null, getPaginatingBackend: () => null }, CONFIG, { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
     (ok as unknown as { running: boolean }).running = true;
     expect(await persist(ok, block())).toBe(true);
     for (let i = 0; i < 4; i++) await persist(failingCrawler(), block());
@@ -833,7 +835,7 @@ describe('crawler singleton lifecycle', () => {
     const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
     const deps = {
       client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
-      indexer: { indexBlockFull: vi.fn() },
+      indexer: { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() },
       network: 'preview',
       config: CONFIG,
     };
@@ -865,7 +867,7 @@ describe('crawler singleton lifecycle', () => {
       const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
       const deps = {
         client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
-        indexer: { indexBlockFull: vi.fn() },
+        indexer: { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() },
         network: 'preview',
         config: CONFIG,
       };
@@ -896,7 +898,7 @@ describe('crawler singleton lifecycle', () => {
       const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
       const deps = {
         client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
-        indexer: { indexBlockFull: vi.fn() },
+        indexer: { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() },
         network: 'preview',
         config: CONFIG,
       };
@@ -925,7 +927,7 @@ describe('crawler singleton lifecycle', () => {
       const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
       const deps = {
         client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: vi.fn() },
-        indexer: { indexBlockFull: vi.fn() },
+        indexer: { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() },
         network: 'preview',
         config: CONFIG,
       };

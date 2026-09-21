@@ -6,8 +6,10 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Total Tests**: 1983 (full run with all backends reachable; the Ogmios-dependent suites skip otherwise). Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
-- **Total Test Suites**: 62 test files (46 unit + 16 integration)
+- **Unit Tests**: 1479, in 52 files (`npm run test:unit`) — hermetic, no network.
+- **Integration Tests**: 17 files; how many cases actually execute depends on backend reachability (the Ogmios-dependent suites self-skip).
+- **Total Test Suites**: 69 test files (52 unit + 17 integration)
+- Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
 - **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%
 - **Function Coverage**: 97.68%
@@ -80,6 +82,7 @@ test/
 │   │                                      # --- v2.0 chain crawler ---
 │   ├── crawler-engine.test.ts             # Reorg handling, intersection ladder, source semantics
 │   ├── crawler-lifecycle.test.ts          # Start/stop, cursor resume, chain-sync wiring
+│   ├── crawler-epoch-snapshot.test.ts     # Pool/DRep snapshots at epoch boundaries (analytics coverage)
 │   ├── crawler-sync-state.test.ts         # Cursor, DB lease, latch semantics
 │   ├── crawler-backend-pagination.test.ts # Pagination source + parent-hash reorg detection
 │   ├── ogmios-chain-sync.test.ts          # Ogmios chain-sync mapping + intersection points

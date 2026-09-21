@@ -185,6 +185,11 @@ interface OgmiosChainSyncTx {
   fee?: { ada: { lovelace: number | bigint } };
   /** `total_collateral` from the body — optional there, so absent on many phase-2 failures. */
   totalCollateral?: { ada: { lovelace: number | bigint } };
+  /**
+   * The body's mint field (`Assets` in the Ogmios schema): policyId -> assetName -> signed
+   * quantity, negative for a burn. Never contains `ada`.
+   */
+  mint?: Record<string, Record<string, number | bigint>>;
   metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
 }
 interface OgmiosPraosBlock {
@@ -1220,6 +1225,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
       spendsCollaterals,
       totalCollateral,
       deposit: '0',
+      // The ledger applies no mint when the script phase failed: the body's mint field is
+      // declared but never enacted, so a phase-2 failure must report none at all.
+      mint: spendsCollaterals ? undefined : this.convertOgmiosValue(tx.mint ?? {}),
       // null = unknown (chain-sync doesn't surface the serialized size) — matches the
       // lazy path's `size ?? null` convention; 0 would masquerade as a real size
       size: null,

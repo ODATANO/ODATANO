@@ -73,8 +73,8 @@ export interface Transaction {
   /**
    * Phase-2 validity as the ledger applied it. True when the script phase failed: the
    * declared inputs and outputs were not applied, the collateral inputs were consumed and
-   * only the collateral return was produced. Only the Ogmios chain-sync path reports it;
-   * the historical backends leave it undefined.
+   * only the collateral return was produced. Reported by the Ogmios chain-sync path
+   * (`spends`) and by Blockfrost (`valid_contract`); Koios leaves it undefined.
    */
   spendsCollaterals?: boolean;
   /**
@@ -84,6 +84,14 @@ export interface Transaction {
    * charge then has to be derived from the resolved collateral inputs minus the return.
    */
   totalCollateral?: Lovelace | string | null;
+  /**
+   * Net mint/burn per asset unit as the ledger applied it, signed — a negative quantity is a
+   * burn. Ogmios (`mint`) and Koios (`assets_minted`) report it natively; Blockfrost has no
+   * such field and leaves it undefined, so the indexer derives the delta from the transaction's
+   * (fully resolved) input and output assets instead — which needs `isReference`/`isCollateral`
+   * and `spendsCollaterals` to be set on that path too. Never carries `lovelace`.
+   */
+  mint?: Amount[];
   /** Tx size in bytes; null when the source cannot provide it (Ogmios chain-sync). */
   size: number | null;
   blockTime: number;

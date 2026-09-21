@@ -63,6 +63,16 @@ service CardanoODataService @(impl: './cardano-service') {
     entity Dreps                    as projection on db.Dreps;
 
     @readonly
+    @title      : 'Pool Epoch Snapshots'
+    @description: 'Projection for per-epoch stake-pool snapshots written by the chain crawler'
+    entity PoolEpochSnapshots       as projection on db.PoolEpochSnapshots;
+
+    @readonly
+    @title      : 'DRep Epoch Snapshots'
+    @description: 'Projection for per-epoch DRep snapshots written by the chain crawler'
+    entity DrepEpochSnapshots       as projection on db.DrepEpochSnapshots;
+
+    @readonly
     @title      : 'Assets'
     @description: 'Projection for Native-Asset Information'
     entity Assets                   as projection on db.Assets;

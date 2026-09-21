@@ -238,6 +238,28 @@ async function main() {
     const reorgs = query<{ c: number }>('select count(*) c from odatano_cardano_CardanoReorgLog')[0].c;
     log('reorgs logged   :', reorgs);
 
+    // ---- 5. Analytics coverage (mint/burn + asset catalogue) ---------------
+    // Acceptance for the analytics FR: after a crawl, and with no API traffic
+    // against this instance, the catalogue must be complete for the range.
+    const units = query<{ unit: string }>(
+      'select distinct unit from odatano_cardano_TransactionOutputAssets');
+    const catalogued = query<{ c: number }>('select count(*) c from odatano_cardano_Assets')[0].c;
+    const missing = units.filter((u) => query<{ c: number }>(
+      'select count(*) c from odatano_cardano_Assets where unit = ?', u.unit)[0].c === 0);
+    log('asset units seen:', units.length, `| catalogued ${catalogued}`,
+      missing.length ? `| MISSING ${missing.length}` : '| complete');
+    if (missing.length) throw new Error(`${missing.length} unit(s) without an Assets row, e.g. ${missing[0].unit}`);
+
+    const mints = query<{ action: string; c: number }>(
+      'select action, count(*) c from odatano_cardano_AssetHistory group by action');
+    const orphaned = query<{ c: number }>(
+      `select count(*) c from odatano_cardano_AssetHistory h
+       where not exists (select 1 from odatano_cardano_Transactions t where t.hash = h.txHash)`)[0].c;
+    log('mint/burn rows  :',
+      mints.map((m) => `${m.action} ${m.c}`).join(', ') || 'none in this range',
+      orphaned ? `| ORPHANED ${orphaned}` : '');
+    if (orphaned) throw new Error(`${orphaned} AssetHistory row(s) reference no indexed transaction`);
+
     log('\nPASS — crawler pre-synced', rows.length, 'blocks, contiguous and matching the chain.');
   } finally {
     shutdown();

@@ -49,6 +49,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionMetadata_: 'odatano.cardano.TransactionMetadata',
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
+  PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
 }));
 
 import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler/crawler';
@@ -56,10 +57,18 @@ import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 0, startBlockHash: 'genesis', source: 'auto',
   batchSize: 20, confirmationDepth: 3, pollIntervalMs: 20000,
+  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: false,
 };
 
+// Only the methods the engine paths touch: teardown stops the asset-enrichment loop,
+// start()/persist would need the rest.
+const stubIndexer = () => ({
+  indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(),
+  configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), snapshotEpoch: vi.fn(),
+});
+
 const makeCrawler = (config: CrawlerConfig = CONFIG, client: unknown = {}) =>
-  new CardanoCrawler(client as never, {} as never, 'preview', config);
+  new CardanoCrawler(client as never, stubIndexer() as never, 'preview', config);
 
 const opsFor = (op: string) => dbRun.mock.calls.map(c => c[0]).filter(q => q._op === op);
 const shortName = (entity: string) => entity.split('.').pop();

@@ -43,6 +43,8 @@ import {
   Epoch as EpochRow,
   Pool as PoolRow,
   Drep as DrepRow,
+  PoolEpochSnapshot as PoolEpochSnapshotRow,
+  DrepEpochSnapshot as DrepEpochSnapshotRow,
   Asset as AssetRow,
   AssetHistory as AssetHistoryRow,
   Account as AccountRow,
@@ -65,6 +67,7 @@ import type {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
+import { ASSET_UNIT_REGEX } from './const';
 
 /** 
  * Maximum age for cached/indexed data in milliseconds 
@@ -591,7 +594,66 @@ export function metadataIdFor(label: string | number): number | string | null {
   return safe ? Number(wrapped) : wrapped.toString();
 }
 
-/** 
+/**
+ * Map a pool observation at an epoch boundary into a snapshot row. Unlike mapPool() this
+ * carries no temporal validity: the row is dated by (epoch, snapshotSlot) and stays valid
+ * forever, because it states what was true then, not what is cached now.
+ * @param providerPoolData pool data from provider
+ * @param epoch epoch the snapshot belongs to
+ * @param at slot and block time of the block that triggered the snapshot
+ * @returns {PoolEpochSnapshotRow} mapped snapshot row
+ */
+export function mapPoolSnapshot(
+  providerPoolData: PoolProviderData,
+  epoch: number,
+  at: { slot: number; time: number },
+): PoolEpochSnapshotRow {
+  return {
+    poolId: providerPoolData.poolId,
+    epoch,
+    snapshotSlot: at.slot,
+    snapshotTime: at.time,
+    blocksMinted: providerPoolData.blocksMinted,
+    blocksEpoch: providerPoolData.blocksEpoch,
+    liveStake: providerPoolData.liveStake,
+    liveSize: Number(providerPoolData.liveSize),
+    liveSaturation: Number(providerPoolData.liveSaturation),
+    liveDelegators: providerPoolData.liveDelegators,
+    activeStake: providerPoolData.activeStake,
+    activeSize: Number(providerPoolData.activeSize),
+    pledge: providerPoolData.pledge,
+    margin: Number(providerPoolData.margin),
+    fixedCost: providerPoolData.fixedCost,
+  };
+}
+
+/**
+ * Map a DRep observation at an epoch boundary into a snapshot row. Non-temporal, same
+ * reasoning as mapPoolSnapshot().
+ * @param providerDrepData drep data from provider
+ * @param epoch epoch the snapshot belongs to
+ * @param at slot and block time of the block that triggered the snapshot
+ * @returns {DrepEpochSnapshotRow} mapped snapshot row
+ */
+export function mapDrepSnapshot(
+  providerDrepData: DrepProviderData,
+  epoch: number,
+  at: { slot: number; time: number },
+): DrepEpochSnapshotRow {
+  return {
+    drepId: providerDrepData.drepId,
+    epoch,
+    snapshotSlot: at.slot,
+    snapshotTime: at.time,
+    amount: providerDrepData.amount,
+    hasScript: providerDrepData.hasScript,
+    lastActiveEpoch: providerDrepData.lastActiveEpoch,
+    retired: providerDrepData.retired,
+    expired: providerDrepData.expired,
+  };
+}
+
+/**
  * Map Pool Data
  * Converts provider pool data into PoolRow format
  * @param providerPoolData pool data from provider
@@ -661,6 +723,66 @@ export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: numb
     registryLogo: providerAssetInfo.registryLogo,
     validFrom,
     validTo,
+  };
+}
+
+/**
+ * Fixed validity stamp for a crawler-written bare `Assets` row. Epoch zero, so the row is
+ * born expired (hidden by CAP's temporal filter) and its `(validFrom, unit)` key can never
+ * collide with a real, wall-clock-stamped slice from mapAsset().
+ */
+export const BARE_ASSET_STAMP = '1970-01-01T00:00:00.000Z';
+
+/**
+ * Map a bare asset row from an asset unit alone — everything derivable without a provider
+ * call: policyId, assetNameHex, the decoded name and the CIP-14 fingerprint. Used by the
+ * crawler to keep the `Assets` catalogue complete for units it meets in a block, at zero
+ * network cost (FR "crawler coverage for analytics").
+ *
+ * The row is stamped as ALREADY EXPIRED (`validTo === validFrom`). That is deliberate: CAP's
+ * temporal filter hides it from OData reads, so the first keyed read still counts as a miss
+ * and the existing lazy path enriches it through indexAsset() with supply and registry data —
+ * while an analytics consumer reading the database directly already sees the full catalogue
+ * (and can exclude the placeholders with `validTo > validFrom`).
+ *
+ * Both stamps are the FIXED epoch sentinel, not `now`. `Assets` is temporal, so its primary
+ * key is `(validFrom, unit)`: a wall-clock stamp would make the same unit a new row on every
+ * sighting and could collide with a slice the lazy path writes in the same millisecond, which
+ * inside the crawler's block transaction means a failed block. With the sentinel the bare row
+ * is one fixed, idempotent row per unit that no `mapAsset()` slice can ever alias.
+ *
+ * @param unit asset unit (policyId + assetNameHex)
+ * @returns {AssetRow | null} bare row, or null when the unit is not a native asset unit
+ */
+export function mapBareAsset(unit: string): AssetRow | null {
+  // The canonical definition of a unit — 56 hex policy + 0..32 bytes of name, even length.
+  // Reusing it keeps the catalogue from inventing a second, looser notion of "asset unit"
+  // than isAssetUnit() enforces on the API surface.
+  if (!ASSET_UNIT_REGEX.test(unit)) return null;
+
+  const policyId = unit.slice(0, 56);
+  const assetNameHex = unit.slice(56);
+
+  return {
+    unit,
+    policyId,
+    assetNameHex,
+    // decodeAssetName falls back to the hex string for non-text and NUL-bearing names
+    assetName: assetNameHex.length > 0 ? decodeAssetName(assetNameHex) : '',
+    fingerprint: computeCip14Fingerprint(policyId, assetNameHex),
+    totalSupply: null,
+    mintOrBurnCount: null,
+    initialMintTxHash: null,
+    initialMintTime: null,
+    onchainMetadata: null,
+    registryName: null,
+    registryTicker: null,
+    registryDecimals: null,
+    registryDescription: null,
+    registryUrl: null,
+    registryLogo: null,
+    validFrom: BARE_ASSET_STAMP,
+    validTo: BARE_ASSET_STAMP,
   };
 }
 

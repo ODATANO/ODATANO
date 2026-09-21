@@ -81,6 +81,11 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   AddressTransactions: 'AddressTransactions',
 }));
 
+// DB-level entity: the asset catalogue's existence check reads past the temporal filter
+vi.mock('#cds-models/odatano/cardano', () => ({
+  Assets: 'AssetsTable',
+}));
+
 vi.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionBuild: 'TransactionBuild',
   TransactionBuilds: 'TransactionBuilds',
