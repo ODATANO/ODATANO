@@ -241,8 +241,9 @@ async function main() {
     // ---- 5. Analytics coverage (mint/burn + asset catalogue) ---------------
     // Acceptance for the analytics FR: after a crawl, and with no API traffic
     // against this instance, the catalogue must be complete for the range.
+    // one row per amount line, so `lovelace` is in there too — not a catalogue entry
     const units = query<{ unit: string }>(
-      'select distinct unit from odatano_cardano_TransactionOutputAssets');
+      "select distinct unit from odatano_cardano_TransactionOutputAssets where unit <> 'lovelace'");
     const catalogued = query<{ c: number }>('select count(*) c from odatano_cardano_Assets')[0].c;
     const missing = units.filter((u) => query<{ c: number }>(
       'select count(*) c from odatano_cardano_Assets where unit = ?', u.unit)[0].c === 0);

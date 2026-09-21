@@ -159,12 +159,14 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
     const reached = await waitForHeight(target);
     expect(reached, 'crawler did not reach the target tip').to.be.at.least(target);
 
-    // Every unit that appears on an output must have a catalogue row — that is the
-    // FR's acceptance criterion, checked with no API traffic against the instance.
+    // Every NATIVE-ASSET unit that appears on an output must have a catalogue row — that
+    // is the FR's acceptance criterion, checked with no API traffic against the instance.
+    // TransactionOutputAssets holds one row per amount line, so it carries `lovelace`
+    // too; that is not a catalogue entry and never gets an Assets row.
     const outputUnits = await rows(
       SELECT.from('odatano.cardano.TransactionOutputAssets').columns('unit'),
     );
-    const distinct = [...new Set(outputUnits.map((r) => String(r.unit)))];
+    const distinct = [...new Set(outputUnits.map((r) => String(r.unit)))].filter((u) => u !== 'lovelace');
     if (distinct.length === 0) return ctx.skip(); // an asset-free range proves nothing
 
     const assets = await rows(SELECT.from('odatano.cardano.Assets').columns('unit', 'policyId', 'fingerprint'));
@@ -173,7 +175,7 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
       expect(catalogued.has(unit), `no Assets row for ${unit}`).to.equal(true);
     }
     // the bare row is derived, not empty
-    const sample = assets.find((a) => a.unit === distinct[0])!;
+    const sample = assets.find((a) => String(a.unit) === distinct[0])!;
     expect(String(sample.policyId)).to.equal(distinct[0].slice(0, 56));
     expect(String(sample.fingerprint)).to.match(/^asset1/);
 
