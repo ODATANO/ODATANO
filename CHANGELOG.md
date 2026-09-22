@@ -1,5 +1,40 @@
 # Changelog
 
+## [v2.0.0-rc.14] - crawler source recovery
+
+### Fixed
+
+- The crawler no longer stays on pagination for the rest of the process when
+  no chain-sync backend was usable at start. On a box that restarts node and
+  ODATANO together the node replays its ledger for minutes while ODATANO is
+  up in seconds, so Ogmios refused its init and the crawl degraded to
+  Blockfrost/Koios pagination — some fifty times slower — without ever looking
+  back. With `source: auto` the crawler now retries the chain-sync backend
+  every 30 seconds while on pagination — on its own timer, so neither an
+  idle poll interval nor a slow batch delays the retry — and hands over as
+  soon as it is usable: a pending poll sleep is cut short, a block in flight
+  is completed first, and the rest of the batch is streamed instead.
+- `blocksEpoch` is `null` instead of `0` on rows filled from Koios, which has
+  no per-epoch block count. A consumer can now tell "unknown" from a real
+  zero; Blockfrost rows are unchanged.
+- `liveSaturation` widened from `Decimal(5, 4)` to `Decimal(9, 4)` on `Pools`
+  and `PoolEpochSnapshots`. The value is a fraction, and on a test network a
+  single pool can hold several times the saturation point: the first preprod
+  snapshot already had a pool at 7.6 against a ceiling of 9.9999, and one pool
+  past it fails the whole epoch's snapshot.
+
+### Added
+
+- `getStatus()` on `CardanoIndexerService` reports `source` — `chain-sync` or
+  `pagination` for the crawler in this process, `null` when this instance is
+  not the one crawling. A crawl degraded to pagination still advances the
+  cursor, so this is how monitoring tells the two apart.
+
+### Notes
+
+- Schema change (column widening): a deployment coming from rc.13 needs a
+  schema update (`cds deploy`).
+
 ## [v2.0.0-rc.13] - pool saturation unit
 
 ### Fixed

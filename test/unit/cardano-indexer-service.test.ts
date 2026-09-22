@@ -11,6 +11,7 @@ const { fakeDb, crawlerMock, readCursorMock, serverMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
+    getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
     isCrawlerRunningInCluster: vi.fn(async () => true),
     startCrawler: vi.fn(async () => undefined),
     stopCrawler: vi.fn(async () => undefined),
@@ -81,6 +82,7 @@ describe('CardanoIndexerService.getStatus', () => {
     expect(status).toEqual({
       running: true,
       syncStatus: 'syncing',
+      source: null, // no crawler in this process
       lastSlot: '4000',
       lastHeight: '50',
       tipHeight: '200',
@@ -99,6 +101,16 @@ describe('CardanoIndexerService.getStatus', () => {
     expect(status).toMatchObject({
       running: false, syncStatus: 'stopped', lastSlot: '0', lastHeight: '0', tipHeight: '0', syncProgress: '0.00',
     });
+  });
+
+  it('reports the source the local crawler ingests from, so a degraded crawl is visible', async () => {
+    readCursorMock.mockResolvedValue({ ...{ lastSlot: 1, lastHeight: 50, tipHeight: 200, syncStatus: 'syncing', consecutiveErrors: 0 } });
+    crawlerMock.getCrawler.mockReturnValue({ getActiveSource: () => 'pagination' });
+    const handlers = boot();
+
+    const status = await handlers.getStatus({});
+
+    expect(status).toMatchObject({ source: 'pagination' });
   });
 
   it('caps progress at 100 when the cursor is ahead of the stale tip', async () => {

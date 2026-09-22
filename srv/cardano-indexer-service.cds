@@ -42,6 +42,10 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     type CrawlerStatus {
         running           : Boolean;
         syncStatus        : String;
+        // 'chain-sync' | 'pagination' for the crawler in this process; null when this
+        // instance is not the one crawling. Pagination is ~50x slower, and a crawl that
+        // degraded to it still advances the cursor — this is how an operator tells.
+        source            : String;
         lastSlot          : String;
         lastHeight        : String;
         tipHeight         : String;

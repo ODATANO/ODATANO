@@ -655,6 +655,23 @@ export class CardanoClient {
   }
 
   /**
+   * getChainSyncBackend(), but retrying the startup init of a chain-sync-capable backend
+   * that failed it. The crawler polls this while it crawls on pagination only because no
+   * chain-sync source was usable when it started: on a box where the node and ODATANO
+   * restart together, the node's chunk validation and ledger replay routinely outlast
+   * ODATANO's startup, so Ogmios refuses the init once and is healthy minutes later.
+   * Without this the crawler would stay on pagination for the rest of the process.
+   */
+  async recoverChainSyncBackend(): Promise<ChainSyncBackend | null> {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      if (!b || !isChainSyncBackend(b)) continue;
+      if (await this.ensureBackendInitialized(b)) return b;
+    }
+    return null;
+  }
+
+  /**
    * Get a backend that can enumerate the full pool/DRep set (Koios), or null. Used by the
    * crawler's epoch-boundary snapshots; without one they stay off rather than degrade into
    * thousands of single requests (see EnumeratingBackend).

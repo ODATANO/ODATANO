@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid } from './utils/errors';
-import { isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
+import { getCrawler, isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
 import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -30,6 +30,9 @@ module.exports = (srv: cds.Service) => {
       return {
         running: isCrawlerLeaseActive(cursor),
         syncStatus: cursor?.syncStatus ?? 'stopped',
+        // Process-local by nature: the source is what THIS instance ingests from. A
+        // standby that does not hold the lease reports null, as does a stopped crawler.
+        source: getCrawler()?.getActiveSource() ?? null,
         lastSlot: String(cursor?.lastSlot ?? 0),
         lastHeight: String(lastHeight),
         tipHeight: String(tipHeight),

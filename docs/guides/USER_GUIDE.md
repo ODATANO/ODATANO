@@ -1,6 +1,6 @@
 # ODATANO User Guide
 
-**Version:** v2.0.0-rc.13 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
 
 ---
 
@@ -651,12 +651,12 @@ By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2
 }}}
 ```
 
-The crawler starts automatically on server boot and resumes from its cursor after a restart. Ogmios is the preferred source (native rollback/reorg handling); Blockfrost/Koios are the fallback. Control + status via **CardanoIndexerService** at `/odata/v4/cardano-indexer/`:
+The crawler starts automatically on server boot and resumes from its cursor after a restart. Ogmios is the preferred source (native rollback/reorg handling); Blockfrost/Koios are the fallback. With `source: auto`, a crawl that had to start on pagination because Ogmios was not reachable yet (typically a node still replaying after a shared restart) retries the chain-sync backend every 30 seconds and hands over as soon as it is usable. Control + status via **CardanoIndexerService** at `/odata/v4/cardano-indexer/`:
 
 ```http
 GET  /odata/v4/cardano-indexer/SyncState        # cursor: lastSlot, lastHeight, tip, syncStatus, errors
 GET  /odata/v4/cardano-indexer/ReorgLog         # audit of handled rollbacks
-GET  /odata/v4/cardano-indexer/getStatus()      # live run state summary (function -> GET)
+GET  /odata/v4/cardano-indexer/getStatus()      # live run state summary (function -> GET); `source` = chain-sync | pagination | null
 POST /odata/v4/cardano-indexer/pauseCrawler
 POST /odata/v4/cardano-indexer/resumeCrawler
 ```
@@ -816,5 +816,5 @@ invisible to existing HTTP clients.
 
 ---
 
-**Version:** v2.0.0-rc.13\
+**Version:** v2.0.0-rc.x\
 **Status:** Production-Ready — OData V4 read service + transaction building + external signing with multi-provider failover

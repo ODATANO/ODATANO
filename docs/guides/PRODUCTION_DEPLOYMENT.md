@@ -1,6 +1,6 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v2.0.0-rc.13 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
 ---
 
 ## Table of Contents

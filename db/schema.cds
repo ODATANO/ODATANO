@@ -158,7 +158,7 @@ entity Pools : temporal {
         blocksMinted   : Integer;
 
         @title      : 'Blocks in Epoch'
-        @description: 'Number of blocks minted in the current epoch'
+        @description: 'Number of blocks minted in the current epoch. Null when the backend that filled the row has no such figure (Koios); a 0 is a real zero'
         blocksEpoch    : Integer;
 
         @title      : 'Live Stake'
@@ -170,8 +170,8 @@ entity Pools : temporal {
         liveSize       : Decimal(5, 4);
 
         @title      : 'Live Saturation'
-        @description: 'Current live saturation as fraction of ideal size (1.0 = 100% saturated)'
-        liveSaturation : Decimal(5, 4);
+        @description: 'Current live saturation as fraction of ideal size (1.0 = 100% saturated). Decimal(9, 4): a test-network pool can hold many times the saturation point'
+        liveSaturation : Decimal(9, 4);
 
         @title      : 'Live Delegators'
         @description: 'Current number of live delegators'
@@ -227,7 +227,7 @@ entity PoolEpochSnapshots {
         blocksMinted   : Integer;
 
         @title      : 'Blocks in Epoch'
-        @description: 'Number of blocks minted in the epoch that was running at snapshot time'
+        @description: 'Number of blocks minted in the epoch that was running at snapshot time. Null when the enumerating backend has no such figure (Koios); a 0 is a real zero'
         blocksEpoch    : Integer;
 
         @title      : 'Live Stake'
@@ -239,8 +239,8 @@ entity PoolEpochSnapshots {
         liveSize       : Decimal(5, 4);
 
         @title      : 'Live Saturation'
-        @description: 'Live saturation as fraction of ideal size (1.0 = 100% saturated)'
-        liveSaturation : Decimal(5, 4);
+        @description: 'Live saturation as fraction of ideal size (1.0 = 100% saturated). Decimal(9, 4): a test-network pool can hold many times the saturation point'
+        liveSaturation : Decimal(9, 4);
 
         @title      : 'Live Delegators'
         @description: 'Number of live delegators'

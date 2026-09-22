@@ -308,3 +308,39 @@ describe('CardanoClient.getChainSyncBackend / getPaginatingBackend', () => {
     expect(client.getPaginatingBackend()).toBeNull(); // ogmios not configured / not paginating
   });
 });
+
+describe('CardanoClient.recoverChainSyncBackend', () => {
+  // A box that restarts node and ODATANO together: the node replays for minutes, Ogmios
+  // refuses the startup init, and the crawler must not stay on pagination for good.
+  it('retries a failed startup init and hands the backend out once it succeeds', async () => {
+    const client = makeClient(['blockfrost', 'ogmios']);
+    const ogmios = live(client)!;
+    uninit(client).add(ogmios);
+    const init = vi.spyOn(ogmios, 'init').mockResolvedValue(true);
+
+    expect(client.getChainSyncBackend()).toBeNull();
+    expect((await client.recoverChainSyncBackend())?.name).toBe('ogmios');
+    expect(init).toHaveBeenCalledTimes(1);
+    // the ordinary getter agrees from now on — the ingest loop reopens chain-sync with it
+    expect(client.getChainSyncBackend()?.name).toBe('ogmios');
+  });
+
+  it('returns null and keeps the backend uninitialized while the init keeps failing', async () => {
+    const client = makeClient(['blockfrost', 'ogmios']);
+    const ogmios = live(client)!;
+    uninit(client).add(ogmios);
+    vi.spyOn(ogmios, 'init').mockRejectedValue(new Error('HealthFailedToConnect'));
+
+    expect(await client.recoverChainSyncBackend()).toBeNull();
+    expect(uninit(client).has(ogmios)).toBe(true);
+    expect(client.getChainSyncBackend()).toBeNull();
+  });
+
+  it('is a no-op without a chain-sync capable backend', async () => {
+    const client = makeClient(['blockfrost', 'koios']);
+    const inits = [...historical(client)].map(b => vi.spyOn(b, 'init'));
+
+    expect(await client.recoverChainSyncBackend()).toBeNull();
+    for (const init of inits) expect(init).not.toHaveBeenCalled(); // never re-inits a paginating backend
+  });
+});

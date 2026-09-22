@@ -1,6 +1,6 @@
 # Transaction Workflow Guide
 
-**Version:** v2.0.0-rc.13 | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
 
 This guide covers building, signing, and submitting Cardano transactions via the ODATANO API.
 

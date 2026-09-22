@@ -222,7 +222,8 @@ export interface PoolData {
   poolId: string;
   vrfKeyHash: string;
   blocksMinted: number;
-  blocksEpoch: number;
+  /** Blocks minted in the current epoch; null when the backend has no such figure (Koios). */
+  blocksEpoch: number | null;
   liveStake: string;
   liveSize: number;
   /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. */

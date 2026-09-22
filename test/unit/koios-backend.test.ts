@@ -428,7 +428,7 @@ describe('KoiosBackend', () => {
 
     // Koios reports live_saturation in percent, Blockfrost as a fraction. The
     // canonical PoolData is a fraction, and the columns behind it are
-    // Decimal(5, 4) — a percent value of 75.42 overflows them.
+    // Decimal(9, 4) — a percent value would be off by a factor of 100.
     it('converts the percent saturation Koios reports into a fraction', async () => {
       nock(KOIOS_BASE_URL)
         .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
@@ -451,10 +451,21 @@ describe('KoiosBackend', () => {
       const result = await backend.getPool(POOL_ID);
 
       expect(result.liveSaturation).toBeCloseTo(0.7542, 10);
-      expect(result.liveSaturation).toBeLessThan(10); // fits Decimal(5, 4)
+      expect(result.liveSaturation).toBeLessThan(10);
       // fractions the provider already reports as fractions stay untouched
       expect(result.liveSize).toBe(0.0012);
       expect(result.margin).toBe(0.02);
+    });
+
+    it('reports blocksEpoch as null — Koios has no per-epoch figure, and a 0 would read as a real zero', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
+        .reply(200, [{ pool_id_bech32: POOL_ID, vrf_key_hash: 'vrf', block_count: 11, live_saturation: 1.5 }]);
+
+      const result = await backend.getPool(POOL_ID);
+
+      expect(result.blocksEpoch).toBeNull();
+      expect(result.blocksMinted).toBe(11); // the lifetime figure Koios does supply
     });
 
     it('defaults a missing saturation to 0 instead of NaN', async () => {
@@ -1114,7 +1125,7 @@ describe('KoiosBackend', () => {
       const pools = await backend.getPools(ids);
 
       expect(pools).toHaveLength(60); // 50 + 10, two requests
-      expect(pools[0]).toMatchObject({ poolId: 'pool10', blocksMinted: 3, liveStake: '10', blocksEpoch: 0 });
+      expect(pools[0]).toMatchObject({ poolId: 'pool10', blocksMinted: 3, liveStake: '10', blocksEpoch: null });
       // Koios percent -> canonical fraction
       expect(pools[0].liveSaturation).toBeCloseTo(0.4, 10);
     });

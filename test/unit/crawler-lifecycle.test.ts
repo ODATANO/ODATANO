@@ -600,6 +600,187 @@ describe('CardanoCrawler chain-sync frame failure', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// pagination-only start: chain-sync backend not usable yet (node still replaying)
+// ---------------------------------------------------------------------------
+
+describe('CardanoCrawler pagination-only start', () => {
+  const RETRY_MS = 30_000; // CardanoCrawler.CHAIN_SYNC_RETRY_MS
+  const stubIndexer = () => ({ indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn() });
+  // The REAL sleep on the fake clock (makeCrawler collapses it, which turns the idle loop
+  // into a hot spin that never lets the fake timers advance). Poll every second.
+  const POLLING: CrawlerConfig = { ...CONFIG, pollIntervalMs: 1000 };
+  const idleCrawler = (client: unknown, config: CrawlerConfig = POLLING, indexer: unknown = stubIndexer()) =>
+    new CardanoCrawler(client as never, indexer as never, 'preview', config);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Ogmios failed its startup init; the lazy retry makes it usable later. */
+  function lateChainSyncClient() {
+    const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => ({ close: vi.fn() }));
+    const chainSync = { openChainSync };
+    let usable: typeof chainSync | null = null;
+    const backend = {
+      getBlockByHeight: vi.fn(),
+      getNextBlocks: vi.fn().mockResolvedValue([]),
+      getBlockTransactions: vi.fn().mockResolvedValue([]),
+    };
+    const client = {
+      getChainSyncBackend: vi.fn(() => usable),
+      recoverChainSyncBackend: vi.fn<() => Promise<typeof chainSync | null>>(async () => { usable = chainSync; return chainSync; }),
+      getPaginatingBackend: () => backend,
+      getLatestBlock: vi.fn().mockResolvedValue(block({ height: 100, slot: 10000, hash: 'tip'.padEnd(64, '3') })),
+    };
+    return { client, backend, openChainSync };
+  }
+
+  it('crawls on pagination meanwhile and hands over to chain-sync once its init succeeds', async () => {
+    cursorExists();
+    const { client, backend, openChainSync } = lateChainSyncClient();
+    const crawler = idleCrawler(client);
+
+    await crawler.start();
+    await settle(() => backend.getNextBlocks.mock.calls.length > 0);
+    expect(crawler.getActiveSource()).toBe('pagination');
+    // the startup init has only just failed — the first retry waits a full interval
+    expect(client.recoverChainSyncBackend).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    await settle(() => openChainSync.mock.calls.length > 0, 50_000);
+
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(1);
+    expect(openChainSync).toHaveBeenCalledTimes(1); // the ingest loop reopened chain-sync
+    expect(crawler.getActiveSource()).toBe('chain-sync');
+    expect(crawler.isRunning()).toBe(true);
+    await crawler.stop();
+    expect(crawler.getActiveSource()).toBeNull();
+  });
+
+  it('retries on its own clock — an hour-long poll sleep does not delay the handover', async () => {
+    // cursor within confirmationDepth of the tip → 'synced' → the loop sleeps pollIntervalMs
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW, lastHeight: '98' };
+      return undefined;
+    });
+    const { client, openChainSync } = lateChainSyncClient();
+    const crawler = idleCrawler(client, { ...CONFIG, pollIntervalMs: 3_600_000 });
+
+    await crawler.start();
+    await settle(() => updatesWith(s => s.syncStatus === 'synced').length > 0);
+    expect(crawler.getActiveSource()).toBe('pagination');
+
+    await vi.advanceTimersByTimeAsync(RETRY_MS); // one retry interval, not one poll interval
+    await settle(() => openChainSync.mock.calls.length > 0, 50_000);
+
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(1);
+    expect(openChainSync).toHaveBeenCalledTimes(1);
+    expect(crawler.getActiveSource()).toBe('chain-sync');
+    await crawler.stop();
+  });
+
+  it('does not sleep a full poll interval when the retry succeeded while the round was fetching', async () => {
+    // cursor 98 → 'synced' after the tip fetch; the tip fetch is held while the probe fires
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW, lastHeight: '98' };
+      return undefined;
+    });
+    const { client, openChainSync } = lateChainSyncClient();
+    let releaseTip!: (b: BlockData) => void;
+    client.getLatestBlock.mockReturnValueOnce(new Promise<BlockData>((resolve) => { releaseTip = resolve; }));
+    const crawler = idleCrawler(client, { ...CONFIG, pollIntervalMs: 3_600_000 });
+
+    await crawler.start();
+    await settle(() => client.getLatestBlock.mock.calls.length > 0, 50_000);
+    await vi.advanceTimersByTimeAsync(RETRY_MS); // recovered while no sleep is pending — nothing to wake
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(1);
+
+    releaseTip(block({ height: 100, slot: 10000, hash: 'tip'.padEnd(64, '3') }));
+    await settle(() => openChainSync.mock.calls.length > 0, 50_000); // no clock advance: the poll pause was skipped
+
+    expect(openChainSync).toHaveBeenCalledTimes(1);
+    expect(crawler.getActiveSource()).toBe('chain-sync');
+    await crawler.stop();
+  });
+
+  it('finishes the block in flight and leaves the rest of the batch to chain-sync', async () => {
+    // stateful cursor: SELECT reflects the lastHeight written by advanceCursor
+    let lastHeight = 40;
+    let lastHash = CURSOR_ROW.lastBlockHash;
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) {
+        return { ...CURSOR_ROW, lastHeight: String(lastHeight), lastBlockHash: lastHash };
+      }
+      if (q._op === 'UPDATE') {
+        const set = q.set as Record<string, unknown>;
+        if (set.lastHeight != null) { lastHeight = Number(set.lastHeight); lastHash = String(set.lastBlockHash); }
+      }
+      return undefined;
+    });
+    const { client, backend, openChainSync } = lateChainSyncClient();
+    backend.getNextBlocks
+      .mockResolvedValueOnce([
+        block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100 }),
+        block({ height: 42, hash: 'b42'.padEnd(64, '0'), slot: 4200 }),
+        block({ height: 43, hash: 'b43'.padEnd(64, '0'), slot: 4300 }),
+      ])
+      .mockResolvedValue([]);
+    // block 41 is held in flight while the retry succeeds
+    let releaseBlock!: () => void;
+    const blockWritten = new Promise<void>((resolve) => { releaseBlock = resolve; });
+    const indexBlockFull = vi.fn(async () => { await blockWritten; });
+    const crawler = idleCrawler(client, POLLING, { ...stubIndexer(), indexBlockFull });
+
+    await crawler.start();
+    await settle(() => indexBlockFull.mock.calls.length > 0, 50_000);
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(1);
+    expect(openChainSync).not.toHaveBeenCalled(); // never mid-block
+
+    releaseBlock();
+    await settle(() => openChainSync.mock.calls.length > 0, 50_000);
+
+    expect(indexBlockFull).toHaveBeenCalledTimes(1); // 41 completed; 42 + 43 are streamed instead
+    expect(backend.getBlockTransactions).toHaveBeenCalledTimes(1);
+    expect(openChainSync).toHaveBeenCalledTimes(1);
+    expect(crawler.getActiveSource()).toBe('chain-sync');
+    await crawler.stop();
+  });
+
+  it('stays on pagination, probing once per interval, while the init keeps failing', async () => {
+    cursorExists();
+    const { client, backend, openChainSync } = lateChainSyncClient();
+    client.recoverChainSyncBackend.mockResolvedValue(null);
+    const crawler = idleCrawler(client);
+
+    await crawler.start();
+    await settle(() => backend.getNextBlocks.mock.calls.length > 0);
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(client.recoverChainSyncBackend).toHaveBeenCalledTimes(2); // one per interval, rescheduled after each failure
+
+    expect(openChainSync).not.toHaveBeenCalled();
+    expect(crawler.getActiveSource()).toBe('pagination');
+    expect(crawler.isRunning()).toBe(true);
+    await crawler.stop();
+  });
+
+  it("never retries chain-sync when the operator pinned the source to 'pagination'", async () => {
+    cursorExists();
+    const { client, backend } = lateChainSyncClient();
+    const crawler = idleCrawler(client, { ...POLLING, source: 'pagination' });
+
+    await crawler.start();
+    await settle(() => backend.getNextBlocks.mock.calls.length > 0);
+    await vi.advanceTimersByTimeAsync(2 * RETRY_MS);
+
+    expect(client.recoverChainSyncBackend).not.toHaveBeenCalled();
+    expect(crawler.getActiveSource()).toBe('pagination');
+    await crawler.stop();
+  });
+});
+
 describe('CardanoCrawler.persistBlock', () => {
   it('rejects a partial backend transaction list without advancing the cursor', async () => {
     cursorExists();

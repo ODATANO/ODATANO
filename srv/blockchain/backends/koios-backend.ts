@@ -625,15 +625,17 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       blocksMinted: poolData.block_count,
       // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
       // (the epoch NUMBER) was mapped here before, which is a different
-      // semantic than Blockfrost's blocks_epoch. 0 = not available.
-      blocksEpoch: 0,
+      // semantic than Blockfrost's blocks_epoch. null = not available: a 0
+      // here read as "minted nothing this epoch" and produced leaderboards
+      // full of zeros downstream, indistinguishable from a real zero.
+      blocksEpoch: null,
       liveStake: poolData.live_stake || '0',
       liveSize: poolData.live_size || 0,
       liveDelegators: poolData.live_delegators || 0,
       // Koios reports saturation in PERCENT (75.42 = 75.42 %), Blockfrost as a
       // fraction (0.7542). PoolData is a fraction everywhere — and the columns
-      // behind it are Decimal(5, 4) — so convert here. Passing the percent value
-      // through overflows the column for any pool at or above 10 % and takes the
+      // behind it are Decimal(9, 4) — so convert here. Passing the percent value
+      // through would overflow the column for a saturated pool and take the
       // whole epoch snapshot down with it.
       liveSaturation: (Number(poolData.live_saturation) || 0) / 100,
       activeStake: poolData.active_stake || '0',

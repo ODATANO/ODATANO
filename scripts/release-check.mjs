@@ -21,7 +21,9 @@ if (lock.packages?.['']?.version !== v) fail(`package-lock.json root package ver
 if (mta !== v) fail(`mta.yaml version ${mta} != package.json ${v}`);
 ok(`version ${v} consistent in package.json, package-lock.json, mta.yaml`);
 
-// 2. Stale "**Version:** vX.Y.Z" headers in the tracked docs and the project guide
+// 2. Stale "**Version:** vX.Y.Z" headers in the tracked docs and the project guide.
+//    During a release-candidate line the docs carry the placeholder "vX.Y.Z-rc.x" so a
+//    bump does not touch every doc; it is accepted for any rc of the same base version.
 const headerFiles = [
   '.claude/CLAUDE.md',
   'docs/*.md',
@@ -35,7 +37,9 @@ try {
 } catch {
   // git grep exits 1 when nothing matches; treat as no headers
 }
-const stale = headers.split('\n').filter((l) => l && !l.includes(`v${v}`));
+const rcPlaceholder = /^(\d+\.\d+\.\d+)-rc\.\d+$/.test(v) ? `v${v.replace(/-rc\.\d+$/, '-rc.x')}` : null;
+const current = (l) => l.includes(`v${v}`) || (rcPlaceholder != null && l.includes(rcPlaceholder));
+const stale = headers.split('\n').filter((l) => l && !current(l));
 if (stale.length) fail(`stale version headers:\n${stale.join('\n')}`);
 ok(`no stale version headers (${headers.split('\n').filter(Boolean).length} checked)`);
 

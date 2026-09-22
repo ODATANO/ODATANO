@@ -54,6 +54,9 @@ class CrawlerLeaseLostError extends Error {
   constructor() { super('Crawler DB lease lost'); this.name = 'CrawlerLeaseLostError'; }
 }
 
+/** The source a running crawler is currently ingesting from. */
+export type CrawlSource = 'chain-sync' | 'pagination';
+
 /** Runtime configuration for the chain crawler (loaded from cds.requires by the server). */
 export interface CrawlerConfig {
   enabled: boolean;
@@ -146,9 +149,26 @@ export class CardanoCrawler {
    */
   private static readonly SNAPSHOT_RETRY_BASE_MS = 30_000;
   private static readonly SNAPSHOT_RETRY_MAX_MS = 10 * 60_000;
+  /**
+   * How often a crawl that runs on pagination for lack of a chain-sync backend retries
+   * that backend's init. Pagination is roughly fifty times slower than chain-sync, so
+   * the cadence errs on the frequent side; the probe is free when no chain-sync backend
+   * is configured at all and bounded by the backend's init timeout when it is down.
+   */
+  private static readonly CHAIN_SYNC_RETRY_MS = 30_000;
 
   private running = false;
   private chainSyncHandle: ChainSyncHandle | null = null;
+  /** What the ingest loop is currently reading from; null while stopped. */
+  private activeSource: CrawlSource | null = null;
+  /**
+   * Chain-sync init retry while the crawl runs on pagination for lack of one: its own
+   * timer (independent of the pagination cadence — a poll sleep can be an hour long),
+   * the in-flight recover call, and its outcome.
+   */
+  private chainSyncProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  private chainSyncProbe: Promise<void> | null = null;
+  private chainSyncRecovered = false;
   /** The detached ingest pipeline — awaited by stop() so teardown never races it. */
   private pipeline: Promise<void> | null = null;
   /** Resolver that cancels a pending poll sleep (set while sleeping). */
@@ -195,6 +215,15 @@ export class CardanoCrawler {
   /** True once the crawler halted because of a failure (not via stop() or a lost lease). */
   haltedWithError(): boolean {
     return !this.running && this.finalStatus === 'error';
+  }
+
+  /**
+   * The source this crawler is ingesting from right now, or null while it is not
+   * running. Lets an operator see a crawl that degraded to pagination — it still makes
+   * progress, so the cursor alone looks healthy.
+   */
+  getActiveSource(): CrawlSource | null {
+    return this.running ? this.activeSource : null;
   }
 
   /**
@@ -287,9 +316,11 @@ export class CardanoCrawler {
     // Once a real failure was observed, a concurrent shutdown must not hide it.
     if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
+    this.activeSource = null;
     // Background asset enrichment belongs to the crawl — it must not outlive it.
     this.indexer.stopAssetEnrichment();
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
+    this.stopChainSyncProbing();
     this.streamEnded?.(); // release the ingest loop — beginHalt awaits the pipeline below
     this.leaseWake?.();
     for (const cancel of [...this.callCancels]) cancel();
@@ -310,6 +341,7 @@ export class CardanoCrawler {
         await Promise.allSettled([...this.inFlightCallbacks]);
       }
       if (this.leaseHeartbeat) await this.leaseHeartbeat.catch(() => undefined);
+      if (this.chainSyncProbe) await this.chainSyncProbe.catch(() => undefined);
 
       try {
         if (this.leaseOwner && this.leaseHeld) {
@@ -323,35 +355,92 @@ export class CardanoCrawler {
   }
 
   private async runIngestPipeline(): Promise<void> {
-    const chainSync = this.config.source !== 'pagination' ? this.client.getChainSyncBackend() : null;
-    if (chainSync) {
-      // One pass per chain-sync stream. A frame the client's parser cannot turn into an
-      // object ends the stream without ending the crawler: pagination fetches that one
-      // block over HTTP, and chain-sync takes over again as soon as it is behind the
-      // cursor. Any other stream error still halts, as it always did.
-      while (this.running) {
-        const streamEnd = new Promise<void>((resolve) => { this.streamEnded = resolve; });
-        await this.runChainSync(chainSync);
-        if (!this.chainSyncHandle) return; // open refused, halted, or stop() raced us
-        await streamEnd;
+    while (this.running) {
+      const chainSync = this.config.source !== 'pagination' ? this.client.getChainSyncBackend() : null;
+      if (chainSync) {
+        // One pass per chain-sync stream. A frame the client's parser cannot turn into an
+        // object ends the stream without ending the crawler: pagination fetches that one
+        // block over HTTP, and chain-sync takes over again as soon as it is behind the
+        // cursor. Any other stream error still halts, as it always did.
+        while (this.running) {
+          const streamEnd = new Promise<void>((resolve) => { this.streamEnded = resolve; });
+          await this.runChainSync(chainSync);
+          if (!this.chainSyncHandle) return; // open refused, halted, or stop() raced us
+          await streamEnd;
 
-        const failure = this.takeFrameFailure();
-        if (!this.running || failure?.height == null) return;
-        logger.warn(
-          `chain-sync cannot deliver block ${failure.height} — switching to pagination until it is behind the cursor`
-        );
-        await this.runPagination(failure.height + 1);
+          const failure = this.takeFrameFailure();
+          if (!this.running || failure?.height == null) return;
+          logger.warn(
+            `chain-sync cannot deliver block ${failure.height} — switching to pagination until it is behind the cursor`
+          );
+          await this.runPagination({ untilHeight: failure.height + 1 });
+        }
+        return;
       }
-      return;
+      if (this.config.source === 'ogmios') {
+        // 'ogmios' means chain-sync ONLY — never silently degrade to the weaker
+        // pagination reorg handling the operator explicitly opted out of.
+        logger.error("Crawler source is 'ogmios' but no chain-sync backend is available — crawler not started (use source 'auto' to allow pagination fallback).");
+        await this.halt('error', true); // config error: a restart cannot fix it
+        return;
+      }
+      if (this.config.source === 'pagination') {
+        await this.runPagination();
+        return;
+      }
+      // 'auto', and no chain-sync backend is usable right now. After a restart of a box
+      // that hosts node and ODATANO together this is the normal case, not the exception:
+      // the node validates its chunks and replays the ledger for minutes while ODATANO is
+      // up in seconds, so Ogmios refused its init. Crawl on pagination meanwhile, but
+      // keep retrying chain-sync — a crawl that makes progress at a fiftieth of the
+      // speed looks healthy to every monitor that watches only the cursor.
+      logger.warn('No chain-sync backend usable — crawling on pagination and retrying chain-sync periodically');
+      await this.runPagination({ untilChainSync: true });
+      // Returned because chain-sync came back (or we stopped): the loop reopens it.
     }
-    if (this.config.source === 'ogmios') {
-      // 'ogmios' means chain-sync ONLY — never silently degrade to the weaker
-      // pagination reorg handling the operator explicitly opted out of.
-      logger.error("Crawler source is 'ogmios' but no chain-sync backend is available — crawler not started (use source 'auto' to allow pagination fallback).");
-      await this.halt('error', true); // config error: a restart cannot fix it
-      return;
-    }
-    await this.runPagination();
+  }
+
+  /**
+   * Retry the init of a chain-sync backend that was unusable when the crawl began, on
+   * its own timer: the pagination loop may be asleep for a whole poll interval (up to
+   * an hour) or inside a slow batch, and neither must delay the retry. The probe runs
+   * in the background so no pagination round waits for it, and one at a time so a node
+   * that is still replaying is not hammered. On success `chainSyncRecovered` is set and
+   * a pending poll sleep is cut short; the pagination loop leaves at its next check
+   * (between rounds, or between blocks of a batch — the block in flight completes) and
+   * the ingest loop reopens chain-sync from the cursor.
+   */
+  private startChainSyncProbing(): void {
+    this.chainSyncRecovered = false;
+    // The startup init has only just failed — give the node a full interval first.
+    this.scheduleChainSyncProbe();
+  }
+
+  private scheduleChainSyncProbe(): void {
+    if (!this.running || this.chainSyncRecovered || this.chainSyncProbeTimer) return;
+    const timer = setTimeout(() => {
+      this.chainSyncProbeTimer = null;
+      if (!this.running || this.chainSyncRecovered) return;
+      this.chainSyncProbe = this.client.recoverChainSyncBackend()
+        .then((backend) => {
+          if (!backend || !this.running) return;
+          this.chainSyncRecovered = true;
+          this.wake?.(); // a poll sleep must not hold the handover back
+        })
+        .catch((err) => logger.debug('chain-sync probe failed:', err))
+        .finally(() => {
+          this.chainSyncProbe = null;
+          this.scheduleChainSyncProbe();
+        });
+    }, CardanoCrawler.CHAIN_SYNC_RETRY_MS);
+    timer.unref?.(); // never keep the process alive for a probe
+    this.chainSyncProbeTimer = timer;
+  }
+
+  private stopChainSyncProbing(): void {
+    if (!this.chainSyncProbeTimer) return;
+    clearTimeout(this.chainSyncProbeTimer);
+    this.chainSyncProbeTimer = null;
   }
 
   /** Bound a direct backend call — these bypass the client's timeout/breaker layer. */
@@ -434,6 +523,7 @@ export class CardanoCrawler {
       return;
     }
     this.chainSyncHandle = handle;
+    this.activeSource = 'chain-sync';
     logger.info(`Crawler running (chain-sync) from ${points[0].hash} (+${points.length - 1} fallback intersection point(s))`);
   }
 
@@ -546,14 +636,27 @@ export class CardanoCrawler {
    *   looping forever. Used to walk past a block the chain-sync stream cannot deliver and
    *   then hand back to it — pagination is roughly seven times slower, so staying on it
    *   for the rest of a backfill would be a poor trade.
+   * @param untilChainSync when set, keep retrying a chain-sync backend in the background
+   *   and return once one is usable, so the ingest loop can hand over to it. Used when
+   *   the crawl started without one (source 'auto', node still coming up).
    */
-  private async runPagination(untilHeight?: number): Promise<void> {
+  private async runPagination(opts: { untilHeight?: number; untilChainSync?: boolean } = {}): Promise<void> {
+    if (opts.untilChainSync) this.startChainSyncProbing();
+    try {
+      await this.paginate(opts);
+    } finally {
+      this.stopChainSyncProbing();
+    }
+  }
+
+  private async paginate({ untilHeight, untilChainSync = false }: { untilHeight?: number; untilChainSync?: boolean }): Promise<void> {
     const backend = this.client.getPaginatingBackend();
     if (!backend) {
       logger.error('No paginating backend available — cannot crawl without Ogmios or Blockfrost/Koios');
       await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
+    this.activeSource = 'pagination';
     logger.info('Crawler running (pagination)');
 
     // Tip cache: during deep catch-up the exact tip is irrelevant (only "am I still
@@ -564,6 +667,11 @@ export class CardanoCrawler {
 
     while (this.running) {
       try {
+        if (untilChainSync && this.chainSyncRecovered) {
+          logger.info('chain-sync backend usable again — leaving pagination');
+          return;
+        }
+
         const cursor = await cds.tx((tx) => readCursor(tx));
         if (!cursor?.lastBlockHash) {
           logger.error('Pagination refused: cursor has no resume block hash.');
@@ -594,7 +702,7 @@ export class CardanoCrawler {
             return true;
           });
           if (!statusWritten) { await this.halt('stopped'); return; }
-          await this.sleep(this.config.pollIntervalMs);
+          await this.pollPause(untilChainSync);
           continue;
         }
 
@@ -604,7 +712,7 @@ export class CardanoCrawler {
           backend.getNextBlocks(cursor.lastBlockHash, this.config.batchSize, cursor.lastHeight > 0 ? cursor.lastHeight : undefined),
           'getNextBlocks',
         );
-        if (!blocks.length) { await this.sleep(this.config.pollIntervalMs); continue; }
+        if (!blocks.length) { await this.pollPause(untilChainSync); continue; }
 
         for (const block of blocks) {
           if (!this.running) break;
@@ -612,6 +720,9 @@ export class CardanoCrawler {
           const txs = await this.withTimeout(backend.getBlockTransactions(block.hash), 'getBlockTransactions');
           const ok = await this.persistBlock(block, txs, tipPoint);
           if (!ok) return; // persistBlock already recorded + halted
+          // Chain-sync came back mid-batch: the block just written is complete and on the
+          // cursor, the rest of the batch is cheaper to stream than to fetch one by one.
+          if (untilChainSync && this.chainSyncRecovered) break;
         }
       } catch (err) {
         if (!this.running || err instanceof CrawlerStoppedError) return;
@@ -629,9 +740,20 @@ export class CardanoCrawler {
         if (streak < 0) { await this.halt('stopped'); return; }
         logger.error(`pagination round failed (error streak ${streak}):`, err);
         if (streak >= MAX_CONSECUTIVE_ERRORS) { await this.halt('error'); return; }
-        await this.sleep(this.config.pollIntervalMs);
+        await this.pollPause(untilChainSync);
       }
     }
+  }
+
+  /**
+   * Poll pause between pagination rounds. Skipped when a handover to chain-sync is
+   * already due: the probe's wake-up only reaches a sleep that has begun, so a probe
+   * that succeeded while the round was still fetching (tip, blocks) would otherwise be
+   * followed by a full poll interval — up to an hour — before the loop notices.
+   */
+  private async pollPause(untilChainSync: boolean): Promise<void> {
+    if (untilChainSync && this.chainSyncRecovered) return;
+    await this.sleep(this.config.pollIntervalMs);
   }
 
   /**
