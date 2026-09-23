@@ -15,7 +15,11 @@ import {
   GRANTS_ENTITY,
   GRANT_USAGE_ENTITY,
   __resetGrantRateLimiterForTests,
+  __resetGrantUsageBufferForTests,
+  __setGrantUsageModeForTests,
   agentPrincipalId,
+  flushGrantUsage,
+  pendingGrantUsageKeys,
   budgetRunnerFor,
   consumeDailyBudget,
   enforceAgentGrant,
@@ -767,6 +771,112 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     });
     expect((await rejection(h.UpdateAgentGrant!(makeReq('UpdateAgentGrant', { grantId: GRANT_ID, agentLabel: 'x' }) as never))).status).toBe(403);
     expect((await rejection(h.UpdateAgentGrant!(makeReq('UpdateAgentGrant', { agentLabel: 'x' }, null) as never))).status).toBe(400);
+  });
+});
+
+describe('deferred usage counters (Postgres / HANA): buffered per key, flushed in one write', () => {
+  const SVC = 'CardanoTransactionService';
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const ACTION = 'BuildSimpleAdaTransaction';
+
+  beforeEach(() => { __setGrantUsageModeForTests('deferred'); __resetGrantUsageBufferForTests(); });
+  afterEach(() => { __setGrantUsageModeForTests(null); __resetGrantUsageBufferForTests(); });
+
+  it('writes nothing per call; the flush lands the summed deltas as one INSERT, later as one UPDATE', async () => {
+    const store = new FakeStore();
+    store.seed(grant({ maxJobsPerDay: null }));
+    const g = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
+
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+    const refused = makeReq(ACTION, {}, g());
+    await enforceAgentGrant(refused as never, store, undefined, SVC);
+    refused._failed.forEach((fn) => fn({ status: 400 }));
+    await tick();
+
+    // Nothing has touched the usage table yet; three calls and one refund wait on one key.
+    expect(store.usageRows()).toEqual([]);
+    expect(store.statements.filter((s) => s === 'INSERT' || s.startsWith('UPDATE calls'))).toHaveLength(0);
+    expect(pendingGrantUsageKeys()).toBe(1);
+
+    expect(await flushGrantUsage(store)).toEqual({ flushed: 1, failed: 0 });
+    expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 3, refunded: 1 }]);
+    expect(pendingGrantUsageKeys()).toBe(0);
+
+    // The next window adds to the existing row: one UPDATE, no INSERT.
+    const before = store.statements.length;
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, 'CardanoSignService'); // same action, other service = other key
+    expect(await flushGrantUsage(store)).toEqual({ flushed: 2, failed: 0 });
+    expect(store.statements.slice(before).filter((s) => s === 'INSERT')).toHaveLength(1); // the new key only
+    expect(store.usageRows()).toEqual([
+      { grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 4, refunded: 1 },
+      { grant_ID: GRANT_ID, day: today(), service: 'CardanoSignService', action: ACTION, calls: 1, refunded: 0 },
+    ]);
+  });
+
+  it('keeps a delta whose write failed for the next flush, and GetGrantUsage flushes before it reads', async () => {
+    const store = new FakeStore();
+    store.seed(grant({ maxJobsPerDay: null }));
+    const g = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+
+    const broken: Runner = { run: async () => { throw new Error('connection reset'); } };
+    expect(await flushGrantUsage(broken)).toEqual({ flushed: 0, failed: 1 });
+    expect(pendingGrantUsageKeys()).toBe(1);
+    expect(store.usageRows()).toEqual([]);
+
+    const window = resolveUsageWindow(undefined, undefined, new Date()) as Extract<ReturnType<typeof resolveUsageWindow>, { ok: true }>;
+    // The flush goes to the detached runner, the read to the request's tx: a
+    // request tx that only reads must not receive the buffered writes.
+    const readOnlyTx: Runner = {
+      run: async (q: unknown) => {
+        const cqn = q as { INSERT?: unknown; UPDATE?: unknown };
+        if (cqn.INSERT || cqn.UPDATE) throw new Error('write on the request transaction');
+        return store.run(q);
+      },
+    };
+    const usage = await getGrantUsage(g(), window, readOnlyTx, store);
+    expect(usage.calls).toEqual([{ service: SVC, action: ACTION, count: 2, refunded: 0 }]);
+    expect(pendingGrantUsageKeys()).toBe(0);
+    expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 2, refunded: 0 }]);
+  });
+
+  it('keeps a delta whose INSERT failed for a reason other than the insert race', async () => {
+    const store = new FakeStore();
+    store.seed(grant({ maxJobsPerDay: null }));
+    const g = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+
+    // The UPDATE finds no row, the INSERT fails, the second UPDATE still finds
+    // no row: not the race, the delta must survive for the next flush.
+    const noInsert: Runner = {
+      run: async (q: unknown) => {
+        if ((q as { INSERT?: unknown }).INSERT) throw new Error('disk full');
+        return store.run(q);
+      },
+    };
+    expect(await flushGrantUsage(noInsert)).toEqual({ flushed: 0, failed: 1 });
+    expect(pendingGrantUsageKeys()).toBe(1);
+    expect(store.usageRows()).toEqual([]);
+    expect(await flushGrantUsage(store)).toEqual({ flushed: 1, failed: 0 });
+    expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 1, refunded: 0 }]);
+  });
+
+  it('stays synchronous for a request inside its own changeset transaction (detached: false) and in sync mode', async () => {
+    const store = new FakeStore();
+    store.seed(grant({ maxJobsPerDay: null }));
+    const g = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
+    // Not detached: the changeset's rollback is the refund, the write rides the transaction.
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, false, SVC);
+    expect(pendingGrantUsageKeys()).toBe(0);
+    expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 1, refunded: 0 }]);
+    // Sync mode (SQLite): the awaited write, as before.
+    __setGrantUsageModeForTests('sync');
+    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
+    expect(pendingGrantUsageKeys()).toBe(0);
+    expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 2, refunded: 0 }]);
   });
 });
 

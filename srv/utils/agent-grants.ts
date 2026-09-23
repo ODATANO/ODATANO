@@ -560,12 +560,21 @@ export interface AgentGrantUsage {
   maxJobsPerDay: number | null;
 }
 
-/** The grant's admitted calls in `window`, grouped by service and action (one SUM per group). */
+/**
+ * The grant's admitted calls in `window`, grouped by service and action (one
+ * SUM per group). `runner` is the request's transaction (the read); deferred
+ * counters (Postgres / HANA) are flushed first on `flushRunner`, the detached
+ * primary db service: written inside the request transaction they would hold
+ * the rows' locks until the GET commits and vanish with its rollback, while a
+ * separate autocommit is visible to the following SELECT under read committed.
+ */
 export async function getGrantUsage(
   grant: AgentGrantRow,
   window: Extract<UsageWindow, { ok: true }>,
-  runner: Runner = dbRunner()
+  runner: Runner = dbRunner(),
+  flushRunner: Runner = dbRunner()
 ): Promise<AgentGrantUsage> {
+  if (pendingGrantUsageKeys() > 0) await flushGrantUsage(flushRunner);
   const rows = ((await runner.run(
     SELECT.from(GRANT_USAGE_ENTITY)
       .columns(
@@ -747,7 +756,7 @@ export function registerAgentGrantHandlers(srv: cds.Service): void {
     const tx = cds.tx(req) as unknown as Runner;
     const grant = (await tx.run(SELECT.one.from(GRANTS_ENTITY).where({ ID: data.grantId }))) as AgentGrantRow | null;
     if (!grant) return req.reject(404, 'Grant not found', 'grantId');
-    return getGrantUsage(grant, window, tx);
+    return getGrantUsage(grant, window, tx, dbRunner());
   });
 }
 
@@ -952,13 +961,121 @@ export async function refundDailyBudget(br: BudgetRunner | Runner, grant: AgentG
   );
 }
 
+// ---------------------------------------------------------------------------
+// Usage counters: synchronous on SQLite, buffered on Postgres / HANA
+// ---------------------------------------------------------------------------
+//
+// One admitted call is `calls + 1` on (grant, UTC day, service, action). Written
+// per request, that UPDATE is the ceiling of a grant: every call of the grant
+// and action takes the same row lock, so 100 parallel reads through ODATANO
+// ACCESS on one grant queued at 30 to 50 calls per second on the hosted box
+// (2026-09-23) while the reads themselves took milliseconds. On Postgres and
+// HANA the counters are therefore buffered in memory and flushed by one timer
+// per second: one UPDATE (or INSERT) per touched key with the summed deltas.
+// GetGrantUsage is exact to within that second; a crash loses at most one
+// second of counters, which is accounting, not admission. One replica is
+// assumed, as the rate limiters already do.
+//
+// SQLite keeps the awaited write: a timer writing on a second connection while
+// a request transaction is open is exactly the WAL snapshot race
+// (SQLITE_BUSY_SNAPSHOT, seen live 2026-09-05) this module must never cause.
+// A request riding its own changeset transaction (`detached: false`) keeps it
+// too: the rollback of that transaction is its refund.
+
+type UsageMode = 'sync' | 'deferred';
+interface UsageDelta { grant_ID: string; day: string; service: string; action: string; calls: number; refunded: number }
+
+const USAGE_FLUSH_INTERVAL_MS = 1000;
+const usageBuffer = new Map<string, UsageDelta>();
+let usageFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let usageModeOverride: UsageMode | null = null;
+let usageShutdownHooked = false;
+
+/** Deferred on the databases whose writers do not block readers; sync everywhere else (SQLite, tests). */
+function usageMode(): UsageMode {
+  if (usageModeOverride) return usageModeOverride;
+  const kind = String((cds as unknown as { db?: { kind?: unknown } }).db?.kind ?? '');
+  return kind === 'postgres' || kind === 'hana' ? 'deferred' : 'sync';
+}
+
+/** Test seam: force a mode (null = derive from cds.db.kind). */
+export function __setGrantUsageModeForTests(mode: UsageMode | null): void {
+  usageModeOverride = mode;
+}
+
+/** Test seam: forget buffered deltas and the pending timer. */
+export function __resetGrantUsageBufferForTests(): void {
+  usageBuffer.clear();
+  if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
+}
+
+/** How many keys wait for the next flush (monitoring, tests). */
+export function pendingGrantUsageKeys(): number {
+  return usageBuffer.size;
+}
+
+function bufferUsage(key: { grant_ID: string; day: string; service: string; action: string }, calls: number, refunded: number): void {
+  const k = `${key.grant_ID}|${key.day}|${key.service}|${key.action}`;
+  const d = usageBuffer.get(k);
+  if (d) { d.calls += calls; d.refunded += refunded; }
+  else usageBuffer.set(k, { ...key, calls, refunded });
+  if (!usageFlushTimer) {
+    usageFlushTimer = setTimeout(() => {
+      usageFlushTimer = null;
+      void flushGrantUsage().catch((err: unknown) => logger.warn(`usage flush failed: ${String((err as Error)?.message ?? err)}`));
+    }, USAGE_FLUSH_INTERVAL_MS);
+    usageFlushTimer.unref?.();
+  }
+  if (!usageShutdownHooked) {
+    usageShutdownHooked = true;
+    cds.on('shutdown', () => flushGrantUsage().catch(() => undefined));
+  }
+}
+
 /**
- * One admitted call: `calls + 1` on (grant, UTC day, service, action). A
- * conditional UPDATE first (the common path), an INSERT when the row does not
- * exist yet, one more UPDATE when a racing request inserted it first. Runs on
- * the hook's BudgetRunner and is AWAITED like every other write of the hook
- * (see touchLastUsed), but never fails the request: usage is accounting, not
- * admission. Returns the day the call was counted on (the refund names it).
+ * Writes the buffered deltas: `calls + n, refunded + m` per key, an INSERT when
+ * the row does not exist yet, one more UPDATE when a racing writer created it.
+ * A delta whose write fails goes back into the buffer for the next flush.
+ * `runner` defaults to the primary db service (tests pass their fake).
+ */
+export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ flushed: number; failed: number }> {
+  if (usageBuffer.size === 0) return { flushed: 0, failed: 0 };
+  const batch = [...usageBuffer.values()];
+  usageBuffer.clear();
+  const br: BudgetRunner = { runner, detached: true };
+  let flushed = 0;
+  let failed = 0;
+  for (const d of batch) {
+    const key = { grant_ID: d.grant_ID, day: d.day, service: d.service, action: d.action };
+    const bump = () => runStmt(br, UPDATE.entity(GRANT_USAGE_ENTITY).set({ calls: { '+=': d.calls }, refunded: { '+=': d.refunded } }).where(key));
+    try {
+      if (Number(await bump()) === 0) {
+        try {
+          await runStmt(br, INSERT.into(GRANT_USAGE_ENTITY).entries({ ...key, calls: d.calls, refunded: d.refunded }));
+        } catch (insertErr) {
+          // Lost the insert race: the row exists now. Anything else (the row is
+          // still missing) is the INSERT's own failure: keep the delta.
+          if (Number(await bump()) === 0) throw insertErr;
+        }
+      }
+      flushed++;
+    } catch (err) {
+      failed++;
+      bufferUsage(key, d.calls, d.refunded); // retried on the next flush
+      logger.warn(`usage flush for grant ${d.grant_ID} (${d.service}.${d.action}) failed, kept for retry: ${String((err as Error)?.message ?? err)}`);
+    }
+  }
+  return { flushed, failed };
+}
+
+/**
+ * One admitted call: `calls + 1` on (grant, UTC day, service, action).
+ * Deferred mode (Postgres / HANA, detached runner): the delta goes into the
+ * buffer, nothing is written here. Sync mode: a conditional UPDATE first (the
+ * common path), an INSERT when the row does not exist yet, one more UPDATE
+ * when a racing request inserted it first, AWAITED like every other write of
+ * the hook (see touchLastUsed). Never fails the request: usage is accounting,
+ * not admission. Returns the day the call was counted on (the refund names it).
  */
 export async function recordGrantUsage(
   br: BudgetRunner | Runner,
@@ -970,6 +1087,10 @@ export async function recordGrantUsage(
   const runner: BudgetRunner = 'runner' in br ? br : { runner: br, detached: true };
   const day = utcDay(now);
   const key = { grant_ID: grant.ID, day, service, action };
+  if (runner.detached && usageMode() === 'deferred') {
+    bufferUsage(key, 1, 0);
+    return day;
+  }
   const bump = () => runStmt(runner, UPDATE.entity(GRANT_USAGE_ENTITY).set({ calls: { '+=': 1 } }).where(key));
   try {
     if (Number(await bump()) > 0) return day;
@@ -984,7 +1105,11 @@ export async function recordGrantUsage(
   return day;
 }
 
-/** `refunded + 1` on the row the call was counted on: a refused request admitted nothing. */
+/**
+ * `refunded + 1` on the row the call was counted on: a refused request admitted
+ * nothing. Deferred mode: into the buffer, on the same key the call went to,
+ * whether or not that call has been flushed yet (the flush adds deltas).
+ */
 export async function refundGrantUsage(
   br: BudgetRunner | Runner,
   grant: AgentGrantRow,
@@ -993,10 +1118,15 @@ export async function refundGrantUsage(
   day: string
 ): Promise<void> {
   const runner: BudgetRunner = 'runner' in br ? br : { runner: br, detached: true };
+  const key = { grant_ID: grant.ID, day, service, action };
+  if (runner.detached && usageMode() === 'deferred') {
+    bufferUsage(key, 0, 1);
+    return;
+  }
   await runStmt(runner,
     UPDATE.entity(GRANT_USAGE_ENTITY)
       .set({ refunded: { '+=': 1 } })
-      .where({ grant_ID: grant.ID, day, service, action })
+      .where(key)
   );
 }
 

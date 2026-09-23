@@ -1,5 +1,37 @@
 # Changelog
 
+## [v2.0.0-rc.15] - buffered grant usage counters
+
+### Changed
+
+- The agent grant hook no longer writes the usage counter per request on
+  PostgreSQL and HANA. Every admitted call was `calls + 1` on the row
+  (grant, day, service, action), awaited before the handler ran, so all calls
+  of one grant and action queued on that row's lock: 100 parallel reads
+  through ODATANO ACCESS on one grant landed at 30 to 50 calls per second on
+  the hosted preprod box while the reads themselves took milliseconds. The
+  deltas are now summed in memory and written by one timer per second, one
+  UPDATE (or INSERT) per touched key; a refund of a refused request goes to
+  the same key. `GetGrantUsage` flushes the buffer before it reads, so its
+  answer stays exact; a crash loses at most one second of counters, which is
+  accounting, not admission. The daily budget (`maxJobsPerDay`) is untouched:
+  its conditional UPDATE is the admission itself and stays synchronous.
+- SQLite keeps the awaited per-request write: a timer writing on a second
+  connection while a request transaction is open is the WAL snapshot race
+  (`SQLITE_BUSY_SNAPSHOT`) this hook must never cause. A request inside its
+  own changeset transaction keeps it on every database (its rollback is the
+  refund).
+
+### Added
+
+- `flushGrantUsage()` and `pendingGrantUsageKeys()` in `srv/utils/agent-grants`
+  (the flush also runs on `cds.on('shutdown')`).
+
+### Notes
+
+- No schema change, no migration. One replica per database is assumed for the
+  buffer, as it already is for the rate limiters.
+
 ## [v2.0.0-rc.14] - crawler source recovery
 
 ### Fixed
