@@ -1,5 +1,17 @@
 # Changelog
 
+## [v2.0.0-rc.18] - start-up fixes reach the standalone server
+
+### Fixed
+
+- `installPostgresOrderNulls()` and `ensureDbIndexes()` run in
+  `initializeAppContext`, shared by the plugin path and the standalone served
+  hook. rc.16 / rc.17 called them from `initializeFromConfig` only, so the
+  standalone server (`cds serve`, the container image) never ran them.
+- Standalone on Postgres: `$top` reads render `ORDER BY … ASC` and use the
+  rc.16 indexes; start log shows `PgOrderNulls` and `18 indexes ensured`.
+- No schema change, no new index, no config change.
+
 ## [v2.0.0-rc.17] - ORDER BY without NULLS on Postgres
 
 ### Fixed

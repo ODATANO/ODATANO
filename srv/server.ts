@@ -89,6 +89,20 @@ async function initializeAppContext(
 ): Promise<AppContext> {
   logger.debug('Initializing blockchain components...');
 
+  // Database first, on every start path: the standalone served hook and the
+  // plugin's initializeFromConfig both come through here (rc.17 had these in
+  // initializeFromConfig only, so the standalone image never ran them).
+  // ORDER BY on Postgres without a NULLS clause for key / NOT NULL columns, so
+  // the indexes serve `$top` and `$orderby` reads (srv/utils/pg-order-nulls.ts).
+  installPostgresOrderNulls();
+  // The secondary indexes the model cannot declare (srv/utils/db-indexes.ts):
+  // idempotent, never fatal, before anything reads.
+  try {
+    await ensureDbIndexes();
+  } catch (err) {
+    logger.warn('secondary indexes not ensured (non-fatal):', err);
+  }
+
   // Create CardanoClient from configuration
   const cardanoClient = new CardanoClient(config);
 
@@ -205,16 +219,6 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
     return;
   }
   hsmConfigInstance = hsmConfig;
-  // ORDER BY on Postgres without a NULLS clause for key / NOT NULL columns, so
-  // the indexes below serve `$top` and `$orderby` reads (srv/utils/pg-order-nulls.ts).
-  installPostgresOrderNulls();
-  // The secondary indexes the model cannot declare (srv/utils/db-indexes.ts):
-  // idempotent, never fatal, before anything reads.
-  try {
-    await ensureDbIndexes();
-  } catch (err) {
-    logger.warn('secondary indexes not ensured (non-fatal):', err);
-  }
   try {
     appContext = await initializeAppContext(config, protocolParams, hsmConfig);
     bootstrapError = null;
