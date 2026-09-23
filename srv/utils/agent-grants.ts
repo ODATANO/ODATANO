@@ -32,7 +32,7 @@ import { runWithoutAmbientTx } from './tx-utils';
 import { RateLimiter, principalRateKey } from './rate-limiter';
 import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
-import { loadGrantAdminRateLimit } from './agent-grants-config';
+import { loadGrantAdminRateLimit, loadTokenCacheMs } from './agent-grants-config';
 
 const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('AgentGrants');
@@ -129,10 +129,14 @@ function grantAdminLimiter(): RateLimiter {
   return grantAdminRateLimiter;
 }
 
-/** Forget every rate-limit window and re-read the limit from the config (tests). */
+/** Forget every rate-limit window, the token cache and re-read the knobs from the config (tests). */
 export function __resetGrantRateLimiterForTests(): void {
   grantAdminRateLimiter = null;
   lastUsedTouched.clear();
+  tokenCache.clear();
+  tokenHashOfGrant.clear();
+  tokenCacheMs = null;
+  tokenCacheOverride = null;
 }
 
 export interface AgentGrantRow {
@@ -212,21 +216,103 @@ export type TokenResolution =
   | { ok: true; grant: AgentGrantRow }
   | { ok: false; status: 401 | 410; message: string };
 
+// ---------------------------------------------------------------------------
+// Token cache: the resolved grant row per token hash, for a few seconds
+// ---------------------------------------------------------------------------
+//
+// The lane resolved every request with one SELECT (plus its CQN compile), one
+// of the few pieces of per-request work this module owns. A busy grant sends
+// many requests per second, so a cache of seconds spares almost every lookup.
+// Only positive results are cached: an unknown or revoked token is never
+// remembered, so a freshly rotated token resolves at once. Revoke, rotate and
+// update in THIS process drop the entry immediately; another replica sees the
+// change when its entry expires (AGENT_TOKEN_CACHE_MS, default 10 s, 0 = off).
+// Expiry (validUntil) is checked per request against the cached row, so an
+// expiring grant turns 410 on time. The budget and the usage counters never
+// read the cached row for admission (their UPDATEs are conditional on the
+// database), so a stale counter in the row is harmless. Injected runners (tests,
+// transactions) bypass the cache unless a test override says otherwise. A
+// generation counter closes the race between a SELECT in flight and a revoke /
+// rotate / update: the lookup only remembers its row when no invalidation
+// happened while it waited, otherwise the row it holds may already be stale.
+
+interface CachedToken { grant: AgentGrantRow; until: number }
+const TOKEN_CACHE_MAX = 10_000;
+const tokenCache = new Map<string, CachedToken>();
+const tokenHashOfGrant = new Map<string, string>();
+let tokenCacheMs: number | null = null;
+let tokenCacheOverride: number | null = null;
+let tokenCacheGeneration = 0;
+
+function tokenCacheTtl(): number {
+  if (tokenCacheOverride !== null) return tokenCacheOverride;
+  tokenCacheMs ??= loadTokenCacheMs();
+  return tokenCacheMs;
+}
+
+/** Test seam: cache lifetime in ms for injected runners too (null = config, injected runners bypass). */
+export function __setTokenCacheMsForTests(ms: number | null): void {
+  tokenCacheOverride = ms;
+  tokenCache.clear();
+  tokenHashOfGrant.clear();
+}
+
+/** Drops the cached resolution of a grant (revoke, rotate, update). */
+export function invalidateTokenCache(grantId: string): void {
+  tokenCacheGeneration++;
+  const hash = tokenHashOfGrant.get(grantId);
+  if (hash !== undefined) {
+    tokenCache.delete(hash);
+    tokenHashOfGrant.delete(grantId);
+  }
+}
+
+/** Entries waiting in the token cache (monitoring, tests). */
+export function tokenCacheSize(): number {
+  return tokenCache.size;
+}
+
+function rememberToken(hash: string, grant: AgentGrantRow, ttl: number): void {
+  if (tokenCache.size >= TOKEN_CACHE_MAX) {
+    // Bounded: a flood of distinct tokens must not grow the map without end.
+    tokenCache.clear();
+    tokenHashOfGrant.clear();
+  }
+  tokenCache.set(hash, { grant, until: Date.now() + ttl });
+  tokenHashOfGrant.set(grant.ID, hash);
+}
+
 /**
  * Authenticate a bearer token: prefix, hash lookup among ACTIVE grants (a
  * revoked grant is an unknown token, non-leaking), expiry. Detached from any
  * ambient transaction: the lane runs before the request transaction exists,
- * and on SQLite the pool holds one connection.
+ * and on SQLite the pool holds one connection. The lookup is cached for a few
+ * seconds (see the token cache above).
  */
 export async function resolveAgentToken(token: string, runner: Runner = dbRunner()): Promise<TokenResolution> {
   if (typeof token !== 'string' || !token.startsWith(AGENT_TOKEN_PREFIX)) {
     return { ok: false, status: 401, message: 'invalid agent token' };
   }
+  const hash = hashAgentToken(token);
+  const ttl = tokenCacheTtl();
+  const cacheable = ttl > 0 && (tokenCacheOverride !== null || runner === dbRunner());
+  if (cacheable) {
+    const hit = tokenCache.get(hash);
+    if (hit && hit.until > Date.now()) {
+      if (isExpired(hit.grant)) return { ok: false, status: 410, message: 'agent grant expired' };
+      return { ok: true, grant: hit.grant };
+    }
+    if (hit) tokenCache.delete(hash);
+  }
+  const generation = tokenCacheGeneration;
   const grant = (await runWithoutAmbientTx(() =>
-    runner.run(SELECT.one.from(GRANTS_ENTITY).where({ tokenHash: hashAgentToken(token), isActive: true }))
+    runner.run(SELECT.one.from(GRANTS_ENTITY).where({ tokenHash: hash, isActive: true }))
   )) as AgentGrantRow | null;
   if (!grant) return { ok: false, status: 401, message: 'invalid agent token' };
   if (isExpired(grant)) return { ok: false, status: 410, message: 'agent grant expired' };
+  // Not remembered when a revoke / rotate / update ran while the SELECT was in
+  // flight: the row read before the UPDATE would outlive the invalidation.
+  if (cacheable && generation === tokenCacheGeneration) rememberToken(hash, grant, ttl);
   return { ok: true, grant };
 }
 
@@ -398,6 +484,7 @@ export async function revokeAgentGrantById(grantId: string, runner: Runner = dbR
       .where({ ID: grantId, isActive: true })
   );
   const revoked = Number(affected) > 0;
+  invalidateTokenCache(grantId);
   if (revoked) logger.info(`agent grant ${grantId} revoked`);
   return revoked;
 }
@@ -414,9 +501,10 @@ export interface RotatedAgentGrant {
 
 /**
  * Replace the grant's token; the old one is an unknown token from the next
- * request (the lane reads tokenHash per request, so nothing needs invalidating;
- * a request in flight with the old token completes). Budget, wallet, allow
- * list and expiry survive. Null when the grant does not exist or is revoked.
+ * request on this process (its cache entry is dropped here; another replica
+ * keeps it for at most AGENT_TOKEN_CACHE_MS; a request in flight with the old
+ * token completes). Budget, wallet, allow list and expiry survive. Null when
+ * the grant does not exist or is revoked.
  */
 export async function rotateAgentGrantToken(grantId: string, runner: Runner = dbRunner()): Promise<RotatedAgentGrant | null> {
   if (!grantId) return null;
@@ -424,6 +512,7 @@ export async function rotateAgentGrantToken(grantId: string, runner: Runner = db
   const affected = await runner.run(
     UPDATE.entity(GRANTS_ENTITY).set({ tokenHash: hashAgentToken(token) }).where({ ID: grantId, isActive: true })
   );
+  invalidateTokenCache(grantId);
   if (Number(affected) === 0) return null;
   logger.info(`agent grant ${grantId} token rotated`);
   return { grantId, token };
@@ -499,6 +588,7 @@ export async function updateAgentGrant(
 
   // Conditional on isActive: a concurrent revoke wins over the edit.
   const affected = await runner.run(UPDATE.entity(GRANTS_ENTITY).set(patch).where({ ID: grantId, isActive: true }));
+  invalidateTokenCache(grantId);
   if (Number(affected) === 0) return { ok: false, status: 409, code: 'GRANT_REVOKED', message: 'Grant is revoked' };
   logger.info(`agent grant ${grantId} updated (${updated.join(', ')})`);
   return { ok: true, grantId, updated };
@@ -1019,7 +1109,9 @@ function bufferUsage(key: { grant_ID: string; day: string; service: string; acti
   const d = usageBuffer.get(k);
   if (d) { d.calls += calls; d.refunded += refunded; }
   else usageBuffer.set(k, { ...key, calls, refunded });
-  if (!usageFlushTimer) {
+  // Under a test override the tests flush explicitly: a timer racing them drained
+  // the buffer mid-test on a slow run (seen in the full unit suite, 2026-09-23).
+  if (!usageFlushTimer && !usageModeOverride) {
     usageFlushTimer = setTimeout(() => {
       usageFlushTimer = null;
       void flushGrantUsage().catch((err: unknown) => logger.warn(`usage flush failed: ${String((err as Error)?.message ?? err)}`));
@@ -1040,6 +1132,11 @@ function bufferUsage(key: { grant_ID: string; day: string; service: string; acti
  */
 export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ flushed: number; failed: number }> {
   if (usageBuffer.size === 0) return { flushed: 0, failed: 0 };
+  if (!runner) {
+    // No database service yet (early boot, tests without cds.db): keep the deltas.
+    logger.debug('usage flush skipped: no database service');
+    return { flushed: 0, failed: usageBuffer.size };
+  }
   const batch = [...usageBuffer.values()];
   usageBuffer.clear();
   const br: BudgetRunner = { runner, detached: true };

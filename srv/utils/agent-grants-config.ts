@@ -51,6 +51,29 @@ export function loadGrantAdminRateLimit(env: Record<string, string | undefined> 
   return n;
 }
 
+export const AGENT_TOKEN_CACHE_MS_DEFAULT = 10_000;
+
+/**
+ * How long the transport lane may reuse a resolved token (the grant row) before
+ * it reads the database again: `agentGrants.tokenCacheMs`, then
+ * `AGENT_TOKEN_CACHE_MS`, default 10 s, 0 switches the cache off. Seconds, not
+ * minutes, on purpose: a busy grant sends many requests per second, so a few
+ * seconds already spare almost every lookup, while a revoke on ANOTHER replica
+ * is honoured at most this much later (on the same process it is immediate).
+ * An unusable value (not an integer, below 0) is logged once and falls back.
+ */
+export function loadTokenCacheMs(env: Record<string, string | undefined> = process.env): number {
+  const cfg = envRecord();
+  const raw = cfg.tokenCacheMs !== undefined ? cfg.tokenCacheMs : env.AGENT_TOKEN_CACHE_MS;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return AGENT_TOKEN_CACHE_MS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    cds.log('ODATANO').warn(`AGENT_TOKEN_CACHE_MS "${String(raw)}" is not an integer >= 0; using ${AGENT_TOKEN_CACHE_MS_DEFAULT}`);
+    return AGENT_TOKEN_CACHE_MS_DEFAULT;
+  }
+  return n;
+}
+
 function envRecord(): Record<string, unknown> {
   const requires = (cds.env?.requires ?? {}) as Record<string, unknown>;
   const core = (requires['odatano-core'] ?? {}) as Record<string, unknown>;

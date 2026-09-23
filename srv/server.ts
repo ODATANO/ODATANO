@@ -7,6 +7,7 @@ import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-
 import { ConfigError, ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
 import { installDbSanitizer } from './utils/db-sanitize';
+import { ensureDbIndexes } from './utils/db-indexes';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
@@ -203,6 +204,13 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
     return;
   }
   hsmConfigInstance = hsmConfig;
+  // The secondary indexes the model cannot declare (srv/utils/db-indexes.ts):
+  // idempotent, never fatal, before anything reads.
+  try {
+    await ensureDbIndexes();
+  } catch (err) {
+    logger.warn('secondary indexes not ensured (non-fatal):', err);
+  }
   try {
     appContext = await initializeAppContext(config, protocolParams, hsmConfig);
     bootstrapError = null;

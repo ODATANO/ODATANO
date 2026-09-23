@@ -1,5 +1,62 @@
 # Changelog
 
+## [v2.0.0-rc.16] - secondary indexes
+
+### Fixed
+
+- The reads no longer scan their tables. `cds deploy` creates primary keys
+  only, and the temporal entities (Assets, Pools, Accounts, Addresses,
+  AddressUTxOs, AddressAssets, UTxOAssets, Dreps) carry `validFrom` FIRST in
+  their key, so every lookup by unit, poolId, stakeAddress or address read the
+  whole table; Blocks by height, slot and epoch, Transactions by block and
+  height, TransactionMetadata by tx and AssetHistory by tx (crawler rollback)
+  had no index at all. On the hosted preprod box (930k blocks, 1.4M
+  transactions, 521k metadata rows) that was 200 ms for the latest block,
+  1.0 s for `GetMetadataByTxHash`, 78 ms for `GetAssetInfo`, 168 ms for a
+  block by height, 767 ms for one rollback lookup; with the indexes 0.2 ms
+  each, the latest block through the OData layer 10 ms instead of 156.
+- The buffered usage counters of rc.15: the flush timer no longer runs under
+  the unit-test mode override (it raced the explicit flush of the test on a
+  slow full-suite run), and a flush without a database service keeps its
+  deltas instead of failing them one by one.
+- `$orderby=height desc` on Blocks is rendered as `ORDER BY height DESC NULLS
+  LAST`, which a plain index cannot serve backwards (still a 200 ms sort with
+  the plain index in place). Blocks carry a second index `(height DESC NULLS
+  LAST)` on PostgreSQL / HANA (`height DESC` on SQLite) for exactly that
+  shape; the plain one stays for ascending order and equality.
+
+### Changed
+
+- The transport lane caches a resolved token (the grant row) for
+  `AGENT_TOKEN_CACHE_MS` (`agentGrants.tokenCacheMs`, default 10 s, 0 = off)
+  instead of one SELECT per request. Only positive results are cached, so an
+  unknown, revoked or just-rotated token is never remembered; `validUntil`
+  is checked per request against the cached row; the budget and usage
+  counters never read the cached row for admission (their UPDATEs are
+  conditional on the database). Revoke, rotate and update drop the entry on
+  this process at once (a lookup in flight during the change does not
+  re-cache its row); another replica honours them when its entry expires,
+  at most 10 s later. Seconds, not minutes, on purpose.
+
+### Added
+
+- `srv/utils/db-indexes.ts`: the list (`DB_INDEXES`, 18 entries) and
+  `ensureDbIndexes()`, run at every start from `initializeFromConfig` with
+  `CREATE INDEX IF NOT EXISTS` (idempotent, plain SQL for SQLite and
+  PostgreSQL, identifiers unquoted so Postgres folds them like the tables;
+  a failing statement is logged and skipped; HANA is skipped altogether, its
+  CREATE INDEX has no IF NOT EXISTS and the column store needs none). The
+  agent token lane's lookup by `tokenHash` is on the list too.
+
+### Notes
+
+- No schema change for `cds deploy`. A plain CREATE INDEX locks the table
+  against writes while it builds, so on a large live PostgreSQL create the
+  set once beforehand with CONCURRENTLY (ODATANO ACCESS ships
+  `scripts/odatano-indexes-on-box.sh`, same names); the start is then a
+  no-op. On the hosted box the build took 1 to 7 s per index, 230 MB in
+  all.
+
 ## [v2.0.0-rc.15] - buffered grant usage counters
 
 ### Changed

@@ -125,6 +125,7 @@ Hand an agent a **scoped, budgeted token** instead of a user.
 AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.enabled
 AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating non-token requests (default: configured kind)
 AGENT_GRANT_ADMIN_RATE_LIMIT=10      # grant administration calls per principal per hour (or agentGrants.adminRateLimit)
+AGENT_TOKEN_CACHE_MS=10000           # a resolved token is reused this long before the row is read again; 0 = off (or agentGrants.tokenCacheMs)
 ```
 
 1. An **Admin** issues a grant (`POST /odata/v4/cardano-agent/CreateAgentGrant`): an allow list of

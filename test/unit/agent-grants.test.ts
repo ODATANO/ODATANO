@@ -17,6 +17,8 @@ import {
   __resetGrantRateLimiterForTests,
   __resetGrantUsageBufferForTests,
   __setGrantUsageModeForTests,
+  __setTokenCacheMsForTests,
+  tokenCacheSize,
   agentPrincipalId,
   flushGrantUsage,
   pendingGrantUsageKeys,
@@ -280,6 +282,114 @@ describe('resolveAgentToken', () => {
     const live = await resolveAgentToken(liveToken, store);
     expect(live.ok).toBe(true);
     if (live.ok) expect(live.grant.ID).toBe(GRANT_ID);
+  });
+});
+
+describe('token cache: a resolved grant is reused for a few seconds, dropped on revoke / rotate / update', () => {
+  const token = AGENT_TOKEN_PREFIX + 'f'.repeat(64);
+  const selects = (store: FakeStore) => store.statements.filter((s) => s.startsWith('SELECT')).length;
+
+  afterEach(() => __setTokenCacheMsForTests(null));
+
+  it('reads the database once, then answers from the cache until the TTL passes', async () => {
+    __setTokenCacheMsForTests(10_000);
+    const store = new FakeStore();
+    store.seed(grant({ tokenHash: hashAgentToken(token) }));
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    expect(selects(store)).toBe(1);
+    expect(tokenCacheSize()).toBe(1);
+
+    __setTokenCacheMsForTests(1);
+    expect((await resolveAgentToken(token, store)).ok).toBe(true); // fills a 1 ms entry
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await resolveAgentToken(token, store)).ok).toBe(true); // expired: read again
+    expect(selects(store)).toBe(3);
+  });
+
+  it('never caches an unknown or revoked token, and expiry is checked per request against the cached row', async () => {
+    __setTokenCacheMsForTests(10_000);
+    const store = new FakeStore();
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 401 });
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 401 });
+    expect(selects(store)).toBe(2);
+    expect(tokenCacheSize()).toBe(0);
+
+    store.seed(grant({ tokenHash: hashAgentToken(token), validUntil: new Date(Date.now() + 30).toISOString() }));
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 410 }); // cached row, expired now
+  });
+
+  it('revoke drops the entry: the next request is 401 at once', async () => {
+    __setTokenCacheMsForTests(10_000);
+    const store = new FakeStore();
+    store.seed(grant({ tokenHash: hashAgentToken(token) }));
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    expect(await revokeAgentGrantById(GRANT_ID, store)).toBe(true);
+    expect(tokenCacheSize()).toBe(0);
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it('rotate drops the old token at once and the new one resolves; update makes the next request re-read the row', async () => {
+    __setTokenCacheMsForTests(10_000);
+    const store = new FakeStore();
+    store.seed(grant({ tokenHash: hashAgentToken(token) }));
+    expect((await resolveAgentToken(token, store)).ok).toBe(true);
+    const rotated = await rotateAgentGrantToken(GRANT_ID, store);
+    expect(rotated).not.toBeNull();
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 401 });
+    const fresh = await resolveAgentToken(rotated!.token, store);
+    expect(fresh.ok).toBe(true);
+
+    const before = selects(store);
+    expect((await resolveAgentToken(rotated!.token, store)).ok).toBe(true); // cached
+    expect(selects(store)).toBe(before);
+    const upd = await updateAgentGrant(GRANT_ID, { allowedActions: ['VerifySignature'] }, store);
+    expect(upd.ok).toBe(true);
+    const after = await resolveAgentToken(rotated!.token, store);
+    expect(after.ok).toBe(true);
+    if (after.ok) expect(JSON.parse(after.grant.allowedActions)).toEqual(['VerifySignature']);
+    expect(selects(store)).toBeGreaterThan(before); // re-read after the update
+  });
+
+  it('does not remember a row read before a revoke that landed while the SELECT was in flight', async () => {
+    __setTokenCacheMsForTests(10_000);
+    const store = new FakeStore();
+    store.seed(grant({ tokenHash: hashAgentToken(token) }));
+    // Hold the SELECT until the revoke has run, then let it return the old row.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = store.run.bind(store);
+    let held = false;
+    store.run = async (q: unknown) => {
+      const result = await run(q);
+      if (!held && typeof q === 'object' && q !== null && 'SELECT' in q) { held = true; await gate; }
+      return result;
+    };
+    const inFlight = resolveAgentToken(token, store);
+    await new Promise((r) => setImmediate(r));
+    expect(await revokeAgentGrantById(GRANT_ID, store)).toBe(true);
+    release();
+    expect((await inFlight).ok).toBe(true); // the request that was already admitted completes
+    expect(tokenCacheSize()).toBe(0); // but its row is not cached
+    expect(await resolveAgentToken(token, store)).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it('is off with a TTL of 0 and bypassed for injected runners without an override', async () => {
+    __setTokenCacheMsForTests(0);
+    const store = new FakeStore();
+    store.seed(grant({ tokenHash: hashAgentToken(token) }));
+    await resolveAgentToken(token, store);
+    await resolveAgentToken(token, store);
+    expect(selects(store)).toBe(2);
+    expect(tokenCacheSize()).toBe(0);
+
+    __setTokenCacheMsForTests(null); // config TTL (default 10 s) applies to the primary db only
+    await resolveAgentToken(token, store);
+    await resolveAgentToken(token, store);
+    expect(selects(store)).toBe(4);
   });
 });
 
@@ -776,7 +886,9 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
 
 describe('deferred usage counters (Postgres / HANA): buffered per key, flushed in one write', () => {
   const SVC = 'CardanoTransactionService';
-  const tick = () => new Promise((r) => setTimeout(r, 0));
+  // The refund runs in a setImmediate; a 0 ms timer can fire before it on a busy
+  // loop, so wait for the check phase first, then a timer.
+  const tick = () => new Promise((r) => setImmediate(() => setTimeout(r, 0)));
   const ACTION = 'BuildSimpleAdaTransaction';
 
   beforeEach(() => { __setGrantUsageModeForTests('deferred'); __resetGrantUsageBufferForTests(); });
