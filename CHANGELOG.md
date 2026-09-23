@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.0.0-rc.17] - ORDER BY without NULLS on Postgres
+
+### Fixed
+
+- `$top` / `$orderby` reads on PostgreSQL use the indexes again. `@cap-js/postgres`
+  renders every ordering term as `ASC NULLS FIRST` / `DESC NULLS LAST`, the opposite
+  of a btree index, so every `$top` read sorted the whole table (`Blocks?$top=1`:
+  0.8 to 7.6 s over 2M rows).
+- `srv/utils/pg-order-nulls.ts` wraps the renderer's `_orderBy` once at start
+  (`installPostgresOrderNulls`) and drops the clause for `key`, `not null` and
+  temporal `validFrom` columns. Nullable columns and an explicit `nulls` keep it;
+  the nullable `height` still needs its rc.16 `DESC NULLS LAST` index.
+- A Postgres deployment whose driver no longer exposes the hook logs a warning
+  and runs as before.
+- No schema change, no new index. Rendered through the real driver in the unit test.
+
 ## [v2.0.0-rc.16] - secondary indexes
 
 ### Fixed

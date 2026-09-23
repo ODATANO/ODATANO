@@ -8,6 +8,7 @@ import { ConfigError, ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
 import { installDbSanitizer } from './utils/db-sanitize';
 import { ensureDbIndexes } from './utils/db-indexes';
+import { installPostgresOrderNulls } from './utils/pg-order-nulls';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
@@ -204,6 +205,9 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
     return;
   }
   hsmConfigInstance = hsmConfig;
+  // ORDER BY on Postgres without a NULLS clause for key / NOT NULL columns, so
+  // the indexes below serve `$top` and `$orderby` reads (srv/utils/pg-order-nulls.ts).
+  installPostgresOrderNulls();
   // The secondary indexes the model cannot declare (srv/utils/db-indexes.ts):
   // idempotent, never fatal, before anything reads.
   try {

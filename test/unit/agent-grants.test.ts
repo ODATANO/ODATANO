@@ -499,14 +499,17 @@ describe('enforceAgentGrant', () => {
       const refused = makeReq('BuildSimpleAdaTransaction', {}, current());
       await enforceAgentGrant(refused as never, store);
       expect(current().jobsUsedToday).toBe(1);
+      // The refund runs in a setImmediate; a 0 ms timer can fire before it on a
+      // busy loop, so wait for the check phase first, then a timer.
+      const settled = () => new Promise((r) => setImmediate(() => setTimeout(r, 0)));
       refused._failed.forEach((fn) => fn({ status: 400 }));
-      await new Promise((r) => setTimeout(r, 0));
+      await settled();
       expect(current().jobsUsedToday).toBe(0);
 
       const crashed = makeReq('BuildSimpleAdaTransaction', {}, current());
       await enforceAgentGrant(crashed as never, store);
       crashed._failed.forEach((fn) => fn({ statusCode: 503 }));
-      await new Promise((r) => setTimeout(r, 0));
+      await settled();
       expect(current().jobsUsedToday).toBe(1);
     });
 
