@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] - crawler-fed ledger state: certificates, outpoints, UTxO set
+## [v2.0.0-rc.19] - crawler-fed ledger state: certificates, outpoints, UTxO set
 
 The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a UTxO set of its own.
 
