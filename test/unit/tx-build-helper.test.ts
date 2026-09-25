@@ -85,9 +85,8 @@ describe('tx-build-helper utilities', () => {
   });
 
   describe('getTxHashFromCbor', () => {
-    // Valid tx CBOR (minimal Conway ADA transfer, metadata-only aux_data). The hash is computed
-    // from the raw CBOR body bytes (array index 0), so this also doubles as the regression fixture
-    // for the harmoniclabs AuxiliaryData.fromCbor bug that rejected metadata-only aux_data (see new_error.md).
+    // Minimal Conway ADA transfer with metadata-only aux_data. The hash is computed from the
+    // raw CBOR body bytes (array index 0), so aux_data parsing never gets in the way.
     const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
 
     it('should throw for empty string input', () => {
@@ -119,7 +118,6 @@ describe('tx-build-helper utilities', () => {
         getTxHashFromCbor('deadbeef'); // parses as CBOR garbage, not a tx array
         expect.unreachable('expected throw');
       } catch (err: any) {
-        // previously a plain Error → surfaced as 500 to the consumer
         expect(err).toBeInstanceOf(TransactionValidationError);
         expect(err.statusCode).toBe(400);
         expect(err.code).toBe(ERROR_CODES.TX_PARSE_FAILED);
@@ -295,7 +293,7 @@ describe('tx-build-helper utilities', () => {
       expect(() => jsonToPlutusData(42 as any)).toThrow('Unsupported PlutusData JSON format');
     });
 
-    // B4: normalizeConstructorKey with list containing constructors
+    // normalizeConstructorKey with list containing constructors
     it('should normalize "constructor" to "constr" inside list elements', () => {
       const result = jsonToPlutusData({
         list: [{ constructor: 0, fields: [{ int: 42 }] }]
@@ -307,7 +305,7 @@ describe('tx-build-helper utilities', () => {
       expect((list.list[0] as DataConstr).constr).toBe(0n);
     });
 
-    // B5: normalizeConstructorKey with map containing constructors
+    // normalizeConstructorKey with map containing constructors
     it('should normalize "constructor" to "constr" inside map keys and values', () => {
       const result = jsonToPlutusData({
         map: [{
@@ -320,7 +318,7 @@ describe('tx-build-helper utilities', () => {
       expect(result).toBeDefined();
     });
 
-    // B6: normalizeConstructorKey with already-correct "constr" + nested "constructor"
+    // normalizeConstructorKey with already-correct "constr" + nested "constructor"
     it('should normalize nested "constructor" inside "constr" fields', () => {
       const result = jsonToPlutusData({
         constr: 0,

@@ -22,8 +22,7 @@ if (mta !== v) fail(`mta.yaml version ${mta} != package.json ${v}`);
 ok(`version ${v} consistent in package.json, package-lock.json, mta.yaml`);
 
 // 2. Stale "**Version:** vX.Y.Z" headers in the tracked docs and the project guide.
-//    During a release-candidate line the docs carry the placeholder "vX.Y.Z-rc.x" so a
-//    bump does not touch every doc; it is accepted for any rc of the same base version.
+//    During an rc line the docs carry the placeholder "vX.Y.Z-rc.x", accepted for any rc of the base.
 const headerFiles = [
   '.claude/CLAUDE.md',
   'docs/*.md',

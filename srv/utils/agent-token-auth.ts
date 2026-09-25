@@ -1,9 +1,6 @@
 /**
- * The `x-agent-token` transport lane for `@odatano/cap-auth`: a token on one
- * of the ODATANO service paths is authenticated here (unknown 401, expired
- * 410, non-leaking) and the request continues as `agent:<grantId>` with the
- * role `agent-grant`; the grant rides on the express request for the
- * enforcement hook. A token on any other path is left to the delegate.
+ * `x-agent-token` transport lane: a token on a service path runs as `agent:<grantId>` with
+ * role `agent-grant` (unknown 401, expired 410); other paths fall through to the delegate.
  * Failed attempts are throttled per client address (20 per 15 minutes).
  */
 

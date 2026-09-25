@@ -73,20 +73,9 @@ import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
 import { ASSET_UNIT_REGEX } from './const';
 
-/** 
- * Maximum age for cached/indexed data in milliseconds 
- */
-
-/** 
- * Map Transaction Data
- * Converts provider transaction data into TransactionRow format
- * @param providerTx 
- * @returns {TransactionRow} mapped transaction row 
- */
+/** Provider transaction to TransactionRow. */
 export function mapTransaction(providerTx: TransactionProviderData): TransactionRow {
-  // determine presence of optional data
-  // length check matters: the Ogmios chain-sync mapper produced `[]` for metadata-less
-  // txs, which the old `Array.isArray` test counted as "has metadata"
+  // length check: chain-sync delivers `[]` for metadata-less txs
   const hasMetadata = Array.isArray(providerTx.metadata) && providerTx.metadata.length > 0;
   const hasInputs = Array.isArray(providerTx.inputs) && providerTx.inputs.length > 0;
   const hasOutputs = Array.isArray(providerTx.outputs) && providerTx.outputs.length > 0;
@@ -107,33 +96,23 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
   };
 }
 
-/** 
- * Map Transaction Inputs
- * Converts provider transaction input data into TransactionInputRow format
- * @param txHash transaction hash
- * @param txInputs transaction inputs from provider
- * @returns {TransactionInputRow[]} mapped transaction input rows
- */
+/** Provider transaction inputs to TransactionInputRows, keyed by position in the tx. */
 export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
-    // Use array index as the input index (position in this transaction's inputs)
-    // Note: input.outputIndex is the output index from the ORIGINAL UTxO being spent, not for keying here
+    // Position in this tx's inputs; input.outputIndex is the spent UTxO's index, not a key here
     const inputIndex = idx;
-    // check presence of address and amount arrays
     const hasAddress = !!input.address?.length;
     const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
 
     return {
       tx_hash: txHash,
       inputIndex: inputIndex,
-      // `|| null`: unresolved chain-sync inputs carry '' — persist a null FK, not a
-      // dangling empty-string Addresses association (lazy-path inputs are never empty)
+      // unresolved chain-sync inputs carry '': persist a null FK, not an empty-string association
       address_address: input.address || null,
       utxoData_dataHash: input.dataHash || null,
       utxoData_inlineDatum: input.inlineDatum || null,
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
-      // Outpoint of the consumed UTxO — every source carries it in memory (the chain-sync
-      // path needs it for resolveInputs), the row just never kept it before.
+      // outpoint of the consumed UTxO
       spentTxHash: input.txHash || null,
       spentOutputIndex: Number.isInteger(input.outputIndex) ? input.outputIndex : null,
       isCollateral: Boolean(input.isCollateral),
@@ -144,19 +123,13 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
   });
 }
 
-/** 
- * Map Transaction Input Assets
- * Converts provider transaction input asset data into TransactionInputAssetRow format
- * @param txHash transaction hash
- * @param inputs transaction inputs from provider
- * @returns {TransactionInputAssetRow[]} mapped transaction input asset rows
- */
+/** Provider transaction input assets to TransactionInputAssetRows. */
 export function mapTransactionInputAssets(
   txHash: string,
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
   return inputs.flatMap((input, idx) => {
-    // Use array index as the input index (must match mapTransactionInputs)
+    // must match mapTransactionInputs
     const inputIndex = idx;
 
     if (!Array.isArray(input.amount)) return [];
@@ -176,12 +149,7 @@ export function mapTransactionInputAssets(
   });
 }
 
-/**
- * Map Transaction Certificates (crawler coverage, `crawler.certificates`).
- * @param txHash transaction hash
- * @param certificates normalized certificates from the source
- * @returns {TransactionCertificateRow[]} one row per (certIndex, kind)
- */
+/** Normalized certificates to TransactionCertificateRows, one per (certIndex, kind). */
 export function mapTransactionCertificates(
   txHash: string,
   certificates: TxCertificateProviderData[]
@@ -198,12 +166,7 @@ export function mapTransactionCertificates(
   }));
 }
 
-/**
- * Map Transaction Withdrawals (crawler coverage, `crawler.certificates`).
- * @param txHash transaction hash
- * @param withdrawals normalized withdrawals from the source
- * @returns {TransactionWithdrawalRow[]} one row per reward account
- */
+/** Normalized withdrawals to TransactionWithdrawalRows, one per reward account. */
 export function mapTransactionWithdrawals(
   txHash: string,
   withdrawals: TxWithdrawalProviderData[]
@@ -217,13 +180,7 @@ export function mapTransactionWithdrawals(
     }));
 }
 
-/** 
- * Map Transaction Outputs
- * Converts provider transaction output data into TransactionOutputRow format
- * @param txHash transaction hash
- * @param txOutputs transaction outputs from provider
- * @returns {TransactionOutputRow[]} mapped transaction output rows
- */
+/** Provider transaction outputs to TransactionOutputRows. */
 export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
   return txOutputs.map((output) => {
 
@@ -244,13 +201,7 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
   });
 }
 
-/** 
- * Map Transaction Output Assets
- * Converts provider transaction output asset data into TransactionOutputAssetRow format
- * @param txHash transaction hash
- * @param outputs transaction outputs from provider
- * @returns {TransactionOutputAssetRow[]} mapped transaction output asset rows
- */
+/** Provider transaction output assets to TransactionOutputAssetRows. */
 export function mapTransactionOutputAssets(
   txHash: string,
   outputs: TxOutputProviderData[]
@@ -274,13 +225,7 @@ export function mapTransactionOutputAssets(
   });
 }
 
-/** 
- * Map Address Data
- * Converts provider address data into AddressRow format
- * @param address address string
- * @param addressData address data from provider
- * @returns {AddressRow} mapped address row
- */
+/** Provider address to a temporal AddressRow valid for `maxAge` ms. */
 export function mapAddress(address: string, addressData: AddressProviderData, maxAge: number): AddressRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -292,7 +237,7 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
   const utxoCount = Array.isArray(addressData.utxos) ? addressData.utxos.length : 0;
   const hasUtxos = utxoCount > 0;
   const hasAssets = Array.isArray(addressData.amount) && addressData.amount.some((a) => a.unit !== 'lovelace');
-  // Transactions are indexed separately in indexAddress() — updated to true after indexing
+  // set to true by indexAddress() once transactions are indexed
   const hasTransactions = false;
 
   return {
@@ -310,9 +255,7 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
   };
 }
 
-/**
- * Net asset change structure
- */
+/** Net asset change */
 interface NetAsset {
   unit: string;
   policyId: string;
@@ -321,20 +264,10 @@ interface NetAsset {
   quantity: string;
 }
 
-/**
- * Map Address Transactions
- * Converts provider address transaction data into AddressTransactionRow format
- * @param addr address string
- * @param addressTxsData address transactions data from provider
- * @returns {AddressTransactionRow[]} mapped address transaction rows
- *  */
-// AddressTransactions is keyed by (address, tx) and the per-tx net amounts are
-// immutable once confirmed — no temporal validity. The entity has no
-// validFrom/validTo columns, so the previous TTL plumbing was silently dropped.
+/** Provider transactions to AddressTransactionRows with the address's net amounts; non-temporal. */
 export function mapAddressTransactions(addr: string, addressTxsData: TransactionProviderData[]): AddressTransactionRow[] {
 
   return addressTxsData.map((tx: TransactionProviderData) => {
-    // Calculate net amounts for this address in this transaction
     const { netLovelace, netAssets } = calculateNetAmounts(addr, tx);
 
     return {
@@ -348,25 +281,18 @@ export function mapAddressTransactions(addr: string, addressTxsData: Transaction
   });
 }
 
-/**
- * Calculate net lovelace and asset changes for an address in a transaction
- * @param addr the address to calculate for
- * @param tx the transaction data
- * @returns object with netLovelace and netAssets array
- */
+/** Net lovelace and asset changes of an address in a transaction (outputs minus inputs). */
 function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLovelace: string; netAssets: NetAsset[] } {
   let inputLovelace = 0n;
   let outputLovelace = 0n;
   const assetBalances = new Map<string, bigint>(); // unit -> net quantity
 
-  // Process inputs belonging to this address (subtract)
   for (const input of tx.inputs ?? []) {
     if (input.address === addr) {
       for (const amount of input.amount ?? []) {
         if (amount.unit === 'lovelace') {
           inputLovelace += BigInt(amount.quantity || '0');
         } else {
-          // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
           assetBalances.set(amount.unit, current - BigInt(amount.quantity || '0'));
         }
@@ -374,14 +300,12 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
     }
   }
 
-  // Process outputs going to this address (add)
   for (const output of tx.outputs ?? []) {
     if (output.address === addr) {
       for (const amount of output.amount ?? []) {
         if (amount.unit === 'lovelace') {
           outputLovelace += BigInt(amount.quantity || '0');
         } else {
-          // Native asset
           const current = assetBalances.get(amount.unit) || 0n;
           assetBalances.set(amount.unit, current + BigInt(amount.quantity || '0'));
         }
@@ -389,12 +313,10 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
     }
   }
 
-  // Convert asset map to array, filtering out zero balances
+  // zero balances are dropped
   const netAssets: NetAsset[] = [];
   for (const [unit, quantity] of assetBalances) {
     if (quantity !== 0n) {
-      // Parse unit into policyId and assetName
-      // Format: policyId (56 chars) + assetNameHex
       const policyId = unit.substring(0, 56);
       const assetNameHex = unit.substring(56);
       const assetName = hexToUtf8(assetNameHex);
@@ -417,14 +339,7 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
 
 
 
-/** 
- * Map Address UTxOs
- * @param addr address string
- * @param validFrom validFrom
- * @param validTo validTo
- * @param addressUtxosData address UTxOs data from provider 
- * @returns {AddressUTxORow[]} mapped address UTxO rows
- */
+/** Provider UTxOs to temporal AddressUTxORows. */
 export function mapAddressUtxos(addr: string, validFrom: string, validTo: string, addressUtxosData: UtxosProviderData[]): AddressUTxORow[] {
 
   return addressUtxosData.map((utxo: UtxosProviderData) => {
@@ -439,10 +354,8 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       blockHash: utxo.blockHash,
       utxodata_dataHash: utxo.datumHash,
       utxodata_inlineDatum: utxo.inlineDatum || null,
-      // This column is a script HASH (Blake2b256). UTxO.scriptRef is overloaded:
-      // Blockfrost/Ogmios give a 56-hex hash (stored as-is); Koios gives the full
-      // script CBOR (used by the tx-builder, but it would truncate this hash
-      // column) — only persist hash-length values here.
+      // Hash column: Blockfrost/Ogmios give a 56-hex hash, Koios the full script CBOR, so only
+      // hash-length values are persisted
       utxodata_referenceScriptHash: utxo.scriptRef && utxo.scriptRef.length <= 64 ? utxo.scriptRef : null,
       lovelace: lovelace,
       validFrom: validFrom,
@@ -452,15 +365,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
   });
 }
 
-/** 
- * Map Address Assets
- * Converts provider address asset data into AddressAssetRow format
- * @param addr address string
- * @param validFrom validFrom
- * @param validTo validTo
- * @param AssetAssets address assets from provider
- * @returns {AddressAssetRow[]} mapped address asset rows
- */
+/** Provider address amounts (without lovelace) to temporal AddressAssetRows. */
 export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
@@ -478,14 +383,7 @@ export function mapAddressAssets(addr: string, validFrom: string, validTo: strin
     });
 }
 
-/**
- * Map UTxO Assets
- * Converts provider address UTxO asset data into UTxOAssetRow format
- * @param addressUtxosData address UTxOs data from provider
- * @param validFrom validFrom
- * @param validTo validTo
- * @returns {UTxOAssetRow[]} mapped UTxO asset rows
- */
+/** Native assets of provider UTxOs to temporal UTxOAssetRows. */
 export function mapAddressUtxoAssets(
   addressUtxosData: UtxosProviderData[],
   validFrom: string, validTo: string,
@@ -513,12 +411,7 @@ export function mapAddressUtxoAssets(
   return assets;
 }
 
-/** 
- * Map Network Information
- * Converts provider network information data into NetworkInfoRow format
- * @param providerNetworkData 
- * @returns {NetworkInfoRow} mapped network information row
- */
+/** Provider network information to a temporal NetworkInfoRow. */
 export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData, max_age: number, network: string): NetworkInfoRow {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -539,23 +432,16 @@ export function mapNetworkInfo(providerNetworkData: NetworkInfoProviderData, max
   };
 }
 
-/** 
- * Map Block Data
- * Converts provider block data into BlockRow format
- * @param providerBlockData block data from provider
- * @param epochData epoch data for the block's epoch
- * @returns {BlockRow} mapped block row
- */
+/** Provider block to BlockRow. */
 export function mapBlock(providerBlockData: BlockProviderData, epochData?: EpochRow): BlockRow {
   return {
     time: new Date(providerBlockData.time * 1000).toISOString(),
     height: providerBlockData.height,
     hash: providerBlockData.hash,
-    // was `String(x ?? null)` → persisted the literal string "null" when absent
     slotLeader: providerBlockData.slotLeader ?? null,
     epochNumber: epochData?.epoch ?? providerBlockData.epoch,
     epoch: epochData,
-    // absolute slot — the crawler's reorg cut axis (same axis as Transactions.slot)
+    // absolute slot: the crawler's reorg cut axis (same as Transactions.slot)
     slot: providerBlockData.slot ?? null,
     epochSlot: providerBlockData.epochSlot,
     size: providerBlockData.size,
@@ -564,12 +450,7 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData?: Epoch
   };
 }
 
-/** 
- * Map Epoch Data
- * Converts provider epoch data into EpochRow format
- * @param providerEpochData epoch data from provider
- * @returns {EpochRow} mapped epoch row
- */
+/** Provider epoch to EpochRow. */
 export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   return {
     epoch: providerEpochData.epoch,
@@ -585,31 +466,23 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   };
 }
 
-/** 
- * Map Transaction Metadata
- * Converts provider transaction metadata labels into TransactionMetadataRow format
- * @param providerLabels array of metadata label data from provider
- * @returns {TransactionMetadataRow[]} mapped transaction metadata rows
- */
+/** Provider metadata labels to TransactionMetadataRows; non-uint64 labels are skipped. */
 export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[]): TransactionMetadataRow[] {
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
     const id = metadataIdFor(lbl.label);
     if (id === null) {
-      // A NaN key would fail the whole bulk write (PostgreSQL: "invalid input syntax
-      // for type bigint") and, in the crawler, count towards the poison-block latch.
+      // a NaN key would fail the whole bulk write on PostgreSQL
       logger.warn(`Metadata label ${JSON.stringify(lbl.label)} of tx ${lbl.txHash} is not a uint64 — row skipped`);
       continue;
     }
     rows.push({
-      // uint64 label → int64 key, exact (see metadataIdFor); `label` keeps the original string
+      // exact int64 key (see metadataIdFor); `label` keeps the original string
       id: id as unknown as number,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
-      // Ogmios' parser deliberately exposes numeric metadata as native bigint.
-      // Its matching serializer writes those values as exact JSON number tokens;
-      // native JSON.stringify would throw, while Number coercion would truncate.
+      // Ogmios exposes numeric metadata as bigint; safeJSON writes exact number tokens
       payload: lbl.json !== undefined ? safeJSON.stringify(lbl.json) : null,
     });
   }
@@ -617,16 +490,9 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
 }
 
 /**
- * Metadata labels are uint64, the `TransactionMetadata.id` key is Integer64 (int64).
- * Labels >= 2^63 are mapped through two's complement (BigInt.asIntN) so they stay
- * unique and in range – preprod tx ee4f7c88… carries label 17802948329108123211,
- * which PostgreSQL rejected as "out of range for type bigint" and halted the
- * crawler. Beyond 2^53 the value is passed as a decimal string so that no
- * precision is lost on the way to the database (CAP accepts strings for
- * Integer64); `label` always keeps the original text.
- *
- * @returns the int64 key, or null when the label is not a non-negative integer
- *   (the caller skips the row — a NaN key would fail the whole bulk write)
+ * uint64 metadata label to the int64 `TransactionMetadata.id` key: labels >= 2^63 wrap via two's complement,
+ * values beyond 2^53 are passed as a decimal string (CAP accepts strings for Integer64).
+ * @returns the key, or null when the label is not a non-negative integer
  */
 export function metadataIdFor(label: string | number): number | string | null {
   let big: bigint;
@@ -643,15 +509,7 @@ export function metadataIdFor(label: string | number): number | string | null {
   return safe ? Number(wrapped) : wrapped.toString();
 }
 
-/**
- * Map a pool observation at an epoch boundary into a snapshot row. Unlike mapPool() this
- * carries no temporal validity: the row is dated by (epoch, snapshotSlot) and stays valid
- * forever, because it states what was true then, not what is cached now.
- * @param providerPoolData pool data from provider
- * @param epoch epoch the snapshot belongs to
- * @param at slot and block time of the block that triggered the snapshot
- * @returns {PoolEpochSnapshotRow} mapped snapshot row
- */
+/** Pool observation at an epoch boundary to a non-temporal PoolEpochSnapshotRow dated by (epoch, snapshotSlot). */
 export function mapPoolSnapshot(
   providerPoolData: PoolProviderData,
   epoch: number,
@@ -676,14 +534,7 @@ export function mapPoolSnapshot(
   };
 }
 
-/**
- * Map a DRep observation at an epoch boundary into a snapshot row. Non-temporal, same
- * reasoning as mapPoolSnapshot().
- * @param providerDrepData drep data from provider
- * @param epoch epoch the snapshot belongs to
- * @param at slot and block time of the block that triggered the snapshot
- * @returns {DrepEpochSnapshotRow} mapped snapshot row
- */
+/** DRep observation at an epoch boundary to a non-temporal DrepEpochSnapshotRow. */
 export function mapDrepSnapshot(
   providerDrepData: DrepProviderData,
   epoch: number,
@@ -702,17 +553,9 @@ export function mapDrepSnapshot(
   };
 }
 
-/**
- * Map Pool Data
- * Converts provider pool data into PoolRow format
- * @param providerPoolData pool data from provider
- * @returns {PoolRow} mapped pool row
- */
+/** Provider pool to a temporal PoolRow valid for `max_age` ms. */
 export function mapPool(providerPoolData: PoolProviderData, max_age: number): PoolRow {
-  // temporal stamping: live fields (liveStake/liveSaturation/retired…) change every
-  // epoch, so a slice expires after max_age and the index-on-miss read re-fetches.
-  // Read the clock ONCE — separate Date.now() calls for validFrom/validTo let the
-  // millisecond tick over between them, making the span max_age+1.
+  // one clock read, so validTo - validFrom is exactly max_age
   const now = Date.now();
   const validFrom = new Date(now).toISOString();
   const validTo = new Date(now + max_age).toISOString();
@@ -736,17 +579,9 @@ export function mapPool(providerPoolData: PoolProviderData, max_age: number): Po
   };
 }
 
-/**
- * Map Asset Info Data
- * Converts provider asset info into AssetRow format. Provider data is already
- * normalized by the backend mapper into the canonical AssetInfo shape, so this
- * function just stamps temporal validity and JSON-stringifies the on-chain metadata.
- * @param providerAssetInfo canonical asset info from backend
- * @param max_age TTL window in ms for the temporal validity
- * @returns {AssetRow} mapped asset row
- */
+/** Canonical asset info to a temporal AssetRow valid for `max_age` ms; on-chain metadata is JSON-stringified. */
 export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: number): AssetRow {
-  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  // one clock read (see mapPool)
   const now = Date.now();
   const validFrom = new Date(now).toISOString();
   const validTo = new Date(now + max_age).toISOString();
@@ -776,37 +611,19 @@ export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: numb
 }
 
 /**
- * Fixed validity stamp for a crawler-written bare `Assets` row. Epoch zero, so the row is
- * born expired (hidden by CAP's temporal filter) and its `(validFrom, unit)` key can never
- * collide with a real, wall-clock-stamped slice from mapAsset().
+ * Fixed validity stamp for a crawler-written bare `Assets` row: epoch zero, so the row is born expired
+ * (hidden by CAP's temporal filter) and its `(validFrom, unit)` key never collides with a mapAsset() slice.
  */
 export const BARE_ASSET_STAMP = '1970-01-01T00:00:00.000Z';
 
 /**
- * Map a bare asset row from an asset unit alone — everything derivable without a provider
- * call: policyId, assetNameHex, the decoded name and the CIP-14 fingerprint. Used by the
- * crawler to keep the `Assets` catalogue complete for units it meets in a block, at zero
- * network cost (analytics coverage).
- *
- * The row is stamped as ALREADY EXPIRED (`validTo === validFrom`). That is deliberate: CAP's
- * temporal filter hides it from OData reads, so the first keyed read still counts as a miss
- * and the existing lazy path enriches it through indexAsset() with supply and registry data —
- * while an analytics consumer reading the database directly already sees the full catalogue
- * (and can exclude the placeholders with `validTo > validFrom`).
- *
- * Both stamps are the FIXED epoch sentinel, not `now`. `Assets` is temporal, so its primary
- * key is `(validFrom, unit)`: a wall-clock stamp would make the same unit a new row on every
- * sighting and could collide with a slice the lazy path writes in the same millisecond, which
- * inside the crawler's block transaction means a failed block. With the sentinel the bare row
- * is one fixed, idempotent row per unit that no `mapAsset()` slice can ever alias.
- *
- * @param unit asset unit (policyId + assetNameHex)
- * @returns {AssetRow | null} bare row, or null when the unit is not a native asset unit
+ * Bare AssetRow from the unit alone (policyId, assetNameHex, decoded name, CIP-14 fingerprint), no provider call.
+ * Stamped `validTo === validFrom` with the fixed sentinel: hidden from OData reads, so the first keyed read
+ * still misses and the lazy path enriches it; one idempotent row per unit inside the crawler's block tx.
+ * @returns the row, or null when the unit is not a native asset unit
  */
 export function mapBareAsset(unit: string): AssetRow | null {
-  // The canonical definition of a unit — 56 hex policy + 0..32 bytes of name, even length.
-  // Reusing it keeps the catalogue from inventing a second, looser notion of "asset unit"
-  // than isAssetUnit() enforces on the API surface.
+  // same unit definition isAssetUnit() enforces on the API
   if (!ASSET_UNIT_REGEX.test(unit)) return null;
 
   const policyId = unit.slice(0, 56);
@@ -816,7 +633,7 @@ export function mapBareAsset(unit: string): AssetRow | null {
     unit,
     policyId,
     assetNameHex,
-    // decodeAssetName falls back to the hex string for non-text and NUL-bearing names
+    // hex fallback for non-text and NUL-bearing names
     assetName: assetNameHex.length > 0 ? decodeAssetName(assetNameHex) : '',
     fingerprint: computeCip14Fingerprint(policyId, assetNameHex),
     totalSupply: null,
@@ -835,12 +652,7 @@ export function mapBareAsset(unit: string): AssetRow | null {
   };
 }
 
-/**
- * Map Asset History entries to row format. No temporal stamping — mint/burn
- * events are immutable; UPSERT keyed on (unit, txHash) is idempotent.
- * @param entries asset history events from backend (already canonical)
- * @returns {AssetHistoryRow[]} mapped rows
- */
+/** Asset history events to non-temporal AssetHistoryRows (immutable, keyed on unit + txHash). */
 export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): AssetHistoryRow[] {
   return entries.map((e) => ({
     unit: e.unit,
@@ -852,16 +664,9 @@ export function mapAssetHistory(entries: AssetHistoryEntryProviderData[]): Asset
   }));
 }
 
-/**
- * Map Drep Data
- * Converts provider drep data into DrepRow format
- * @param providerDrepData drep data from provider
- * @returns {DrepRow} mapped drep row
- */
+/** Provider DRep to a temporal DrepRow valid for `max_age` ms. */
 export function mapDrep(providerDrepData: DrepProviderData, max_age: number): DrepRow {
-  // temporal stamping: amount/retired/expired drift over time → slice expires
-  // after max_age so the index-on-miss read re-fetches fresh state.
-  // Read the clock once so the span is exactly max_age (see mapPool).
+  // one clock read (see mapPool)
   const now = Date.now();
   const validFrom = new Date(now).toISOString();
   const validTo = new Date(now + max_age).toISOString();
@@ -878,14 +683,9 @@ export function mapDrep(providerDrepData: DrepProviderData, max_age: number): Dr
   };
 }
 
-/** 
- * Map Account Data
- * Converts provider account data into AccountRow format
- * @param providerAccountData account data from provider
- * @returns {AccountRow} mapped account row
- */
+/** Provider account to a temporal AccountRow valid for `max_age` ms. */
 export function mapAccount(providerAccountData: AccountProviderData, max_age: number): AccountRow {
-  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  // one clock read (see mapPool)
   const now = Date.now();
   const validFrom = new Date(now).toISOString();
   const validTo = new Date(now + max_age).toISOString();
@@ -906,13 +706,7 @@ export function mapAccount(providerAccountData: AccountProviderData, max_age: nu
   };
 }
 
-/**
- * Map Backend Error
- * Converts BackendError or unknown error into OData request rejection
- * @param req OData request
- * @param err error object (BackendError or unknown)
- * @param ctx context string for error message
- */
+/** Rejects the OData request for a BackendError; unknown errors are logged and answered as a sanitized 500. */
 export function mapError(req: Request, err: unknown, ctx: string) {
     if (err instanceof BackendError) {
       return req.reject(
@@ -921,22 +715,15 @@ export function mapError(req: Request, err: unknown, ctx: string) {
         err.target
       );
     }
-    // Handle non-BackendError (plain Error, string, etc.)
-    // Log full error server-side, but return sanitized message to client
     const internalMsg = err instanceof Error ? err.message : String(err);
     logger.error({ error: internalMsg }, `Unexpected error in ${ctx}`);
     return req.reject(500, fmt('INTERNAL_ERROR', ctx, 'An internal error occurred'));
 }
 
-/** 
- * Map Transaction Build Result
- * Converts provider transaction build result into TransactionBuildRow format
- * @param txbuildResult transaction build result from provider
- * @returns {TransactionBuildRow} mapped transaction build row
- */
+/** Build result to a temporal TransactionBuildRow with a fresh build id. */
 export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: number): TransactionBuildRow {
   const buildId = cds.utils.uuid();
-  // Read the clock once so validTo - validFrom is exactly max_age (see mapPool).
+  // one clock read (see mapPool)
   const nowMs = Date.now();
   const now = Math.floor(nowMs / 1000);
   const validFrom = new Date(nowMs).toISOString();
@@ -955,12 +742,12 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
     unsignedTxCbor: txbuildResult.unsignedTxCbor,
     txBodyHash: txbuildResult.txBodyHash,
     fee: txbuildResult.feeLovelace,
-    size: txbuildResult.sizeBytes, // size in bytes
+    size: txbuildResult.sizeBytes, // bytes
     createdAt: now, // epoch seconds
     submission: null,
-    hasInputs: hasInputs, // indicates if build has inputs
-    hasOutputs: hasOutputs, // indicates if build has outputs
-    wasSubmitted: false, // indicates if this build was submitted
+    hasInputs: hasInputs,
+    hasOutputs: hasOutputs,
+    wasSubmitted: false,
     scriptHash: txbuildResult.scriptHash ?? null,
     mintScriptHash: txbuildResult.mintScriptHash ?? null,
     forcedInputsUsed: txbuildResult.forcedInputsUsed ?? 0,
@@ -968,13 +755,7 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
   }
 }
 
-/** 
- * Map Transaction Build Inputs
- * Converts transaction build result inputs into TransactionBuildInputRow format
- * @param buildId the transaction build ID
- * @param inputs transaction build result inputs
- * @returns {TransactionBuildInputRow[]} mapped transaction build input rows
- */
+/** Build result inputs to TransactionBuildInputRows. */
 export function mapBuildInputs(buildId: string, inputs: Array<{ txHash: string; index: number; lovelace: string; address?: string }>): TransactionBuildInputRow[] {
   return inputs.map((input, idx) => ({
     build_id: buildId,
@@ -987,14 +768,7 @@ export function mapBuildInputs(buildId: string, inputs: Array<{ txHash: string; 
   }));
 }
 
-/** 
- * Map Transaction Build Outputs
- * Converts transaction build result outputs into TransactionBuildOutputRow format
- * @param buildId the transaction build ID
- * @param outputs transaction build result outputs
- * @param changeAddress the change address to identify change outputs
- * @returns {TransactionBuildOutputRow[]} mapped transaction build output rows
- */
+/** Build result outputs to TransactionBuildOutputRows; `changeAddress` marks the change output. */
 export function mapBuildOutputs(buildId: string, outputs: Array<{ address: string; lovelace: string }>, changeAddress?: string): TransactionBuildOutputRow[] {
   return outputs.map((output, idx) => ({
     build_id: buildId,
@@ -1006,12 +780,7 @@ export function mapBuildOutputs(buildId: string, outputs: Array<{ address: strin
   }));
 }
 
-/** 
- * Map Protocol Parameters
- * Converts provider protocol parameters into ProtocolParameterRow format
- * @param providerParams protocol parameters from provider
- * @returns {ProtocolParameterRow} mapped protocol parameter row
- */
+/** Provider protocol parameters to ProtocolParameterRow. */
 export function mapProtocolParameters(providerParams: ProtocolParameters): ProtocolParameterRow {
   return {
     network: providerParams.network,
@@ -1051,13 +820,7 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
   };
 }
 
-/**
- * Map Transaction Submission
- * Converts signed transaction CBOR and hash into TransactionSubmissionRow format
- * @param signedTxCbor signed transaction in CBOR hex format
- * @param txHash transaction hash
- * @returns {TransactionSubmissionRow} mapped transaction submission row
- */
+/** Signed tx CBOR and hash to a TransactionSubmissionRow stamped now (epoch seconds). */
 export function mapTransactionSubmission(signedTxCbor: string, txHash: string): TransactionSubmissionRow {
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -1067,13 +830,7 @@ export function mapTransactionSubmission(signedTxCbor: string, txHash: string): 
   };
 }
 
-/**
- * Map Address Signing Requests
- * Creates AddressSigningRequest row for address-signing request association
- * @param addr bech32 address
- * @param signingRequestId signing request UUID
- * @returns {AddressSigningRequestRow} mapped address signing request row
- */
+/** Address to signing-request association row. */
 export function mapAddressSigningRequest(addr: string, signingRequestId: string): AddressSigningRequestRow {
   return {
     address_address: addr,
@@ -1081,13 +838,7 @@ export function mapAddressSigningRequest(addr: string, signingRequestId: string)
   };
 }
 
-/**
- * Map Address Transaction Builds
- * Creates AddressTransactionBuild row for address-build association
- * @param addr bech32 address
- * @param buildId transaction build UUID
- * @returns {AddressTransactionBuildRow} mapped address transaction build row
- */
+/** Address to transaction-build association row. */
 export function mapAddressTransactionBuild(addr: string, buildId: string): AddressTransactionBuildRow {
   return {
     address_address: addr,
@@ -1100,19 +851,8 @@ export function mapAddressTransactionBuild(addr: string, buildId: string): Addre
 //-----------------------------------------------------------------------
 
 /**
- * Normalize cost models to array format in canonical Plutus parameter order.
- *
- * Blockfrost's cost_models (named keys) has known key-value mapping bugs for
- * PlutusV3 (shifted values in the quotientInteger/remainderInteger region).
- * The Blockfrost backend now prefers cost_models_raw (canonical arrays from the
- * node) which bypasses this issue entirely.
- *
- * For V3 arrays: already in canonical order, just pad to 297 via toCostModelArrV3.
- * For V3 objects (Ogmios named format): toCostModelArrV3(obj) maps via canonical keys.
- * For V1/V2: alphabetical order IS the canonical order (no reordering needed).
- *
- * @param raw - Raw cost models from any backend (Blockfrost, Ogmios, Koios)
- * @returns Object with all cost model values as number arrays in canonical order
+ * Cost models to number arrays in canonical Plutus parameter order. V3 goes through toCostModelArrV3
+ * (canonical keys, padded to 297); for V1/V2 alphabetical key order is the canonical order.
  */
 export function normalizeCostModels(raw: Record<string, unknown>): Record<string, number[]> {
   const result: Record<string, number[]> = {};
@@ -1120,11 +860,9 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
     const isV3 = key === 'PlutusV3' || key === 'plutus:v3';
     if (Array.isArray(value)) {
       if (isV3) {
-        // V3 arrays (from cost_models_raw or Ogmios) are already in canonical Plutus V3 order.
-        // toCostModelArrV3 pads to 297 (Chang 2) with defaults if the array is shorter.
+        // already canonical; toCostModelArrV3 pads short arrays to 297 with defaults
         result[key] = Array.from(toCostModelArrV3(value as AnyV3CostModel)).map(Number);
       } else {
-        // V1/V2: pass through (already in canonical order)
         result[key] = value;
       }
     } else if (value && typeof value === 'object') {
@@ -1132,7 +870,6 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
       if (isV3) {
         result[key] = Array.from(toCostModelArrV3(obj as unknown as AnyV3CostModel)).map(Number);
       } else {
-        // V1/V2: alphabetical sort IS correct for those versions
         result[key] = Object.keys(obj as Record<string, number>).sort()
             .map(k => (obj as Record<string, number>)[k]);
       }
@@ -1141,34 +878,17 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
   return result;
 }
 
-/**
- * Convert hex string to UTF-8 string, falling back to hex if conversion fails.
- * This helper reduces code duplication and improves performance by centralizing
- * the conversion logic.
- * 
- * @param hex - Hexadecimal string to convert
- * @returns {string} UTF-8 string or original hex if conversion fails
- */
+/** Hex to UTF-8 display string, hex fallback (see decodeAssetName). */
 function hexToUtf8(hex: string): string {
   return decodeAssetName(hex);
 }
 
-// ignoreBOM: a leading U+FEFF is part of the asset name's bytes and must survive the
-// round trip (Buffer.toString('utf8') kept it; TextDecoder's default drops it).
+// ignoreBOM: a leading U+FEFF is part of the asset name's bytes and must survive the round trip
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 /**
- * Decode an asset name (hex bytes) into its display string.
- *
- * Asset names are arbitrary bytes. When they are not valid UTF-8, or when they
- * contain U+0000, the hex form is returned unchanged: PostgreSQL rejects NUL in
- * `text` and in the JSON documents @cap-js/postgres uses for bulk INSERT/UPSERT
- * ("unsupported Unicode escape sequence"), which halted the crawler on preprod
- * block 4281919 (asset name ending in 0x00). SQLite accepted the same bytes
- * silently. `assetNameHex` always keeps the exact bytes, so nothing is lost.
- *
- * @param hex - asset name as hex string
- * @returns UTF-8 text, or the hex string when the bytes are not clean text
+ * Asset name (hex bytes) to its display string; the hex is returned unchanged for invalid UTF-8 or
+ * names containing U+0000 (PostgreSQL rejects NUL in `text`). `assetNameHex` always keeps the exact bytes.
  */
 export function decodeAssetName(hex: string): string {
   if (!hex) return hex;
@@ -1181,12 +901,7 @@ export function decodeAssetName(hex: string): string {
   return text.includes('\u0000') ? hex : text;
 }
 
-/** 
- * Parse asset unit (policyId + assetNameHex) into components.
- * Optimizes repeated parsing logic across multiple mapper functions.
- * @param unit - Asset unit string (56 char policyId + asset name hex)
- * @returns { policyId: string | null; assetName: string | null } Object with policyId and assetName
- */
+/** Split an asset unit into policyId and decoded assetName; `lovelace` and malformed units get a null policyId. */
 function parseAssetUnit(unit: string): { policyId: string | null; assetName: string | null } {
   if (unit === 'lovelace') {
     return { policyId: null, assetName: 'lovelace' };
@@ -1202,13 +917,7 @@ function parseAssetUnit(unit: string): { policyId: string | null; assetName: str
   return { policyId, assetName };
 }
 
-/**
- * Compute CIP-14 asset fingerprint from policyId and assetName.
- * Algorithm: bech32_encode("asset", blake2b_160(policyId_bytes + assetName_bytes))
- * @param policyIdHex - Policy ID as hex string (56 chars / 28 bytes)
- * @param assetNameHex - Asset name as hex string (variable length)
- * @returns CIP-14 fingerprint string (e.g. "asset1...")
- */
+/** CIP-14 fingerprint: bech32("asset", blake2b_160(policyId_bytes + assetName_bytes)). */
 export function computeCip14Fingerprint(policyIdHex: string, assetNameHex: string): string {
   const input = Buffer.from(policyIdHex + assetNameHex, 'hex');
   const out = Buffer.alloc(20);
@@ -1217,11 +926,7 @@ export function computeCip14Fingerprint(policyIdHex: string, assetNameHex: strin
   return bech32.encode('asset', words);
 }
 
-/**
- * Derive an enterprise script address from a script hash and network.
- * Enterprise address = header_byte + 28-byte script hash, bech32-encoded.
- * Header: 0x71 (mainnet, type 7 network 1) or 0x70 (testnet, type 7 network 0).
- */
+/** Enterprise script address: header 0x71 (mainnet) / 0x70 (testnet) + 28-byte script hash, bech32. */
 export function scriptHashToEnterpriseAddress(
   scriptHashHex: string,
   network: 'mainnet' | 'preprod' | 'preview'
@@ -1235,10 +940,7 @@ export function scriptHashToEnterpriseAddress(
   return bech32.encode(hrp, words, 120);
 }
 
-/**
- * Encode a stake credential as a bech32 reward account (stake address).
- * Header: type nibble 0xe (key) / 0xf (script), network nibble 1 (mainnet) / 0 (testnets).
- */
+/** Stake credential to bech32 reward account; header nibbles 0xe key / 0xf script, network 1 mainnet / 0 testnets. */
 export function credentialToStakeAddress(
   credentialHex: string,
   isScript: boolean,
@@ -1263,9 +965,8 @@ export interface DecodedAddress {
 }
 
 /**
- * Decode the Shelley address header (CIP-19) without a provider: type, script flag and,
- * for base addresses, the embedded stake credential re-encoded as a reward account.
- * Byron (base58) and anything unparseable come back as `byron` / `unknown` with no stake.
+ * Decode the CIP-19 Shelley address header: type, script flag and, for base addresses, the embedded
+ * stake credential as a reward account. Byron (base58) and unparseable input yield `byron` / `unknown`.
  */
 export function decodeShelleyAddress(address: string): DecodedAddress {
   const none: DecodedAddress = { type: 'unknown', isScript: false, stakeAddress: null, networkId: null };
@@ -1302,11 +1003,7 @@ export function decodeShelleyAddress(address: string): DecodedAddress {
   }
 }
 
-/**
- * Encode a DRep credential as a CIP-129 DRep ID (`drep1…`, 29 bytes).
- * Header byte: high nibble 0x2 = DRep, low nibble 0x2 = key hash / 0x3 = script hash —
- * the inverse of `decodeDrepId` in the Ogmios backend.
- */
+/** DRep credential to CIP-129 DRep ID (29 bytes): header 0x22 key hash / 0x23 script hash. */
 export function credentialToDrepId(credentialHex: string, isScript: boolean): string {
   const payload = Buffer.alloc(29);
   payload[0] = isScript ? 0x23 : 0x22;
@@ -1314,13 +1011,7 @@ export function credentialToDrepId(credentialHex: string, isScript: boolean): st
   return bech32.encode('drep', bech32.toWords(payload), 120);
 }
 
-/**
- * Format error message
- * @param code error code
- * @param ctx context string
- * @param msg error message
- * @returns {string} formatted error message
- */
+/** `[code] ctx: msg` */
 function fmt(code: string, ctx: string, msg: string): string {
   return `[${code}] ${ctx}: ${msg}`;
 }

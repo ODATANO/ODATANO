@@ -19,8 +19,7 @@ vi.mock('@blockfrost/blockfrost-js', () => {
   return { BlockFrostAPI: mockBlockFrostAPI };
 });
 
-// Shared handle on the mocked constructor (replaces the per-test
-// jest.requireMock('@blockfrost/blockfrost-js') lookups).
+// Shared handle on the mocked constructor.
 const BlockFrostAPI = vi.mocked(BlockFrostAPIActual);
 
 const NETWORK = 'preview' as const;
@@ -462,7 +461,7 @@ describe('BlockfrostBackend getProtocolParameters', () => {
       collateral_percent: 150,
       max_collateral_inputs: 3,
       coins_per_utxo_size: '4310',
-      // Blockfrost now uses cost_models_raw (canonical arrays direct from node)
+      // cost_models_raw: canonical arrays straight from the node
       cost_models_raw: {
         PlutusV3: [100, 200]
       }
@@ -481,7 +480,7 @@ describe('BlockfrostBackend getProtocolParameters', () => {
     const costModels = JSON.parse(result.costModels);
 
     expect(Array.isArray(costModels.PlutusV3)).toBe(true);
-    // toCostModelArrV3 pads short arrays to N_COST_MODEL_PLUTUS_V3 (350 post-Plomin²) with defaults
+    // toCostModelArrV3 pads short arrays to N_COST_MODEL_PLUTUS_V3 with defaults
     expect(costModels.PlutusV3.length).toBe(N_COST_MODEL_PLUTUS_V3);
     expect(costModels.PlutusV3[0]).toBe(100);
     expect(costModels.PlutusV3[1]).toBe(200);
@@ -854,7 +853,7 @@ describe('BlockfrostBackend isUtxoUnspent', () => {
 });
 
 // ---------------------------------------------------------------------------
-// getTransaction — the flags every consumer of a Transaction reads (rc.12)
+// getTransaction — the flags every consumer of a Transaction reads
 // ---------------------------------------------------------------------------
 
 describe('BlockfrostBackend getTransaction — input flags and phase-2 validity', () => {
@@ -886,8 +885,7 @@ describe('BlockfrostBackend getTransaction — input flags and phase-2 validity'
   });
 
   it('maps collateral and reference onto the TxInputLine names the indexer reads', async () => {
-    // Blockfrost calls them `collateral`/`reference`; nothing in the codebase reads those,
-    // so a reference input used to arrive indistinguishable from a consumed one.
+    // Blockfrost names them `collateral`/`reference`; the indexer reads isCollateral/isReference.
     const backend = backendFor(txBody(), {
       hash: TX,
       inputs: [

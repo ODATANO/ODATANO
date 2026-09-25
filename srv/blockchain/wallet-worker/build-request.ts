@@ -11,18 +11,9 @@ import type { Network } from '../cardano-client';
 import type { WalletJobKindValue } from './job-store';
 
 /**
- * Transform a stored wallet-job `requestJson` (the documented Build*-action
- * payload shape — assetsJson, mintActionsJson, metadataJson strings, …) into
- * the TxBuildRequest shape the CardanoIndexer build methods expect (assets,
- * mintActions with bigint quantities, parsed metadata, assembled
- * plutusScriptExecution, …).
- *
- * The synchronous CardanoTransactionService handlers do this transformation
- * inline per action; the worker executes the SAME payload asynchronously, so
- * this module mirrors that logic using the shared parsers
- * (srv/utils/tx-request-parsers.ts). Validation failures throw
- * BackendError 400 INVALID_INPUT — deterministic, so the job fails terminally
- * instead of burning retries.
+ * Transforms a stored wallet-job request (Build*-action payload shape) into the
+ * TxBuildRequest the CardanoIndexer build methods expect, mirroring the synchronous handlers.
+ * Validation failures throw BackendError 400 INVALID_INPUT so the job fails terminally, not via retries.
  */
 
 type RawRequest = Record<string, unknown>;
@@ -31,12 +22,7 @@ function fail(message: string): never {
   throw new BackendError(message, 400, ERROR_CODES.INVALID_INPUT);
 }
 
-/**
- * Presence-only check for required payload fields. Format validation (bech32,
- * hex, amounts) deliberately stays with the builder/indexer, mirroring what a
- * missing field would produce on the synchronous path — the transform's job is
- * the SHAPE, not re-validating content.
- */
+/** Presence-only check; format validation (bech32, hex, amounts) stays with the builder/indexer. */
 function requirePresent(raw: RawRequest, required: string[]): void {
   const missing = required.filter((f) => raw[f] === undefined || raw[f] === null || raw[f] === '');
   if (missing.length > 0) fail(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required`);
@@ -58,8 +44,7 @@ function parseScriptParams(raw: RawRequest): JSONValue[] | undefined {
   return parsed;
 }
 
-/** Mirrors the BuildMint/BuildPlutusSpend mint-action parsing (bigint quantities,
- * multi-policy per-action fields). */
+/** Mint-action parsing as in BuildMint/BuildPlutusSpend (bigint quantities, per-action policy fields). */
 function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[] {
   const parsed = parseJsonField(raw, 'mintActionsJson');
   if (!Array.isArray(parsed)) fail('mintActionsJson must be a JSON array');
@@ -72,7 +57,7 @@ function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[
       fail(`Invalid quantity: "${String(action.quantity)}" — must be an integer string`);
     }
     if (typeof action.assetUnit !== 'string') fail('Each mint action must have an assetUnit string');
-    // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson.
+    // Optional per-action mintingPolicyScript + redeemerJson (multi-policy mint).
     const policyFields = parseMintActionPolicyFields(action, i);
     if (policyFields.error) fail(policyFields.error);
     let actionPolicyId: string | undefined;
@@ -114,13 +99,11 @@ function scriptHashOf(scriptHex: string, context: string): string {
 }
 
 /**
- * BUG 9 mirror: every (expanded) mint action must carry the effective policy id —
- * parseAssetUnit silently discards the first 56 hex chars, so a mismatched prefix
- * would mint a truncated asset name.
+ * Every mint action must carry the effective policy id: parseAssetUnit drops the first
+ * 56 hex chars, so a mismatched prefix would mint a truncated asset name.
  */
 function assertPolicyPrefix(actions: Array<{ assetUnit: string; mintingPolicyScript?: string }>, policyId: string): void {
-  // Actions with their own per-action script were already checked against THAT
-  // script's policy id during parsing.
+  // Actions with their own script were already checked against that script's policy id.
   const mismatch = actions.find((a) => !a.mintingPolicyScript && !a.assetUnit.toLowerCase().startsWith(policyId));
   if (mismatch) {
     fail(`assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`);
@@ -233,8 +216,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
   if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
   delete clean.referenceScriptHex;
 
-  // Apply script parameters (parameterized policies), expand bare asset names,
-  // route lockOnScript output — mirrors BuildMintTransaction.
+  // Apply script parameters, expand bare asset names, route lockOnScript output.
   let finalMintingPolicyScript = raw.mintingPolicyScript as string;
   let effectivePolicyId: string | undefined;
   if (scriptParams && scriptParams.length > 0) {
@@ -292,7 +274,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
   const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
   const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
 
-  // Optional combined spend+mint (FR-1) — mirrors BuildPlutusSpendTransaction.
+  // Optional combined spend+mint.
   const validatorScript = raw.validatorScript as string;
   const mintingPolicyScript = raw.mintingPolicyScript as string | undefined;
   let mintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
@@ -378,11 +360,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
   return clean as TxBuildRequest;
 }
 
-/**
- * Transform the raw job request (documented Build*-action payload) into the
- * TxBuildRequest the matching CardanoIndexer build method expects. Throws
- * BackendError 400 INVALID_INPUT for malformed payloads (terminal job failure).
- */
+/** Raw job request → TxBuildRequest for the matching build method; malformed payloads throw 400 INVALID_INPUT. */
 export function prepareWorkerBuildRequest(kind: WalletJobKindValue, raw: RawRequest, network: Network): TxBuildRequest {
   switch (kind) {
     case 'simpleAda': return prepareSimpleAda(raw, network);

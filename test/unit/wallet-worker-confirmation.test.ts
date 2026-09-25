@@ -1,14 +1,11 @@
 /**
- * Wallet worker — confirmation tracker (W4/W6).
- * Real crawler hooks + real job-store against a stateful in-memory CQL fake;
- * fake CardanoClient. Covers: hook-path confirmation at depth, reorg
- * invalidation + same-CBOR re-submit, polling discovery and TX_DROPPED timeout.
+ * Wallet worker confirmation tracker on real crawler hooks + real job-store over an in-memory CQL
+ * fake: confirmation at depth, reorg invalidation + same-CBOR re-submit, polling, TX_DROPPED timeout.
  */
 
 vi.mock('@sap/cds', () => {
-  // Query data lives under _q so the chaining METHODS (where/orderBy/columns)
-  // can't clobber the captured where/orderBy DATA of the same name — the
-  // original flat shape silently matched every row.
+  // Query data lives under `_q` so the chaining methods (where/orderBy/columns)
+  // cannot clobber the captured where/orderBy data of the same name.
   const chain = (data: Record<string, unknown>) => ({
     _q: data,
     where: (w: unknown) => chain({ ...data, where: w }),

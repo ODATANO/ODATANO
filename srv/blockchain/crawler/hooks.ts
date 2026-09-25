@@ -4,16 +4,8 @@ import { emitServiceEvent } from '../../utils/service-events';
 const logger = cds.log('CardanoCrawler');
 
 /**
- * Crawler event hooks (v2.1).
- *
- * Small listener registry that lets other subsystems (currently the wallet-worker
- * confirmation tracker) observe crawler progress without the crawler importing
- * them (dependency direction stays crawler ← consumer). The crawler emits:
- *  - `blockIndexed` after each successfully persisted block (with its tx hashes), and
- *  - `reorg` after a completed rollback (with the fork slot).
- *
- * Listener failures are logged and swallowed — a broken consumer must never
- * stop the crawler.
+ * Listener registry for crawler progress: `blockIndexed` after each persisted block,
+ * `reorg` after a completed rollback. Listener failures are logged and swallowed.
  */
 
 export interface BlockIndexedEvent {
@@ -31,10 +23,7 @@ export interface ReorgEvent {
   forkSlot: number;
   /** How many blocks the rollback removed (0 when the fork was already the tip). */
   blocksRolledBack?: number;
-  /**
-   * Block height of the fork point, when known. Listeners tracking confirmation
-   * depth must clamp their tip to this — the pre-fork tip height no longer exists.
-   */
+  /** Block height of the fork point, when known; depth trackers must clamp their tip to it. */
   forkHeight: number | null;
 }
 

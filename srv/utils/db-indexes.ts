@@ -1,27 +1,7 @@
 /**
- * Secondary indexes the CDS model cannot declare. `cds deploy` creates the
- * primary keys only, and the temporal entities (Assets, Pools, Accounts,
- * Addresses, AddressUTxOs, ...) carry `validFrom` FIRST in their key, so every
- * lookup by unit / poolId / stakeAddress / address scanned the table; Blocks
- * by height (ORDER BY height DESC is the "latest block" read), by slot and by
- * epoch, Transactions by block, TransactionMetadata by tx and AssetHistory by
- * tx (crawler rollback) had no index at all. Measured on the hosted preprod
- * box on 2026-09-23 (930k blocks, 1.4M transactions, 521k metadata rows):
- * latest block 200 ms, GetMetadataByTxHash 1.0 s, GetAssetInfo 78 ms, a
- * block by height 168 ms; with the indexes 0.2 ms each.
- *
- * Created at start with CREATE INDEX IF NOT EXISTS: idempotent, plain SQL
- * that SQLite and PostgreSQL both accept, identifiers unquoted so Postgres
- * folds them exactly like @cap-js/postgres folds the table names. A plain
- * CREATE INDEX locks the table against writes for the build; on a large
- * live PostgreSQL create them once beforehand with CONCURRENTLY (ODATANO
- * ACCESS's scripts/odatano-indexes-on-box.sh does that), then this is a
- * no-op at every boot. A failure is logged, never fatal: the service works
- * without them, only slower.
- *
- * HANA is skipped: its CREATE INDEX knows neither IF NOT EXISTS nor NULLS
- * LAST, and the column store keeps an inverted index per column anyway, so
- * these lookups do not scan there.
+ * Secondary indexes the CDS model cannot declare (temporal keys start with `validFrom`, so business-key
+ * lookups would scan). Created at start with CREATE INDEX IF NOT EXISTS, unquoted identifiers so Postgres
+ * folds them like @cap-js does; failures are logged, never fatal. HANA is skipped (column store, no IF NOT EXISTS).
  */
 import cds from '@sap/cds';
 
@@ -38,14 +18,12 @@ export interface IndexSpec {
   postgres?: string;
 }
 
-/** Every entry answers a query the service or the crawler actually runs (see the module doc). */
+/** Every entry answers a query the service or the crawler actually runs. */
 export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   // Blocks: latest (ORDER BY height DESC), byHeight, crawler `height in`, rollback `slot >`, epoch filters
   { name: 'odatano_cardano_blocks_height', table: 'odatano_cardano_Blocks', columns: 'height' },
-  // CAP renders `$orderby=height desc` as ORDER BY height DESC NULLS LAST, which the
-  // plain (ASC NULLS LAST) index cannot serve backwards (200 ms sort on the box
-  // with the plain index in place). This one serves it, and ASC NULLS FIRST
-  // backwards; the plain one stays for plain ASC and equality.
+  // CAP renders `$orderby=height desc` as DESC NULLS LAST, which the plain ASC NULLS LAST
+  // index cannot serve backwards; the plain one stays for ASC and equality.
   { name: 'odatano_cardano_blocks_height_desc', table: 'odatano_cardano_Blocks', columns: 'height DESC', postgres: 'height DESC NULLS LAST' },
   { name: 'odatano_cardano_blocks_slot', table: 'odatano_cardano_Blocks', columns: 'slot' },
   { name: 'odatano_cardano_blocks_epoch', table: 'odatano_cardano_Blocks', columns: 'epochNumber' },
@@ -91,12 +69,7 @@ export function indexStatement(spec: IndexSpec, kind: string = 'sqlite'): string
 /** Anything that runs a plain SQL string: the primary db service. */
 export type SqlRunner = { run: (sql: string) => Promise<unknown>; kind?: string };
 
-/**
- * Creates every index that does not exist yet. Returns the names it ran;
- * a failing statement is logged and skipped (a missing table on a partial
- * deployment, a database without the privilege), the others still run.
- * On HANA nothing runs (see the module doc).
- */
+/** Creates every missing index; a failing statement is logged and skipped, the others still run. */
 export async function ensureDbIndexes(runner: SqlRunner | undefined = cds.db as unknown as SqlRunner | undefined): Promise<{ ensured: string[]; failed: string[] }> {
   const ensured: string[] = [];
   const failed: string[] = [];

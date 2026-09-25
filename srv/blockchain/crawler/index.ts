@@ -8,9 +8,8 @@ import { isCrawlerLeaseActive, readCursor, setCrawlerDesiredRunning } from './sy
 const logger = cds.log('CardanoCrawler');
 
 /**
- * Module-level singleton lifecycle for the chain crawler. Mirrors NIGHTGATE's
- * srv/crawler/index.ts: one active crawler per process, started fire-and-forget from
- * the server's `served` hook and controlled (pause/resume/status) via the indexer service.
+ * Process-wide crawler singleton: started fire-and-forget from the `served` hook,
+ * controlled (pause/resume/status) via the indexer service.
  */
 
 let active: CardanoCrawler | null = null;
@@ -23,12 +22,8 @@ const STANDBY_RETRY_MS = 5_000;
 const STANDBY_MAX_BACKOFF_MS = 5 * 60_000;
 
 /**
- * Delay before the next standby start attempt. A healthy standby (a lease loser, or
- * the leader's own no-op tick) retries every 5 s. Only after the crawler in THIS
- * process halted with an error does the shared cursor's consecutiveErrors drive an
- * exponential backoff (5 s, 10 s, 20 s ... capped at 5 min), so a block the crawler
- * cannot persist no longer re-syncs the chain-sync stream every 5 s. A standby that
- * never held the lease is not slowed down by the leader's streak: failover stays 5 s.
+ * Delay before the next standby start attempt: 5 s for a healthy standby; after a local
+ * error halt, exponential backoff (5 s … 5 min) driven by the shared cursor's error streak.
  */
 export function standbyDelayMs(consecutiveErrors: number): number {
   if (!Number.isFinite(consecutiveErrors) || consecutiveErrors <= 1) return STANDBY_RETRY_MS;

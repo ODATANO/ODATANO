@@ -1,8 +1,6 @@
 /**
- * Wallet worker — lease heartbeat.
- * The renewal callback is injected, so these drive the timing/failure semantics
- * directly: periodic renewal, lenient beats vs. strict fences, and standing down
- * once the lease provably belongs to someone else.
+ * Wallet worker lease heartbeat: periodic renewal, lenient beats vs. strict fences,
+ * and standing down once the lease provably belongs to someone else.
  */
 
 // `ql` is only here because job-store (imported for WORKER_LEASE_TTL_MS)

@@ -1,9 +1,7 @@
 /**
- * The image's transport auth end to end: @odatano/cap-auth's contract table
- * against the real CAP server with `kind: basic`, the operator user and the
- * `x-agent-token` lane (an unknown token is refused by the lane, without a
- * basic challenge). Every guarded path is a lane path, so the contract's
- * off-lane row is skipped. No network: nothing is initialized.
+ * Transport-auth contract against the real CAP server with `kind: basic`: the operator
+ * user and the `x-agent-token` lane (an unknown token is refused without a basic
+ * challenge). Every guarded path is a lane path, so the off-lane row is skipped.
  */
 
 import cds from '@sap/cds';
@@ -25,9 +23,8 @@ cds.User.default = (cds.User as unknown as { Anonymous: typeof cds.User.default 
   users: { odatano: { password: 'op-secret', roles: ['Admin'] } },
 };
 
-// require() shares the native module graph with the booted CAP server; it
-// activates agent grants (and registers the lane) before CAP builds its
-// middlewares.
+// Native require shares the module graph with the booted CAP server and registers
+// the agent-token lane before CAP builds its middlewares.
 require('../../srv/server');
 
 const cap = cds.test(__dirname + '/../../') as unknown as { url: string };

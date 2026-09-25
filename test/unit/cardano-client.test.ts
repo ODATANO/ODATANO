@@ -95,7 +95,7 @@ describe('CardanoClient Configuration', () => {
       expect(() => new CardanoClient(config)).not.toThrow();
     });
 
-    it('wires indexTtlMs into the cache TTL the indexer reads (was hardcoded 60s)', () => {
+    it('wires indexTtlMs into the cache TTL the indexer reads', () => {
       const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 3_600_000 }));
       expect(client.max_age_ms).toBe(3_600_000);
     });
@@ -476,8 +476,8 @@ describe('CardanoClient Configuration', () => {
       const result = await client.getNetworkInformation();
       expect(result).toBeDefined();
       expect(result.supply).toBeDefined();
-      // Live backend is KEPT for lazy retry (previously removed permanently) —
-      // the request retried its init once before falling through to koios
+      // The live backend is kept for lazy retry: the request retried its init once
+      // before falling through to koios
       expect((client as any).liveBackend).toBe(failingLiveBackend);
       expect((client as any).uninitializedBackends.has(failingLiveBackend)).toBe(true);
       expect(failingLiveBackend.init.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -518,8 +518,7 @@ describe('CardanoClient Configuration', () => {
 
       await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsInitFailedError);
 
-      // previously the rejected initPromise stayed cached — the client was
-      // permanently broken until process restart
+      // a rejected initPromise must not stay cached, or the client is broken until restart
       const result = await client.getNetworkInformation();
       expect(result).toBe(mockNetworkInfo);
       expect(backend.init).toHaveBeenCalledTimes(2);
@@ -811,7 +810,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).initialized = true;
       (client as any).liveBackend = {
         name: 'ogmios',
-        // hanging socket — previously blocked Plutus builds indefinitely
+        // hanging socket: must time out rather than block the build
         evaluateTransaction: vi.fn().mockReturnValue(new Promise(() => { /* never settles */ })),
       };
 

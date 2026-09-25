@@ -2,13 +2,8 @@ import { validateJsonWithLimits, isTxHash, isAssetUnit, isValidCbor, isValidBech
 import type { JSONValue } from './types';
 
 /**
- * Shared parsers for the Build*-action JSON payload fields. Used by the
- * synchronous CardanoTransactionService handlers AND the wallet-worker's
- * request transformation (srv/blockchain/wallet-worker/build-request.ts) so
- * both paths accept exactly the same payload shape.
- *
- * Result contract: { parsed } on success (undefined for absent/empty input →
- * no-op) or { error } with a caller-presentable message.
+ * Shared parsers for the Build*-action JSON payload fields (transaction service and wallet worker).
+ * Result contract: `{ parsed }` on success (undefined for absent/empty input) or `{ error }` with a client message.
  */
 
 export function parseUtxoRefArray(
@@ -39,10 +34,7 @@ export function parseUtxoRefArray(
   return { parsed: refs };
 }
 
-/**
- * Parse and validate requiredSignersJson (array of 56-hex Ed25519 key hashes).
- * Same result contract as the other parse* helpers.
- */
+/** Parse and validate requiredSignersJson (array of 56-hex Ed25519 key hashes). */
 export function parseRequiredSigners(
   requiredSignersJson: string | undefined
 ): { parsed?: string[]; error?: string } {
@@ -56,11 +48,7 @@ export function parseRequiredSigners(
   }
 }
 
-/**
- * Parse and validate an assetsJson array ({unit, quantity} entries) with the same
- * per-entry strictness as parseExtraOutputs — unchecked entries previously flowed
- * into the builder and surfaced as 500s.
- */
+/** Parse and validate an assetsJson array of `{unit, quantity}` entries. */
 export function parseAssetsArray(
   assetsJson: string | undefined,
   fieldName: string
@@ -97,10 +85,7 @@ export interface ParsedExtraOutput {
   referenceScript?: string;
 }
 
-/**
- * Parse and validate extraOutputsJson. Returns { parsed } on success (possibly undefined
- * for empty array → no-op) or { error } on validation failure.
- */
+/** Parse and validate extraOutputsJson (undefined for an empty array). */
 export function parseExtraOutputs(
   extraOutputsJson: string | undefined
 ): { parsed?: ParsedExtraOutput[]; error?: string } {
@@ -177,12 +162,8 @@ export function parseExtraOutputs(
 }
 
 /**
- * Parse the optional PER-ACTION policy fields of a mintActionsJson entry
- * (multi-policy mint FR): `mintingPolicyScript` (CBOR hex, applied as-is; a
- * parameterized per-action script must be pre-applied by the caller) and
- * `redeemerJson` (a JSON-encoded string, same convention as extraOutputs'
- * inlineDatumJson). Absent fields fall back to the action's top-level
- * script/redeemer at build time.
+ * Parse the optional per-action policy fields of a mintActionsJson entry: `mintingPolicyScript` (CBOR hex,
+ * applied as-is) and `redeemerJson` (JSON string). Absent fields fall back to the top-level script/redeemer.
  */
 export function parseMintActionPolicyFields(
   entry: Record<string, unknown>,

@@ -17,12 +17,9 @@ import {
   Script,
   DataI,
 } from '@harmoniclabs/buildooor';
-// AuxiliaryData internally checks `instanceof TxMetadata` against the class at
-// `dist/tx/metadata/TxMetadata`, and TxMetadata's constructor in turn checks
-// `instanceof TxMetadatum` against `dist/tx/metadata/TxMetadatum`. The buildooor
-// barrel re-exports the *eras/common* variants of those symbols, which fail
-// the identity check. Import directly from the paths AuxiliaryData/TxMetadata
-// use internally.
+// AuxiliaryData/TxMetadata check `instanceof` against the classes at the dist/tx/metadata
+// paths; the buildooor barrel re-exports the eras/common variants, which fail that check.
+// Import from the paths the library uses internally.
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import { Cbor, CborArray } from '@harmoniclabs/cbor';
@@ -247,11 +244,8 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(roundtrip.hash.toString()).toBe(script.hash.toString());
   });
 
-  // The legacy Shelley aux-data format (plain metadata CborMap — still valid on-chain
-  // CBOR) decodes fine in ledger-ts, so extractMetadataLabels is testable end-to-end
-  // through parseTransaction today: build the tx (serializes aux data as Conway
-  // tag-259), then surgically swap the aux-data slot (tx = [body, wits, isValid, aux])
-  // to the legacy metadata map before parsing.
+  // Build the tx (Conway tag-259 aux data), then swap the aux-data slot
+  // (tx = [body, wits, isValid, aux]) for a plain Shelley metadata map before parsing.
   it('parses metadata labels from auxiliary data (legacy Shelley format)', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),
@@ -271,10 +265,8 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(parsed.metadataLabels.sort()).toEqual(['674', '721']);
   });
 
-  // Works natively since @harmoniclabs/cardano-ledger-ts 0.5.6: AuxiliaryData.fromCborObj
-  // treats all Conway script-collection fields as optional (our upstream PR), so
-  // metadata-only aux_data decodes instead of throwing. (The vendored runtime patch
-  // that previously enabled this is deleted.)
+  // AuxiliaryData.fromCborObj treats the Conway script-collection fields as optional,
+  // so metadata-only aux_data decodes instead of throwing.
   it('parses metadata labels from Conway tag-259 auxiliary data', () => {
     const metadata = new TxMetadata({
       '721': new TxMetadatumInt(1n),

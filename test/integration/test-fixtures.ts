@@ -1,7 +1,5 @@
 /**
- * Test Fixtures
- * Constants and mock data for integration tests
- * This file has NO nock dependency - safe to import in all tests
+ * Constants and mock data for integration tests. No nock dependency, safe for every test.
  */
 
 export type BackendType = 'blockfrost' | 'koios' | 'ogmios';
@@ -48,11 +46,8 @@ export const TEST_FIXTURES = {
   mintQuantity_1000: '1000',
   burnQuantity_500: '-500',
   validPlutusScript: "585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009",
-  // Genuinely PARAMETERIZED always-succeeds PlutusV3 script: `\param -> \ctx -> 0`.
-  // Applying one parameter leaves a valid single-arg validator that evaluates without
-  // error. (validPlutusScript above is non-parameterized — applying a param to it
-  // produces a script that fails local evaluation, which the builder now rejects when
-  // no Ogmios evaluator is available.)
+  // Genuinely parameterized always-succeeds PlutusV3 script (`\param -> \ctx -> 0`): applying
+  // one parameter leaves a validator that still evaluates (validPlutusScript does not).
   parameterizedScript: "4701010022480001",
   validMetadataJson: JSON.stringify({"721": {"MyToken": {"name": "TokenM", "description": "My first minted token"}}}),
   invalidMintActionsJson: "invalid_json",
@@ -236,8 +231,7 @@ export const mockProtocolParams = {
   }
 };
 
-// Mock protocol parameters in LedgerProtocolParameter format (mapped from mockProtocolParams)
-// This is the format used by CardanoTxBuilder - same mapping as koios-backend.ts getProtocolParameters()
+// mockProtocolParams mapped to LedgerProtocolParameter, as koios-backend getProtocolParameters() does.
 export const mockLedgerProtocolParams = {
   network: 'preview' as const,
   epoch: 0,
@@ -391,10 +385,8 @@ export const metaDataRequestBody2 = {
 export const SCRIPT_UTXO_TX_HASH = 'aabb0011223344556677889900aabbccddeeff00112233445566778899001122';
 export const SCRIPT_UTXO_OUTPUT_INDEX = 0;
 
-// Enterprise script address (header 0x70) for the validSpendingScript hash — the
-// address the script UTxO actually lives at. Kept distinct from the sender so the
-// builder runs its getTransaction-based script-UTxO resolution (instead of finding
-// it among sender UTxOs) and the live-unspent pre-check queries it separately.
+// Enterprise script address (header 0x70) of validSpendingScript — where the script UTxO
+// lives. Distinct from the sender so the builder resolves it via getTransaction.
 export const SCRIPT_UTXO_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
 
 // Koios /address_utxos entry the script address returns, so _assertUnspent sees the
@@ -459,7 +451,7 @@ export const mockScriptTxInfoWithAssets = [{
 }];
 
 // ---------------------------------------------------------------------------
-// FR-2 Fixtures — extraOutputsJson
+// extraOutputsJson fixtures
 // ---------------------------------------------------------------------------
 
 /** Single ADA-only extra output, generously sized to clear min-ADA on any address. */
@@ -506,13 +498,13 @@ export const extraOutputBelowMinAda = {
 };
 
 // ---------------------------------------------------------------------------
-// Fixtures — lockOnScript / DeriveScriptAddress / ExtractPaymentKeyHash
+// lockOnScript / DeriveScriptAddress / ExtractPaymentKeyHash fixtures
 // ---------------------------------------------------------------------------
 
 /** PlutusData JSON array used as params for script parameter application. */
 export const validScriptParamsJson = JSON.stringify([{ int: 42 }]);
 
-/** A different param set — used to assert that different params ⇒ different address. */
+/** A different param set: different params must yield a different address. */
 export const altScriptParamsJson = JSON.stringify([{ int: 99 }]);
 
 /** BuildSimpleAdaTransaction body extended with lockOnScript. */
@@ -528,7 +520,7 @@ export const simpleLockOnScriptWithParamsRequestBody = {
 };
 
 // ---------------------------------------------------------------------------
-// FR-1 Fixtures — combined spend+mint on BuildPlutusSpendTransaction
+// combined spend+mint fixtures (BuildPlutusSpendTransaction)
 // ---------------------------------------------------------------------------
 
 export const plutusSpendWithMintRequestBody = {
@@ -544,7 +536,7 @@ export const plutusSpendWithMintRequestBody = {
  */
 export const plutusSpendMultiPurposeScriptRequestBody = {
   ...plutusSpendRequestBody,
-  // BUG 9: full assetUnits must carry the policyId of the minting script — here the
+  // Full assetUnits must carry the policyId of the minting script — here the
   // multi-purpose validator (validSpendingScript), not the standalone mint policy.
   mintActionsJson: JSON.stringify([{ assetUnit: TEST_FIXTURES.spendingScriptPolicyId + TEST_FIXTURES.assetName, quantity: '1' }]),
   mintingPolicyScript: TEST_FIXTURES.validSpendingScript,
@@ -557,7 +549,7 @@ export const plutusSpendWithBurnRequestBody = {
 };
 
 // ---------------------------------------------------------------------------
-// FR-3 Fixtures — __INPUT_IDX__ placeholder resolution
+// __INPUT_IDX__ placeholder fixtures
 // ---------------------------------------------------------------------------
 
 /** Redeemer pointing at the script UTxO via its post-sort index. */
@@ -577,21 +569,15 @@ export const bogusIndexPlaceholderRedeemer = {
   fields: [{ int: `__INPUT_IDX:${'cc'.repeat(32)}#0__` }],
 };
 
-/**
- * Configure environment for a specific backend test
- * This ensures only the specified backend is used as primary
- * Server auto-initializes by default in test environment
- */
+/** Pin the environment to a single backend before cds.test() boots the server. */
 export function configureBackendForTest(
   backendConfig: TestConfiguration,
   originalBlockfrostKey?: string
 ): void {
   if (backendConfig.backendName === 'koios') {
-    // Only Koios backend
     process.env.BACKENDS = 'koios';
     delete process.env.BLOCKFROST_API_KEY;
   } else if (backendConfig.backendName === 'blockfrost') {
-    // Only Blockfrost backend
     process.env.BACKENDS = 'blockfrost';
     if (originalBlockfrostKey) {
       process.env.BLOCKFROST_API_KEY = originalBlockfrostKey;

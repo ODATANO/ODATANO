@@ -81,7 +81,7 @@ describe('installOgmiosFrameGuard', () => {
 
   it('still delivers a frame nested far beyond the parser limit', () => {
     const frame = deepFrame(12000);
-    // the untouched client parser is what this is rescuing us from
+    // the untouched client parser overflows on this frame
     expect(() => pristineParse(frame as never)).toThrow(RangeError);
 
     const parsed = safeJSON.parse(frame) as { result: { block: { height: number; slot: number } } };
@@ -122,7 +122,7 @@ describe('installOgmiosFrameGuard', () => {
     expect(reported).toHaveLength(0); // only an overflow is the guard's business
   });
 
-  it('installs once — reopening the stream swaps the callback, it does not stack wrappers', () => {
+  it('installs once — a second stream adds its callback, it does not stack wrappers', () => {
     const wrapped = safeJSON.parse;
     const second: UnparseableFrame[] = [];
     installOgmiosFrameGuard((f) => { second.push(f); });
@@ -130,6 +130,26 @@ describe('installOgmiosFrameGuard', () => {
     expect(safeJSON.parse).toBe(wrapped);
     safeJSON.parse(deepFrame(12000).slice(0, -50));
     expect(second).toHaveLength(1);
-    expect(reported).toHaveLength(0); // the first callback is no longer the one being used
+    expect(reported).toHaveLength(1); // the first stream still gets the report
+  });
+
+  it('stops reporting to a callback once it is unregistered', () => {
+    const second: UnparseableFrame[] = [];
+    const unregister = installOgmiosFrameGuard((f) => { second.push(f); });
+    unregister();
+
+    safeJSON.parse(deepFrame(12000).slice(0, -50));
+    expect(second).toHaveLength(0);
+    expect(reported).toHaveLength(1);
+  });
+
+  it('keeps reporting to the others when one callback throws', () => {
+    installOgmiosFrameGuard(() => { throw new Error('boom'); });
+    const third: UnparseableFrame[] = [];
+    installOgmiosFrameGuard((f) => { third.push(f); });
+
+    expect(() => safeJSON.parse(deepFrame(12000).slice(0, -50))).not.toThrow();
+    expect(reported).toHaveLength(1);
+    expect(third).toHaveLength(1);
   });
 });

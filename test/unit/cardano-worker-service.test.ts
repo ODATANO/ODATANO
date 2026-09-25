@@ -1,8 +1,7 @@
 /**
- * CardanoWorkerService.SubmitWalletJob authorization: HSM-backed wallets inherit the
- * sign service's hsm.requiresRole gate, so an ordinary authenticated-user cannot queue
- * a job that spends the server-held HSM key. Dependencies are mocked at module
- * boundaries; handleRequest passes through to the callback with a fake db.
+ * CardanoWorkerService handlers: the SubmitWalletJob HSM role gate and validation,
+ * job access control and worker control. Dependencies are mocked at module
+ * boundaries; handleRequest passes a fake db straight to the callback.
  */
 
 // No static imports here, so mark the file as a module — otherwise its top-level
@@ -246,9 +245,8 @@ describe('CardanoWorkerService job access control', () => {
   it('GetJobStatus hides a foreign job behind the same 404 as a missing one', async () => {
     const handlers = boot();
 
-    // Assert the STATUS, not the mechanism: these run inside handleRequest, whose
-    // catch remaps anything that is not a BackendError to 500 — which is exactly
-    // how the real 404 was broken before the integration test caught it.
+    // Assert the status, not the mechanism: handleRequest remaps anything that is
+    // not a BackendError to 500.
     jobStoreMock.getJobById.mockResolvedValue({ ...OWN_JOB, createdBy: 'bob' });
     await expect(handlers.GetJobStatus(makeReq([], { jobId: 'job-1' }))).rejects.toMatchObject({
       statusCode: 404,

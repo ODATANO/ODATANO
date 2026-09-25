@@ -1,33 +1,21 @@
 import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
 
-/**
- *  Hex-encoded string (lower/upper-case depending on source) 
- */
+/** Hex-encoded string (case depends on source) */
 export type Hex = string;
 
-/**
- * Lovelace amount (integer) - represented as string to preserve precision for values > Number.MAX_SAFE_INTEGER.
- * Cardano max supply = 45B ADA = 45,000,000,000,000,000 lovelace (exceeds MAX_SAFE_INTEGER).
- * Provider APIs (Blockfrost, Koios) return lovelace as strings. Harmonic Labs uses bigint internally.
- */
+/** Lovelace amount; a string preserves precision above Number.MAX_SAFE_INTEGER (max supply is 4.5e16). */
 export type Lovelace = number | string;
 
-/** 
- * JSON Value Type - Represents any valid JSON value 
- */
+/** Any valid JSON value */
 export type JSONValue = | string | number | boolean | { [key: string]: JSONValue } | JSONValue[] | null;
 
-/** 
- * Amount Data Structure Type - Multi-asset amount line as returned by common Cardano APIs 
- */
+/** Multi-asset amount line as returned by common Cardano APIs */
 export interface Amount {
   unit: string;
   quantity: string;
 }
 
-/** 
- * Transaction Input Data Structure Type 
- */
+/** Transaction input */
 export interface TxInputLine {
   address: string;
   amount: Amount[];
@@ -40,9 +28,7 @@ export interface TxInputLine {
   isReference?: boolean;
 }
 
-/** 
- * Transaction Output Data Structure Type 
- */
+/** Transaction output */
 export interface TxOutputLine {
   address: string;
   amount: Amount[];
@@ -55,11 +41,8 @@ export interface TxOutputLine {
 }
 
 /**
- * Normalized certificate kinds. Both crawler sources map onto this vocabulary; a type
- * neither knows is passed through as the raw source string so nothing is dropped.
- * A Conway stake+vote delegation is SPLIT into a `pool_delegation` and a `vote_delegation`
- * entry sharing one `certIndex` — Koios (db-sync) reports it that way natively, the
- * Ogmios mapper splits to match, so both sources yield identical rows.
+ * Normalized certificate kinds; unknown types pass through as the raw source string. A Conway
+ * stake+vote delegation is split into `pool_delegation` + `vote_delegation` sharing one `certIndex`.
  */
 export type CertificateKind =
   | 'stake_registration'
@@ -104,42 +87,29 @@ export interface TxWithdrawal {
   amount: Lovelace | string;
 }
 
-/** 
- * Transaction Data Structure Type - Normalized transaction structure 
- */
+/** Normalized transaction */
 export interface Transaction {
   hash: Hex;
   blockHash: Hex;
   blockHeight: number;
   slot: number;
   index: number;
-  /**
-   * What the ledger charged. For an ordinary transaction that is the fee declared in the
-   * body; for a phase-2 failure (`spendsCollaterals`) it is the collateral consumed, which
-   * is what the sender actually paid — the declared fee was never collected.
-   */
+  /** What the ledger charged: the declared fee, or on a phase-2 failure the collateral consumed. */
   fee: Lovelace | string;
   deposit: Lovelace | string;
   /**
-   * Phase-2 validity as the ledger applied it. True when the script phase failed: the
-   * declared inputs and outputs were not applied, the collateral inputs were consumed and
-   * only the collateral return was produced. Reported by the Ogmios chain-sync path
-   * (`spends`) and by Blockfrost (`valid_contract`); Koios leaves it undefined.
+   * True when phase-2 failed: inputs/outputs not applied, collateral consumed, only the collateral
+   * return produced. Ogmios (`spends`) and Blockfrost (`valid_contract`) report it; Koios leaves it undefined.
    */
   spendsCollaterals?: boolean;
   /**
-   * `total_collateral` from the transaction body, when it declares one. The ledger requires
-   * it to equal the collateral actually consumed, so it is the exact value for `fee` on a
-   * phase-2 failure without resolving a single input. Null when the body omits it — the
-   * charge then has to be derived from the resolved collateral inputs minus the return.
+   * `total_collateral` from the body when declared; equals the collateral consumed on a phase-2 failure.
+   * Null when omitted, the charge is then derived from the resolved collateral inputs minus the return.
    */
   totalCollateral?: Lovelace | string | null;
   /**
-   * Net mint/burn per asset unit as the ledger applied it, signed — a negative quantity is a
-   * burn. Ogmios (`mint`) and Koios (`assets_minted`) report it natively; Blockfrost has no
-   * such field and leaves it undefined, so the indexer derives the delta from the transaction's
-   * (fully resolved) input and output assets instead — which needs `isReference`/`isCollateral`
-   * and `spendsCollaterals` to be set on that path too. Never carries `lovelace`.
+   * Signed net mint/burn per unit (negative = burn), never `lovelace`. Ogmios and Koios report it;
+   * Blockfrost leaves it undefined and the indexer derives it from resolved input/output assets.
    */
   mint?: Amount[];
   /** Tx size in bytes; null when the source cannot provide it (Ogmios chain-sync). */
@@ -149,19 +119,13 @@ export interface Transaction {
   inputs: TxInputLine[];
   outputs: TxOutputLine[];
   metadata?: MetadataLabelTx[];
-  /**
-   * Certificates as the source reports them; `[]` when the transaction carries none,
-   * undefined when the source does not report the field at all (Blockfrost — a per-tx
-   * enumeration would cost six extra calls per transaction, so it stays unreported there).
-   */
+  /** Certificates; `[]` when the tx has none, undefined when the source does not report them (Blockfrost). */
   certificates?: TxCertificate[];
   /** Reward-account withdrawals; same `[]` vs undefined convention as `certificates`. */
   withdrawals?: TxWithdrawal[];
 }
 
-/**
- *  Address Data Structure Type - Address view, including current value and known UTxOs
- */
+/** Address view with current value and known UTxOs */
 export interface Address {
   address: string;
   stakeAddress: string | null;
@@ -169,12 +133,10 @@ export interface Address {
   isScript: boolean;
   amount: Amount[];
   utxos: UTxO[];
-  transactions?: Transaction[]; // Optional - loaded separately via getAddressTransactions()
+  transactions?: Transaction[]; // loaded separately via getAddressTransactions()
 }
 
-/** 
- * UTxO Data Structure Type - Unspent transaction outputs (UTxOs) 
- */
+/** Unspent transaction output */
 export interface UTxO {
   txHash: Hex;
   outputIndex: number;
@@ -186,9 +148,7 @@ export interface UTxO {
   inlineDatum?: string | null;
 }
 
-/** 
- * Block Data Structure Type - Basic block information structure
- */
+/** Basic block information */
 export interface BlockData {
   time: number;
   height: number | null;
@@ -202,9 +162,7 @@ export interface BlockData {
   fees?: string | null;
 }
 
-/** 
- * Supply Data Structure Type - Network supply information
- */
+/** Network supply */
 export interface Supply {
   max: string;
   total: string;
@@ -214,25 +172,19 @@ export interface Supply {
   reserves: string;
 }
 
-/** 
- * Stake Data Structure Type - Network stake information
- */
+/** Network stake */
 export interface Stake {
   live: string;
   active: string;
 }
 
-/** 
- * Network Information Data Structure Type - Network supply and stake information
- */
+/** Network supply and stake */
 export interface NetworkInformation {
   supply: Supply;
   stake: Stake;
 }
 
-/** 
- * Epoch Data Structure Type - Epoch information
- */
+/** Epoch information */
 export interface EpochData {
   epoch: number;
   start_time: number;
@@ -246,18 +198,14 @@ export interface EpochData {
   active_stake: string | null;
 }
 
-/** 
- * Metadata Label Transaction Data Structure Type - Transaction metadata under a specific label 
- */
+/** Transaction metadata under one label */
 export interface MetadataLabelTx {
   txHash: Hex;
   label: number | string;
   json?: JSONValue;
 }
 
-/** 
- * Account Data Structure Type - Stake account information 
- */
+/** Stake account information */
 export interface AccountData {
   stakeaddress: string;
   active: boolean;
@@ -273,9 +221,7 @@ export interface AccountData {
   addresses: Address[];
 }
 
-/** 
- * Pool Data Structure Type - Pool information 
- */
+/** Pool information */
 export interface PoolData {
   poolId: string;
   vrfKeyHash: string;
@@ -295,9 +241,7 @@ export interface PoolData {
   rewardAccount: string;
 }
 
-/**
- * Drep Data Structure Type - Drep information
- */
+/** DRep information */
 export interface DrepData {
   drepId: string;
   hex: string;
@@ -308,21 +252,17 @@ export interface DrepData {
   expired: boolean;
 }
 
-/**
- * Asset Info Data Structure Type - Normalized native-asset metadata + supply.
- * Backends provide overlapping but non-identical fields; the mapper produces
- * this canonical shape. Fields that one backend doesn't expose are null.
- */
+/** Normalized native-asset metadata and supply; fields a backend does not expose are null. */
 export interface AssetInfo {
   unit: string;
   policyId: string;
   assetNameHex: string;
-  assetName: string | null;          // UTF-8 representation when decodable
+  assetName: string | null;          // UTF-8 when decodable
   fingerprint: string;
   totalSupply: string;                // BigInt-safe decimal string
   mintOrBurnCount: number;
   initialMintTxHash: string | null;
-  initialMintTime: number | null;     // Unix seconds; null on Blockfrost (would require extra tx fetch)
+  initialMintTime: number | null;     // Unix seconds; null on Blockfrost
   onchainMetadata: JSONValue | null;  // CIP-25 on-chain metadata (any shape)
   registryName: string | null;
   registryTicker: string | null;
@@ -332,10 +272,7 @@ export interface AssetInfo {
   registryLogo: string | null;
 }
 
-/**
- * Asset History Entry - single mint or burn event.
- * `quantity` is always the ABSOLUTE amount; sign info lives in `action`.
- */
+/** One mint or burn event; `quantity` is absolute, the sign lives in `action`. */
 export interface AssetHistoryEntry {
   unit: string;
   txHash: string;
@@ -345,11 +282,9 @@ export interface AssetHistoryEntry {
   blockHeight: number | null;
 }
 
-/** 
- * Ledger Protocol Parameters Data Structure Type - Current protocol parameters 
- */
+/** Current protocol parameters */
 export type LedgerProtocolParameters = {
-  network: string;     // mainnet | preprod | preview (dein ODATANO-Konzept)
+  network: string;     // mainnet | preprod | preview
   epoch: number;
   // --- Fees / Sizes ---
   minFeeA: number;       // txFeePerByte Mapping
@@ -386,41 +321,32 @@ export type LedgerProtocolParameters = {
   collateralPercent: number | null;
   maxCollateralInputs: number | null;
   coinsPerUtxoSize: string | null;  // babbage+
-  // -- Hauskeeping ---
+  // --- Housekeeping ---
   fetchedAt: string;
   source: string;              // "blockfrost/koios/direct"
 }
 
-/**
- * Mint/Burn Asset Action Type
- */
+/** Mint/burn action */
 export type MintAction = {
   /** Asset unit to mint/burn (policyId + assetName) */
   assetUnit: string;
-  /** Quantity to mint (positive) or burn (negative) */
+  /** Positive to mint, negative to burn */
   quantity: bigint;
-  /** Optional redeemer data (integer). Defaults to 0 if not specified. */
+  /** Optional integer redeemer, default 0 */
   redeemer?: number;
   /**
-   * Optional PER-ACTION minting policy (CBOR hex). When set, this action
-   * mints under THIS script instead of the request's top-level
-   * mintingPolicyScript, enabling multiple policies in one transaction.
-   * Passed as-is (a parameterized script must be pre-applied); the action's
-   * assetUnit must carry this script's policyId.
+   * Per-action minting policy (CBOR hex, applied as-is) for multi-policy transactions; overrides the
+   * top-level mintingPolicyScript. The assetUnit must carry this script's policyId.
    */
   mintingPolicyScript?: string;
   /**
-   * Optional PER-ACTION redeemer (parsed PlutusData JSON). Only valid
-   * together with mintingPolicyScript; falls back to the request's
-   * mintRedeemer when absent. Actions resolving to the SAME policy must
-   * agree on their redeemer (the ledger carries one redeemer per policy).
+   * Per-action redeemer (parsed PlutusData JSON), only with mintingPolicyScript; falls back to mintRedeemer.
+   * Actions on the same policy must agree (one redeemer per policy in the ledger).
    */
   redeemerJson?: JSONValue;
 };
 
-/**
- * Plutus Script Execution Type - For spending from script addresses
- */
+/** Plutus script execution for spending from a script address */
 export type PlutusScriptExecution = {
   /** Validator script (CBOR hex) */
   validatorScript: string;
@@ -431,19 +357,16 @@ export type PlutusScriptExecution = {
   };
   /** Redeemer data (JSON value that will be converted to PlutusData) */
   redeemer: JSONValue;
-  /** Datum data (JSON value, optional - required for hash-based datums) */
+  /** Datum (JSON value), required for hash-based datums */
   datum?: JSONValue;
 };
 
-/** 
- * Transaction Build Request Type - Parameters for building a transaction, including optional minting and Plutus execution details
- */
+/** Parameters for building a transaction, with optional minting and Plutus execution */
 export type TxBuildRequest = {
   network: 'mainnet' | 'preprod' | 'preview';
   senderAddress: string;
   recipientAddress: string;
-  // OData `Lovelace` is Decimal(20,0) → delivered as a STRING at runtime (CAP
-  // preserves decimal precision). The handlers already BigInt()/String() it.
+  // OData Decimal(20,0) arrives as a string at runtime
   lovelaceAmount: string;
   changeAddress?: string;
   metadataJson?: JSONValue;
@@ -459,7 +382,7 @@ export type TxBuildRequest = {
   outputDatum?: JSONValue;
   /** Required signers - Ed25519 key hashes (hex, 28 bytes each) */
   requiredSigners?: string[];
-  /** Script parameters — PlutusData JSON array applied to script before building */
+  /** Script parameters (PlutusData JSON array) applied to the script before building */
   scriptParams?: JSONValue[];
   /** Optional inline datum for minted token output (PlutusData JSON, parsed) */
   inlineDatum?: JSONValue;
@@ -468,23 +391,13 @@ export type TxBuildRequest = {
   /** When true, route output to enterprise script address derived from applied script hash */
   lockOnScript?: boolean;
   /**
-   * Optional UTxOs that MUST be consumed as inputs. Resolved and added to the TxBuilder
-   * BEFORE coin selection runs. Coin selection then only covers the remaining shortfall.
-   * Deduplicated against plutusScriptExecution.scriptUtxo in spend transactions.
-   * Primary use case: one-shot minting seeds (policy parameterized with a specific TxOutRef).
+   * UTxOs that must be consumed, added before coin selection (one-shot minting seeds);
+   * deduplicated against plutusScriptExecution.scriptUtxo.
    */
   forceInputs?: Array<{ txHash: string; outputIndex: number }>;
-  /**
-   * Optional CIP-31 reference inputs (read-only, not consumed). Resolved to full UTxOs
-   * and passed as readonlyRefInputs to Buildooor. The validator can read these UTxOs'
-   * datums/values without consuming them (e.g., oracle feeds, shared config).
-   */
+  /** CIP-31 reference inputs (read-only, not consumed), passed as readonlyRefInputs to Buildooor. */
   referenceInputs?: Array<{ txHash: string; outputIndex: number }>;
-  /**
-   * Optional additional outputs appended after the primary recipient output, before change.
-   * Each extra output is independently min-ADA checked. Used for multi-output state-machine
-   * transitions (e.g. counter update + batch NFT outputs in a single transaction).
-   */
+  /** Additional outputs after the primary recipient output, before change; each min-ADA checked. */
   extraOutputs?: Array<{
     address: string;
     lovelaceAmount: string;
@@ -492,56 +405,32 @@ export type TxBuildRequest = {
     inlineDatum?: JSONValue;
     referenceScript?: string;
   }>;
-  /**
-   * Optional Plutus V3 validator CBOR hex to attach as a referenceScript on the primary
-   * recipient output (CIP-33). Adding a ref script significantly increases the output's
-   * min-ADA — consumers must provide enough lovelaceAmount to cover it.
-   */
+  /** Plutus V3 validator CBOR hex attached as CIP-33 reference script on the recipient output; raises its min-ADA. */
   referenceScript?: string;
-  /**
-   * Optional validity-interval start in Posix milliseconds. Sets `invalidBefore`
-   * on the built transaction so that Plutus validators checking
-   * `expect Finite(lower) = tx.validity_range.lower_bound.bound_type` see a finite bound.
-   * Defaults inside the builder to `Date.now() - 120_000` (script builds only).
-   */
+  /** Validity start in Posix ms (`invalidBefore`); builder default `now - 120_000` for script builds. */
   validityStartMs?: string;
-  /**
-   * Optional validity-interval end in Posix milliseconds. Sets `invalidAfter` (ledger TTL).
-   * Defaults inside the builder to `Date.now() + 3_600_000` (script builds only).
-   */
+  /** Validity end in Posix ms (`invalidAfter`, ledger TTL); builder default `now + 3_600_000` for script builds. */
   validityEndMs?: string;
 };
 
-/**
- * Transaction Build Request for Mint/Burn operations - requires mintActions and mintingPolicyScript
- */
+/** Mint/burn build request: mintActions and mintingPolicyScript required */
 export type TxBuildMintRequest = TxBuildRequest & {
   mintActions: MintAction[];
   mintingPolicyScript: string;
 };
 
-/**
- * Transaction Build Request for Plutus spending - requires plutusScriptExecution
- */
+/** Plutus spend build request: plutusScriptExecution required */
 export type TxBuildPlutusSpendRequest = TxBuildRequest & {
   plutusScriptExecution: PlutusScriptExecution;
 };
 
-/**
- * Execution Budget for Plutus scripts
- */
+/** Execution budget for Plutus scripts */
 export type ExecutionBudget = {
   memory: number;
   cpu: number;
 };
 
-/**
- * Script evaluation result from Ogmios
- */
-/**
- * Ogmios validator descriptor — `purpose:index` (e.g., "spend:0", "mint:1")
- * or a structured object with purpose + index fields depending on Ogmios version.
- */
+/** Ogmios validator descriptor: `purpose:index` (e.g. "spend:0") or `{ purpose, index }` depending on version */
 export type ScriptValidator =
   | string
   | { purpose: string; index: number };
@@ -551,14 +440,10 @@ export type ScriptEvaluationResult = {
   budget: ExecutionBudget;
 };
 
-/**
- * Transaction evaluator function type - evaluates script execution units
- */
+/** Evaluates script execution units of an unsigned tx */
 export type TxEvaluator = (unsignedTxCbor: string) => Promise<ScriptEvaluationResult[]>;
 
-/**
- * Transaction Build Context Type - Context for building a transaction
- */
+/** Context for building a transaction */
 export type TxBuildContext = {
   utxos: UTxO[];
   protocolParameters: LedgerProtocolParameter;
@@ -568,9 +453,7 @@ export type TxBuildContext = {
   referenceInputUtxos?: UTxO[];
 };
 
-/**
- *  Transaction Build Result Type 
- */
+/** Transaction build result */
 export type TxBuildResult = {
   senderAddress?: string;
   network?: 'mainnet' | 'preprod' | 'preview';
@@ -596,9 +479,7 @@ export type TxBuildResult = {
   referenceInputsUsed?: number;
 };
 
-/**
- * Supported external signer types
- */
+/** Supported external signer types */
 export enum ExternalSignerType {
   /** Cardano CLI - Reference implementation for signing */
   CARDANO_CLI = 'cardano-cli',
@@ -612,9 +493,7 @@ export enum ExternalSignerType {
   HSM = 'hsm',
 }
 
-/**
- * Signing request status
- */
+/** Signing request status */
 export enum SigningStatus {
   /** Request created, awaiting signing */
   PENDING = 'pending',
@@ -630,9 +509,7 @@ export enum SigningStatus {
   EXPIRED = 'expired',
 }
 
-/**
- * Instructions for external signers
- */
+/** Instructions for external signers */
 export interface SigningInstructions {
   /** Signer type hint (which tool/wallet to use) */
   signerTypeHint: ExternalSignerType;
@@ -651,12 +528,7 @@ export interface SigningInstructions {
   cardanoCliCommand?: string;
 }
 
-/**
- * Unsigned transaction export payload for external signers
- *
- * This is the standardized format returned by BuildTransaction actions.
- * External signers use this payload to sign the transaction.
- */
+/** Unsigned transaction payload returned by the Build actions for external signers */
 export interface UnsignedTxExportPayload {
   /** Unique identifier for this signing request */
   signingRequestId: string;
@@ -678,9 +550,7 @@ export interface UnsignedTxExportPayload {
   signingInstructions: SigningInstructions;
 }
 
-/**
- * Signed transaction submission payload
- */
+/** Signed transaction submission payload */
 export interface SignedTxPayload {
   /** Original signing request ID */
   signingRequestId: string;
@@ -694,9 +564,7 @@ export interface SignedTxPayload {
   signerInfo?: string;
 }
 
-/**
- * Signing workflow state
- */
+/** Signing workflow state */
 export interface SigningWorkflowState {
   /** Current status of the signing workflow */
   status: SigningStatus;
@@ -720,9 +588,7 @@ export interface SigningWorkflowState {
   };
 }
 
-/**
- * Result of signature verification
- */
+/** Result of signature verification */
 export interface SignatureVerificationResult {
   /** Whether the signature is valid */
   isValid: boolean;
@@ -738,9 +604,7 @@ export interface SignatureVerificationResult {
   errorMessage?: string;
 }
 
-/**
- * Options for signature verification
- */
+/** Options for signature verification */
 export interface VerificationOptions {
   /** Expected transaction body hash (from the build) */
   expectedTxBodyHash?: string;
@@ -750,9 +614,7 @@ export interface VerificationOptions {
   requiredSigners?: string[];
 }
 
-/**
- * HSM Configuration for PKCS#11 integration
- */
+/** HSM configuration for PKCS#11 integration */
 export interface HsmConfig {
   /** Whether HSM signing is enabled */
   enabled: boolean;
@@ -766,13 +628,11 @@ export interface HsmConfig {
   keyId?: string;
   /** Key label for CKA_LABEL lookup */
   keyLabel?: string;
-  /** Optional CDS role required for HSM actions (SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus). When set, only users with this role can invoke HSM operations. */
+  /** CDS role required for the HSM actions (SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus) */
   requiresRole?: string;
 }
 
-/**
- * HSM signing result
- */
+/** HSM signing result */
 export interface HsmSignResult {
   /** Ed25519 signature (64 bytes, hex) */
   signatureHex: string;

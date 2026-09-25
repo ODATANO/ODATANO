@@ -8,21 +8,13 @@ import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@
 import { Cbor, CborArray, CborBytes, CborMap, CborUInt, CborTag, type CborObj } from '@harmoniclabs/cbor';
 import { Address } from '@harmoniclabs/cardano-ledger-ts';
 
-/**
- * Extract lovelace amount from UTxO
- * @param u UTxO to extract from
- * @returns {bigint} lovelace amount
- */
+/** Lovelace amount of a UTxO. */
 export function getLovelace(u: OdatanoUtxo): bigint {
   const entry = u.amount.find(a => (a.unit).toLowerCase() === "lovelace");
   return BigInt(entry?.quantity ?? "0");
 }
 
-/**
- * Assert that UTxO contains only ADA (lovelace)
- * @param u UTxO to check
- * @throws {MixedAssetsError} if UTxO contains non-ADA assets
- */
+/** Throws MixedAssetsError when the UTxO carries non-ADA assets. */
 export function assertAdaOnly(u: OdatanoUtxo): void {
   const nonAda = u.amount.filter(a => (a.unit).toLowerCase() !== "lovelace" && BigInt(a.quantity) !== 0n);
   if (nonAda.length > 0) {
@@ -34,29 +26,20 @@ export function assertAdaOnly(u: OdatanoUtxo): void {
 }
 
 /**
- * Extract transaction hash from a transaction CBOR (signed or unsigned).
- * Hash is computed over the body, so witness presence does not affect it.
- * @param txCbor transaction in CBOR hex format
- * @returns {string} transaction hash (64 character hex string)
- * @throws {Error} if CBOR is invalid or transaction hash cannot be extracted
+ * Transaction hash of a signed or unsigned tx CBOR: blake2b-256 over the body bytes, so witnesses do not affect it.
+ * @returns 64-char hex string
  */
 export function getTxHashFromCbor(txCbor: string): string {
   if (!txCbor || typeof txCbor !== 'string') {
     throw new Error('Invalid input: txCbor must be a non-empty string');
   }
 
-  // Validate hex format. Require even length — a hex byte string encodes whole bytes,
-  // so an odd-length string is malformed and would otherwise surface as a confusing
-  // "Failed to parse transaction CBOR" from fromHex/Cbor.parse rather than a clear
-  // input-validation error.
+  // Even length: an odd hex string would otherwise fail later as a confusing parse error
   if (!/^[a-fA-F0-9]+$/.test(txCbor) || txCbor.length % 2 !== 0) {
     throw new Error('Invalid input: txCbor must be a valid hex string');
   }
 
-  // Compute blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
-  // subCborRef.toBuffer() returns the exact bytes as received — no re-serialization, so
-  // the hash matches what was signed. We stay at the raw-CBOR level (never instantiate
-  // the high-level Tx type) for that byte-exactness.
+  // Hash the ORIGINAL body bytes via subCborRef (no re-serialization), so it matches what was signed
   try {
     const tx = Cbor.parse(fromHex(txCbor));
     if (!(tx instanceof CborArray) || tx.array.length < 1 || !tx.array[0].subCborRef) {
@@ -65,7 +48,6 @@ export function getTxHashFromCbor(txCbor: string): string {
     const bodyBytes = tx.array[0].subCborRef.toBuffer();
     return toHex(blake2b_256(bodyBytes));
   } catch (err: unknown) {
-    // typed 400 — a plain Error here surfaced as a 500 to the consumer
     throw new TransactionValidationError('Failed to parse transaction CBOR', err, ERROR_CODES.TX_PARSE_FAILED);
   }
 }
@@ -79,16 +61,8 @@ export interface TxCacheTargets {
 }
 
 /**
- * Extract the consumed input refs and the output addresses from a transaction
- * CBOR (signed or unsigned) — the rows a successful submit makes stale in the
- * UTxO cache. Works at the raw-CBOR level for the same reason as
- * getTxHashFromCbor (byte-exact, no high-level Tx round-trip).
- *
- * Outputs whose address bytes cannot be decoded (e.g. Byron bootstrap
- * addresses) are skipped — invalidation is best-effort per address.
- *
- * @param txCbor transaction in CBOR hex format
- * @throws {TransactionValidationError} if the CBOR is not a transaction
+ * Consumed input refs and output addresses of a tx CBOR: the UTxO-cache rows a submit makes stale.
+ * Outputs whose address bytes cannot be decoded (Byron) are skipped.
  */
 export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   let body: CborMap;
@@ -105,7 +79,7 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   const bodyValue = (key: number): CborObj | undefined =>
     body.map.find(e => e.k instanceof CborUInt && e.k.num === BigInt(key))?.v;
 
-  // key 0: inputs — plain array or a CBOR tag-258 set (Conway)
+  // key 0: inputs, plain array or CBOR tag-258 set (Conway)
   const inputs: TxCacheTargets['inputs'] = [];
   let inputsObj = bodyValue(0);
   if (inputsObj instanceof CborTag) inputsObj = inputsObj.data;
@@ -121,7 +95,7 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
     }
   }
 
-  // key 1: outputs — post-alonzo map form ({0: address, ...}) or legacy array form ([address, amount, ...])
+  // key 1: outputs, post-Alonzo map form ({0: address, ...}) or legacy array form ([address, amount, ...])
   const outputAddresses = new Set<string>();
   const outputsObj = bodyValue(1);
   if (outputsObj instanceof CborArray) {
@@ -133,7 +107,7 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
       try {
         outputAddresses.add(Address.fromBuffer(addrObj.bytes).toString());
       } catch {
-        // non-Shelley address bytes — nothing cached under a bech32 key for it
+        // non-Shelley address bytes: nothing cached under a bech32 key
       }
     }
   }
@@ -142,22 +116,11 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
 }
 
 /**
- * Maps builder errors to typed BackendErrors
- * Used by the Buildooor transaction builder.
- * When no assetUnit is provided, extracts it from the error message if possible
- * (e.g. "not enough <policyId.assetName>"), falling back to 'lovelace'.
- * @param err Error from builder
- * @param assetUnit Optional asset unit override (auto-extracted from error message if omitted)
- * @param context Optional build-flow context (e.g. the collateral/funding partition)
- *                appended to the consumer-facing message — the builder's own message
- *                has no way of knowing it
- * @throws {InsufficientFundsError} if error is related to insufficient funds
- * @throws {Error} original error if not mappable
+ * Maps Buildooor errors to typed BackendErrors. Asset unit is parsed from "not enough <unit>" when not given;
+ * `context` (e.g. the collateral partition) is appended to the consumer-facing message.
  */
 export function mapBuilderError(err: unknown, assetUnit?: string, context?: string): never {
-  // Already-typed errors carry their own status + payload (amounts, asset units,
-  // validation details) — re-wrapping them into a generic InsufficientFundsError
-  // because their MESSAGE happens to contain "balance"/"insufficient" destroys that.
+  // Typed errors keep their own status and payload
   if (err instanceof BackendError) {
     throw err;
   }
@@ -173,8 +136,7 @@ export function mapBuilderError(err: unknown, assetUnit?: string, context?: stri
       const match = msg.match(/not enough\s+([a-f0-9.]+)/i);
       return match?.[1] || 'lovelace';
     })();
-    // The builder knows no amounts here — surface its own message (plus the build
-    // context) instead of a meaningless "required 0, available 0".
+    // No amounts known here: surface the builder's own message instead of "required 0, available 0"
     throw new InsufficientFundsError(effectiveUnit, 0n, 0n, err,
       context ? `${rawMsg} (${context})` : rawMsg);
   }
@@ -182,11 +144,7 @@ export function mapBuilderError(err: unknown, assetUnit?: string, context?: stri
   throw err;
 }
 
-/**
- * Parse asset unit string into policyId and assetName
- * Format: policyId (56 hex chars) + assetName (remaining hex)
- * Used by the Buildooor transaction builder
- */
+/** Split an asset unit into policyId (56 hex chars) and assetName (remaining hex). */
 export function parseAssetUnit(assetUnit: string): { policyId: string; assetName: string } {
   return {
     policyId: assetUnit.substring(0, 56),
@@ -194,7 +152,7 @@ export function parseAssetUnit(assetUnit: string): { policyId: string; assetName
   };
 }
 
-/** Allowed keys in PlutusData JSON — strip anything else for defense-in-depth */
+/** Allowed keys in PlutusData JSON; anything else is stripped */
 const PLUTUS_DATA_ALLOWED_KEYS = new Set([
   'constructor', 'constr', 'fields', 'int', 'bytes', 'list', 'map', 'k', 'v'
 ]);
@@ -210,11 +168,7 @@ function sanitizePlutusKeys(obj: Record<string, unknown>): Record<string, unknow
   return clean;
 }
 
-/**
- * Normalize PlutusData JSON from cardano-cli format ("constructor") to
- * Buildooor format ("constr"), recursively through fields/list/map.
- * Also strips unrecognized keys for safety.
- */
+/** Normalize cardano-cli "constructor" to Buildooor "constr" recursively; strips unknown keys. */
 function normalizeConstructorKey(obj: Record<string, unknown>): Record<string, unknown> {
   const safe = sanitizePlutusKeys(obj);
   const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -247,17 +201,7 @@ function normalizeConstructorKey(obj: Record<string, unknown>): Record<string, u
   return safe;
 }
 
-/**
- * Convert JSON value to Buildooor PlutusData (Data type).
- * Accepts both cardano-cli format ("constructor") and Buildooor format ("constr").
- * - { "int": 42 } → DataI(42)
- * - { "bytes": "deadbeef" } → DataB("deadbeef")
- * - { "list": [...] } → DataList([...])
- * - { "map": [{ "k": ..., "v": ... }] } → DataMap([...])
- * - { "constructor": 0, "fields": [...] } or { "constr": 0, "fields": [...] } → DataConstr(0, [...])
- * @param json JSON value representing PlutusData
- * @returns Buildooor Data object
- */
+/** JSON (`int` / `bytes` / `list` / `map` / `constructor`|`constr`) to Buildooor PlutusData. */
 export function jsonToPlutusData(json: JSONValue): Data {
   if (json === null || json === undefined) {
     throw new Error('PlutusData JSON cannot be null or undefined');
@@ -270,21 +214,13 @@ export function jsonToPlutusData(json: JSONValue): Data {
 }
 
 /**
- * Normalize a backend-provided inline datum to canonical CBOR hex.
- *
- * Backends report inline datums in different shapes:
- * - Blockfrost: hex CBOR string (e.g. "19a6aa")
- * - Koios (_extended): wrapper { bytes: "<hex>", value: { ...PlutusData JSON... } }
- * - Koios (sometimes empty): { bytes: null, value: null }
- * - Some endpoints: raw PlutusData JSON ({ "int": 42 } / { "constructor": 0, "fields": [] })
- *
- * Returns hex CBOR (lowercase) or null. Defensive: returns null on unknown
- * shapes rather than throwing — backend mappers must not crash on malformed data.
+ * Backend inline datum to lowercase CBOR hex: hex string (Blockfrost), `{ bytes, value }` wrapper (Koios)
+ * or raw PlutusData JSON. Returns null on unknown shapes instead of throwing.
  */
 export function inlineDatumToHex(datum: unknown): string | null {
   if (datum === null || datum === undefined) return null;
 
-  // Already hex CBOR (Blockfrost path, or pre-normalized)
+  // Already hex CBOR
   if (typeof datum === 'string') {
     const s = datum.trim();
     if (!s) return null;
@@ -295,8 +231,7 @@ export function inlineDatumToHex(datum: unknown): string | null {
 
   const obj = datum as Record<string, unknown>;
 
-  // Koios wrapper: { bytes: "<hex>", value: <PlutusData JSON> }.
-  // Distinguished from raw PlutusData {bytes:"deadbeef"} by the presence of `value`.
+  // Koios wrapper { bytes, value }; `value` distinguishes it from raw PlutusData { bytes }
   if ('value' in obj && typeof obj.bytes === 'string' && obj.bytes.length > 0) {
     const hex = obj.bytes.trim();
     return /^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0 ? hex.toLowerCase() : null;
@@ -321,26 +256,9 @@ export function inlineDatumToHex(datum: unknown): string | null {
 export type ScriptParamUplcType = 'data' | 'bytes' | 'int' | 'bool' | 'unit';
 
 /**
- * Encode a single script parameter into the UPLC constant the parameterized
- * script expects.
- *
- * A script parameter is applied as a UPLC constant whose TYPE must match what
- * the compiled validator expects for that parameter. Two input shapes are
- * accepted:
- *
- *  1. Typed — `{ "uplc": "<type>", "value": <...> }`:
- *       - `"data"`  → `UPLCConst.data(...)`        value: PlutusData JSON ("constr"/cardano-cli form)
- *       - `"bytes"` → `UPLCConst.byteString(...)`  value: even-length hex string
- *       - `"int"`   → `UPLCConst.int(...)`         value: number | numeric string
- *       - `"bool"`  → `UPLCConst.bool(...)`        value: boolean
- *       - `"unit"`  → `UPLCConst.unit`             value: omitted
- *     Required for compilers whose scalar params are NATIVE-typed rather than
- *     Data-wrapped (e.g. Pebble: `param x: PubKeyHash` expects a native
- *     `bytestring`, not a `Data` bytestring).
- *
- *  2. Bare PlutusData object (e.g. `{ "bytes": "ab.." }`, `{ "constructor": 0, ... }`)
- *     — shorthand for `{ "uplc": "data", "value": <object> }`. This is the
- *     Aiken / CIP-57 blueprint convention, where every parameter is Data.
+ * Encode a script parameter as the UPLC constant of the type the validator expects: typed
+ * `{ uplc: data|bytes|int|bool|unit, value }` for native-typed params, or a bare PlutusData object
+ * (Aiken / CIP-57 convention) as shorthand for `uplc: "data"`.
  */
 export function encodeScriptParam(param: JSONValue): UPLCConst {
   if (
@@ -383,41 +301,32 @@ export function encodeScriptParam(param: JSONValue): UPLCConst {
         throw new Error(`Unknown script param uplc type "${String(uplc)}"; expected one of: data, bytes, int, bool, unit`);
     }
   }
-  // Bare PlutusData → apply as Data (Aiken / blueprint convention)
+  // Bare PlutusData: apply as Data
   return UPLCConst.data(jsonToPlutusData(param));
 }
 
 /**
- * Apply parameters to a parameterized PlutusV3 script (CBOR-wrapped flat UPLC).
- * Each parameter becomes a successive UPLC Application wrapping the program body.
- *
- * Parameters are applied in their declared UPLC type via {@link encodeScriptParam}:
- * pass `{ uplc, value }` entries for native-typed params (e.g. Pebble scalars),
- * or bare PlutusData objects for the Data convention (Aiken / CIP-57 blueprints).
- *
- * @param scriptHex CBOR hex of the unapplied Plutus script (as output by Aiken/Pebble/Plutus compilers)
- * @param params Array of script parameters (typed `{uplc,value}` and/or bare PlutusData JSON) to apply in order
- * @returns CBOR hex of the applied script (ready for transaction building)
+ * Apply parameters to a parameterized PlutusV3 script (CBOR-wrapped flat UPLC): each parameter becomes a
+ * UPLC Application around the program body, encoded via {@link encodeScriptParam}.
+ * @returns CBOR hex of the applied script
  */
 export function applyScriptParameters(scriptHex: string, params: JSONValue[]): string {
   if (!Array.isArray(params) || params.length === 0) {
     throw new Error('Script parameters must be a non-empty array');
   }
 
-  // 1. CBOR-decode script hex → get inner flat UPLC bytes
+  // CBOR-unwrap to the flat UPLC bytes
   const cborObj = Cbor.parse(scriptHex) as CborBytes;
   const flatBytes = cborObj.bytes;
 
-  // 2. Flat-decode → UPLCProgram
   const program = UPLCDecoder.parse(flatBytes, 'flat');
 
-  // 3. Apply each parameter as Application(body, <typed UPLC constant>)
   let body = program.body;
   for (const param of params) {
     body = new Application(body, encodeScriptParam(param));
   }
 
-  // 4. Create new program with applied body, flat-encode, CBOR-wrap
+  // Flat-encode the applied program and CBOR-wrap it again
   const applied = new UPLCProgram(program.version, body);
   const appliedFlatBytes = compileUPLC(applied);
   const cborEncoded = Cbor.encode(new CborBytes(appliedFlatBytes));

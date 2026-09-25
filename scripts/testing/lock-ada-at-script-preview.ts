@@ -35,10 +35,8 @@ const NETWORK_ID = 0;
 // ---------------------------------------------------------------------------
 
 /**
- * Derive the script address (enterprise, no staking) from a PlutusV3 script CBOR hex.
- * Uses the same Buildooor/HarmonicLabs path as the server (Script.fromCbor →
- * blake2b_224(0x03 || cbor) → enterprise bech32) so the address matches what the
- * service derives.
+ * Derives the enterprise script address the same way the server does
+ * (Script.fromCbor → blake2b_224(0x03 || cbor) → bech32), so both match.
  */
 function deriveScriptAddress(scriptCborHex: string, networkId: number): string {
   const scriptHash = Script.fromCbor(Buffer.from(scriptCborHex, 'hex')).hash.toString();

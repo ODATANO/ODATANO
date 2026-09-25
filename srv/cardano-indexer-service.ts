@@ -4,6 +4,7 @@ import { rejectInvalid, rejectMissing, TransactionValidationError } from './util
 import { getCrawler, isCrawlerRunning, isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
 import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
 import { importUtxoSet } from './blockchain/crawler/utxo-set-import';
+import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -14,6 +15,22 @@ const logger = cds.log('CardanoIndexerService');
 /** One import at a time per process; the promise is only used as the busy flag. */
 let utxoSetImportInFlight: Promise<unknown> | null = null;
 
+/** The certificate backfill of this process: one at a time, state kept until the next start. */
+interface CertificateBackfillState extends CertificateBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  fromSlot: number;
+  toSlot: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+/** Set while a start request is validated, so a second request cannot start a parallel run. */
+let certificateBackfillStarting = false;
+let certificateBackfill: CertificateBackfillState = {
+  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
+  startedAt: null, finishedAt: null, error: null,
+};
+
 function utxoSetConfigured(): boolean {
   try {
     return Boolean(loadCrawlerConfigFromEnv()?.utxoSet);
@@ -23,16 +40,15 @@ function utxoSetConfigured(): boolean {
 }
 
 /**
- * CardanoIndexerService handlers — thin control/observability surface over the crawler
- * singleton (srv/blockchain/crawler). Engine logic lives there; this only reads the
- * cursor and starts/stops the crawler.
+ * CardanoIndexerService handlers: control/observability surface over the crawler
+ * singleton (srv/blockchain/crawler). Reads the cursor and starts/stops the crawler.
  */
 module.exports = (srv: cds.Service) => {
 
   // getLiveness — unauthenticated probe (@requires: 'any'); no handleRequest, no app context.
   srv.on('getLiveness', async () => buildLiveness());
 
-  // getStatus — live run state + sync progress (numeric fields as strings, CAP-10 aligned)
+  // getStatus — live run state + sync progress (numeric fields as strings, CAP 10 convention)
   srv.on('getStatus', async (req: Request) => {
     return handleRequest(req, async (db) => {
       const cursor = await readCursor(db);
@@ -43,8 +59,7 @@ module.exports = (srv: cds.Service) => {
       return {
         running: isCrawlerLeaseActive(cursor),
         syncStatus: cursor?.syncStatus ?? 'stopped',
-        // Process-local by nature: the source is what THIS instance ingests from. A
-        // standby that does not hold the lease reports null, as does a stopped crawler.
+        // Process-local: a standby without the lease or a stopped crawler reports null.
         source: getCrawler()?.getActiveSource() ?? null,
         lastSlot: String(cursor?.lastSlot ?? 0),
         lastHeight: String(lastHeight),
@@ -59,12 +74,70 @@ module.exports = (srv: cds.Service) => {
           importedAt: cursor?.utxoSet?.importedAt ?? null,
           error: cursor?.utxoSet?.error ?? null,
         },
+        certificateBackfill: {
+          status: certificateBackfill.status,
+          fromSlot: String(certificateBackfill.fromSlot),
+          toSlot: String(certificateBackfill.toSlot),
+          atSlot: String(certificateBackfill.atSlot),
+          blocks: certificateBackfill.blocks,
+          certificates: certificateBackfill.certificates,
+          withdrawals: certificateBackfill.withdrawals,
+          startedAt: certificateBackfill.startedAt,
+          finishedAt: certificateBackfill.finishedAt,
+          error: certificateBackfill.error,
+        },
       };
     });
   });
 
-  // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validation first,
-  // then the import runs detached (mainnet takes a while); progress via getStatus().utxoSet.
+  // backfillCertificates — second chain-sync stream over already crawled blocks; writes the
+  // certificate and withdrawal tables only. Validates, then runs detached.
+  srv.on('backfillCertificates', async (req: Request) => {
+    const data = (req.data ?? {}) as { fromSlot?: string | number | null; toSlot?: string | number | null };
+    if (data.fromSlot != null && !Number.isInteger(Number(data.fromSlot))) return rejectInvalid(req, 'backfillCertificates', 'fromSlot must be an integer', 'fromSlot');
+    if (data.toSlot != null && !Number.isInteger(Number(data.toSlot))) return rejectInvalid(req, 'backfillCertificates', 'toSlot must be an integer', 'toSlot');
+    if (certificateBackfill.status === 'running' || certificateBackfillStarting) return rejectInvalid(req, 'backfillCertificates', 'A certificate backfill is already running');
+    if (!getCardanoClient().getChainSyncBackend()) return rejectInvalid(req, 'backfillCertificates', 'No chain-sync backend available (needs Ogmios)');
+    certificateBackfillStarting = true;
+    try {
+      return await handleRequest(req, async (db) => {
+        const cursor = await readCursor(db);
+        if (!cursor) throw new TransactionValidationError('No crawler cursor yet — the backfill covers crawled blocks only.');
+        const fromSlot = data.fromSlot != null ? Number(data.fromSlot) : (cursor.startSlot ?? 0);
+        const toSlot = data.toSlot != null ? Number(data.toSlot) : cursor.lastSlot;
+        if (toSlot < fromSlot) throw new TransactionValidationError(`toSlot ${toSlot} lies before fromSlot ${fromSlot}.`);
+        if (toSlot > cursor.lastSlot) throw new TransactionValidationError(`toSlot ${toSlot} is past the crawler cursor (slot ${cursor.lastSlot}) — only crawled blocks can be backfilled.`);
+        certificateBackfill = {
+          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
+          startedAt: new Date().toISOString(), finishedAt: null, error: null,
+        };
+        void backfillCertificates({
+          client: getCardanoClient(), fromSlot, toSlot,
+          onProgress: (p) => {
+            Object.assign(certificateBackfill, p);
+            if (certificateBackfill.blocks % 20_000 < 200) logger.info(`Certificate backfill at slot ${p.atSlot}: ${p.blocks} blocks, ${p.certificates} certificates, ${p.withdrawals} withdrawals`);
+          },
+        })
+          .then((r) => { Object.assign(certificateBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            Object.assign(certificateBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+            logger.error(`Certificate backfill failed: ${message}`);
+          });
+        return {
+          accepted: true,
+          fromSlot: String(fromSlot),
+          toSlot: String(toSlot),
+          message: `Certificate backfill started for slots ${fromSlot}..${toSlot}; poll getStatus().certificateBackfill.`,
+        };
+      });
+    } finally {
+      certificateBackfillStarting = false;
+    }
+  });
+
+  // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validates, then
+  // runs detached; progress via getStatus().utxoSet.
   srv.on('importUtxoSet', async (req: Request) => {
     const data = (req.data ?? {}) as { source?: string; filePath?: string; anchorSlot?: string | number | null; anchorHash?: string | null };
     const source = data.source === 'file' || data.source === 'ogmios' ? data.source : null;
@@ -118,18 +191,15 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // resumeCrawler — (re)start from the persisted cursor using the configured source.
-  // Gated on config.enabled: the control action must not start a crawler the operator
-  // never configured (an unconfigured start would otherwise sync from genesis).
-  // NOTE: to apply CHANGED config to a running crawler, call pauseCrawler first —
-  // resume on a running crawler is a no-op by design.
+  // resumeCrawler — (re)start from the persisted cursor. Gated on config.enabled so an
+  // unconfigured crawler is never started (it would sync from genesis). Resume on a running
+  // crawler is a no-op; pauseCrawler first to apply changed config.
   srv.on('resumeCrawler', async (req: Request) => {
     let config: CrawlerConfig;
     try {
       config = loadCrawlerConfigFromEnv();
     } catch (err) {
-      // e.g. ConfigError: enabled but no start block — a config problem is the
-      // caller's 400, not a raw 500 from an escaping throw
+      // A config problem (e.g. enabled without a start block) is the caller's 400.
       return rejectInvalid(req, 'resumeCrawler', err instanceof Error ? err.message : String(err));
     }
     if (!config.enabled) {

@@ -1,9 +1,6 @@
 /**
- * Unit tests for the shared Build*-payload parsers (srv/utils/tx-request-parsers.ts).
- *
- * These parsers back BOTH the synchronous CardanoTransactionService handlers and
- * the wallet-worker's request transformation, so every accept/reject branch is
- * exercised here once instead of through two service layers.
+ * Shared Build*-payload parsers (srv/utils/tx-request-parsers.ts). They back both the
+ * CardanoTransactionService handlers and the wallet worker, so every branch is exercised here once.
  */
 
 // Imported above the vi.mock block only so `vi` is declared before it is read;

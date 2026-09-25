@@ -6,12 +6,9 @@ const pluginRoot = path.resolve(__dirname, '..');
 
 let initialized = false;
 
-/**
- * CAP Plugin registration for @odatano/core
- * This is executed when the plugin is loaded via cds-plugin.js
- */
+// CAP plugin registration for @odatano/core; loaded via cds-plugin.js.
 
-// Register service kinds so consumer apps can configure via cds.env.requires
+// Register the service kind so consumer apps can configure via cds.env.requires
 if (!cds.env.requires) {
   (cds.env as { requires?: Record<string, unknown> }).requires = {};
 }
@@ -46,9 +43,8 @@ const IMPL_PATHS = [
   model: [...PLUGIN_MODEL]
 };
 
-// CRITICAL: Also set model directly on the requires entry.
-// CAP's _link_required_services() merges kind→requires BEFORE cds-plugin.js runs,
-// so the model array on the kind is never merged. Set it directly.
+// Also set model on the requires entry: CAP merges kind→requires before cds-plugin.js
+// runs, so the model array on the kind alone is never picked up.
 const req = (cds.env.requires as Record<string, { model?: string[] } | undefined>)['odatano-core'];
 if (req) {
   req.model = [...PLUGIN_MODEL];
@@ -57,21 +53,15 @@ if (req) {
 logger.debug('Plugin registered');
 
 /**
- * Agent grants (AGENT_GRANTS_DESIGN.md). Off by default; switched on by
- * cds.requires.odatano-core.agentGrants.enabled / AGENT_GRANTS_ENABLED=true.
- * Has to run at plugin load, before CAP builds its middlewares (the auth impl
- * is swapped here). srv/server.ts makes the same call for standalone mode, where
- * this file is never loaded; the call is idempotent and never throws.
+ * Agent grants (off by default). Must run at plugin load, before CAP builds its
+ * middlewares, because it swaps the auth impl. Idempotent; server.ts repeats it for standalone.
  */
 (require('../srv/utils/agent-grants-config') as typeof import('../srv/utils/agent-grants-config'))
   .activateAgentGrants();
 
 /**
- * Rewrite @impl paths for plugin mode.
- * CDS files use relative @impl (e.g. 'srv/cardano-service') which resolves from cds.root.
- * In standalone mode cds.root IS the package root, so it works.
- * In plugin mode cds.root is the consumer app — rewrite to package-qualified paths
- * so CAP resolves via Node module resolution (node_modules/@odatano/core/srv/...).
+ * Plugin mode: relative @impl paths resolve from cds.root (the consumer app), so
+ * rewrite them to package-qualified paths that Node module resolution can find.
  */
 cds.on('loaded', (model) => {
   if (path.resolve(cds.root) === pluginRoot) return;
@@ -84,14 +74,11 @@ cds.on('loaded', (model) => {
   }
 });
 
-/**
- * Initialize blockchain components when services are served
- */
+// Initialize blockchain components once services are served.
 cds.on('served', async () => {
   if (initialized) return;
 
-  // Honor SKIP_AUTO_INIT so consumer test suites can mount the plugin without it
-  // opening real backend connections (matches srv/server.ts's standalone hook).
+  // SKIP_AUTO_INIT lets consumer test suites mount the plugin without backend connections.
   if (process.env.SKIP_AUTO_INIT === 'true') {
     logger.info('Skipping plugin auto-initialization (SKIP_AUTO_INIT=true)');
     return;
@@ -105,14 +92,11 @@ cds.on('served', async () => {
     logger.info('Plugin initialized successfully');
     initialized = true;
   } catch (err) {
-    // Don't throw - plugin failure shouldn't crash the host app
+    // Never throw: a plugin failure must not crash the host app.
     logger.error('Failed to initialize plugin:', err);
   }
 });
 
-/**
- * Graceful shutdown handler
- */
 cds.on('shutdown', async () => {
   if (!initialized) return;
 

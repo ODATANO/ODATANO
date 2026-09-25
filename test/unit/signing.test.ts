@@ -1,7 +1,6 @@
 /**
- * Unit tests for signing module (ExternalSignerModule and SignatureVerifier)
- *
- * These tests use the real @harmoniclabs libraries with valid test data
+ * ExternalSignerModule, SignatureVerifier and the witness-set helpers, on real
+ * @harmoniclabs libraries with real testnet transactions.
  */
 
 import {
@@ -46,8 +45,7 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
-// Valid test transaction CBORs from actual Cardano testnet
-// These are real Cardano testnet transactions used as fixtures
+// Real Cardano testnet transactions used as fixtures.
 
 // Unsigned transaction CBOR
 const VALID_UNSIGNED_TX_CBOR = '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6';
@@ -94,19 +92,14 @@ describe('SignatureVerifier', () => {
       }).toThrow();
     });
 
-    // Regression for new_error.md: @harmoniclabs/cardano-ledger-ts@0.5.1
-    // AuxiliaryData.fromCbor rejected Conway txs whose aux_data contained only metadata
-    // (keys outside {0} undefined). The verifier hashes the raw CBOR body bytes
-    // (array index 0) directly and never instantiates the high-level AuxiliaryData type,
-    // so it does not share the precondition bug.
+    // The verifier hashes the raw CBOR body bytes (array index 0) and never instantiates
+    // AuxiliaryData, so metadata-only aux_data (keys outside {0} undefined) cannot trip it.
     it('should extract body hash from tx with metadata-only auxiliary_data (regression)', () => {
       // Unsigned tx body (Conway) with label-674 metadata-only aux_data.
       // Body: 1 input, 1 output (lovelace only), fee, aux_data_hash.
       // Aux_data: Tag(259) map with key 0 → metadata map {674: {"msg": ["hi"]}}.
       const METADATA_ONLY_TX_CBOR = '84a500818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb000181a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680021a0002b569075820a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10f00a0d90103a100a11902a2a1636d7367816268695840';
-      // The raw-CBOR hash path only needs to read the body (array[0]); it never parses
-      // aux_data, so the AuxiliaryData precondition can't throw. We assert it does not
-      // surface that error, and (on success) that it returns a valid 64-char hex hash.
+      // Must not surface an AuxiliaryData precondition error; on success, a 64-char hex hash.
       let threw = false;
       let hash: string | undefined;
       try {
@@ -320,7 +313,7 @@ describe('ExternalSignerModule', () => {
       expect(request.signingInstructions.signerTypeHint).toBe(ExternalSignerType.CARDANO_CLI);
     });
 
-    it('should generate a network-aware cardanoCliCommand (was always NULL)', () => {
+    it('should generate a network-aware cardanoCliCommand', () => {
       const txBodyHash = verifier.extractTxBodyHash(VALID_UNSIGNED_TX_CBOR);
       const preview = module.createSigningRequest('b', VALID_UNSIGNED_TX_CBOR, txBodyHash, 'preview', 'm');
       const cmd = preview.signingInstructions.cardanoCliCommand;

@@ -10,11 +10,8 @@ const ASSET_NAME = '546f6b656e4d';
 const ASSET_UNIT = POLICY_ID + ASSET_NAME;
 
 /**
- * Upstream keepRelevant (fixed in buildooor 0.2.9, our PR) — regression tests
- * against the defects of the 0.2.6 implementation: lovelace matching the asset
- * filter (whole-set selection), tx-id-only dedup (sibling outputs collapse),
- * and number-based lovelace comparison (breaks above 2^53). Kept to catch any
- * upstream regression of the coin selection we depend on.
+ * Regression tests for upstream keepRelevant (buildooor coin selection): lovelace must
+ * not match the asset filter, dedup is by id#index, lovelace compares as bigint.
  */
 describe('keepRelevant (buildooor coin selection)', () => {
   const input = (txHash: string, index: number, lovelace: bigint, assetQty?: bigint): ITxBuildInput => {
@@ -43,8 +40,7 @@ describe('keepRelevant (buildooor coin selection)', () => {
       input('bb'.repeat(32), 0, 3_000_000n),
       input('cc'.repeat(32), 0, 200_000_000n),
     ];
-    // 2 ADA requested + 5 ADA default minimum = 7 ADA → the 100 ADA input suffices;
-    // the buggy version returned all three (every input "matches" lovelace).
+    // 2 ADA requested + 5 ADA default minimum = 7 ADA to cover
     const selected = keepRelevant(Value.lovelaces(2_000_000n), pool);
     expect(refStrs(selected)).toEqual([`${'bb'.repeat(32)}#0`, `${'aa'.repeat(32)}#0`].sort());
   });
@@ -77,8 +73,7 @@ describe('keepRelevant (buildooor coin selection)', () => {
       Buffer.from(ASSET_NAME, 'hex'),
       1n
     ));
-    // The buggy id-only dedup dropped #1 (same tx id as the asset-selected #0),
-    // leaving the lovelace requirement uncovered.
+    // id-only dedup would drop #1 and leave the lovelace requirement uncovered
     const selected = keepRelevant(requested, pool);
     expect(refStrs(selected)).toEqual([`${txHash}#0`, `${txHash}#1`]);
   });

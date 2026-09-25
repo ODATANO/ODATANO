@@ -31,8 +31,8 @@ test/
 │   ├── core.koios.test.ts                 # Koios backend test entry
 │   ├── core-ogmios.test.ts                # Ogmios backend tests (27 tests)
 │   ├── blockfrost-custom-backend.test.ts  # Custom Blockfrost endpoint configuration
-│   ├── defer-submit.test.ts               # Deferred submit path (KNOWN_ISSUES #11)
-│   ├── nested-tx-guard.test.ts            # detachedTx deadlock guard (KNOWN_ISSUES #11)
+│   ├── defer-submit.test.ts               # Deferred submit path
+│   ├── nested-tx-guard.test.ts            # detachedTx deadlock guard
 │   ├── error-handling-service.test.ts     # Service-level error validation (96 tests)
 │   ├── error-handling.backend.ts          # Backend-level error handling (11 tests)
 │   ├── odata_features.test.ts             # OData query feature tests (41 tests)

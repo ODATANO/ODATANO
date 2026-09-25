@@ -1,9 +1,6 @@
 // Value conversion for migrate-sqlite-to-postgres (SQLite row -> CAP insert).
-// Integers are read as BigInt: exact for Integer64, converted for the small
-// types. A Decimal or Integer64 that SQLite holds as a REAL at or beyond 2^53
-// is copied as the integer that double represents (the chain constants stored
-// this way, such as the 45e15 lovelace max supply, are exactly representable);
-// digits SQLite already rounded at write time cannot be recovered.
+// Integers arrive as BigInt (exact for Integer64). A Decimal or Integer64 that
+// SQLite holds as a REAL at or beyond 2^53 is copied as the integer that double represents.
 const SMALL_INTS = new Set(['cds.Integer', 'cds.Int32', 'cds.Int16', 'cds.UInt8']);
 const BIG_INTS = new Set(['cds.Integer64', 'cds.Int64']);
 const MAX_EXACT_REAL = 2 ** 53;
@@ -36,7 +33,7 @@ export function convertValue(el, v, column = '?') {
     return v;
 }
 
-/** One SQLite row as CAP insert data; columns the model no longer knows are dropped. */
+/** One SQLite row as CAP insert data; columns absent from the model are dropped. */
 export function convertRow(def, row) {
     const out = {};
     for (const [k, v] of Object.entries(row)) {

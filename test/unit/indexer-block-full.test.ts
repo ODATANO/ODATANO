@@ -1,8 +1,6 @@
 /**
- * CardanoIndexer.indexBlockFull + resolveInputs (crawler C3): bulk one-UPSERT-per-table
- * writes, the per-epoch memo (incl. negative caching), and the Ogmios bare-ref input
- * backfill (same-block, prior-block via DB, and skip of already-resolved inputs).
- * Mock style mirrors cardano-indexer.test.ts (string entity proxies, real mappers).
+ * CardanoIndexer.indexBlockFull + resolveInputs: one UPSERT per table, the per-epoch memo,
+ * and the Ogmios bare-ref input backfill. String entity proxies, real mappers.
  */
 
 type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
@@ -402,9 +400,7 @@ describe('CardanoIndexer.applyCollateralFees (via indexBlockFull)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Mint/burn history (analytics coverage)
-// ---------------------------------------------------------------------------
 
 const POLICY = 'a1'.repeat(28);
 const UNIT_A = `${POLICY}${Buffer.from('TOKA').toString('hex')}`;
@@ -470,8 +466,8 @@ describe('CardanoIndexer.indexBlockFull — mint/burn history', () => {
     ]);
   });
 
-  // The two exclusions below only bite on the delta path, i.e. on Blockfrost — which since
-  // rc.12 maps `collateral`/`reference` onto these TxInputLine names instead of dropping them.
+  // The two exclusions below only bite on the delta path (Blockfrost), where
+  // collateral/reference inputs arrive with these flags on the TxInputLine.
   it('ignores collateral declared by a transaction whose script phase succeeded', async () => {
     const { indexer } = makeIndexer();
     const hash = 'm8'.padEnd(64, '0');
@@ -543,9 +539,7 @@ describe('CardanoIndexer.indexBlockFull — mint/burn history', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Asset catalogue (bare rows)
-// ---------------------------------------------------------------------------
 
 const assetWrites = () => upsertsFor('AssetsTable');
 const assetSelects = () => runs.filter(q => q._op === 'SELECT.many' && q.entity === 'AssetsTable');
@@ -631,9 +625,7 @@ describe('CardanoIndexer.indexBlockFull — asset catalogue', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Crawler-fed ledger state: outpoint on inputs, certificates, withdrawals
-// ---------------------------------------------------------------------------
 describe('CardanoIndexer.indexBlockFull — outpoint, certificates, withdrawals', () => {
   const STAKE = 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn';
   const POOL = 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r';
@@ -697,9 +689,7 @@ describe('CardanoIndexer.indexBlockFull — outpoint, certificates, withdrawals'
   });
 });
 
-// ---------------------------------------------------------------------------
 // Crawler-fed UTxO set: the indexer applies a block only past the anchor
-// ---------------------------------------------------------------------------
 describe('CardanoIndexer.indexBlockFull — ledger state gating', () => {
   const ledger = () => (applyBlockToLedger as unknown as Mock);
   beforeEach(() => {

@@ -23,32 +23,17 @@ export interface FinalizeParams {
   signerInfo?: string;
 }
 
-// Lazy require breaks the srv/server.ts <-> this-module import cycle (the
-// server calls redriveInterruptedSubmissions at boot; we need its app-context
-// getters at runtime only). Same pattern as src/plugin.ts.
+// Lazy require avoids the srv/server.ts <-> this-module import cycle; the app-context
+// getters are only needed at runtime.
 function server(): typeof import('../../server') {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   return require('../../server') as typeof import('../../server');
 }
 
 /**
- * Submit a verified+claimed signing request to the blockchain and persist the
- * outcome — DELIBERATELY outside the caller's request transaction.
- *
- * The caller must already have durably committed `status:'submitting'` (the
- * claim). This function then:
- *   1. submits with NO DB write-lock held (the lock was the reason concurrent
- *      submits serialized and the SQLite busy-timeout could fire mid-network),
- *   2. on submit failure: marks the request 'failed' in its own committed tx
- *      and rethrows (NOT rolled back to a pre-submit status — losing the
- *      attempt would hide a tx the node may have accepted),
- *   3. on success: persists the submission + 'submitted' status in a committed
- *      transaction.
- *
- * Crash window: a process death between (1) and (3) leaves the request durably
- * at 'submitting'. Deferred-path requests carry their signed CBOR on the row
- * and are re-driven at the next boot (redriveInterruptedSubmissions); sync-path
- * requests are left for the operator/poller exactly as before.
+ * Submit a claimed signing request (status 'submitting' already committed by the caller) and
+ * persist the outcome in detached transactions, so no DB lock is held across the network call.
+ * Submit failure → 'failed' in its own tx, then rethrow. A crash before finalize leaves 'submitting'.
  */
 export async function submitAndFinalize(
   SigningRequests: unknown,
@@ -72,10 +57,8 @@ export async function submitAndFinalize(
   try {
     await server().getCardanoClient().submitTransaction(params.fullSignedTxCbor);
   } catch (submitErr: unknown) {
-    // Already-submitted means the tx reached the mempool — e.g. the first backend accepted
-    // it but its response was lost and a fallback observed the duplicate. That is SUCCESS,
-    // not failure: finalize it as 'submitted' (same as the happy path) instead of durably
-    // recording a spurious 'failed' for a tx the node already holds.
+    // Already-submitted means the tx reached the mempool (e.g. first backend accepted it, response
+    // lost, fallback saw the duplicate): finalize as 'submitted' rather than recording a spurious 'failed'.
     if (submitErr instanceof TransactionAlreadySubmittedError) {
       logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
         'Submit reported already-submitted — finalizing as submitted (tx already in mempool)');
@@ -96,16 +79,9 @@ export async function submitAndFinalize(
 }
 
 /**
- * Deferred-submit scheduler (KNOWN_ISSUES #11, Layer 2).
- *
- * Called by an action handler AFTER verify + claim ran on the CALLER's
- * transaction. Hooks the request's post-commit event: only once the caller's
- * root transaction has committed (claim durable, pooled connection released)
- * does the network submit + finalize run — detached via setImmediate +
- * runWithoutAmbientTx, so no ambient transaction is held across it.
- *
- * If the caller's transaction rolls back instead, 'succeeded' never fires and
- * nothing was claimed — strictly consistent.
+ * Deferred submit: runs submitAndFinalize only after the caller's root transaction has committed
+ * (claim durable, connection released), detached via setImmediate + runWithoutAmbientTx.
+ * If the caller rolls back, 'succeeded' never fires and nothing was claimed.
  */
 export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, params: FinalizeParams): void {
   req.on('succeeded', () => {
@@ -124,15 +100,9 @@ export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, p
 }
 
 /**
- * Boot-time recovery: re-drive submissions that were claimed on the deferred
- * path (status 'submitting' WITH persisted signedTxCbor) but never finalized —
- * i.e. the process died between the caller's commit and the detached submit.
- *
- * Safe to repeat: a tx the node already holds finalizes as 'submitted' via the
- * TransactionAlreadySubmittedError path in submitAndFinalize. Rows at
- * 'submitting' WITHOUT signed CBOR (sync-path crash window) are deliberately
- * left untouched for the operator/poller, exactly as before Layer 2.
- *
+ * Boot-time recovery: re-drive rows at 'submitting' WITH persisted signedTxCbor (process died between
+ * the caller's commit and the detached submit). Idempotent: a tx the node already holds finalizes as
+ * 'submitted'. Rows without signed CBOR are left for the operator/poller.
  * @returns number of rows re-driven (attempted, not necessarily succeeded)
  */
 export async function redriveInterruptedSubmissions(): Promise<number> {
@@ -155,8 +125,7 @@ export async function redriveInterruptedSubmissions(): Promise<number> {
   let attempted = 0;
   for (const row of rows) {
     try {
-      // Re-verify from the persisted CBOR (deterministic — it passed at claim
-      // time; this recomputes the witness metadata the finalize step persists).
+      // Re-verify from the persisted CBOR to recompute the witness metadata the finalize step persists.
       const verificationResult = getExternalSignerModule().verifyOrThrow(row.signedTxCbor, row.txBodyHash);
       attempted++;
       await submitAndFinalize(SigningRequests, {
@@ -170,9 +139,8 @@ export async function redriveInterruptedSubmissions(): Promise<number> {
       });
       logger.info({ signingRequestId: row.id, txHash: row.txBodyHash }, 'Interrupted submission re-driven');
     } catch (err: unknown) {
-      // submitAndFinalize marked the row 'failed' on submit errors; verification
-      // errors leave it at 'submitting' for manual inspection (should not happen
-      // for CBOR that verified once).
+      // Submit errors already marked the row 'failed'; verification errors leave it at
+      // 'submitting' for manual inspection.
       logger.error({ err, signingRequestId: row.id }, 'Re-drive of interrupted submission failed');
     }
   }

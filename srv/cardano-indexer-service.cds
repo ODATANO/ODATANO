@@ -15,8 +15,7 @@ using {odatano.cardano as db} from '../db/schema';
  * on every request BEFORE the operation's own annotation, so an operation-level
  * `@requires: 'any'` can never open a single function on an otherwise
  * authenticated service (anonymous callers get the 401 challenge first). The
- * requirement therefore sits on each element, and getLiveness() alone is 'any' —
- * the same layout as NIGHTGATE's indexer service.
+ * requirement therefore sits on each element, and getLiveness() alone is 'any'.
  */
 // Service-level 'any' on purpose: CAP authorizes the service BEFORE the operation and
 // treats a service without a service-level @requires as authenticated-user under
@@ -53,6 +52,31 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         consecutiveErrors : Integer;
         // crawler-fed ledger state (crawler.utxoSet): snapshot anchor + validity
         utxoSet           : UtxoSetStatus;
+        // one-off certificate/withdrawal backfill over already crawled blocks (this process)
+        certificateBackfill : CertificateBackfillStatus;
+    }
+
+    @title      : 'Certificate Backfill Status'
+    @description: 'Progress of the certificate/withdrawal backfill started with backfillCertificates; process-local, none after a restart'
+    type CertificateBackfillStatus {
+        status       : String;    // none | running | done | failed
+        fromSlot     : String;
+        toSlot       : String;
+        atSlot       : String;    // last slot handled
+        blocks       : Integer64;
+        certificates : Integer64;
+        withdrawals  : Integer64;
+        startedAt    : Timestamp;
+        finishedAt   : Timestamp;
+        error        : String;
+    }
+
+    @title      : 'Certificate Backfill Result'
+    type CertificateBackfillResult {
+        accepted : Boolean;
+        fromSlot : String;
+        toSlot   : String;
+        message  : String;
     }
 
     @title      : 'UTxO Set Status'
@@ -112,8 +136,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     // Anonymous on purpose: a liveness probe carries no credentials. 200 as long
     // as the process answers — no backend or DB probe, no secrets, no backend
     // names, no API key state. Readiness stays with getStatus and the worker
-    // status, which remain authenticated. Mirrors NIGHTGATE's
-    // `/api/v1/indexer/getLiveness()`, so a gateway probes both products the same way.
+    // status, which remain authenticated.
     @title      : 'Get Liveness'
     @description: 'Unauthenticated liveness probe: 200 while the process answers. Docker HEALTHCHECK and upstream probes use this instead of the service document.'
     @requires   : 'any'
@@ -133,4 +156,9 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @description: 'One-off import of the UTxO set that anchors crawler.utxoSet. Pause the crawler first. source=ogmios acquires the set at the crawler cursor (crawl must be at the tip); source=file loads a cardano-cli query utxo --whole-utxo dump (.json, or .ndjson from jq -c to_entries[]) taken at anchorSlot/anchorHash. Runs in the background; progress via getStatus().utxoSet.'
     @requires   : 'Admin'
     action   importUtxoSet(source: String, filePath: String, anchorSlot: Integer64, anchorHash: String) returns UtxoSetImportResult;
+
+    @title      : 'Backfill Certificates'
+    @description: 'Fill TransactionCertificates and TransactionWithdrawals for blocks the crawl already holds, from a second chain-sync stream (Ogmios). fromSlot defaults to the crawl start, toSlot to the cursor. Writes only those two tables; the crawler may keep running. Runs in the background; progress via getStatus().certificateBackfill.'
+    @requires   : 'Admin'
+    action   backfillCertificates(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
 }

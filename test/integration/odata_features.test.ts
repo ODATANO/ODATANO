@@ -120,7 +120,6 @@ describe('OData Query Features', () => {
         expect(status1).to.equal(200);
         expect(status2).to.equal(200);
 
-        // If both have results, they should be different
         if (data1.value.length > 0 && data2.value.length > 0) {
           expect(data1.value[0].hash).to.not.equal(data2.value[0].hash);
         }
@@ -142,7 +141,6 @@ describe('OData Query Features', () => {
         const { status, data } = await test.get(`/odata/v4/cardano-odata/Transactions?$count=true&$top=5`);
         expect(status).to.equal(200);
 
-        // OData v4 includes @odata.count when $count=true
         if (data['@odata.count'] !== undefined) {
           // CAP 10: @odata.count serializes as string (Edm.Int64) — accept both, normalize for range check
           expect(typeof data['@odata.count']).to.be.oneOf(['number', 'string']);

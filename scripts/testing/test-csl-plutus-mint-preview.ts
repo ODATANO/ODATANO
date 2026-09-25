@@ -5,27 +5,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 /**
- * Test script: CSL PlutusV3 Pharma Trace Mint on Preview
+ * PlutusV3 parameterized mint on preview (pharma_trace validator, Aiken v1.1.21):
+ * applies the manufacturer VKH via scriptParamsJson, sets requiredSignersJson and
+ * an inline ChainOfCustody datum, then signs with cardano-cli and submits.
  *
- * Purpose: Verify that the CSL transaction builder correctly handles PlutusV3
- * cost models (297 parameters, Conway Chang 2) and does NOT produce
- * PPViewHashesDontMatch errors.
- *
- * Uses the pharma_trace parameterized PlutusV3 validator (Aiken v1.1.21).
- * The mint validator requires:
- *   - scriptParamsJson with manufacturer VKH (applies the parameter to the script)
- *   - requiredSignersJson with manufacturer VKH (extra_signatories check)
- *   - inlineDatumJson with ChainOfCustody datum (spend validator needs it)
- *
- * Prerequisites:
- *   1. ODATANO running with TX_BUILDERS=csl:
- *        TX_BUILDERS=csl BACKENDS=blockfrost BLOCKFROST_API_KEY=preview_... npm run cds:watch
- *   2. payment.skey in project root (preview testnet wallet)
- *   3. Docker available (for cardano-cli signing)
- *   4. Wallet funded with preview tADA
- *
- * Usage:
- *   npx tsx scripts/test-csl-plutus-mint-preview.ts
+ * Prerequisites: server running with a Blockfrost backend, payment.skey in the
+ * project root, Docker for cardano-cli signing, wallet funded with preview tADA.
+ * Usage: npx tsx scripts/testing/test-csl-plutus-mint-preview.ts
  */
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
@@ -39,9 +25,8 @@ const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 // Wallet address on preview (change to your own)
 const SENDER_ADDRESS = "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp";
 
-// Manufacturer verification key hash (28 bytes hex) — derived from your payment.skey
-// This is the VKH of the wallet that signs the transaction.
-// Obtain via: cardano-cli conway address key-hash --payment-verification-key-file payment.vkey
+// Manufacturer VKH (28 bytes hex) = key hash of the signing wallet. Obtain via:
+// cardano-cli conway address key-hash --payment-verification-key-file payment.vkey
 const MANUFACTURER_VKH = "374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a1";
 
 // ---------------------------------------------------------------------------
@@ -130,7 +115,7 @@ async function main() {
       process.exit(1);
     }
 
-    // Step 1: Build PlutusV3 Mint Transaction via CSL
+    // Step 1: Build PlutusV3 Mint Transaction
     console.log('\n[1/3] Building PlutusV3 Mint Transaction (CSL builder)...');
     console.log('       scriptParamsJson applied → policyId derived from applied script');
 
@@ -191,7 +176,6 @@ async function main() {
     console.log('signedTxCbor extracted (starts with', signedTxCbor.slice(0, 6), ')');
 
     // Step 3: Submit Transaction
-    // PPViewHashesDontMatch would occur HERE if cost models are wrong
     console.log('\n[3/3] Submitting Transaction...');
     console.log('       (PPViewHashesDontMatch would appear here if cost model fix failed)');
 

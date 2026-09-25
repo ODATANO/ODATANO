@@ -78,17 +78,15 @@ interface KoiosTxInfo {
   collateral_output?: KoiosTxIO | KoiosTxIO[] | null;
   reference_inputs?: KoiosTxIO[] | null;
   /**
-   * Net mint/burn of the transaction (`_assets: true`), quantity signed — negative is a burn.
-   * Absent on older Koios versions; the indexer then derives the delta from inputs/outputs,
-   * which is exact here because Koios resolves every input's `asset_list`.
+   * Net mint/burn (`_assets: true`), quantity signed — negative is a burn. Absent on older
+   * Koios; the indexer then derives the delta from inputs/outputs.
    */
   assets_minted?: Array<{ policy_id?: string; asset_name?: string | null; quantity?: string | number }> | null;
   /** `_withdrawals: true` only (crawler batch path); null/absent otherwise. */
   withdrawals?: Array<{ amount?: string | number; stake_addr?: string }> | null;
   /**
    * `_certs: true` only (crawler batch path). `type` is Koios' own vocabulary
-   * (stake_registration, pool_delegation, vote_delegation, pool_update, pool_retire, …);
-   * `info` carries the certificate fields, named per type.
+   * (stake_registration, pool_delegation, …); `info` carries per-type fields.
    */
   certificates?: Array<{ index?: number | null; type?: string; info?: Record<string, unknown> | null }> | null;
 }
@@ -107,11 +105,8 @@ interface KoiosUtxoRow {
 }
 
 /**
- * Koios `reference_script` (with `_extended: true`) is an OBJECT
- * `{ hash, size, type, bytes, value }` — the previous `as string` cast handed
- * that object downstream and broke the v1.6.1 input-side refScript feature.
- * Returns the full script CBOR bytes when present (what the local Plutus eval
- * needs), falling back to the hash (resolved on-chain only).
+ * Koios `reference_script` (`_extended: true`) is an object `{ hash, size, type, bytes, value }`.
+ * Returns the full script CBOR when present (needed for local Plutus eval), else the hash.
  */
 function koiosRefScriptBytes(ref: unknown): string | null {
   if (!ref) return null;
@@ -128,33 +123,22 @@ function koiosRefScriptHash(ref: unknown): string | null {
   return obj.hash || null;
 }
 
-/**
- * Sort Koios /address_txs rows newest-first. Koios gives no ordering guarantee —
- * a bare `slice(0, limit)` returned ARBITRARY rather than recent transactions
- * (Blockfrost requests `order: 'desc'` for the same data).
- */
+/** Sort Koios /address_txs rows newest-first — Koios gives no ordering guarantee. */
 function sortAddressTxsDesc<T extends { block_height?: number | string | null; block_time?: number | null }>(rows: T[]): T[] {
   return [...rows].sort((a, b) =>
     Number(b.block_height ?? b.block_time ?? 0) - Number(a.block_height ?? a.block_time ?? 0)
   );
 }
 
-/**
- * KoiosBackend Implementation for CardanoBackend Interface
- * Implements the CardanoBackend interface using Koios API with Axios
- */
+/** CardanoBackend implementation on the Koios REST API (Axios). */
 export class KoiosBackend implements CardanoBackend, PaginatingBackend, EnumeratingBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   private network: Network;
 
-  /**
-   * Constructor
-   */
   constructor(network: Network, timeoutMs: number, apiKey?: string) {
     const headers: Record<string, string> = {};
 
-    // Add Authorization header if API key is configured
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
@@ -166,12 +150,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     });
     this.network = network;
 
-    // Koios runs multiple instances behind a load balancer; during their schema
-    // migrations single instances serve broken SQL functions (PostgREST 400,
-    // e.g. code 42703 "column … does not exist") or hit statement timeouts
-    // (57014) while the rest are healthy. Such failures are instance-specific,
-    // so a short bounded retry usually lands on a healthy instance. Genuine
-    // client-input errors (PG class 22 etc.) are not retried.
+    // Koios is load-balanced; single instances serve broken SQL functions (PostgREST 400,
+    // e.g. 42703) or statement timeouts (57014) while others are healthy, so a short
+    // bounded retry usually lands on a healthy instance. Client-input errors are not retried.
     this.api.interceptors.response.use(undefined, async (error: AxiosError) => {
       const config = error.config as (InternalAxiosRequestConfig & { pgRetryCount?: number }) | undefined;
       const pgCode = (error.response?.data as { code?: unknown } | undefined)?.code;
@@ -189,11 +170,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     });
   }
 
-  /** 
-   * Initialize the backend 
-   */
+  /** Probe /tip to verify connectivity. */
   async init(): Promise<boolean> {
-    // Test connection by fetching latest block
     try {
     await this.api.get('/tip');
     } catch (error) {
@@ -203,16 +181,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Retry a Koios API call up to 3 times with exponential backoff if the
-   * result is an empty array.  Koios sometimes returns [] transiently for
-   * valid queries — a single retry is not always sufficient for historical
-   * epoch lookups, so we retry with increasing delays (500 → 1000 → 2000 ms).
+   * Retry (500 → 1000 → 2000 ms) when Koios transiently returns [] for a valid query.
+   * Element type is `any` on purpose: only non-emptiness is checked; rows are narrowed at use sites.
    */
-  // Type-agnostic retry helper: it only checks that `.data` is a non-empty
-  // array, so the element type is intentionally `any` to avoid forcing every
-  // Koios endpoint call site (block_info, epoch_info, account_info, …) to
-  // declare a row shape just for the empty-array retry path. Row narrowing
-  // happens at the use sites.
   private async fetchWithRetryOnEmpty(
     fn: () => Promise<{ data: any[] }>, // eslint-disable-line @typescript-eslint/no-explicit-any
     label: string
@@ -239,13 +210,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Koios runs several load-balanced grest instances and they are occasionally
-   * version-skewed: some return HTTP 400 with Postgres error 42804 ("structure
-   * of query does not match function result type", e.g. `out_sum_lovelace`
-   * word128 vs numeric on /epoch_info) while healthy instances serve the
-   * IDENTICAL request fine. The same request therefore flips 200/400 between
-   * calls. Retrying a few times lands on a healthy instance. Scoped strictly to
-   * the 42804 type-skew error so genuine 400s (bad params) still fail fast.
+   * Retry on Postgres 42804 ("structure of query does not match function result type"):
+   * version-skewed Koios instances behind the load balancer return it for a request that
+   * healthy instances serve fine. Other 400s still fail fast.
    */
   private async getWithRetryOn42804(
     url: string,
@@ -381,8 +348,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const addressData = data[0];
         const addressUtxos = await this.getAddressUtxos(address);
 
-        // Sum balances from the already-mapped UTxOs instead of re-iterating
-        // address_info's utxo_set (whose asset_list can be null → crashed here).
+        // Sum balances from the mapped UTxOs; address_info's utxo_set may carry a null asset_list.
         const totals = new Map<string, bigint>();
         for (const u of addressUtxos) {
           for (const a of u.amount) {
@@ -476,11 +442,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Get UTxOs by payment credential. Returns UTxOs across all bech32 addresses
-   * sharing the given 28-byte payment credential (key hash or script hash).
-   * Native Koios endpoint — single round-trip with inline-datum hydration.
+   * UTxOs across all bech32 addresses sharing a payment credential (native Koios endpoint).
    * @param credHash 28-byte payment credential as 56-char lowercase hex
-   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms
    */
   async getCredentialUtxos(credHash: string): Promise<UTxO[]> {
     return handleBackendRequest(
@@ -526,7 +489,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(
       async () => {
-        // Try /totals endpoint (works on mainnet, but returns empty array on preview/preprod testnet)
+        // /totals works on mainnet but returns [] on preview/preprod
         const { data: totalsData } = await this.api.get('/totals', {
           params: { order: 'epoch_no.desc', limit: 1 }
         });
@@ -549,8 +512,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           };
         }
         
-        // Fallback for preview/preprod network where /totals doesn't work
-        // Use genesis endpoint to get max supply; remaining fields default to '0'
+        // Testnet fallback: max supply from /genesis, remaining fields '0'
         const { data: genesisData } = await this.api.get('/genesis');
 
         if (!genesisData || !Array.isArray(genesisData) || genesisData.length === 0) {
@@ -641,20 +603,14 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || fallbackId,
       vrfKeyHash: poolData.vrf_key_hash,
       blocksMinted: poolData.block_count,
-      // Koios pool_info has no blocks-in-current-epoch figure — epoch_no
-      // (the epoch NUMBER) was mapped here before, which is a different
-      // semantic than Blockfrost's blocks_epoch. null = not available: a 0
-      // here read as "minted nothing this epoch" and produced leaderboards
-      // full of zeros downstream, indistinguishable from a real zero.
+      // Koios pool_info has no blocks-in-current-epoch figure. null = not available;
+      // a 0 would be indistinguishable from a real zero downstream.
       blocksEpoch: null,
       liveStake: poolData.live_stake || '0',
       liveSize: poolData.live_size || 0,
       liveDelegators: poolData.live_delegators || 0,
-      // Koios reports saturation in PERCENT (75.42 = 75.42 %), Blockfrost as a
-      // fraction (0.7542). PoolData is a fraction everywhere — and the columns
-      // behind it are Decimal(9, 4) — so convert here. Passing the percent value
-      // through would overflow the column for a saturated pool and take the
-      // whole epoch snapshot down with it.
+      // Koios reports saturation in PERCENT (75.42); PoolData holds a fraction (0.7542)
+      // stored in Decimal(9, 4) — the percent value would overflow the column.
       liveSaturation: (Number(poolData.live_saturation) || 0) / 100,
       activeStake: poolData.active_stake || '0',
       activeSize: poolData.active_size || 0,
@@ -666,11 +622,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata).
-   * Koios's `asset_info` returns total_supply, mint/burn counts split,
-   * minting tx + creation_time, and both on-chain and registry metadata.
+   * Asset info from Koios `asset_info`: supply, mint/burn counts, minting tx, CIP-25 + CIP-26 metadata.
    * @param unit policyId + assetNameHex (concatenated hex)
-   * @returns {Promise<AssetInfo>} canonical asset info
    */
   async getAssetInfo(unit: string): Promise<AssetInfo> {
     return handleBackendRequest(
@@ -744,14 +697,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Get latest mint/burn events for an asset.
-   * Koios's `asset_history` returns minting_txs[{ tx_hash, block_time, quantity }]
-   * with `quantity` SIGNED (negative = burn). Action is derived from sign;
-   * the canonical `quantity` field stores absolute value.
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @param limit max number of events (default 100). Note: Koios returns ALL events;
-   *              limit is applied client-side after sort-by-block_time desc.
-   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   * Latest mint/burn events. Koios `asset_history` returns ALL events with `quantity` SIGNED
+   * (negative = burn): action derives from the sign, `quantity` stores the absolute value,
+   * `limit` is applied client-side after sorting by block_time desc.
    */
   async getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     return handleBackendRequest(
@@ -816,11 +764,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
 
   /** Map one Koios /drep_info row to the canonical DrepData. */
   private _mapKoiosDrep(drepData: Record<string, any>): DrepData { // eslint-disable-line @typescript-eslint/no-explicit-any
-    // Koios changed the /drep_info schema (observed 2026-07): the old
-    // `expired`/`retired`/`last_active_epoch` fields were replaced by
-    // `drep_status` ('registered' | 'retired'), `active` (boolean) and
-    // `expires_epoch_no`. Read the old fields first (mainnet/preprod may
-    // lag the migration), then derive from the new ones.
+    // Koios /drep_info exposes either `expired`/`retired`/`last_active_epoch` (older schema)
+    // or `drep_status` ('registered' | 'retired'), `active` and `expires_epoch_no`; read both.
     const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
     const expired: boolean = drepData.expired ?? (drepData.active === false && !retired);
     return {
@@ -828,8 +773,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       hex: drepData.hex,
       amount: drepData.amount,
       hasScript: drepData.has_script,
-      // The new schema no longer reports the last-activity epoch (only
-      // `expires_epoch_no`, which has different semantics) — keep 0 there.
+      // The newer schema has no last-activity epoch (`expires_epoch_no` differs in meaning) — 0 then.
       lastActiveEpoch: drepData.last_active_epoch ?? 0,
       expired,
       retired,
@@ -853,7 +797,6 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         if (!Array.isArray(data) || data.length === 0) {
           throw new NotFoundError('Account', this.name);
         }
-        // Fetch associated addresses
         const addressDataResponse = await this.api.post('/account_addresses', body);
 
         // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
@@ -1093,12 +1036,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     this.crawlCertificates = Boolean(options.certificates);
   }
 
-  /**
-   * Batch fetch multiple transactions by hash using Koios POST /tx_info.
-   * Sends all hashes in one request (chunked at 100 per Koios limit).
-   * @param txHashes array of transaction hashes
-   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
-   */
+  /** Batch fetch transactions via POST /tx_info, chunked at 100 hashes (Koios limit). */
   async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
     return handleBackendRequest(
       async () => {
@@ -1112,8 +1050,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             _inputs: true,
             _metadata: true,
             _assets: true,
-            // crawler coverage (`crawler.certificates`): same request, larger payload —
-            // only asked for when the crawl will write them
+            // certificates + withdrawals only when the crawl will write them (larger payload)
             _withdrawals: this.crawlCertificates,
             _certs: this.crawlCertificates,
             _scripts: false,
@@ -1140,13 +1077,10 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   // ---------------------------------------------------------------------------
-  // PaginatingBackend — forward iteration for the chain crawler (v2.0)
+  // PaginatingBackend — forward iteration for the chain crawler
   // ---------------------------------------------------------------------------
 
-  /**
-   * Map a Koios /block_info response object to our BlockData (same shape getBlock
-   * maps inline; kept private to avoid touching getBlock).
-   */
+  /** Map a Koios /block_info row to BlockData. */
   private mapKoiosBlockInfo(data: {
     block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
     epoch_no: number | null; epoch_slot: number | null; vrf_key: string; block_size: number;
@@ -1185,22 +1119,18 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Get up to `count` blocks following `afterHash`, in ascending chain order.
-   * Koios has no "next after hash" endpoint, so we list blocks above the anchor height
-   * (PostgREST gt + order + limit), then batch /block_info. When the caller already
-   * knows the anchor height (the crawler's cursor), the hash→height resolution
-   * round-trip is skipped entirely.
+   * Up to `count` blocks after `afterHash`, ascending. Koios has no "next after hash" endpoint:
+   * list blocks above the anchor height (PostgREST gt + order + limit), then batch /block_info.
+   * A known `afterHeight` skips the hash→height round-trip.
    */
   async getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]> {
     return handleBackendRequest(
       async () => {
         let anchorHeight = afterHeight;
         if (anchorHeight != null && anchorHeight > 0) {
-          // A height hint saves the hash -> height lookup, but it must never be
-          // trusted as proof that the cursor is still on the canonical chain.
-          // After a rollback Koios can continue listing canonical blocks above H
-          // even though `afterHash` is the now-orphaned block at H. Validate the
-          // canonical hash first so the crawler enters its reorg-recovery path.
+          // A height hint is not proof the cursor is still canonical: after a rollback Koios
+          // keeps listing blocks above H while `afterHash` is orphaned. Validate the hash first
+          // so the crawler enters reorg recovery.
           const canonical = await this.fetchWithRetryOnEmpty(
             () => this.api.get(`/blocks?block_height=eq.${anchorHeight}&limit=1`),
             `getNextBlocks/anchor(${anchorHeight})`
@@ -1238,12 +1168,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           () => this.api.post('/block_info', { _block_hashes: requestedHashes }),
           `getNextBlocks/info(${afterHash})`
         );
-        // Completeness guard: Koios' load-balanced instances can return a PARTIAL
-        // /block_info batch (fetchWithRetryOnEmpty only retries fully empty
-        // responses). Returning the subset would let the crawler advance its cursor
-        // past the missing block, leaving a permanent hole in the pre-synced range
-        // (crawled entities are non-temporal — nothing re-fetches them). Fail the
-        // round as transient instead; the next round retries the same anchor.
+        // Load-balanced instances can return a PARTIAL /block_info batch. Returning the subset
+        // would advance the cursor past the missing block and leave a permanent hole (crawled
+        // entities are never re-fetched), so fail the round as transient instead.
         if (infos.length < requestedHashes.length) {
           const returned = new Set(infos.map((d: { hash: string }) => d.hash));
           const missing = requestedHashes.filter((h) => !returned.has(h));
@@ -1268,10 +1195,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   private static readonly LIST_PAGE_SIZE = 1000;
   /** Ids resolved per /pool_info / /drep_info request. */
   private static readonly INFO_BATCH_SIZE = 50;
-  /**
-   * Refuse to page forever if an endpoint keeps returning full pages — 500 pages is
-   * 500 000 ids, far beyond any real pool or DRep set.
-   */
+  /** Page cap — 500 pages is 500 000 ids, far beyond any real pool or DRep set. */
   private static readonly LIST_MAX_PAGES = 500;
 
   /**
@@ -1355,9 +1279,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /**
-   * Get the full transaction list of a block in block order via /block_txs → /tx_info
-   * batch. Handles both the current flattened shape ({tx_hash} per row) and the older
-   * {tx_hashes:[...]} shape defensively.
+   * Full transaction list of a block in block order via /block_txs → /tx_info batch.
+   * Accepts both the flattened ({tx_hash} per row) and the {tx_hashes:[...]} shape.
    */
   async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
     return handleBackendRequest(
@@ -1376,9 +1299,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const byHash = await this.getTransactionsBatch(hashes);
         const missing = hashes.filter(h => !byHash.has(h));
         if (missing.length > 0) {
-          // Advancing the block cursor with only a subset of /tx_info would make
-          // the omitted transactions permanent. Surface a 503 so the crawler
-          // retries the whole block without persisting it.
+          // A partial /tx_info would make the omitted transactions permanent — 503 so the
+          // crawler retries the whole block without persisting it.
           throw new ProviderUnavailableError(
             `Incomplete transaction data for block ${blockHash}: ${missing.length}/${hashes.length} transaction(s) missing`,
             this.name
@@ -1394,9 +1316,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   // Private Helpers
   //-----------------------------------------------------------------------------
 
-  /**
-   * Map a Koios /tx_info response object to the normalized Transaction type.
-   */
+  /** Map a Koios /tx_info row to the normalized Transaction. */
   private _mapKoiosTx(tx: KoiosTxInfo): Transaction {
     let labels: MetadataLabelTx[] = [];
 
@@ -1415,9 +1335,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       blockHeight: Number(tx.block_height),
       blockTime: tx.tx_timestamp ?? tx.block_time ?? 0,
       slot: tx.absolute_slot ?? tx.slot_no ?? 0,
-      // Koios /tx_info fields are `tx_block_index` and `fee` (verified against
-      // the live OpenAPI spec) — `tx_index`/`tx_fee` never existed, so the fee
-      // was always reported as '0'
+      // Koios spells these `tx_block_index` and `fee` (not `tx_index` / `tx_fee`)
       index: tx.tx_block_index ?? 0,
       fee: tx.fee || '0',
       deposit: tx.deposit || '0',
@@ -1527,10 +1445,8 @@ const KOIOS_CERT_KINDS: Record<string, CertificateKind> = {
 };
 
 /**
- * Normalize Koios `/tx_info` certificates (`_certs: true`). Field names inside `info`
- * differ per type (`stake_address`, `pool_id_bech32`, `drep_id`, `deposit`,
- * `retiring_epoch` — spelled `retiring epoch` with a space in current Koios), so every
- * alias is read. Exported for the unit tests.
+ * Normalize Koios `/tx_info` certificates (`_certs: true`). Field names inside `info` differ
+ * per type (`retiring_epoch` is spelled `retiring epoch` in current Koios), so every alias is read.
  */
 export function mapKoiosCertificates(
   certs: NonNullable<KoiosTxInfo['certificates']>

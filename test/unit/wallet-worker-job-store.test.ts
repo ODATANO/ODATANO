@@ -1,14 +1,11 @@
 /**
- * Wallet worker — job store (W1/W6).
- * Mocks the @sap/cds CQL layer (crawler-sync-state test style) with a small
- * stateful in-memory store, and drives the job state machine, idempotency,
- * crash recovery and the per-wallet lease through it.
+ * Wallet worker job store over a small in-memory CQL store: job state machine, idempotency,
+ * crash recovery and the per-wallet lease.
  */
 
 vi.mock('@sap/cds', () => {
-  // Query data lives under `_q` so the chaining METHODS (where/orderBy/columns)
-  // can't clobber the captured where/orderBy DATA of the same name — the
-  // original flat shape silently matched every row.
+  // Query data lives under `_q` so the chaining methods (where/orderBy/columns)
+  // cannot clobber the captured where/orderBy data of the same name.
   const chain = (data: Record<string, unknown>) => ({
     _q: data,
     where: (w: unknown) => chain({ ...data, where: w }),
@@ -104,10 +101,8 @@ function makeStore() {
         case 'INSERT': {
           const entries = Array.isArray(q.entries) ? q.entries : [q.entries!];
           for (const e of entries) {
-            // Mirror the deployed `dedup` UNIQUE constraint on the jobs table
-            // (verified against the generated DDL: SQLite table constraint /
-            // HANA unique inverted index) so the store is tested against the
-            // same guarantee production has.
+            // Mirror the deployed `dedup` UNIQUE constraint on the jobs table (SQLite table
+            // constraint / HANA unique inverted index) so the fake gives the same guarantee.
             if (q.entity === 'odatano.cardano.CardanoWalletJobs'
               && rows.some(r => r.walletId === e.walletId && r.kind === e.kind && r.dedupKey === e.dedupKey)) {
               throw Object.assign(
@@ -358,7 +353,7 @@ describe('job-store: state machine transitions', () => {
     expect(await markConfirmed(db as never, jobId)).toBe(false);
     // cancel works from pending only
     expect(await markCancelled(db as never, jobId)).toBe(true);
-    // and building can no longer claim a cancelled job
+    // and building cannot claim a cancelled job
     expect(await markBuilding(db as never, jobId, 1)).toBe(false);
   });
 
@@ -426,7 +421,7 @@ describe('job-store: state machine transitions', () => {
   });
 });
 
-describe('job-store: crash recovery (design §8)', () => {
+describe('job-store: crash recovery', () => {
   it('fails building jobs and returns submitted jobs for reconciliation', async () => {
     const db = makeStore();
     const { jobId: interrupted } = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}' });

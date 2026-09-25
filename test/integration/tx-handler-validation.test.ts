@@ -1,6 +1,5 @@
 /**
- * Integration tests for CardanoTransactionService handler validations
- * Tests edge cases and error paths in action handlers
+ * CardanoTransactionService handler validations: edge cases and error paths of the actions.
  */
 
 import cds from '@sap/cds';
@@ -486,8 +485,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       // Delete it so the SELECT.one returns null
       await cds.run(cds.ql.DELETE.from('CardanoTransactionService.TransactionSubmissions').where({ id: submissionId }));
 
-      // Now call CheckSubmissionStatus — the framework may not find the record
-      // Note: @from constraint might also reject since we deleted it
+      // The @from constraint or the missing row may reject.
       const { status } = await test.post(`/odata/v4/cardano-transaction/TransactionSubmissions(id='${submissionId}')/CardanoTransactionService.CheckSubmissionStatus`, {})
         .catch((err: any) => err.response ?? { status: err.status ?? 500 });
 
@@ -530,7 +528,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T1: BuildSimpleAdaTransaction — assetsJson happy path (line 130/134)
+  // BuildSimpleAdaTransaction — assetsJson happy path
   // ==========================================================================
 
   describe('BuildSimpleAdaTransaction — assetsJson happy path', () => {
@@ -552,7 +550,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T2: BuildMintTransaction — requiredSignersJson invalid JSON (line 249)
+  // BuildMintTransaction — requiredSignersJson invalid JSON
   // ==========================================================================
 
   describe('BuildMintTransaction — requiredSignersJson invalid JSON', () => {
@@ -571,22 +569,20 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T3: BuildMintTransaction — scriptParams + lockOnScript + fingerprint
-  // (lines 312-330, 349, 355-358)
+  // BuildMintTransaction — scriptParams + lockOnScript + fingerprint
   // ==========================================================================
 
   describe('BuildMintTransaction — scriptParams + lockOnScript + fingerprint', () => {
     it('should apply script params, expand assetName, compute fingerprint and scriptAddress', async () => {
-      // Use short assetName (< 57 chars) to trigger BUG 7 expansion (line 318-322)
+      // Short assetName (< 57 hex chars) is expanded with the policy id.
       const shortAssetName = '546f6b656e4d'; // "TokenM" hex
       const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', {
         senderAddress: TEST_FIXTURES.addressWithAssets,
         recipientAddress: TEST_FIXTURES.addressWithAssets,
         lovelaceAmount: '2000000',
         mintActionsJson: JSON.stringify([{ assetUnit: shortAssetName, quantity: '100' }]),
-        // Must be a genuinely parameterized policy: applying a param to a non-parameterized
-        // script (e.g. validPlutusScript) yields one that fails local evaluation, which the
-        // builder rejects without an Ogmios evaluator to certify execution units.
+        // Must be a genuinely parameterized policy: a param applied to a non-parameterized
+        // script fails local evaluation and the builder rejects it without an Ogmios evaluator.
         mintingPolicyScript: TEST_FIXTURES.parameterizedScript,
         scriptParamsJson: JSON.stringify([{ bytes: 'a'.repeat(56) }]),
         lockOnScript: true,
@@ -596,17 +592,17 @@ describe('CardanoTransactionService Handler Validations', () => {
       expect(status).toBe(200);
       expect(data).toHaveProperty('scriptHash');
       expect(data.scriptHash).toMatch(/^[a-f0-9]{56}$/);
-      // T4: CIP-14 fingerprint (line 349)
+      // CIP-14 fingerprint
       expect(data).toHaveProperty('fingerprint');
       expect(data.fingerprint).toMatch(/^asset1/);
-      // T5: lockOnScript scriptAddress (lines 355-358)
+      // lockOnScript scriptAddress
       expect(data).toHaveProperty('scriptAddress');
       expect(data.scriptAddress).toMatch(/^addr_test1/);
     });
   });
 
   // ==========================================================================
-  // T6: BuildPlutusSpendTransaction — scriptParamsJson invalid JSON (line 420)
+  // BuildPlutusSpendTransaction — scriptParamsJson invalid JSON
   // ==========================================================================
 
   describe('BuildPlutusSpendTransaction — scriptParamsJson invalid JSON', () => {
@@ -627,7 +623,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T8: BuildPlutusSpendTransaction — lockOnScript (lines 469/480)
+  // BuildPlutusSpendTransaction — lockOnScript
   // ==========================================================================
 
   describe('BuildPlutusSpendTransaction — lockOnScript', () => {
@@ -636,9 +632,8 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildPlutusSpendTransaction', {
         ...plutusSpendRequestBody,
-        // Parameterized validator: applying a param leaves a still-evaluable validator.
-        // (buildooor doesn't bind the input address to the script hash at build time, so
-        // reusing the shared script UTxO is fine — only successful evaluation matters.)
+        // Parameterized validator: applying a param leaves a still-evaluable validator, and
+        // buildooor does not bind the input address to the script hash at build time.
         validatorScript: TEST_FIXTURES.parameterizedScript,
         scriptParamsJson: JSON.stringify([{ bytes: 'a'.repeat(56) }]),
         lockOnScript: true,
@@ -652,7 +647,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T9: SetCollateral — no UTxOs at address (line 531)
+  // SetCollateral — no UTxOs at address
   // ==========================================================================
 
   describe('SetCollateral — no UTxOs at address', () => {
@@ -669,12 +664,11 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T10: SubmitTransaction — submission failure error handling (lines 597-599)
+  // SubmitTransaction — submission failure error handling
   // ==========================================================================
 
   describe('SubmitTransaction — submission failure', () => {
     it('should handle submission failure and persist failed status', async () => {
-      // Create a build record in DB
       const buildId = 'test-build-fail-submit';
       const now = Date.now();
       await cds.run(
@@ -692,7 +686,6 @@ describe('CardanoTransactionService Handler Validations', () => {
         })
       );
 
-      // Mock Koios submission failure
       nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
         .reply(400, { error: 'Transaction validation failed: signature verification failed' });
@@ -707,7 +700,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T10b: SubmitTransaction — cache invalidation branch (lines 559-562)
+  // SubmitTransaction — cache invalidation branch
   // ==========================================================================
 
   describe('SubmitTransaction — cache invalidation', () => {
@@ -751,12 +744,11 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T11: CheckSubmissionStatus — tx confirmed on chain (lines 667-675)
+  // CheckSubmissionStatus — tx confirmed on chain
   // ==========================================================================
 
   describe('CheckSubmissionStatus — tx confirmed on chain', () => {
     it('should update status to confirmed when tx found on chain', async () => {
-      // Create a submission record with status 'submitted'
       const submissionId = 'a0000000-0000-0000-0000-000000000011';
       const txHash = TEST_FIXTURES.validTxHash;
       await cds.run(
@@ -795,7 +787,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T11b: CheckSubmissionStatus — provider error branch (lines 650-651)
+  // CheckSubmissionStatus — provider error branch
   // ==========================================================================
 
   describe('CheckSubmissionStatus — provider error', () => {
@@ -827,12 +819,11 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T12: SubmitVerifiedTransaction — no build_id (line 908)
+  // SubmitVerifiedTransaction — no build_id
   // ==========================================================================
 
   describe('SubmitVerifiedTransaction — no build_id', () => {
     it('should reject when signing request has no associated build', async () => {
-      // Create signing request directly in DB without build_id
       const signingRequestId = 'b0000000-0000-0000-0000-000000000012';
       const now = new Date();
       await cds.run(
@@ -859,12 +850,11 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // T13: SubmitVerifiedTransaction — full signed tx path (line 920)
+  // SubmitVerifiedTransaction — full signed tx path
   // ==========================================================================
 
   describe('SubmitVerifiedTransaction — full signed tx (cardano-cli path)', () => {
     it('should accept full signed transaction directly (not witness set)', async () => {
-      // Create build record
       const buildId = 'd0000000-0000-0000-0000-000000000013';
       const now = Date.now();
       await cds.run(
@@ -884,7 +874,6 @@ describe('CardanoTransactionService Handler Validations', () => {
         })
       );
 
-      // Create signing request with build_id
       const signingRequestId = 'c0000000-0000-0000-0000-000000000013';
       await cds.run(
         INSERT.into('CardanoSignService.SigningRequests').entries({
@@ -899,11 +888,9 @@ describe('CardanoTransactionService Handler Validations', () => {
         })
       );
 
-      // Mock submission endpoint
       setupTxResponseMock();
 
-      // Submit with full signed transaction (not witness set)
-      // signedTxCbor1 starts with 84 (CBOR array = full tx), not a1 (CBOR map = witness set)
+      // signedTxCbor1 starts with 84 (CBOR array = full tx), not a1 (map = witness set).
       const { status, data } = await test.post(
         `/odata/v4/cardano-sign/SubmitVerifiedTransaction`,
         { signingRequestId, signedTxCbor: TEST_FIXTURES.signedTxCbor1 }
@@ -1027,13 +1014,11 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // BUG 9: assetUnit policyId prefix check — an assetUnit >= 57 hex is parsed
-  // as policyId+assetName and minted under the policy script's hash; a bare
-  // 29-32-byte asset name is length-indistinguishable from a full unit and
-  // must be rejected instead of silently minting a truncated name.
+  // mint assetUnit policyId prefix check — a bare 29-32-byte asset name is
+  // length-indistinguishable from a full unit and must be rejected.
   // ==========================================================================
 
-  describe('mint assetUnit policyId prefix check (BUG 9)', () => {
+  describe('mint assetUnit policyId prefix check', () => {
     // 32-byte asset name — 64 hex, length-indistinguishable from a full unit
     const longAssetName = 'ab'.repeat(32);
 
@@ -1233,10 +1218,10 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // FR-2: BuildPlutusSpendTransaction — extraOutputsJson validations
+  // BuildPlutusSpendTransaction — extraOutputsJson validations
   // ==========================================================================
 
-  describe('BuildPlutusSpendTransaction extraOutputsJson validations (FR-2)', () => {
+  describe('BuildPlutusSpendTransaction extraOutputsJson validations', () => {
     const baseRequest = {
       senderAddress: TEST_FIXTURES.addressWithAssets,
       recipientAddress: TEST_FIXTURES.addressWithAssets,
@@ -1347,10 +1332,10 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // FR-1: BuildPlutusSpendTransaction — combined mint validations
+  // BuildPlutusSpendTransaction — combined spend+mint validations
   // ==========================================================================
 
-  describe('BuildPlutusSpendTransaction combined mint validations (FR-1)', () => {
+  describe('BuildPlutusSpendTransaction combined spend+mint validations', () => {
     const baseRequest = {
       senderAddress: TEST_FIXTURES.addressWithAssets,
       recipientAddress: TEST_FIXTURES.addressWithAssets,
@@ -1426,7 +1411,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // BuildSimpleAdaTransaction — lockOnScript Validations (FR-A)
+  // BuildSimpleAdaTransaction — lockOnScript Validations
   // ==========================================================================
 
   describe('BuildSimpleAdaTransaction lockOnScript validations', () => {
@@ -1466,7 +1451,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // DeriveScriptAddress Validations (FR-B)
+  // DeriveScriptAddress Validations
   // ==========================================================================
 
   describe('DeriveScriptAddress validations', () => {
@@ -1517,7 +1502,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // ExtractPaymentKeyHash Validations (FR-C)
+  // ExtractPaymentKeyHash Validations
   // ==========================================================================
 
   describe('ExtractPaymentKeyHash validations', () => {
@@ -1551,12 +1536,8 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // Validity bounds — cross-action validator smoke tests
-  //
-  // Verifies that validityStartMs / validityEndMs survive the CDS → handler →
-  // validators pipeline on all four Build actions. We only assert validator
-  // behavior (200/400), not on-chain correctness — that is covered by the
-  // builder unit tests and manual preview-network verification.
+  // Validity bounds — validityStartMs / validityEndMs survive the CDS → handler →
+  // validators pipeline on all four Build actions (validator behaviour only).
   // ==========================================================================
 
   describe('Validity bounds validation', () => {
@@ -1623,10 +1604,7 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
-  // BuildMintTransaction — metadataJson plumbing
-  //
-  // Validates that CIP-20 / label-674 style metadata survives the handler →
-  // builder pipeline and lands in the unsigned tx's auxiliary_data.
+  // BuildMintTransaction — metadataJson lands in the unsigned tx's auxiliary_data
   // ==========================================================================
 
   describe('BuildMintTransaction metadataJson', () => {

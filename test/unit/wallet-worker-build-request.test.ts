@@ -1,12 +1,6 @@
 /**
- * Unit tests for the wallet-worker request transformation
- * (srv/blockchain/wallet-worker/build-request.ts).
- *
- * The stored job `requestJson` has the documented Build*-action payload shape;
- * prepareWorkerBuildRequest must produce exactly what the CardanoIndexer build
- * methods expect (assets, bigint mintActions, parsed metadata, assembled
- * plutusScriptExecution). Malformed payloads throw BackendError 400 — a
- * deterministic, terminal job failure.
+ * Wallet-worker request transformation (build-request.ts): a stored Build*-action payload
+ * becomes what the CardanoIndexer build methods expect; malformed payloads throw BackendError 400.
  */
 
 // Imported above the vi.mock block only so `vi` is declared before it is read;
@@ -186,9 +180,9 @@ describe('prepareWorkerBuildRequest: mint', () => {
     expect((result.mintActions as Array<{ quantity: bigint }>)[0].quantity).toBe(-500n);
   });
 
-  it('rejects a unit that does not carry the policy id (BUG 9 guard)', () => {
-    // NOTE: TEST_FIXTURES.assetUnit's prefix IS the fixture script's policy id —
-    // use a foreign policy prefix to actually trigger the mismatch.
+  it('rejects a unit that does not carry the policy id', () => {
+    // TEST_FIXTURES.assetUnit's prefix IS the fixture script's policy id —
+    // a foreign policy prefix is needed to trigger the mismatch.
     expectRejects(() => prepareWorkerBuildRequest('mint', {
       ...mintBase,
       mintActionsJson: JSON.stringify([{ assetUnit: 'b'.repeat(56) + '546f6b656e4d', quantity: '1' }]),
@@ -283,7 +277,7 @@ describe('prepareWorkerBuildRequest: mint', () => {
       }, 'preview'), /requires mintActions\[0\].mintingPolicyScript/);
     });
 
-    it('parses extraOutputsJson on mint (FR-2)', () => {
+    it('parses extraOutputsJson on mint', () => {
       const result = prepareWorkerBuildRequest('mint', {
         ...mintBase,
         extraOutputsJson: JSON.stringify([{

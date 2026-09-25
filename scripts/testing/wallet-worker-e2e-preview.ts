@@ -1,26 +1,13 @@
 /**
- * Wallet-worker end-to-end on preview: a full wallet session.
- *
- *   pending → building → submitting → submitted → confirmed
- *
- * Self-contained: It boots its own server with the worker enabled, drives the
- * OData surface, and shuts down again:
+ * Wallet-worker end-to-end on preview: boots a server with the worker enabled,
+ * submits a self-payment job and follows it pending → building → submitting →
+ * submitted → confirmed, checking idempotency and the durable pre-submit row.
  *
  *   npx tsx scripts/testing/wallet-worker-e2e-preview.ts
  *   npx tsx scripts/testing/wallet-worker-e2e-preview.ts --amount 3000000 --depth 2
  *
- * What it proves, against the real chain:
- *  - the configured wallet is registered and its signer initialized
- *  - a submitted job runs build → sign → submit without operator interaction
- *  - the signed tx is durable BEFORE submission (the row carries txHash and
- *    signedTxCbor while still `submitting`) — the crash-safety invariant
- *  - the same idempotencyKey returns the SAME job instead of paying twice
- *  - the job reaches `confirmed` once the tx sits at the configured depth
- *
- * Key handling: the signing key is read from payment.skey and passed to the
- * server process in memory only. It is never written to a file and never logged.
- * The worker always spends from the enterprise address derived from that key —
- * the preflight refuses to run if that is not the funded payment.addr.
+ * The signing key is read from payment.skey and passed to the server in memory
+ * only; the preflight refuses to run unless it derives the funded payment.addr.
  */
 
 import 'dotenv/config';
@@ -144,9 +131,8 @@ async function main() {
   child.stdout?.on('data', capture);
   child.stderr?.on('data', capture);
 
-  // On Windows `shell: true` puts cmd.exe between us and the server: child.kill()
-  // would only kill the shell, orphaning the server — which keeps running AND
-  // holds our stdout pipe open, so a piped run never returns. Kill the tree.
+  // On Windows `shell: true` puts cmd.exe between us and the server; child.kill()
+  // would only kill the shell, and the orphaned server keeps our stdout pipe open.
   const shutdown = () => {
     if (child.exitCode !== null || child.killed) return;
     if (process.platform === 'win32' && child.pid) {

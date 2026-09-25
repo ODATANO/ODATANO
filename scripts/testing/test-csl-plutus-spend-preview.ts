@@ -5,36 +5,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 /**
- * Test script: CSL PlutusV3 Pharma Trace Spend (Redeem) on Preview
+ * PlutusV3 parameterized spend on preview (pharma_trace validator): consumes the
+ * minted NFT UTxO and produces a continuing output with an updated inline
+ * ChainOfCustody datum (state-machine pattern), signs with cardano-cli, submits.
  *
- * Purpose: Verify that BuildPlutusSpendTransaction with inlineDatumJson works
- * correctly — consuming a minted NFT at a script address and producing a
- * continuing output with an updated inline datum (state-machine pattern).
- *
- * Flow:
- *   1. Find the UTxO from the previous mint transaction (contains the NFT + ChainOfCustody datum)
- *   2. BuildPlutusSpendTransaction with:
- *      - validatorScript (spend validator, parameterized)
- *      - scriptTxHash + scriptOutputIndex (the minted NFT UTxO)
- *      - redeemerJson: Transfer action with next_holder VKH
- *      - datumJson: current ChainOfCustody (for script input)
- *      - inlineDatumJson: updated ChainOfCustody (for continuing output)
- *      - requiredSignersJson: current holder VKH
- *   3. Sign with cardano-cli
- *   4. Submit
- *
- * Prerequisites:
- *   1. ODATANO running with TX_BUILDERS=csl:
- *        TX_BUILDERS=csl BACKENDS=blockfrost BLOCKFROST_API_KEY=preview_... npm run cds:watch
- *   2. payment.skey in project root (preview testnet wallet)
- *   3. Docker available (for cardano-cli signing)
- *   4. A previously minted NFT from test-csl-plutus-mint-preview.ts
- *
- * Usage:
- *   npx tsx scripts/test-csl-plutus-spend-preview.ts
- *
- * IMPORTANT: Update MINT_TX_HASH and MINT_OUTPUT_INDEX below with the
- * transaction hash and output index from your mint transaction.
+ * Prerequisites: server running with a Blockfrost backend, payment.skey in the
+ * project root, Docker for cardano-cli signing, an NFT minted by
+ * test-csl-plutus-mint-preview.ts (set MINT_TX_HASH / MINT_OUTPUT_INDEX below).
+ * Usage: npx tsx scripts/testing/test-csl-plutus-spend-preview.ts
  */
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
@@ -67,9 +45,7 @@ const NEXT_HOLDER_VKH = MANUFACTURER_VKH;
 // ---------------------------------------------------------------------------
 
 // Unapplied compiled code from plutus.json — pharma_trace.pharma_trace.spend
-// NOTE: For a combined validator (mint+spend), this may be the same hex as mint.
-// If your plutus.json has a separate spend validator, use that hex here.
-// For the pharma_trace combined validator, the mint hex is used for both.
+// (combined mint+spend validator, so the same hex as the mint script).
 const UNAPPLIED_VALIDATOR_HEX = "5902be010100229800aba2aba1aab9faab9eaab9dab9a9bae00248888889660033001300437540112300730083008300830083008300830083008001911919800800801912cc00400629422b30013371e6eb8c02800400e2946266004004601600280310094dc3a4000911119194c004c024dd5000cc03001a60180049112cc004c01800e264b30013300837586012601c6ea800c02e26644b30010018014566002602600313370e6eb4c040c0480052002801202240442940c8c8cc004004dd59809180998099809980998081baa0052259800800c00e2646644b30013372200e00515980099b8f0070028800c01901244cc014014c05c0110121bae3011001375660240026026002809052f5bded8c114a08060dd7180798069baa0048acc004cdc3a4004007132332259800980498079baa004899192cc004c05400a2b3001300b3011375400719800980a18091baa0039bae30143012375400d2301530160014889660026601e6eb0c040c054dd50051bae300130153754007132323300100137586004602e6ea8030896600200314a1159800992cc004cdc3a400860306ea8006264b300130133019375400313232323298009bad30200019bae30200049bae30200039bae30200024888966002604a00b15980099b8f375c604860446ea8024dd7181218111baa0108acc004cdc79bae300e3022375401201f15980099b8f375c601a60446ea8024dd7180698111baa01089919b87375a600260466ea8028cdc01bad300130233754022900111812981318131813000c52820408a50408114a081022c81186040002603e002603c00260346ea80062c80c0c06cc064dd5000c528202e300330183754603400314a3133002002301b001405880c88c060c064c064006294101322c80822c8098dd7180980098081baa0048b201c301000130103011001300d375400916402c80586016601800260160088a4d13656400801";
 
 // Asset name for the minted NFT (same as in mint script)
@@ -167,7 +143,7 @@ async function main() {
       process.exit(1);
     }
 
-    // Step 1: Build PlutusV3 Spend Transaction via CSL
+    // Step 1: Build PlutusV3 Spend Transaction
     console.log('\n[1/3] Building PlutusV3 Spend Transaction (CSL builder)...');
     console.log('       scriptParamsJson applied → validator address derived');
     console.log('       inlineDatumJson → updated ChainOfCustody on continuing output');

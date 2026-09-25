@@ -1,8 +1,6 @@
 /**
- * Unit tests for DeriveScriptAddress derivation logic
- *
- * Exercises the pure pieces: applyScriptParameters → Script.fromCbor(..).hash →
- * scriptHashToEnterpriseAddress. The integration tests cover the handler wiring.
+ * DeriveScriptAddress derivation: applyScriptParameters → Script.fromCbor(..).hash →
+ * scriptHashToEnterpriseAddress. Handler wiring is covered by the integration tests.
  */
 
 // Mock cds logger + utils (mappers.ts / tx-build-helper.ts import cds)

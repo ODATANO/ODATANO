@@ -11,17 +11,9 @@ import type { WorkerSignerTypeValue } from './job-store';
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Wallet-worker signers (v2.0).
- *
- * `WorkerSigner` is the signer-agnostic surface the worker engine executes against:
- *  - `hsm` (production): thin wrapper around the already-initialized `HsmSigner`
- *    (PKCS#11 — keys never leave the module).
- *  - `software` (dev/test): operator-configured Ed25519 key from an environment
- *    variable, either plain 64-char hex or AES-256-GCM encrypted
- *    (`iv:authTag:ciphertext`, keyed by ENCRYPTION_KEY — see srv/utils/crypto.ts).
- *
- * Keys are NEVER accepted through the OData surface and never persisted; the
- * software key lives only in this process's memory.
+ * Wallet-worker signers: `hsm` wraps the process-wide HsmSigner (PKCS#11), `software` holds an
+ * Ed25519 key from an env var (plain hex or AES-256-GCM `iv:authTag:ciphertext`, keyed by ENCRYPTION_KEY).
+ * Keys are never accepted via OData and never persisted.
  */
 
 export interface WorkerSigner {
@@ -38,18 +30,13 @@ export interface WorkerSigner {
 export interface WorkerWalletConfig {
   walletId: string;
   signerType: WorkerSignerTypeValue;
-  /**
-   * software only: name of the environment variable holding the Ed25519 signing
-   * key — plain 64-char hex, or AES-256-GCM `iv:authTag:ciphertext` (base64 parts).
-   */
+  /** software only: env var holding the Ed25519 key — 64-char hex or AES-256-GCM `iv:authTag:ciphertext` (base64). */
   keyEnv?: string;
 }
 
 /**
- * Merge a single VKey witness [publicKey, signature] into an unsigned transaction's
- * witness set at the raw CBOR level, preserving all non-vkey entries (scripts,
- * datums, redeemers) and encoding metadata. Same single-signer semantics as
- * HsmSigner.signTransaction — the worker wallet is the sole signer of its builds.
+ * Merge a single VKey witness into the witness set at the raw CBOR level, preserving
+ * non-vkey entries and encoding metadata. Single-signer semantics as HsmSigner.signTransaction.
  */
 export function mergeVkeyWitness(unsignedTxCbor: string, publicKeyHex: string, signatureHex: string): string {
   const txObj = Cbor.parse(fromHex(unsignedTxCbor));
@@ -144,10 +131,7 @@ export class SoftwareWorkerSigner implements WorkerSigner {
   }
 }
 
-/**
- * Resolve the software key material for a wallet: plain hex passes through,
- * the AES-256-GCM combined format (contains ':') is decrypted with ENCRYPTION_KEY.
- */
+/** Plain hex passes through; the AES-256-GCM combined format (contains ':') is decrypted with ENCRYPTION_KEY. */
 function resolveSoftwareKey(wallet: WorkerWalletConfig): string {
   if (!wallet.keyEnv) {
     throw new ConfigError(`Wallet worker: wallet "${wallet.walletId}" is signerType=software but has no keyEnv configured`);

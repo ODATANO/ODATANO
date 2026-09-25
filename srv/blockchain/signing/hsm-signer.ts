@@ -7,27 +7,10 @@ import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
 
 const logger = cds.log('HsmSigner');
 
-/**
- * CKM_EDDSA mechanism ID (PKCS#11 v3.0)
- * Used for Ed25519 signing operations
- */
+/** CKM_EDDSA mechanism ID (PKCS#11 v3.0) for Ed25519 signing. */
 const CKM_EDDSA = 0x00001057;
 
-/**
- * HsmSigner - PKCS#11 Hardware Security Module integration for Cardano transaction signing
- *
- * Wraps a PKCS#11 compliant HSM (YubiHSM 2, AWS CloudHSM, Thales Luna, etc.)
- * to provide Ed25519 signing for Cardano transactions. Private keys never leave
- * the HSM chip — only signatures are returned.
- *
- * Lifecycle:
- *   1. constructor(config) — stores config
- *   2. init(network) — connects to HSM, locates key, exports public key, derives Cardano address
- *   3. sign() / signTransaction() — signing operations
- *   4. shutdown() — closes session
- */
-/** Minimal PKCS#11 module surface used here. Loaded dynamically; no static type
- * package is depended on. We narrow to the actual handful of methods invoked. */
+/** Minimal PKCS#11 surface used here; pkcs11js is loaded dynamically, no static type package. */
 interface PKCS11Instance {
   load(path: string): void;
   C_Initialize(): void;
@@ -51,9 +34,8 @@ type Pkcs11JsModule = {
   [k: string]: unknown;
 };
 
-// pkcs11js is loaded lazily (optionalDependency with a native binding). The
-// loader is an injectable seam: tests swap in a fake module because module
-// mocks cannot intercept this native require.
+// pkcs11js (optionalDependency, native binding) is loaded lazily through an injectable
+// loader so tests can swap in a fake module.
 type Pkcs11Loader = () => Pkcs11JsModule;
 const defaultPkcs11Loader: Pkcs11Loader = () => require('pkcs11js') as Pkcs11JsModule;
 let pkcs11Loader: Pkcs11Loader = defaultPkcs11Loader;
@@ -63,6 +45,10 @@ export function setPkcs11Loader(loader: Pkcs11Loader | null): void {
   pkcs11Loader = loader ?? defaultPkcs11Loader;
 }
 
+/**
+ * Ed25519 transaction signing through a PKCS#11 HSM (YubiHSM 2, CloudHSM, Luna, …); private
+ * keys never leave the device. Lifecycle: init(network) → sign()/signTransaction() → shutdown().
+ */
 export class HsmSigner {
   private pkcs11!: PKCS11Instance;
   private session!: Buffer;
@@ -78,13 +64,11 @@ export class HsmSigner {
   }
 
   /**
-   * Initialize PKCS#11 session and locate the signing key.
-   * Called once during plugin startup.
-   *
-   * @param network - Cardano network (mainnet, preview, preprod) for address derivation
+   * Open the PKCS#11 session, locate the key, export the public key and derive the
+   * enterprise address for `network`. Called once at startup.
    */
   async init(network: 'mainnet' | 'preview' | 'preprod' | string): Promise<void> {
-    // Dynamic import — pkcs11js is only loaded when HSM is configured
+    // pkcs11js is only loaded when HSM is configured
     let pkcs11js: Pkcs11JsModule;
     try {
       pkcs11js = pkcs11Loader();
@@ -97,15 +81,12 @@ export class HsmSigner {
     this.pkcs11 = new pkcs11js.PKCS11();
 
     try {
-      // 1. Load PKCS#11 module
       this.pkcs11.load(this.config.pkcs11Module);
       this.pkcs11.C_Initialize();
       logger.info({ module: this.config.pkcs11Module }, 'PKCS#11 module loaded');
 
-      // 2. Open session on configured slot.
-      // NOTE: `config.slot` is the 0-based INDEX into the list of slots-with-token
-      // returned by C_GetSlotList(true), NOT the PKCS#11 slot ID (which need not be
-      // contiguous or zero-based). Configure it as a position, not a hardware slot id.
+      // `config.slot` is the 0-based index into C_GetSlotList(true) (slots with a token),
+      // not the PKCS#11 slot ID, which need not be contiguous or zero-based.
       const slots = this.pkcs11.C_GetSlotList(true);
       if (this.config.slot >= slots.length) {
         throw new HsmError(
@@ -119,16 +100,11 @@ export class HsmSigner {
       );
       logger.debug({ slot: this.config.slot }, 'PKCS#11 session opened');
 
-      // 3. Login with PIN
       try {
         this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER as number, this.config.pin);
       } finally {
-        // Zero the PIN everywhere it could residue after login (crash-dump /
-        // heap-inspection hardening), regardless of login outcome:
-        //  - this.config (shared reference with the server-side hsmConfigInstance
-        //    singleton) — mutate IN PLACE, not reassign, so the singleton clears too
-        //  - the HSM_PIN environment variable
-        //  - the CAP config (cds.env.requires['odatano-core'].hsm.pin)
+        // Zero the PIN wherever it could linger (config object shared with the server
+        // singleton — mutate in place —, HSM_PIN env, CAP config), whatever the login outcome.
         this.config.pin = '';
         if (process.env.HSM_PIN) delete process.env.HSM_PIN;
         try {
@@ -138,14 +114,12 @@ export class HsmSigner {
       }
       logger.debug('PKCS#11 login successful');
 
-      // 4. Find private key by label or ID
       this.privateKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PRIVATE_KEY as number);
 
-      // 5. Export public key
       this.publicKeyBytes = this._exportPublicKey(pkcs11js);
       logger.debug({ publicKeyLength: this.publicKeyBytes.length }, 'Ed25519 public key exported');
 
-      // 6. Derive Cardano key hash and enterprise address
+      // Key hash = blake2b-224 of the public key
       const blake2b = require('blake2b');
       const hashOut = Buffer.alloc(28);
       blake2b(28).update(this.publicKeyBytes).digest(hashOut);
@@ -180,20 +154,13 @@ export class HsmSigner {
     }
   }
 
-  /**
-   * Sign a 32-byte transaction body hash using the HSM.
-   * Returns the Ed25519 signature + public key for witness construction.
-   *
-   * @param txBodyHash - 32-byte hash of the transaction body
-   * @returns HsmSignResult with signature, public key, and key hash
-   */
+  /** Sign a 32-byte tx body hash in the HSM; returns Ed25519 signature + public key for the witness. */
   sign(txBodyHash: Buffer): HsmSignResult {
     if (!this.connected) {
       throw new HsmError('HSM not connected', 503, ERROR_CODES.HSM_UNAVAILABLE);
     }
 
     try {
-      // CKM_EDDSA = Ed25519 signing mechanism
       this.pkcs11.C_SignInit(this.session, { mechanism: CKM_EDDSA }, this.privateKeyHandle);
       const signature = this.pkcs11.C_Sign(this.session, txBodyHash, Buffer.alloc(64));
 
@@ -212,22 +179,14 @@ export class HsmSigner {
   }
 
   /**
-   * Sign a transaction and produce a complete signed transaction CBOR.
-   *
-   * Takes the unsigned transaction CBOR, signs the body hash via HSM,
-   * builds a VKey witness [publicKey, signature], and merges it into
-   * the transaction's witness set using raw CBOR manipulation.
-   *
-   * @param unsignedTxCbor - Unsigned transaction CBOR (hex)
-   * @param txBodyHash - Transaction body hash (hex, 64 chars)
-   * @returns Signed transaction CBOR (hex)
+   * Sign the body hash (hex) in the HSM, build the VKey witness [publicKey, signature] and
+   * splice it into the witness set at the raw CBOR level. Returns the signed tx CBOR (hex).
    */
   signTransaction(unsignedTxCbor: string, txBodyHash: string): string {
     const hashBytes = Buffer.from(txBodyHash, 'hex');
     const result = this.sign(hashBytes);
 
     try {
-      // Parse unsigned transaction at raw CBOR level
       const txObj = Cbor.parse(fromHex(unsignedTxCbor));
 
       if (!(txObj instanceof CborArray) || txObj.array.length < 2) {
@@ -240,13 +199,10 @@ export class HsmSigner {
         new CborBytes(Buffer.from(result.signatureHex, 'hex')),
       ]);
 
-      // Merge into witness set (txObj.array[1])
-      // Single-signer design: HSM is the sole signer for unsigned transactions.
-      // Multi-sig (e.g. wallet + HSM) uses combineTransactionWithWitnesses() instead.
+      // Witness set (txObj.array[1]): vkey witnesses (key 0) become the HSM witness only — single
+      // signer; multi-sig goes through combineTransactionWithWitnesses(). Other keys are preserved.
       const origWs = txObj.array[1];
       if (origWs instanceof CborMap) {
-        // Replace VKey witnesses (key 0) with HSM witness only
-        // Preserves all other entries (redeemers key 5, datums key 4, scripts keys 1-3, 6-7)
         const entries = origWs.map.filter(
           (e) => !(e.k instanceof CborUInt && Number(e.k.num) === 0)
         );
@@ -333,9 +289,7 @@ export class HsmSigner {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /**
-   * Find a key object (private or public) in the HSM by label and/or ID
-   */
+  /** Find an Ed25519 key object (private or public) in the HSM by label and/or ID. */
   private _findKey(pkcs11js: Pkcs11JsModule, objectClass: number): Buffer {
     const template: Pkcs11Attribute[] = [
       { type: pkcs11js.CKA_CLASS as number, value: objectClass },
@@ -374,13 +328,11 @@ export class HsmSigner {
   private _exportPublicKey(pkcs11js: Pkcs11JsModule): Buffer {
     const pubKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PUBLIC_KEY as number);
 
-    // Extract CKA_EC_POINT (DER-encoded public key)
     const attrs = this.pkcs11.C_GetAttributeValue(this.session, pubKeyHandle, [
       { type: pkcs11js.CKA_EC_POINT as number },
     ]);
 
-    // CKA_EC_POINT for Ed25519 is DER OCTET STRING wrapping 32-byte public key
-    // Format: 04 20 <32 bytes>
+    // CKA_EC_POINT for Ed25519 is a DER OCTET STRING around the 32-byte key: 04 20 <32 bytes>
     const ecPoint = Buffer.from(attrs[0].value as Buffer);
 
     if (ecPoint.length === 34 && ecPoint[0] === 0x04 && ecPoint[1] === 0x20) {
@@ -398,23 +350,15 @@ export class HsmSigner {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Singleton pattern (same as getExternalSignerModule())
-// ---------------------------------------------------------------------------
-
+// Singleton instance
 let hsmSignerInstance: HsmSigner | null = null;
 
-/**
- * Get the initialized HsmSigner instance.
- * Returns null if HSM is not configured.
- */
+/** The initialized HsmSigner, or null when HSM is not configured. */
 export function getHsmSigner(): HsmSigner | null {
   return hsmSignerInstance;
 }
 
-/**
- * Set the HsmSigner instance (called during initialization and shutdown).
- */
+/** Set the HsmSigner instance (initialization and shutdown). */
 export function setHsmSigner(signer: HsmSigner | null): void {
   hsmSignerInstance = signer;
 }

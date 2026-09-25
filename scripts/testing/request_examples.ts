@@ -167,7 +167,7 @@ const examples: ExampleRequest[] = [
 
     try {
       const config = {
-        timeout: 60_000, // Increased to 60 seconds for backend API calls
+        timeout: 60_000, // backend API calls can take a while
         headers: {
           'Authorization': AUTH_HEADER,
           ...(ex.method === 'POST' ? { 'Content-Type': 'application/json' } : {}),

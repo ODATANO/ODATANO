@@ -1,14 +1,14 @@
 /**
- * CardanoIndexerService handlers (crawler C5 control surface): getStatus shape +
- * progress math, pauseCrawler, and the resumeCrawler `enabled` gate (400 instead of
- * an implicit genesis crawl). Dependencies are mocked at module boundaries; the
- * handleRequest wrapper is passed through to the callback with a fake db.
+ * CardanoIndexerService handlers: getStatus shape and progress math, pauseCrawler,
+ * the resumeCrawler `enabled` gate and getLiveness. Dependencies are mocked at
+ * module boundaries; handleRequest passes a fake db straight to the callback.
  */
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
+  backfillMock: vi.fn(),
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
     getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
@@ -46,11 +46,11 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 vi.mock('../../srv/server', () => serverMock);
 // the snapshot import pulls cds.ql + the DB models at load time; not under test here
 vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn() }));
+vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCertificates: backfillMock }));
 
-// the impl registers handlers via module.exports = (srv) => {...}; the dynamic
-// import goes through vitest's module graph so the mocks above apply, and the
-// CJS export surfaces as `.default`. (beforeAll instead of top-level await —
-// tsconfig compiles CommonJS, which forbids TLA.)
+// The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
+// mocks above and surfaces the CJS export as `.default`. beforeAll, not top-level
+// await: the CommonJS build forbids TLA.
 type Handler = (req: Record<string, unknown>) => Promise<unknown>;
 
 let registerHandlers: (srv: unknown) => void;
@@ -92,6 +92,10 @@ describe('CardanoIndexerService.getStatus', () => {
       consecutiveErrors: 2,
       // crawler-fed UTxO set: not configured, nothing imported
       utxoSet: { enabled: false, status: 'none', anchorSlot: null, anchorHash: null, importedAt: null, error: null },
+      certificateBackfill: {
+        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, certificates: 0, withdrawals: 0,
+        startedAt: null, finishedAt: null, error: null,
+      },
     });
   });
 
@@ -195,5 +199,50 @@ describe('CardanoIndexerService.getLiveness', () => {
     expect(readCursorMock).not.toHaveBeenCalled();
     expect(serverMock.getCardanoClient).not.toHaveBeenCalled();
     expect(serverMock.getCardanoIndexer).not.toHaveBeenCalled();
+  });
+});
+
+// Runs last: the backfill state is module-level and outlives each boot().
+describe('CardanoIndexerService.backfillCertificates', () => {
+  const cursor = { startSlot: 100, startBlockHash: 'start', lastSlot: 900 };
+  const withChainSync = () => serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getChainSyncBackend: () => ({}) } as any);
+
+  it('refuses without a chain-sync backend', async () => {
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getChainSyncBackend: () => null } as any);
+    const handlers = boot();
+    await expect(handlers.backfillCertificates({ data: {} })).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('chain-sync') });
+    expect(backfillMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a toSlot past the crawler cursor', async () => {
+    withChainSync();
+    readCursorMock.mockResolvedValue(cursor);
+    const handlers = boot();
+    await expect(handlers.backfillCertificates({ data: { toSlot: '901' } })).rejects.toThrow(/past the crawler cursor/);
+    expect(backfillMock).not.toHaveBeenCalled();
+  });
+
+  it('starts one run only, even for two requests that arrive together', async () => {
+    withChainSync();
+    let releaseCursor!: (c: typeof cursor) => void;
+    readCursorMock.mockReturnValueOnce(new Promise((r) => { releaseCursor = r; }));
+    let finishRun!: (r: unknown) => void;
+    backfillMock.mockReturnValue(new Promise((r) => { finishRun = r; }));
+    const handlers = boot();
+
+    const first = handlers.backfillCertificates({ data: {} });
+    await expect(handlers.backfillCertificates({ data: {} })).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('already running') });
+    releaseCursor(cursor);
+    expect(await first).toMatchObject({ accepted: true, fromSlot: '100', toSlot: '900' });
+    expect(backfillMock).toHaveBeenCalledTimes(1);
+    expect(backfillMock.mock.calls[0][0]).toMatchObject({ fromSlot: 100, toSlot: 900 });
+
+    readCursorMock.mockResolvedValue(cursor);
+    await expect(handlers.backfillCertificates({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ certificateBackfill: { status: 'running', fromSlot: '100', toSlot: '900' } });
+
+    finishRun({ atSlot: 900, blocks: 3, transactions: 4, certificates: 2, withdrawals: 1, fromSlot: 100, toSlot: 900, intersection: 'origin' });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ certificateBackfill: { status: 'done', atSlot: '900', blocks: 3, certificates: 2, withdrawals: 1 } });
   });
 });

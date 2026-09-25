@@ -1,9 +1,6 @@
 /**
- * Wallet worker — module singleton lifecycle (srv/blockchain/wallet-worker/index).
- * CardanoWalletWorker is mocked; what matters here is the singleton bookkeeping:
- * idempotent start, replacing a dead worker, dropping the reference when a start
- * fails or refuses, and serializing concurrent start/stop calls.
- * (The engine's own start()/stop() live in wallet-worker-engine.test.ts.)
+ * Wallet worker singleton lifecycle (srv/blockchain/wallet-worker/index) with the engine mocked:
+ * idempotent start, replacing a dead worker, dropping a failed start, serialized start/stop.
  */
 
 const { workerInstances, workerCtor } = vi.hoisted(() => {

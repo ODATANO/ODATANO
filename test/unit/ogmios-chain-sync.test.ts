@@ -1,8 +1,6 @@
 /**
- * OgmiosBackend.openChainSync + mapOgmiosBlock/mapOgmiosTx (crawler C2c).
- * Mocks the @cardano-ogmios/client chain-sync factory, captures the message handlers
- * and drives them with fixture Ogmios payloads — asserting the BlockData/Transaction
- * mapping, ordering (nextBlock), tip propagation, skip- and error-paths.
+ * OgmiosBackend.openChainSync + mapOgmiosBlock/mapOgmiosTx: the chain-sync factory is mocked and
+ * its message handlers driven with fixture payloads (mapping, ordering, tip, skip and error paths).
  */
 
 vi.mock('@sap/cds', () => {

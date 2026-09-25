@@ -51,9 +51,7 @@ vi.mock('@sap/cds', () => {
 
 describe('mappers', () => {
 
-  // ==========================================================================
   // mapTransactionInputAssets — amount guard
-  // ==========================================================================
   describe('mapTransactionInputAssets', () => {
     it('should return empty array when input.amount is undefined', () => {
       const result = mapTransactionInputAssets('abc123', [
@@ -83,9 +81,7 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
   // mapTransactionOutputAssets — amount guard
-  // ==========================================================================
   describe('mapTransactionOutputAssets', () => {
     it('should return empty array when output.amount is undefined', () => {
       const result = mapTransactionOutputAssets('abc123', [
@@ -102,9 +98,7 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
   // normalizeCostModels — object-format V3 handling
-  // ==========================================================================
   describe('normalizeCostModels', () => {
     it('should pass through V1/V2 arrays unchanged', () => {
       const raw = { PlutusV1: [1, 2, 3, 4, 5] };
@@ -121,7 +115,6 @@ describe('mappers', () => {
 
     it('should handle V3 array format with padding to the current on-chain cardinality', () => {
       // V3 arrays are padded by toCostModelArrV3 to N_COST_MODEL_PLUTUS_V3
-      // (350 since costmodels-ts 1.6 / post-Plomin²; was 297 on Chang-2)
       const raw = { PlutusV3: new Array(251).fill(100) };
       const result = normalizeCostModels(raw);
       expect(result.PlutusV3.length).toBe(N_COST_MODEL_PLUTUS_V3);
@@ -142,9 +135,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // scriptHashToEnterpriseAddress
-  // ==========================================================================
   describe('scriptHashToEnterpriseAddress', () => {
     // Known script hash (28 bytes = 56 hex chars)
     const scriptHash = 'a'.repeat(56);
@@ -178,9 +168,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapTransaction
-  // ==========================================================================
   describe('mapTransaction', () => {
     it('should map all fields from provider data', () => {
       const result = mapTransaction({
@@ -247,9 +234,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapTransactionInputs
-  // ==========================================================================
   describe('mapTransactionInputs', () => {
     it('should map inputs with collateral and reference flags', () => {
       const result = mapTransactionInputs('tx123', [
@@ -292,9 +276,7 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
   // mapTransactionCertificates / mapTransactionWithdrawals (crawler.certificates)
-  // ==========================================================================
   describe('mapTransactionCertificates', () => {
     it('maps every field and nulls the ones a kind does not carry', () => {
       const rows = mapTransactionCertificates('tx1', [
@@ -326,9 +308,7 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
   // credentialToStakeAddress / credentialToDrepId (Ogmios hands out bare hashes)
-  // ==========================================================================
   describe('credentialToStakeAddress', () => {
     // Koios API docs example reward account; payload e1 || hash (key credential, mainnet)
     const HASH = '9084d6174b028be3b346f5eb11e0a8bf889a7e464447f7973605c886';
@@ -392,9 +372,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAddress
-  // ==========================================================================
   describe('mapAddress', () => {
     it('should map address data with all optional fields', () => {
       const result = mapAddress('addr_test1abc', {
@@ -452,9 +429,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAddressTransactions
-  // ==========================================================================
   describe('mapAddressTransactions', () => {
     it('should include net native asset deltas in netAssets JSON', () => {
       const addr = 'addr_test1abc';
@@ -475,9 +449,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAddressAssets
-  // ==========================================================================
   describe('mapAddressAssets', () => {
     it('should map invalid/short asset units with null policyId and raw assetName', () => {
       const rows = mapAddressAssets('addr_test1abc', '2024-01-01', '2025-01-01', [
@@ -490,9 +461,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAddressUtxos
-  // ==========================================================================
   describe('mapAddressUtxos', () => {
     it('should extract lovelace and detect multi-asset UTxOs', () => {
       const result = mapAddressUtxos('addr_test1abc', '2024-01-01', '2025-01-01', [
@@ -531,9 +499,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapBlock
-  // ==========================================================================
   describe('mapBlock', () => {
     it('persists a real null slotLeader (not the string "null")', () => {
       const row = mapBlock({ time: 1700000000, height: 1, hash: 'h', slotLeader: null, epoch: 5, epochSlot: 1, size: 1, txCount: 0, fees: '0' } as any);
@@ -542,9 +507,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapBuildResult
-  // ==========================================================================
   describe('mapBuildResult', () => {
     it('should map build result with all fields', () => {
       const result = mapBuildResult({
@@ -570,9 +532,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAsset
-  // ==========================================================================
   describe('mapAsset', () => {
     const POLICY = 'a'.repeat(56);
     const UNIT = POLICY + '484f534b59';
@@ -637,9 +596,7 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapPool / mapDrep — temporal stamping (Pools/Dreps are now : temporal)
-  // ==========================================================================
+  // mapPool / mapDrep — temporal stamping (Pools/Dreps are temporal)
   describe('mapPool / mapDrep temporal stamping', () => {
     it('mapPool stamps validFrom/validTo from max_age so slices expire and re-fetch', () => {
       const before = Date.now();
@@ -658,9 +615,6 @@ describe('mappers', () => {
     });
   });
 
-  // ==========================================================================
-  // mapAssetHistory
-  // ==========================================================================
   describe('mapAssetHistory', () => {
     const POLICY = 'a'.repeat(56);
     const UNIT = POLICY + '484f534b59';
@@ -681,9 +635,7 @@ describe('mappers', () => {
       expect(mapAssetHistory([])).toEqual([]);
     });
   });
-// ==========================================================================
 // mapBareAsset / mapPoolSnapshot / mapDrepSnapshot — crawler analytics coverage
-// ==========================================================================
 describe('crawler analytics mappers', () => {
   const POLICY = 'a1'.repeat(28);
   const UNIT = POLICY + Buffer.from('SUNDAE').toString('hex');

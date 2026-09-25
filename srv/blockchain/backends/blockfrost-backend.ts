@@ -22,19 +22,13 @@ import {
 } from '../../utils/types';
 import { Network } from '../cardano-client';
 
-/**
- * BlockfrostBackend Implementation for CardanoBackend Interface
- * Implements the CardanoBackend interface using Blockfrost API SDK
- */
+/** CardanoBackend + PaginatingBackend implementation on the Blockfrost API SDK. */
 export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
   private network: Network;
   private timeoutMs: number;
 
-  /** 
-   * Constructor
-   */
   constructor(network: Network, timeoutMs: number, projectId: string, customBackend?: string) {
     if (!projectId && !customBackend) {
       throw new BackendInitError(
@@ -42,10 +36,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         new Error('Either projectId (BLOCKFROST_API_KEY) or customBackend (BLOCKFROST_CUSTOM_BACKEND) is required'),
       );
     }
-    // Dolos and some other self-hosted Blockfrost-compatible nodes reject empty
-    // project_id headers even when they don't authenticate against them. The upstream
-    // SDK validator accepts customBackend OR projectId — this substitution is purely
-    // for the runtime HTTP header.
+    // Self-hosted Blockfrost-compatible nodes reject an empty project_id header
+    // even without authentication — placeholder for the runtime HTTP header only.
     const effectiveProjectId = projectId || 'self-hosted';
     this.api = new BlockFrostAPI({
       projectId: effectiveProjectId,
@@ -56,9 +48,6 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     this.timeoutMs = timeoutMs;
   }
 
-  /** 
-   * Initialize the backend 
-   */
   async init(): Promise<boolean> {
     this.api.options.requestTimeout = this.timeoutMs;
     // Test connection by fetching latest block
@@ -70,10 +59,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     return true;
   }
 
-  /** 
-   * Get Network Information
-   * @returns {Promise<NetworkInformation>} network information
-   */
+  /** Network information (supply, stake). */
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(
       async () => {
@@ -87,11 +73,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Block Data
-   * @param blockHash block hash (hex)
-   * @returns {Promise<BlockData>} block data
-   */
+  /** Block by hash (hex). */
   async getBlock(blockHash: string): Promise<BlockData> {
     return handleBackendRequest(
       async () => this.toBlockData(await this.api.blocks(blockHash)),
@@ -99,11 +81,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Epoch Data
-   * @param epochNumber epoch number
-   * @returns {Promise<EpochData>} epoch data
-   */
+  /** Epoch by number. */
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -125,11 +103,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Transaction Data
-   * @param hash transaction hash (hex)
-   * @returns {Promise<Transaction>} transaction data
-   */
+  /** Transaction by hash (hex), with UTxOs and metadata. */
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
@@ -167,8 +141,6 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
             dataHash: input.data_hash,
             inlineDatum: inlineDatumToHex(input.inline_datum),
             referenceScriptHash: input.reference_script_hash,
-            // TxInputLine's names — these were mapped as `collateral`/`reference` before,
-            // which nothing reads, so every consumer saw a reference input as a consumed one.
             isCollateral: input.collateral === true,
             isReference: input.reference === true,
           })),
@@ -189,11 +161,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get Transaction Metadata
-   * @param tx_hash transaction hash (hex)
-   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
-   */
+  /** Metadata labels of a transaction (hash hex); NotFoundError when it has none. */
   async getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(
       async () => {
@@ -213,17 +181,12 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get Address Data (without transactions - use getAddressTransactions() separately)
-   * @param address bech32 address string
-   * @returns {Promise<Address>} address data
-   */
+  /** Address data with UTxOs (no transactions — see getAddressTransactions()). */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
-        // *All variant paginates internally — addressesUtxos caps at 100 entries,
-        // silently truncating larger wallets (wrong balances / spurious InsufficientFunds)
+        // *All variant paginates internally — plain addressesUtxos caps at 100 entries and silently truncates
         const address_utxos = await this.api.addressesUtxosAll(address);
 
         return {
@@ -248,11 +211,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get Address Transactions
-   * @param address bech32 address string
-   * @returns {Promise<Transaction[]>} list of transactions for this address
-   */
+  /** Transactions of an address, most recent first, with full details (batched). */
   async getAddressTransactions(address: string, limit?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
@@ -276,11 +235,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Address UTxOs
-   * @param address bech32 address string
-   * @returns {Promise<UTxO[]>} list of UTxOs
-   */
+  /** UTxOs of an address. */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
@@ -301,11 +256,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Pool Data
-   * @param poolId stake pool id (hex)
-   * @return {Promise<PoolData>} pool data
-   */
+  /** Stake pool by id. */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(
       async () => {
@@ -318,8 +269,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           liveStake: poolData.live_stake || '0',
           liveSize: poolData.live_size,
           liveDelegators: poolData.live_delegators,
-          // Blockfrost already reports a fraction (0.7542 = 75.42 %), which is the
-          // canonical unit — see the conversion in KoiosBackend._mapKoiosPool.
+          // Blockfrost reports saturation as a fraction (0.7542 = 75.42 %), the canonical unit
           liveSaturation: poolData.live_saturation,
           activeStake: poolData.active_stake || '0',
           activeSize: poolData.active_size,
@@ -334,11 +284,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   }
 
   /**
-   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata).
-   * Blockfrost does NOT expose initial-mint timestamp in this endpoint —
-   * `initialMintTime` is left null. Filling it would cost an extra tx fetch.
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @return {Promise<AssetInfo>} canonical asset info
+   * Asset info (supply, mint history, CIP-25 + CIP-26 metadata); unit = policyId + assetNameHex.
+   * Blockfrost does not expose the initial-mint timestamp here, so `initialMintTime` stays null.
    */
   async getAssetInfo(unit: string): Promise<AssetInfo> {
     return handleBackendRequest(
@@ -378,14 +325,9 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   }
 
   /**
-   * Get latest mint/burn events for an asset, with backfilled block metadata.
-   * Blockfrost's `assetsHistory` returns tx_hash + action + amount only; we
-   * backfill `blockTime` and `blockHeight` via concurrent `api.txs(...)` calls.
-   * Cost: 1 extra API call per history entry. Failed tx fetches leave the
-   * timestamp fields null instead of failing the whole call (best-effort).
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @param limit max number of events (default 100, max 100 per Blockfrost page)
-   * @return {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   * Mint/burn events of an asset, most recent first (max 100 per Blockfrost page).
+   * `assetsHistory` carries no block metadata; blockTime/blockHeight are backfilled with one
+   * best-effort `txs()` call per entry (a failed fetch leaves them null).
    */
   async getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     return handleBackendRequest(
@@ -430,11 +372,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get Drep Data
-   * @param drepId drep id (bech32)
-   * @return {Promise<DrepData>} drep data
-   */
+  /** DRep by id (bech32). */
   async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(
       async () => {
@@ -454,11 +392,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Account Data
-   * @param stakeAddress bech32 stake address
-   * @return {Promise<AccountData>} account data
-   */
+  /** Account by stake address (bech32), with all its addresses and their UTxOs. */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(
       async () => {
@@ -491,11 +425,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Submit Transaction
-   * @param signedTxCbor hex-encoded signed transaction CBOR
-   * @returns {Promise<string>} transaction hash
-   */
+  /** Submit a signed transaction (CBOR hex); returns the tx hash. */
   async submitTransaction(signedTxCbor: string): Promise<string> {
     const txBytes = Buffer.from(signedTxCbor, "hex");
     return handleBackendRequest(
@@ -507,10 +437,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Protocol Parameters
-   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
-   */
+  /** Protocol parameters of the latest epoch. */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(
       async () => {
@@ -559,10 +486,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Latest Epoch Data
-   * @returns {Promise<EpochData>} latest epoch data
-   */
+  /** Latest epoch. */
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
@@ -584,10 +508,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** 
-   * Get Latest Block Data
-   * @returns {Promise<BlockData>} latest block data
-   */
+  /** Latest block. */
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
@@ -609,10 +530,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get the latest chain tip slot.
-   * @returns {Promise<number>} current chain slot
-   */
+  /** Latest chain tip slot; ProviderUnavailableError when the latest block has no slot. */
   async getCurrentSlot(): Promise<number> {
     const block = await this.getLatestBlock();
     if (block.slot == null) {
@@ -624,12 +542,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     return block.slot;
   }
 
-  /**
-   * Check whether a UTxO is still unspent via Blockfrost's `consumed_by_tx` field.
-   * @param txHash 64-char lowercase hex
-   * @param outputIndex non-negative integer
-   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
-   */
+  /** Whether a UTxO is unspent, via Blockfrost's `consumed_by_tx`; false for unknown tx or out-of-range index. */
   async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
     if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
     try {
@@ -638,9 +551,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           const utxos = await this.api.txsUtxos(txHash);
           const out = utxos?.outputs?.find(o => o.output_index === outputIndex);
           if (!out) return false;
-          // consumed_by_tx is optional on the openapi type (added in Blockfrost
-          // server v0.1.59). If absent we cannot prove unspent — escalate so the
-          // router falls through to another backend rather than silently lying.
+          // consumed_by_tx is optional on the openapi type (Blockfrost server >= 0.1.59); without it
+          // unspent cannot be proven — escalate so the router falls through to another backend.
           const consumed = (out as { consumed_by_tx?: string | null }).consumed_by_tx;
           if (consumed === undefined) {
             throw new ProviderUnavailableError(
@@ -665,12 +577,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   /** Max concurrent Blockfrost API calls (free tier: ~10 req/s) */
   private static readonly MAX_CONCURRENT = 10;
 
-  /**
-   * Get transaction hashes for an address (lightweight — no full tx details).
-   * @param address bech32 address
-   * @param limit maximum number of hashes
-   * @returns {Promise<string[]>} most recent tx hashes
-   */
+  /** Most recent tx hashes of an address (no details). */
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     return handleBackendRequest(
       async () => {
@@ -683,12 +590,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Batch fetch multiple transactions by hash.
-   * Blockfrost has no batch endpoint — uses concurrency-limited parallel calls.
-   * @param txHashes array of transaction hashes
-   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
-   */
+  /** Transactions by hash (map hash -> Transaction); no batch endpoint, so concurrency-limited parallel calls. */
   async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
     return handleBackendRequest(
       async () => {
@@ -709,13 +611,10 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   }
 
   // ---------------------------------------------------------------------------
-  // PaginatingBackend — forward iteration for the chain crawler (v2.0)
+  // PaginatingBackend — forward iteration for the chain crawler
   // ---------------------------------------------------------------------------
 
-  /**
-   * Map a Blockfrost block summary (from blocks()/blocksNext()) to our BlockData.
-   * Same shape getBlock() maps inline — kept private to avoid touching getBlock().
-   */
+  /** Map a Blockfrost block summary (blocks()/blocksNext()) to BlockData. */
   private toBlockData(b: {
     time: number; height: number | null; hash: string; slot: number | null;
     slot_leader: string; epoch: number | null; epoch_slot: number | null;
@@ -735,10 +634,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     };
   }
 
-  /**
-   * Get a block by its height. Blockfrost's `blocks` endpoint accepts a height as
-   * well as a hash.
-   */
+  /** Block by height; Blockfrost's `blocks` endpoint accepts a height as well as a hash. */
   async getBlockByHeight(height: number): Promise<BlockData> {
     return handleBackendRequest(
       async () => this.toBlockData(await this.api.blocks(height)),
@@ -746,9 +642,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get up to `count` blocks immediately following `afterHash`, in ascending chain order.
-   */
+  /** Up to `count` blocks immediately following `afterHash`, in ascending chain order. */
   async getNextBlocks(afterHash: string, count: number): Promise<BlockData[]> {
     return handleBackendRequest(
       async () => {
@@ -756,11 +650,9 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         try {
           blocks = await this.api.blocksNext(afterHash, { count });
         } catch (err: unknown) {
-          // Blockfrost only knows canonical blocks — a 404 on the anchor means the
-          // cursor block was orphaned by a reorg. Emit the crawler's explicit
-          // mismatch signal (same contract as KoiosBackend.getNextBlocks); a plain
-          // NotFoundError would be treated as transient and the crawler would halt
-          // with an error streak instead of entering reorg recovery.
+          // Blockfrost only knows canonical blocks: a 404 on the anchor means the cursor block was
+          // orphaned by a reorg. Signal CHAIN_POINT_MISMATCH so the crawler enters reorg recovery;
+          // a plain NotFoundError would count as transient and halt it with an error streak.
           const normalized = normalizeBackendError(err, this.name);
           if (normalized.statusCode === 404) {
             throw new ProviderUnavailableError(
@@ -776,10 +668,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Get the full transaction list of a block in block order. Blockfrost returns tx
-   * hashes; details are batched via getTransactionsBatch. Order is preserved.
-   */
+  /** Full transaction list of a block in block order (hashes from blocksTxsAll, details batched). */
   async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {

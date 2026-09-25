@@ -101,17 +101,8 @@ const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
 const logger = cds.log('CardanoIndexer');
 
 /**
- * CardanoIndexer - Indexer for Cardano blockchain data into OData entities
- *
- * Provides methods to index & manage db consistency for various Cardano blockchain data (transactions, addresses, blocks, epochs, accounts, pools, dreps)
- * 1. Fetches data from the configured Cardano data provider via the CardanoClient
- * 2. Maps the provider data into corresponding OData entity rows
- * 3. Upserts the data rows into the database via CAP transactions
- * 4. Ensures referential integrity and consistency across related entities (e.g., addresses in transactions, UTxOs in addresses)
- * 5. Returns the indexed entity data for further processing
- *
- * Each method corresponds to a specific Cardano Entity type and handles the necessary mapping and persistence
- * into the corresponding OData entities defined in the CardanoODataService(M1) and CardanoTransactionService(M2) models.
+ * Indexes Cardano data into the OData entities: fetches via CardanoClient, maps provider data
+ * to entity rows and UPSERTs them inside the caller's CAP transaction.
  */
 export class CardanoIndexer {
   private client: CardanoClient;
@@ -122,14 +113,9 @@ export class CardanoIndexer {
   private static readonly CRAWL_EPOCH_RETRY_MS = 30 * 1000;
 
   /**
-   * Crawler epoch memo. Network reads are refreshed periodically while an epoch is
-   * live and once more when the next epoch starts, so counters such as block_count,
-   * fees and lastBlockTime do not remain frozen at their first observed value.
-   *
-   * At most the current and immediately previous epoch are retained. The rows are
-   * intentionally UPSERTed in every block transaction: the caller owns that
-   * transaction, so an in-memory "persisted" bit cannot know whether its commit later
-   * succeeded. Repeating one local UPSERT is cheap and remains correct after rollback.
+   * Crawler epoch memo: refreshed periodically while an epoch is live and once more when the
+   * next one starts; holds at most the current and previous epoch. Rows are UPSERTed in every
+   * block transaction because the caller owns the commit.
    */
   private crawlEpochCache = new Map<number, {
     row?: Epoch;
@@ -139,11 +125,7 @@ export class CardanoIndexer {
   private crawlEpochCurrent: number | null = null;
   private crawlEpochPrevious: number | null = null;
 
-  /**
-   * Analytics coverage of the crawl path (v2.0). The
-   * defaults mirror the crawler config defaults, so an indexer the crawler never configured
-   * (unit tests, the lazy-only path) behaves exactly like a configured one.
-   */
+  /** Analytics coverage of the crawl path; defaults mirror the crawler config defaults. */
   private crawlAssetHistory = true;
   private crawlAssetCatalogue: 'off' | 'bare' | 'enrich' = 'bare';
   /** Certificates + withdrawals per block (ledger-state coverage). Opt-in. */
@@ -151,18 +133,16 @@ export class CardanoIndexer {
   /** Logged once per process: the active source reports no certificates (Blockfrost). */
   private certificatesUnreportedWarned = false;
   /**
-   * Crawler-fed ledger state (`crawler.utxoSet`). Blocks after `utxoAnchor` are
-   * applied to the Ledger* tables; no anchor (nothing imported, or invalidated by a reorg
-   * past it) means the mode is configured but inactive.
+   * Crawler-fed ledger state (`crawler.utxoSet`): blocks after `utxoAnchor` are applied to the
+   * Ledger* tables; no anchor means configured but inactive.
    */
   private crawlUtxoSet = false;
   private utxoAnchor: LedgerAnchor | null = null;
   /** The anchor block was found in the crawled chain (checked once, before the first apply). */
   private utxoAnchorVerified = false;
   /**
-   * Invalidation decided inside a block transaction. The in-memory anchor stays until the
-   * crawler confirms the commit (`takeLedgerInvalidation`), so a rolled-back attempt neither
-   * loses the anchor nor leaves the DB saying `active` while this process stopped applying.
+   * Invalidation decided inside a block transaction; the anchor stays until the crawler confirms
+   * the commit (`takeLedgerInvalidation`), so a rolled-back attempt changes nothing.
    */
   private ledgerInvalidation: string | null = null;
 
@@ -171,20 +151,15 @@ export class CardanoIndexer {
   private assetMemo = new Set<string>();
 
   /**
-   * Background registry enrichment (`assetCatalogue: 'enrich'`). Bare rows are queued here and
-   * resolved at a fixed rate OUTSIDE the block transaction, so a mint storm can slow the queue
-   * but never the crawl. Above the cap the oldest entries are dropped: the unit keeps its bare
-   * row and is still enriched by the lazy path on its first API read.
+   * Background registry enrichment queue (`assetCatalogue: 'enrich'`), drained at a fixed rate
+   * outside the block transaction. Above the cap the oldest units are dropped (bare row stays).
    */
   private static readonly ENRICH_QUEUE_CAP = 50_000;
   private enrichQueue: string[] = [];
   private enrichTimer: ReturnType<typeof setInterval> | null = null;
   private enrichRate = 2;
 
-  /**
-   * Adopt the crawler's coverage settings. Called once from the crawler's start path; the
-   * lazy request path never touches these.
-   */
+  /** Adopt the crawler's coverage settings; the lazy request path never touches these. */
   configureCrawlCoverage(coverage: {
     assetHistory: boolean;
     assetCatalogue: 'off' | 'bare' | 'enrich';
@@ -208,17 +183,9 @@ export class CardanoIndexer {
   }
 
   /**
-   * The imported set describes the chain AT the anchor block. Before the first block past
-   * it is applied, that block has to be the one the crawler actually followed — a snapshot
-   * taken on a fork that was dropped again without a rollback the crawler saw (the fork was
-   * never in its cursor) would otherwise seed the set with the wrong balances.
-   *
-   * The check is against the cursor, not the Blocks table: when the first block past the
-   * anchor arrives, the cursor (not yet advanced in this transaction) IS the block the
-   * crawler followed last, so it must equal the anchor exactly. That also covers the
-   * bootstrap case — the configured start block sits in the cursor without a Blocks row of
-   * its own. Once a block has been applied (`utxoAppliedSlot` set, same transaction), the
-   * anchor was verified and a restart skips the check.
+   * The imported set describes the chain AT the anchor block, so before the first block past it
+   * is applied the cursor (not yet advanced in this transaction) must equal the anchor exactly;
+   * otherwise the snapshot was taken on a fork. Skipped once `utxoAppliedSlot` is set.
    */
   private async verifyUtxoAnchor(tx: CapTransaction, anchor: LedgerAnchor): Promise<boolean> {
     const cursor = await readCursor(tx);
@@ -238,10 +205,7 @@ export class CardanoIndexer {
     return this.crawlUtxoSet && !this.ledgerInvalidation ? this.utxoAnchor : null;
   }
 
-  /**
-   * Called by the crawler right after a block transaction committed: hands out a pending
-   * invalidation (and drops the anchor) exactly once, or null.
-   */
+  /** Hand out a pending invalidation (dropping the anchor) exactly once after the block commit, or null. */
   takeLedgerInvalidation(): string | null {
     const reason = this.ledgerInvalidation;
     if (reason) {
@@ -254,9 +218,7 @@ export class CardanoIndexer {
 
   /**
    * Drain the enrichment queue at `enrichRate` units per second, one `indexAsset()` per tick in
-   * its own transaction. The timer is unref'd, so it never holds the process open, and a failing
-   * unit (404 from every backend, provider outage) is dropped rather than retried — its bare row
-   * stays and the lazy path can still enrich it later.
+   * its own transaction. A failing unit is dropped; its bare row stays for the lazy path.
    */
   private startAssetEnrichment(): void {
     if (this.enrichTimer || this.crawlAssetCatalogue !== 'enrich') return;
@@ -284,9 +246,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block
-   * write transaction — the backend round-trip must never run while the DB write
-   * lock is held (indexBlockFull then serves the epoch from this memo). Never throws.
+   * Network-only epoch prefetch for the crawler. Call BEFORE opening the per-block write
+   * transaction so no backend round-trip runs under the DB write lock. Never throws.
    */
   async prefetchCrawlEpoch(epochNumber: number): Promise<void> {
     const previousEpoch = this.crawlEpochCurrent;
@@ -344,11 +305,6 @@ export class CardanoIndexer {
     }
   }
 
-  /**
-   * Create a new CardanoIndexer instance
-   * @param client - The CardanoClient instance for blockchain queries
-   * @param txBuilder - The CardanoTransactionBuilder instance for transaction building
-   */
   constructor(client: CardanoClient, txBuilder: CardanoTransactionBuilder) {
     this.client = client;
     this.txBuilder = txBuilder;
@@ -356,15 +312,10 @@ export class CardanoIndexer {
   }
 
   /**
-   * Index & return a single transaction with inputs/outputs/assets/UTxOs/addresses
-   * All UPSERTs execute within the same CAP transaction (cds.tx), which ensures
-   * atomicity: either all entities are persisted or none are (automatic rollback on error).
-   * @param tx      CAP transaction (cds.tx(req))
-   * @param txHash  Cardano transaction hash (hex)
-   * @returns {Promise<CardanoTransaction>} transaction entity data
+   * Index a transaction with inputs/outputs/assets/metadata; all UPSERTs run in the caller's
+   * transaction, so either everything persists or nothing does.
    */
   async indexTransaction(tx: CapTransaction, txHash: string): Promise<CardanoTransaction> {
-    // getting data from cardano data provider
     const providerTx = await this.client.getTransaction(txHash);
     const txRow = mapTransaction(providerTx);
 
@@ -390,8 +341,7 @@ export class CardanoIndexer {
       }
     }
 
-    // Outputs + OutputAssets — independent of inputs (a tx with empty/missing
-    // `inputs` previously skipped its outputs entirely)
+    // Outputs + OutputAssets — must not depend on the inputs branch
     if (providerTx.outputs) {
       const outputRows = mapTransactionOutputs(txHash, providerTx.outputs);
       const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs);
@@ -413,11 +363,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Index & return address data with assets and UTxOs (without transactions)
-   * Transactions are loaded separately via indexAddressTransactions() for better performance
-   * @param tx       CAP transaction
-   * @param addr     bech32 address
-   * @return {Promise<Address>} address entity data
+   * Index address data with assets and UTxOs; transactions are loaded separately via
+   * indexAddressTransactions().
    */
   async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
     const addrData = await this.client.getAddress(addr);
@@ -431,8 +378,7 @@ export class CardanoIndexer {
 
     await tx.run(UPSERT.into(Addresses).entries(AddrEntity));
 
-    // Also insert child entities for new address
-    // Supplement address-level amounts with assets found in UTxOs but missing from addresses endpoint
+    // Supplement address-level amounts with assets only present in UTxOs
     const addressAssetUnits = new Set(addrData.amount.filter(a => a.unit !== 'lovelace').map(a => a.unit));
     for (const utxo of addrData.utxos) {
       for (const amt of utxo.amount) {
@@ -493,17 +439,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Index UTxOs by 28-byte payment credential. Always-fresh fetch from Koios
-   * (bypasses cache) — credential queries serve dApp-state use cases that require
-   * current data. Underlying AddressUTxOs/UTxOAssets rows are UPSERTed and stay
-   * available for follow-up address-keyed queries within the TTL.
-   *
-   * Does NOT upsert parent Addresses rows; child rows reference bech32 addresses
-   * that may not yet have a parent stub. Same pattern as TransactionInputs.
-   *
-   * @param tx       CAP transaction
-   * @param credHash 28-byte payment credential as 56-char lowercase hex
-   * @return UTxO entity rows across all bech32 addresses sharing the credential
+   * Index UTxOs by 28-byte payment credential (56-char hex), always fresh from Koios. Child
+   * rows are UPSERTed without a parent Addresses row (same pattern as TransactionInputs).
    */
   async indexCredentialUtxos(tx: CapTransaction, credHash: string): Promise<AddressUTxOs[]> {
     const utxos = await this.client.getCredentialUtxos(credHash);
@@ -551,17 +488,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Index ONLY the UTxOs at a bech32 address via getAddressUtxos — deliberately
-   * WITHOUT a getAddress (address-detail) call, so it works on backends that serve
-   * the live UTxO set but not address aggregation (e.g. Ogmios). Used as the
-   * GetUTxOsByAddress fallback when no configured backend supports getAddress.
-   *
-   * Does NOT upsert a parent Addresses row (same pattern as indexCredentialUtxos);
-   * AddressUTxOs/UTxOAssets reference the bech32 address directly.
-   *
-   * @param tx    CAP transaction
-   * @param addr  bech32 address
-   * @return UTxO entity rows for the address (empty when the address holds none)
+   * Index only the UTxOs of an address via getAddressUtxos (no getAddress call), so it works on
+   * backends without address aggregation such as Ogmios. Writes no parent Addresses row.
    */
   async indexAddressUtxos(tx: CapTransaction, addr: string): Promise<AddressUTxOs[]> {
     const utxos = await this.client.getAddressUtxos(addr);
@@ -591,21 +519,9 @@ export class CardanoIndexer {
   }
 
   /**
-   * Evict cached rows a submitted transaction made stale, so the next read
-   * refetches instead of serving spent UTxOs for up to indexTtlMs:
-   *   - every consumed input ref (spent under WHATEVER address cached it),
-   *   - all address-level rows of the output addresses (their UTxO set gained
-   *     the new outputs — sender change included) and of `extraAddresses`
-   *     (e.g. the build's sender when the CBOR could not be parsed).
-   *
-   * Only the read cache is touched; submissions/builds stay untouched. Note the
-   * next refetch may STILL see pre-submit state on lagging backends
-   * (Blockfrost/Koios propagation) — that matches cache-less behaviour and is
-   * not recoverable server-side.
-   *
-   * @param tx             CAP transaction
-   * @param targets        input refs + output addresses from extractTxCacheTargets
-   * @param extraAddresses additional bech32 addresses to evict
+   * Evict cached rows a submitted transaction made stale: every consumed input ref (under any
+   * address) and all address-level rows of the output addresses plus `extraAddresses`. Only the
+   * read cache is touched; lagging backends may still serve pre-submit state on refetch.
    */
   async invalidateUtxoCacheForTx(
     tx: CapTransaction,
@@ -628,24 +544,18 @@ export class CardanoIndexer {
     }
   }
 
-  /**
-   * Index & return address transactions (separate from indexAddress for lazy loading)
-   * @param tx       CAP transaction
-   * @param addr     bech32 address
-   * @param limit    maximum number of transactions to fetch
-   * @return {Promise<AddressTransactions[]>} address transaction entities
-   */
+  /** Index address transactions (separate from indexAddress for lazy loading). */
   async indexAddressTransactions(tx: CapTransaction, addr: string, limit: number): Promise<AddressTransactions[]> {
     logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
 
-    // Layer 4: Hash-only listing (lightweight, 1 API call)
+    // Hash-only listing (one API call)
     const txHashes = await this.client.getAddressTransactionHashes(addr, limit);
 
     logger.debug(`indexAddressTransactions: found ${txHashes.length} tx hashes for ${addr}`);
 
     if (txHashes.length === 0) return [];
 
-    // Layer 3: DB-first dedup + batch fetch
+    // DB-first dedup + batch fetch
     const batchFetched = await this.ensureTransactionsIndexed(tx, txHashes);
 
     // For address-transaction mapping we need full provider tx data (inputs/outputs for net amounts).
@@ -685,14 +595,7 @@ export class CardanoIndexer {
     return transactionsEntities as AddressTransactions[];
   }
 
-  /**
-   * Index & return address signing request association
-   * Links an address to a signing request for address-based queries
-   * @param tx       CAP transaction
-   * @param addr     bech32 address
-   * @param signingRequestId signing request UUID
-   * @return {Promise<void>}
-   */
+  /** Link an address to a signing request for address-based queries. */
   async indexAddressSigningRequests(tx: CapTransaction, addr: string, signingRequestId: string): Promise<void> {
     logger.debug(`indexAddressSigningRequests: linking address ${addr} to signing request ${signingRequestId}`);
 
@@ -703,14 +606,7 @@ export class CardanoIndexer {
     logger.debug(`indexAddressSigningRequests: linked address ${addr} to signing request ${signingRequestId}`);
   }
 
-  /**
-   * Index & return address transaction build association
-   * Links an address to a transaction build for address-based queries
-   * @param tx       CAP transaction
-   * @param addr     bech32 address
-   * @param buildId  transaction build UUID
-   * @return {Promise<void>}
-   */
+  /** Link an address to a transaction build for address-based queries. */
   async indexAddressTransactionBuilds(tx: CapTransaction, addr: string, buildId: string): Promise<void> {
     logger.debug(`indexAddressTransactionBuilds: linking address ${addr} to build ${buildId}`);
 
@@ -721,13 +617,7 @@ export class CardanoIndexer {
     logger.debug(`indexAddressTransactionBuilds: linked address ${addr} to build ${buildId}`);
   }
 
-  /**
-   * Index & return metadata for a single transaction (Metadata)
-   * @param tx       CAP transaction
-   * @param txHash   transaction hash
-   * @param metadata raw metadata object (label -> JSONValue)
-   * @return {Promise<TransactionMetadata[]>} array of transaction metadata rows  
-   */
+  /** Index the metadata rows of a transaction. */
   async indexTransactionMetadata(tx: CapTransaction, tx_hash: string): Promise<TransactionMetadata[]> {
     const metadata = await this.client.getTransactionMetadata(tx_hash);
     const rows = mapTransactionMetadata(metadata);
@@ -737,11 +627,7 @@ export class CardanoIndexer {
     return rows;
   }
 
-  /** 
-   * Index & return the network information data
-   * @param tx CAP transaction object
-   * @returns {Promise<NetworkInformation>} network information entity data
-   */
+  /** Index the network information. */
   async indexNetworkInformation(tx: CapTransaction): Promise<NetworkInformation> {
     const netInfo = await this.client.getNetworkInformation();
     const netEntity = mapNetworkInfo(netInfo,this.client.max_age_ms,this.client.network);
@@ -750,12 +636,7 @@ export class CardanoIndexer {
     return netEntity;
   }
 
-  /** 
-   * Index & return the block information data
-   * @param tx CAP transaction object
-   * @param blockHash block hash (hex)
-   * @returns {Promise<Block>} block entity data
-   */
+  /** Index a block by hash, with best-effort epoch enrichment. */
   async indexBlock(tx: CapTransaction, blockHash: string): Promise<Block> {
     const blockInfo = await this.client.getBlock(blockHash);
     let epoch: Epoch | undefined;
@@ -770,28 +651,13 @@ export class CardanoIndexer {
   }
 
   /**
-   * Bulk-index a whole block and all of its transactions in ONE pass (chain crawler,
-   * v2.0). Unlike indexTransaction()/indexBlock() this does NOT re-fetch per hash — the
-   * crawler already carries the block + full tx list from the stream/page. Rows are
-   * accumulated across the block's txs and UPSERTed once per table (few statements).
-   *
-   * All writes run inside the caller's CAP transaction (`tx`), so a block is persisted
-   * atomically — a failure mid-block rolls the whole block back, keeping the cursor and
-   * the data consistent.
-   *
-   * Inputs from the Ogmios chain-sync path arrive as bare references (no address/amount);
-   * resolveInputs() backfills them from this block's own outputs and previously-indexed
-   * outputs before mapping. Blockfrost/Koios inputs already carry address/amount and are
-   * left untouched.
-   *
-   * @param tx        CAP transaction (one per block, committed by the crawler)
-   * @param blockData block header/summary from the crawler source
-   * @param txs       the block's full transaction list (in block order)
+   * Bulk-index a whole block and its transactions in one pass for the crawler: no per-hash
+   * re-fetch, one UPSERT per table, all inside the caller's transaction so the block persists
+   * atomically. Bare chain-sync inputs are backfilled by resolveInputs() first.
    */
   async indexBlockFull(tx: CapTransaction, blockData: BlockData, txs: ProviderTransaction[]): Promise<void> {
-    // Block row — best-effort epoch enrichment from the prefetched memo. The network
-    // fetch happens in prefetchCrawlEpoch() BEFORE the caller opened this write tx;
-    // if the caller skipped it, resolve now (memoized) and accept the in-tx fetch.
+    // Epoch from the prefetched memo; if the caller skipped prefetchCrawlEpoch, resolve now
+    // (memoized) and accept the in-tx fetch.
     let epoch: Epoch | undefined;
     if (blockData.epoch != null) {
       await this.prefetchCrawlEpoch(blockData.epoch);
@@ -810,18 +676,16 @@ export class CardanoIndexer {
 
     await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
 
-    // Accumulate rows across the whole block, then one bulk UPSERT per table.
-    // NUL safety (PostgreSQL rejects U+0000 in text/JSON) is enforced for every write
-    // of this plugin by the db-level hook in srv/utils/db-sanitize.ts, not per call site.
+    // One bulk UPSERT per table. NUL safety for PostgreSQL is enforced by the db-level hook in
+    // srv/utils/db-sanitize.ts, not per call site.
     const txRows = txs.map(t => mapTransaction(t));
     const inputRows = txs.flatMap(t => mapTransactionInputs(t.hash, t.inputs ?? []));
     const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(t.hash, t.inputs ?? []));
     const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
     const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
     const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
-    // Certificates + withdrawals are block content the source already delivered (Ogmios
-    // chain-sync natively, Koios via the same /tx_info call) — keyed (tx, certIndex, kind) /
-    // (tx, stakeAddress), so a re-crawl is idempotent and a reorg removes them with their tx.
+    // Certificates + withdrawals are keyed (tx, certIndex, kind) / (tx, stakeAddress), so a
+    // re-crawl is idempotent and a reorg removes them with their tx.
     const certificateRows = this.crawlCertificates
       ? txs.flatMap(t => mapTransactionCertificates(t.hash, t.certificates ?? []))
       : [];
@@ -860,9 +724,7 @@ export class CardanoIndexer {
     }
     if (assetHistoryRows.length) await tx.run(UPSERT.into(AssetHistory).entries(assetHistoryRows));
 
-    // Catalogue last: it reads what the block just wrote conceptually, and a block without
-    // native assets costs nothing here. Collecting the units is skipped entirely when the
-    // catalogue is off — this runs once per block.
+    // Catalogue last; collecting the units is skipped entirely when the catalogue is off.
     const newAssets = this.crawlAssetCatalogue === 'off'
       ? 0
       : await this.ensureAssetRows(tx, this.collectBlockUnits(txs, assetHistoryRows));
@@ -874,16 +736,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Backfill input address/amount for chain-sync transactions whose inputs are bare
-   * references. Resolves first from this block's own outputs (a tx may spend an earlier
-   * tx's output in the same block), then batch-reads previously-indexed outputs from the
-   * DB. Inputs that already carry an address (Blockfrost/Koios) are skipped.
-   */
-  /**
-   * `crawler.certificates` is on but the block's transactions carry no `certificates` field at
-   * all — the source does not report them (Blockfrost: a per-tx enumeration would be six extra
-   * calls per transaction). `[]` means "none", undefined means "unreported"; only the latter is
-   * worth a warning, and only once — the crawl itself is unaffected.
+   * Warn once when `crawler.certificates` is on but the source reports none (`certificates`
+   * undefined, as with Blockfrost). `[]` means "none" and is not a warning.
    */
   private warnIfCertificatesUnreported(txs: ProviderTransaction[]): void {
     if (this.certificatesUnreportedWarned || !txs.length) return;
@@ -896,6 +750,10 @@ export class CardanoIndexer {
     );
   }
 
+  /**
+   * Backfill address/amount of bare chain-sync inputs: from this block's own outputs first,
+   * then earlier-indexed outputs from the DB. Inputs that already carry an address are skipped.
+   */
   private async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
     // 1. In-memory index of this block's outputs (txHash#outputIndex -> {address, amount})
     const blockOutputs = new Map<string, { address: string; amount: Amount[] }>();
@@ -922,9 +780,8 @@ export class CardanoIndexer {
     }
     if (!unresolved.length) return;
 
-    // 3. Batch-read prior-block outputs from the DB — chunked so a dense block's
-    //    input set can never exceed a driver's bind-variable cap (same IN_CHUNK
-    //    discipline as the crawler's reorg deletes)
+    // 3. Batch-read prior-block outputs from the DB, chunked so a dense block's input set
+    //    never exceeds a driver's bind-variable cap
     const sourceHashes = [...new Set(unresolved.map(u => u.input.txHash))];
     const addrByKey = new Map<string, string>();
     const amtByKey = new Map<string, Amount[]>();
@@ -953,24 +810,9 @@ export class CardanoIndexer {
   }
 
   /**
-   * Settle the fee of phase-2-invalid transactions and the block total that follows from it.
-   *
-   * A failed script phase does not pay the fee declared in the body: the ledger consumes the
-   * collateral instead, i.e. the collateral inputs minus the collateral return. The Ogmios
-   * mapper already uses the body's `total_collateral` when it declares one; what is left are
-   * the transactions without it, and those need the collateral inputs that resolveInputs()
-   * has just filled in.
-   *
-   * A collateral input the crawler cannot resolve — spent from an output produced before the
-   * crawl start, so no row exists locally — would make the sum silently too small. The
-   * declared fee is kept in that case and the transaction is logged: a value that is wrong in
-   * a known, named way beats one that looks derived but is short by an unknown amount.
-   *
-   * Applies to every backend that reports phase-2 validity — the chain-sync path (`spends`)
-   * and Blockfrost (`valid_contract`), whose declared `fees` are likewise never collected on a
-   * failed script phase, and Koios (`valid_contract` + collateral inputs/output on `/tx_info`).
-   * A source without the field carries `spendsCollaterals` as undefined and passes through
-   * untouched.
+   * Settle the fee of phase-2-invalid transactions (collateral inputs minus collateral return)
+   * and the block total. The declared fee is kept when the mapper already set it via
+   * `total_collateral` or a collateral input is not indexed locally (the sum would be short).
    */
   private applyCollateralFees(blockData: BlockData, txs: ProviderTransaction[]): void {
     const lovelaceOf = (amount: Amount[] | undefined): bigint =>
@@ -1016,24 +858,9 @@ export class CardanoIndexer {
   }
 
   /**
-   * Mint/burn rows for a whole block, as a by-product of data the crawler already holds —
-   * no provider round-trip (v2.1 analytics coverage).
-   *
-   * Two sources, in this order:
-   *  1. `t.mint` — the ledger's own mint field, reported natively by Ogmios (`mint`) and
-   *     Koios (`assets_minted`). Authoritative: it needs no resolved inputs and states the
-   *     net per unit directly.
-   *  2. Σ outputs − Σ inputs per unit, for backends without that field (Blockfrost), whose
-   *     inputs all carry their full `amount` so the delta is exact.
-   *
-   * The delta path excludes what the ledger does not consume or produce: reference inputs are
-   * read, never spent, and collateral only moves when the script phase failed — which applies
-   * no mint at all, so those transactions are skipped outright. Both exclusions rest on
-   * `isReference` / `isCollateral` / `spendsCollaterals`, which every backend that can reach
-   * this branch has to set — Blockfrost does since rc.12. A transaction with even one
-   * unresolvable consumed input (an output created before the crawl start, so no local row) is
-   * skipped and logged rather than reported with a delta that is short by an unknown amount —
-   * the same discipline as applyCollateralFees() above.
+   * Mint/burn rows for a block from data in hand: the ledger's mint field when the source
+   * reports it (Ogmios, Koios), else Σ outputs − Σ inputs per unit, excluding reference and
+   * collateral inputs. A tx with an unresolvable consumed input is skipped and logged.
    */
   private buildAssetHistoryRows(blockData: BlockData, txs: ProviderTransaction[]): AssetHistory[] {
     const entries: AssetHistoryEntryProviderData[] = [];
@@ -1094,21 +921,10 @@ export class CardanoIndexer {
   }
 
   /**
-   * Keep the `Assets` catalogue complete for every unit the crawl meets, from the data already
-   * in hand — no provider call (analytics coverage, variant "bare row").
-   *
-   * `Assets` is temporal, so its key is `(validFrom, unit)` and a row is a slice. The bare row
-   * therefore carries the fixed epoch-zero stamp (`BARE_ASSET_STAMP`), which no wall-clock slice
-   * from mapAsset() can ever alias: the write cannot overwrite enriched registry data, and it
-   * stays a single idempotent row per unit. That makes UPSERT safe — and safe is what it has to
-   * be, because this runs inside the crawler's block transaction, where a unique-key violation
-   * from a lazy-path write racing us would take the whole block down with it (and on PostgreSQL
-   * poison the transaction beyond any catch).
-   *
-   * The existence check is then only an optimization — it keeps a settled catalogue from
-   * rewriting every unit of every block. It runs against the DB-LEVEL entity on purpose: the
-   * service projection carries the temporal filter (`validFrom < $valid.to AND validTo >
-   * $valid.from`), which hides precisely the born-expired rows this check is looking for.
+   * Keep the `Assets` catalogue complete for every unit the crawl meets, without provider calls.
+   * `Assets` is temporal, key `(validFrom, unit)`: the bare row's fixed epoch-zero stamp never
+   * aliases an enriched slice, so the UPSERT is safe inside the block transaction. The existence
+   * check uses the DB-level entity: the service projection's temporal filter hides such rows.
    */
   private async ensureAssetRows(tx: CapTransaction, units: Set<string>): Promise<number> {
     if (this.crawlAssetCatalogue === 'off' || !units.size) return 0;
@@ -1130,13 +946,11 @@ export class CardanoIndexer {
     if (!missing.length) return 0;
 
     const rows = missing.map(mapBareAsset).filter((r): r is NonNullable<typeof r> => r !== null);
-    // Chunked like the lookup above: a mint-storm block can carry thousands of fresh units,
-    // and one statement per 500 rows keeps every driver's bind-variable cap out of reach.
+    // Chunked like the lookup: a mint-storm block can carry thousands of fresh units.
     for (const rowChunk of chunk(rows, IN_CHUNK)) {
       await tx.run(UPSERT.into(AssetsTable).entries(rowChunk));
     }
-    // Memoize every unit we looked up, including the ones mapBareAsset rejected — re-deciding
-    // that a malformed unit is unmappable on every block would cost a SELECT each time.
+    // Memoize also the units mapBareAsset rejected, so they cost no SELECT per block.
     for (const unit of missing) this.noteAssetSeen(unit);
 
     if (this.crawlAssetCatalogue === 'enrich' && rows.length) {
@@ -1150,9 +964,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Remember a unit as present in the catalogue. Insertion-ordered Set → the oldest entries
-   * are evicted first once the cap is reached, which keeps a long backfill's memory flat while
-   * hot policies stay memoized. Losing an entry costs one SELECT, never a wrong write.
+   * Remember a unit as present in the catalogue. Insertion-ordered eviction keeps a long
+   * backfill's memory flat; losing an entry costs one SELECT, never a wrong write.
    */
   private noteAssetSeen(unit: string): void {
     if (this.assetMemo.has(unit)) return;
@@ -1164,19 +977,9 @@ export class CardanoIndexer {
   }
 
   /**
-   * Snapshot every stake pool and DRep at an epoch boundary (v2.0 analytics coverage).
-   *
-   * Runs in its OWN transaction, called by the crawler after a block commit — never inside the
-   * block's write transaction: a few thousand rows would inflate an otherwise small atomic
-   * write, and a snapshot failure would fail the block and burn its persist retries.
-   *
-   * Writes two things per entity: the dated snapshot row (authoritative, never expires) and a
-   * refresh of the live temporal row, so `Pools` / `Dreps` also stop being empty on a crawled
-   * instance. Needs an enumerating backend (Koios); without one it is a logged no-op.
-   *
-   * @param epoch the epoch the snapshot is taken for
-   * @param at    slot and block time of the block that triggered the boundary
-   * @returns counts actually written, for the caller's log
+   * Snapshot every pool and DRep for an epoch in its OWN transaction (after the block commit):
+   * dated snapshot rows plus a refresh of the live `Pools` / `Dreps` rows. Needs Koios, else a no-op.
+   * @returns counts written
    */
   async snapshotEpoch(epoch: number, at: { slot: number; time: number }): Promise<{ pools: number; dreps: number }> {
     const backend = this.client.getEnumeratingBackend();
@@ -1223,12 +1026,7 @@ export class CardanoIndexer {
     return units;
   }
 
-  /**
-   * Index & return the epoch information data
-   * @param tx CAP transaction object
-   * @param epochNumber epoch number
-   * @returns {Promise<Epoch>} epoch entity data
-   */
+  /** Index an epoch by number. */
   async indexEpoch(tx: CapTransaction, epochNumber: number): Promise<Epoch> {
     const epochInfo = await this.client.getEpoch(epochNumber);
     const epochEntity = mapEpoch(epochInfo);
@@ -1237,12 +1035,7 @@ export class CardanoIndexer {
     return epochEntity;
   }
 
-  /** 
-   * Index & return the account information data
-   * @param tx CAP transaction object
-   * @param stakeAddress stake address (bech32)
-   * @returns {Promise<Account>} account entity data
-  */
+  /** Index an account by stake address, plus its addresses when it has any. */
   async indexAccount(tx: CapTransaction, stakeAddress: string): Promise<Account> {
     const accountInfo = await this.client.getAccount(stakeAddress);
     const accountEntity = mapAccount(accountInfo, this.client.max_age_ms);
@@ -1258,12 +1051,7 @@ export class CardanoIndexer {
     return accountEntity;
   }
 
-  /** 
-   * Index & return the drep information data
-   * @param tx CAP transaction object
-   * @param drepId drep id (bech32)
-   * @returns {Promise<Drep>} drep entity data
-   */
+  /** Index a DRep by bech32 id. */
   async indexDrep(tx: CapTransaction, drepId: string): Promise<Drep> {
     const drepInfo = await this.client.getDrep(drepId);
     const drepEntity = mapDrep(drepInfo, this.client.max_age_ms);
@@ -1271,12 +1059,7 @@ export class CardanoIndexer {
     return drepEntity;
   }
 
-  /**
-   * Index & return the pool information data
-   * @param tx CAP transaction object
-   * @param poolId pool id (hex)
-   * @returns {Promise<Pool>} pool entity data
-   */
+  /** Index a pool by id. */
   async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
     const poolInfo = await this.client.getPool(poolId);
     const poolEntity = mapPool(poolInfo, this.client.max_age_ms);
@@ -1286,12 +1069,7 @@ export class CardanoIndexer {
     return poolEntity;
   }
 
-  /**
-   * Index & return the asset information data
-   * @param tx CAP transaction object
-   * @param unit asset unit (policyId + assetNameHex)
-   * @returns {Promise<Asset>} asset entity data
-   */
+  /** Index an asset by unit (policyId + assetNameHex). */
   async indexAsset(tx: CapTransaction, unit: string): Promise<Asset> {
     const assetInfo = await this.client.getAssetInfo(unit);
     const assetEntity = mapAsset(assetInfo, this.client.max_age_ms);
@@ -1302,14 +1080,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * Index & return mint/burn history for an asset. Always-fresh from the
-   * preferred backend (Koios for block timestamps, Blockfrost as fallback).
-   * UPSERTs entries by (unit, txHash) — events are immutable, so re-fetching
-   * just refreshes the cap of recent entries; older cached entries persist.
-   * @param tx CAP transaction object
-   * @param unit asset unit (policyId + assetNameHex)
-   * @param limit max number of recent events to fetch (default 100)
-   * @returns {Promise<AssetHistory[]>} list of mint/burn event entity rows
+   * Index mint/burn history for an asset, always fresh. Rows are keyed (unit, txHash), so a
+   * refetch refreshes the recent cap and older cached entries persist.
    */
   async indexAssetHistory(tx: CapTransaction, unit: string, limit: number = 100): Promise<AssetHistory[]> {
     const events = await this.client.getAssetHistory(unit, limit);
@@ -1320,14 +1092,7 @@ export class CardanoIndexer {
     return rows as AssetHistory[];
   }
 
-  /**
-   * Common method: build a transaction, persist build result with inputs/outputs/address associations.
-   * All four public indexBuild*Result methods delegate to this to eliminate duplication.
-   * @param tx      CAP transaction object
-   * @param buildreq transaction build request data
-   * @param buildFn  the specific builder method to call
-   * @returns {Promise<TransactionBuild>} transaction build entity data
-   */
+  /** Build a transaction and persist the build result with inputs/outputs/address association. */
   private async _indexBuildResult(
     tx: CapTransaction,
     buildreq: TxBuildRequest,
@@ -1376,27 +1141,20 @@ export class CardanoIndexer {
     return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildPlutusSpendTransaction(req, params));
   }
 
-  /**
-   * Index & return the protocol parameters data
-   * @param tx CAP transaction object
-   * @returns {Promise<LedgerProtocolParameter>} protocol parameters entity data
-   */
+  /** Protocol parameters, served from the DB row within a 5-minute TTL. */
   async indexProtocolParameters(tx: CapTransaction): Promise<LedgerProtocolParameter> {
     const network = this.client.network;
     const now = Date.now();
 
-    // Return cached DB row if within TTL (protocol params only change at epoch boundaries ~5 days)
-    const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes — matches client cache TTL
+    const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // matches the client cache TTL
     if (now - this.lastParamsFetchTime < PROTOCOL_PARAMS_TTL_MS) {
-      // (network, epoch) is the composite key — old epochs accumulate as rows, so
-      // order by epoch desc to return the LATEST instead of an arbitrary row.
+      // (network, epoch) is the key; order by epoch desc to get the latest row
       const existing = await tx.run(
         SELECT.one.from(LedgerProtocolParameter).where({ network }).orderBy('epoch desc')
       );
       if (existing) return existing;
     }
 
-    // Fetch from provider (client has 5-min in-memory TTL cache, so this is cheap)
     const protocolParamsInfo = await this.client.getProtocolParameters();
     const protocolParams = mapProtocolParameters(protocolParamsInfo);
     await tx.run(UPSERT.into(LedgerProtocolParameter).entries(protocolParams));
@@ -1405,13 +1163,7 @@ export class CardanoIndexer {
     return protocolParams;
   }
 
-  /**
-   * Persist a transaction submission with optional build association
-   * Handles: TransactionSubmission insert, optional Build status update
-   * @param tx CAP transaction object
-   * @param params submission parameters
-   * @returns {Promise<TransactionSubmission>} persisted transaction submission entity
-   */
+  /** Persist a transaction submission and flag the build as submitted when linked. */
   async persistTransactionSubmission(
     tx: CapTransaction,
     params: {
@@ -1422,10 +1174,9 @@ export class CardanoIndexer {
   ): Promise<TransactionSubmission> {
     const { signedTxCbor, txHash, buildId } = params;
 
-    // Map submission data
     const indexSubmission = mapTransactionSubmission(signedTxCbor, txHash);
 
-    // Create submission record (status: 'pending' — updated to 'submitted' after blockchain confirms)
+    // status 'pending' until the second phase of the submit flow confirms
     const submissionRecord = {
       ...indexSubmission,
       build_id: buildId || null,
@@ -1433,11 +1184,9 @@ export class CardanoIndexer {
       status: 'pending' as const,
     };
 
-    // Persist submission
     await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
     logger.debug({ submissionId: submissionRecord.id, txHash }, 'Persisted submission record');
 
-    // Update build status if buildId provided
     if (buildId) {
       await tx.run(
         UPDATE.entity(TransactionBuilds)
@@ -1450,14 +1199,7 @@ export class CardanoIndexer {
     return submissionRecord;
   }
 
-  /**
-   * Update the status of a transaction submission
-   * Used for the two-phase submit flow: pending → submitted (or failed)
-   * @param tx CAP transaction object
-   * @param submissionId the submission to update
-   * @param status new status value
-   * @param errorMessage optional error message for failed status
-   */
+  /** Update a submission's status (two-phase submit: pending → submitted or failed). */
   async updateSubmissionStatus(
     tx: CapTransaction,
     submissionId: string,
@@ -1476,12 +1218,7 @@ export class CardanoIndexer {
     logger.debug({ submissionId, status }, 'Updated submission status');
   }
 
-  /**
-   * Persist a new signing request
-   * @param tx CAP transaction object
-   * @param params signing request parameters from external signer module
-   * @returns persisted signing request record
-   */
+  /** Persist a new signing request and link it to the build's sender address. */
   async persistSigningRequest(
     tx: CapTransaction,
     params: {
@@ -1502,7 +1239,6 @@ export class CardanoIndexer {
   ) {
     const { buildId, signingPayload } = params;
 
-    // Create signing request record
     const signingRequestRecord = {
       id: signingPayload.signingRequestId,
       build_id: buildId,
@@ -1516,11 +1252,9 @@ export class CardanoIndexer {
       cip30TxCbor: signingPayload.signingInstructions.cip30SigningRequest?.txCbor,
     };
 
-    // Persist to database
     await tx.run(INSERT.into(SigningRequests).entries(signingRequestRecord));
     logger.debug({ signingRequestId: signingRequestRecord.id, buildId }, 'Persisted signing request');
 
-    // Index address-signing request association
     const build = await tx.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
     if (build?.senderAddress) {
       await this.indexAddressSigningRequests(tx, build.senderAddress, signingRequestRecord.id);
@@ -1529,13 +1263,7 @@ export class CardanoIndexer {
     return signingRequestRecord;
   }
 
-  /**
-   * Persist a signature verification with signing request status update
-   * Handles: SignatureVerification insert, SigningRequest status update
-   * @param tx CAP transaction object
-   * @param params verification parameters
-   * @returns persisted signature verification record
-   */
+  /** Persist a signature verification and update the signing request status. */
   async persistSignatureVerification(
     tx: CapTransaction,
     params: {
@@ -1555,7 +1283,6 @@ export class CardanoIndexer {
   ) {
     const { signingRequestId, signedTxCbor, verificationResult, signerType, signerInfo } = params;
 
-    // Create verification record
     const verificationRecord = {
       id: cds.utils.uuid(),
       signingRequest_id: signingRequestId,
@@ -1569,11 +1296,9 @@ export class CardanoIndexer {
       verifiedAt: new Date().toISOString(),
     };
 
-    // Persist verification
     await tx.run(INSERT.into(SignatureVerifications).entries(verificationRecord));
     logger.debug({ verificationId: verificationRecord.id }, 'Persisted signature verification record');
 
-    // Update signing request status
     const newStatus = verificationResult.isValid ? 'verified' : 'failed';
     await tx.run(
       UPDATE.entity(SigningRequests)
@@ -1591,13 +1316,7 @@ export class CardanoIndexer {
     return verificationRecord;
   }
 
-  /**
-   * Index a verified transaction submission with all related records
-   * Handles persistence of: SignatureVerification, TransactionSubmission, SigningRequest update, Build update
-   * @param tx CAP transaction object
-   * @param params submission parameters
-   * @returns {Promise<TransactionSubmission>} transaction submission entity data
-   */
+  /** Persist a verified submission: verification, submission, signing request and build updates. */
   async indexVerifiedTransactionSubmission(
     tx: CapTransaction,
     params: {
@@ -1617,7 +1336,6 @@ export class CardanoIndexer {
   ): Promise<TransactionSubmission> {
     const { signingRequestId, buildId, fullSignedTxCbor, txHash, verificationResult, signerType, signerInfo } = params;
 
-    // Step 1: Create and persist verification record
     const verificationRecord = {
       id: cds.utils.uuid(),
       signingRequest_id: signingRequestId,
@@ -1633,7 +1351,6 @@ export class CardanoIndexer {
     await tx.run(INSERT.into(SignatureVerifications).entries(verificationRecord));
     logger.debug({ verificationId: verificationRecord.id }, 'Persisted signature verification record');
 
-    // Step 2: Create and persist submission record
     const indexSubmission = mapTransactionSubmission(fullSignedTxCbor, txHash);
     const submissionRecord = {
       ...indexSubmission,
@@ -1644,7 +1361,6 @@ export class CardanoIndexer {
     await tx.run(INSERT.into(TransactionSubmissions).entries(submissionRecord));
     logger.debug({ submissionId: submissionRecord.id }, 'Persisted submission record');
 
-    // Step 3: Update signing request metadata and status
     const now = new Date().toISOString();
     await tx.run(
       UPDATE.entity(SigningRequests)
@@ -1660,7 +1376,6 @@ export class CardanoIndexer {
     );
     logger.debug({ signingRequestId }, 'Updated signing request status to submitted');
 
-    // Step 4: Update build status
     await tx.run(
       UPDATE.entity(TransactionBuilds)
         .set({ wasSubmitted: true })
@@ -1671,11 +1386,7 @@ export class CardanoIndexer {
     return submissionRecord;
   }
 
-  /** 
-   * Index & return the latest epoch information data
-   * @param tx CAP transaction object
-   * @returns {Promise<Epoch>} epoch entity data
-   */
+  /** Index the latest epoch. */
   async indexLatestEpoch(tx: CapTransaction): Promise<Epoch> {
     const epochInfo = await this.client.getLatestEpoch();
 
@@ -1686,11 +1397,7 @@ export class CardanoIndexer {
     return epochEntity;
   }
 
-  /** 
-   * Index & return the latest block information data
-   * @param tx CAP transaction object
-   * @returns {Promise<Block>} block entity data
-   */
+  /** Index the latest block, with best-effort epoch enrichment. */
   async indexLatestBlock(tx: CapTransaction): Promise<Block> {
 
     const blockInfo = await this.client.getLatestBlock();
@@ -1714,15 +1421,8 @@ export class CardanoIndexer {
   private static readonly ADDR_CONCURRENCY = 5;
 
   /**
-   * Ensure a set of transactions are indexed — batch DB-check + batch fetch.
-   * 1. Deduplicate hashes
-   * 2. Check which hashes already exist in DB
-   * 3. Batch-fetch missing transactions from backend
-   * 4. UPSERT all entities (Transactions, Inputs, Outputs, Assets, Metadata)
-   *
-   * @param tx       CAP transaction (cds.tx)
-   * @param txHashes array of transaction hashes to ensure
-   * @returns Map of txHash → provider Transaction (all requested, from DB fetch or backend)
+   * Ensure a set of transactions is indexed: DB check, batch fetch of the missing ones, UPSERT.
+   * @returns provider transactions for the hashes that had to be fetched
    */
   async ensureTransactionsIndexed(
     tx: CapTransaction,
@@ -1731,7 +1431,6 @@ export class CardanoIndexer {
     const unique = [...new Set(txHashes)];
     if (unique.length === 0) return new Map();
 
-    // DB check — which hashes are already indexed?
     const existingRows = await tx.run(
       SELECT.from(Transactions).columns('hash').where({ hash: { in: unique } })
     );
@@ -1740,12 +1439,10 @@ export class CardanoIndexer {
 
     logger.debug(`ensureTransactionsIndexed: ${unique.length} unique, ${existingSet.size} cached, ${missing.length} to fetch`);
 
-    // Batch-fetch missing from backend
     let fetched = new Map<string, ProviderTransaction>();
     if (missing.length > 0) {
       fetched = await this.client.getTransactionsBatch(missing);
 
-      // UPSERT all fetched transactions + child entities
       for (const [, providerTx] of fetched) {
         const txRow = mapTransaction(providerTx);
         await tx.run(UPSERT.into(Transactions).entries(txRow));
@@ -1777,12 +1474,7 @@ export class CardanoIndexer {
   // Private Helpers
   //-----------------------------------------------------------------------------
 
-  /**
-   * Index multiple addresses with concurrency-limited parallelism.
-   * Processes addresses in chunks to avoid overwhelming backends.
-   * @param tx CAP transaction object
-   * @param bech32List array of bech32 addresses
-   */
+  /** Index addresses with bounded concurrency. */
   private async _ensureAddresses(
     tx: CapTransaction,
     bech32List: string[]

@@ -14,9 +14,7 @@ import {
 
 const logger = cds.log('ExternalSigner');
 
-/**
- * Default TTL for signing requests (30 minutes)
- */
+/** Default TTL for signing requests (30 minutes). */
 const DEFAULT_SIGNING_TTL_MS = 30 * 60 * 1000;
 
 /** Network flag for cardano-cli (mainnet vs testnet-magic). */
@@ -27,10 +25,8 @@ const CLI_NETWORK_FLAG: Record<string, string> = {
 };
 
 /**
- * Build a copy-pasteable cardano-cli signing recipe for the unsigned tx.
- * Templated (the caller supplies their own signing key file); the network flag
- * and the unsigned CBOR are filled in. Previously this was always NULL despite
- * the schema exposing a `cardanoCliCommand` field.
+ * Copy-pasteable cardano-cli signing recipe for the unsigned tx (network flag and CBOR
+ * filled in; the caller supplies the signing key file).
  */
 function buildCardanoCliCommand(network: string, unsignedTxCbor: string): string {
   const netFlag = CLI_NETWORK_FLAG[network] ?? '--testnet-magic <MAGIC>';
@@ -44,18 +40,8 @@ function buildCardanoCliCommand(network: string, unsignedTxCbor: string): string
 }
 
 /**
- * ExternalSignerModule - Manages the external signing workflow
- *
- * This module orchestrates the complete flow:
- * 1. Create signing request from build result
- * 2. Export unsigned transaction for external signing
- * 3. Receive and verify signed transaction
- * 4. Prepare for submission
- *
- * Key security principles:
- * - NO private keys are ever handled by this service
- * - Signature verification ensures transaction integrity
- * - Complete audit trail of the signing workflow
+ * External signing workflow: create signing request → export unsigned tx → verify the
+ * signed tx → prepare submission. No private keys are ever handled here.
  */
 export class ExternalSignerModule {
   private verifier: SignatureVerifier;
@@ -66,20 +52,7 @@ export class ExternalSignerModule {
     this.signingTtlMs = options?.signingTtlMs ?? DEFAULT_SIGNING_TTL_MS;
   }
 
-  /**
-   * Create an unsigned transaction export payload for external signing
-   *
-   * This is the entry point for the external signing workflow.
-   * Call this after building a transaction to get a standardized
-   * payload that external signers can use.
-   *
-   * @param buildId - The build ID from TransactionBuilds
-   * @param unsignedTxCbor - The unsigned transaction CBOR
-   * @param txBodyHash - The transaction body hash
-   * @param network - The Cardano network
-   * @param options - Additional options
-   * @returns Unsigned transaction export payload
-   */
+  /** Create the unsigned-tx export payload that starts a signing request (workflow entry point). */
   public createSigningRequest(
     buildId: string,
     unsignedTxCbor: string,
@@ -125,9 +98,7 @@ export class ExternalSignerModule {
     return payload;
   }
 
-  /**
-   * Generate signing instructions for different signer types
-   */
+  /** Signing instructions for the different signer types (CIP-30 request + cardano-cli recipe). */
   private generateSigningInstructions(
     unsignedTxCbor: string,
     network: string,
@@ -146,17 +117,7 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Verify a signed transaction
-   *
-   * Call this after receiving a signed transaction from an external signer.
-   * This verifies the signature integrity before submission.
-   *
-   * @param signedTxCbor - The signed transaction CBOR
-   * @param expectedTxBodyHash - The expected transaction body hash (from the build)
-   * @param options - Additional verification options
-   * @returns Verification result
-   */
+  /** Verify a signed tx against the build's body hash; enforces the signing TTL when `expiresAt` is given. */
   public verifySignedTransaction(
     signedTxCbor: string,
     expectedTxBodyHash: string,
@@ -164,7 +125,6 @@ export class ExternalSignerModule {
   ): SignatureVerificationResult {
     logger.debug({ expectedTxBodyHash }, 'Verifying signed transaction');
 
-    // Enforce signing TTL if expiresAt is provided
     if (options?.expiresAt && this.isExpired(options.expiresAt)) {
       return {
         isValid: false,
@@ -198,14 +158,7 @@ export class ExternalSignerModule {
     return result;
   }
 
-  /**
-   * Verify signed transaction and throw on failure
-   *
-   * @param signedTxCbor - The signed transaction CBOR
-   * @param expectedTxBodyHash - The expected transaction body hash
-   * @param options - Additional verification options
-   * @throws {TransactionValidationError} if verification fails
-   */
+  /** Like verifySignedTransaction, but throws TransactionValidationError on failure. */
   public verifyOrThrow(
     signedTxCbor: string,
     expectedTxBodyHash: string,
@@ -222,15 +175,7 @@ export class ExternalSignerModule {
     return result;
   }
 
-  /**
-   * Create a complete signing workflow state
-   *
-   * This creates a trackable workflow state that can be stored
-   * and updated throughout the signing process.
-   *
-   * @param signingRequest - The unsigned transaction export payload
-   * @returns Initial workflow state
-   */
+  /** Initial (pending) workflow state for a signing request. */
   public createWorkflowState(signingRequest: UnsignedTxExportPayload): SigningWorkflowState {
     return {
       status: SigningStatus.PENDING,
@@ -241,13 +186,7 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Update workflow state after signing
-   *
-   * @param state - Current workflow state
-   * @param signedTxCbor - The signed transaction CBOR
-   * @returns Updated workflow state
-   */
+  /** Workflow state → signed. */
   public markAsSigned(state: SigningWorkflowState, signedTxCbor: string): SigningWorkflowState {
     return {
       ...state,
@@ -260,13 +199,7 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Update workflow state after verification
-   *
-   * @param state - Current workflow state
-   * @param verificationResult - The verification result
-   * @returns Updated workflow state
-   */
+  /** Workflow state → verified, or → failed when the verification result is invalid. */
   public markAsVerified(
     state: SigningWorkflowState,
     verificationResult: SignatureVerificationResult
@@ -286,13 +219,7 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Update workflow state after submission
-   *
-   * @param state - Current workflow state
-   * @param txHash - The submitted transaction hash
-   * @returns Updated workflow state
-   */
+  /** Workflow state → submitted. */
   public markAsSubmitted(state: SigningWorkflowState, txHash: string): SigningWorkflowState {
     return {
       ...state,
@@ -305,13 +232,7 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Update workflow state on failure
-   *
-   * @param state - Current workflow state
-   * @param errorMessage - The error message
-   * @returns Updated workflow state
-   */
+  /** Workflow state → failed. */
   public markAsFailed(state: SigningWorkflowState, errorMessage: string): SigningWorkflowState {
     return {
       ...state,
@@ -324,34 +245,16 @@ export class ExternalSignerModule {
     };
   }
 
-  /**
-   * Check if a signing request has expired
-   *
-   * @param expiresAt - The expiration timestamp (ISO 8601)
-   * @returns true if expired
-   */
+  /** True when the ISO-8601 `expiresAt` lies in the past. */
   public isExpired(expiresAt: string): boolean {
     return new Date(expiresAt) < new Date();
   }
 
-  /**
-   * Validate a signed transaction payload before submission
-   *
-   * This performs all pre-submission checks:
-   * 1. Verify the signature
-   * 2. Check transaction hasn't been tampered with
-   * 3. Ensure the build ID matches
-   *
-   * @param payload - The signed transaction payload
-   * @param originalBuildTxBodyHash - The original transaction body hash from the build
-   * @returns Validation result with verification details
-   * @throws {TransactionValidationError} if validation fails
-   */
+  /** Pre-submission check: signature + body-hash integrity against the build; throws TransactionValidationError. */
   public validateForSubmission(
     payload: SignedTxPayload,
     originalBuildTxBodyHash: string
   ): SignatureVerificationResult {
-    // Verify the signature and transaction integrity
     const result = this.verifyOrThrow(
       payload.signedTxCbor,
       originalBuildTxBodyHash
@@ -367,9 +270,7 @@ export class ExternalSignerModule {
     return result;
   }
 
-  /**
-   * Get the signature verifier instance
-   */
+  /** The underlying signature verifier. */
   public getVerifier(): SignatureVerifier {
     return this.verifier;
   }
@@ -378,9 +279,7 @@ export class ExternalSignerModule {
 // Singleton instance
 let moduleInstance: ExternalSignerModule | null = null;
 
-/**
- * Get the singleton ExternalSignerModule instance
- */
+/** Singleton ExternalSignerModule. */
 export function getExternalSignerModule(): ExternalSignerModule {
   if (!moduleInstance) {
     moduleInstance = new ExternalSignerModule();
@@ -388,9 +287,7 @@ export function getExternalSignerModule(): ExternalSignerModule {
   return moduleInstance;
 }
 
-/**
- * Create a new ExternalSignerModule instance with custom options
- */
+/** New ExternalSignerModule with custom options (not the singleton). */
 export function createExternalSignerModule(options?: {
   signingTtlMs?: number;
 }): ExternalSignerModule {

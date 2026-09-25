@@ -1,8 +1,6 @@
 /**
- * Unit tests for the FR-3 PlutusData input-index placeholder helpers.
- *
- * These cover the pure walker, the regex contract, the Buildooor-equivalent
- * input sort, and the whole-tree placeholder detector.
+ * `__INPUT_IDX__` PlutusData placeholder helpers: the pure walker, the regex contract
+ * and the Buildooor-equivalent input sort.
  */
 
 import {

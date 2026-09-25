@@ -19,9 +19,6 @@ import { ERROR_CODES } from '../../srv/utils/error-codes';
 
 describe('Error Classes', () => {
 
-  // ============================================================================
-  // BackendError
-  // ============================================================================
   describe('BackendError', () => {
     it('should create error with default values', () => {
       const error = new BackendError('Test error');
@@ -52,9 +49,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // NotFoundError
-  // ============================================================================
   describe('NotFoundError', () => {
     it('should create 404 error for resource', () => {
       const error = new NotFoundError('Transaction');
@@ -80,9 +74,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // ProviderUnavailableError
-  // ============================================================================
   describe('ProviderUnavailableError', () => {
     it('should create 503 error with message', () => {
       const error = new ProviderUnavailableError('Service down');
@@ -115,9 +106,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // RateLimitError
-  // ============================================================================
   describe('RateLimitError', () => {
     it('should create 429 error with message', () => {
       const error = new RateLimitError('Rate limit exceeded');
@@ -150,9 +138,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // AllBackendsFailedError
-  // ============================================================================
   describe('AllBackendsFailedError', () => {
     it('should create error with multiple backend failures', () => {
       const errors = [
@@ -191,9 +176,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // ConfigError
-  // ============================================================================
   describe('ConfigError', () => {
     it('should create config error', () => {
       const error = new ConfigError('Missing BLOCKFROST_KEY');
@@ -204,9 +186,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // BackendInitError
-  // ============================================================================
   describe('BackendInitError', () => {
     it('should create init error with backend name', () => {
       const originalError = new Error('Connection failed');
@@ -219,9 +198,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // AllBackendsInitFailedError
-  // ============================================================================
   describe('AllBackendsInitFailedError', () => {
     it('should create error with all init failures', () => {
       const errors = [
@@ -248,9 +224,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // getErrorStatus
-  // ============================================================================
   describe('getErrorStatus', () => {
     it('should extract status from error.status', () => {
       const err = { status: 404 };
@@ -274,9 +247,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // getErrorMessage
-  // ============================================================================
   describe('getErrorMessage', () => {
     it('should extract message from error.message', () => {
       const err = new Error('Test error');
@@ -295,9 +265,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // normalizeBackendError
-  // ============================================================================
   describe('normalizeBackendError', () => {
     it('should return already normalized BackendError', () => {
       const originalError = new BackendError('Already normalized');
@@ -391,12 +358,9 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
 
-    // ============================================================================
-    // Priority 3b: PostgREST server-side SQL faults surfaced as HTTP 400 (Koios)
-    // ============================================================================
+    // PostgREST server-side SQL faults surfaced as HTTP 400
     it('should classify PostgREST 42703 (undefined column) 400 as 503 ProviderUnavailableError', () => {
-      // Real-world case (Koios preview 2026-07): half-migrated drep_info
-      // function on one LB instance.
+      // A half-migrated SQL function on one provider LB instance answers 400 with a server-side code.
       const error = {
         message: 'Request failed with status code 400',
         response: {
@@ -477,9 +441,6 @@ describe('Error Classes', () => {
       expect(result.message).toContain('Something went wrong');
     });
 
-    // ============================================================================
-    // Priority 6: Explicit tests for true Priority 6 scenarios
-    // ============================================================================
     it('should convert null error to ProviderUnavailable (Priority 6)', () => {
       const result = normalizeBackendError(null, 'blockfrost');
 
@@ -650,15 +611,15 @@ describe('Error Classes', () => {
     });
 
     it('should NOT classify provider-outage wording as 404 (would be breaker-exempt)', () => {
-      // bare 'no data' / 'not available' also appear in outage messages —
-      // classifying them as 404 hid the 503 AND exempted it from the breaker
+      // bare 'no data' / 'not available' also appear in outage messages;
+      // a 404 would hide the 503 and exempt it from the breaker
       const outage = normalizeBackendError({ status: 503, message: 'Service temporarily not available' }, 'koios');
       expect(outage.statusCode).toBe(503);
       expect(outage).toBeInstanceOf(ProviderUnavailableError);
     });
 
     it('should classify "malformed address" on a read as 404, not as tx validation', () => {
-      // 'malformed' in the validation hints used to shadow 'malformed address'
+      // 'malformed address' must win over the 'malformed' validation hint
       const result = normalizeBackendError({ status: 400, message: 'Malformed address provided' }, 'blockfrost');
       expect(result.statusCode).toBe(404);
       expect(result).toBeInstanceOf(NotFoundError);
@@ -680,9 +641,7 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(NotFoundError);
     });
 
-    // ============================================================================
-    // TypeError handling for uninitialized backend (lines 300-306)
-    // ============================================================================
+    // TypeError from an uninitialized backend
     it('should convert TypeError "Cannot read properties of null" to BackendInitError', () => {
       const error = new TypeError('Cannot read properties of null (reading "query")');
       const result = normalizeBackendError(error, 'koios');
@@ -724,9 +683,6 @@ describe('Error Classes', () => {
       expect(result.backendName).toBe('unknown');
     });
 
-    // ============================================================================
-    // TransactionAlreadySubmittedError (line 327)
-    // ============================================================================
     it('should convert "already exists" message to TransactionAlreadySubmittedError', () => {
       const error = { status: 400, message: 'Transaction abc123def456 already exists in mempool' };
       const result = normalizeBackendError(error, 'blockfrost');
@@ -766,9 +722,6 @@ describe('Error Classes', () => {
     });
   });
 
-  // ============================================================================
-  // rejectInvalid & rejectMissing
-  // ============================================================================
   describe('rejectInvalid', () => {
     it('should throw BackendError with invalid input error', () => {
       const mockReq = {} as any;

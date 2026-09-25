@@ -10,35 +10,21 @@ const { SELECT } = cds.ql;
 const logger = cds.log(`CardanoService`);
 
 // ---------------------------------------------------------------------------
-// Handler Factories - Eliminate duplication in index-on-miss patterns
+// Handler factories for the index-on-miss pattern
 // ---------------------------------------------------------------------------
 
 type IndexFn<K = string> = (db: cds.Transaction, key: K) => Promise<unknown>;
 type ValidateFn = ((v: unknown) => boolean);
 
-/**
- * Upper bound of the temporal window opened by {@link widenTemporalWindow}.
- * Generous on purpose: it only has to outlast the slowest index-on-miss (chained
- * backend timeouts of several calls) within ONE request.
- */
+/** Upper bound of the temporal window; must outlast the slowest index-on-miss of one request. */
 const TEMPORAL_WINDOW_SLACK_MS = 60 * 60 * 1000;
 
 /**
- * Let this request see temporal slices that IT writes during index-on-miss.
- *
- * CAP filters temporal entities (Pools, Assets, Dreps, Addresses, Accounts, …)
- * with `validFrom < $valid.to AND validTo > $valid.from`. The DB session reads
- * both bounds from the request's `_` bag (`VALID-FROM` / `VALID-TO`) when the
- * transaction begins (HANA) or on first use (sqlite) and otherwise defaults to
- * `now` / `now + 1ms` — a window that is closed long before the backend fetch
- * returns, so a slice stamped after the fetch would be invisible to the
- * `req.query` re-read that honours `$expand` / `$select` (KNOWN_ISSUES #13).
- *
- * Only the UPPER bound is moved. No slice is ever future-dated (every mapper
- * stamps `validFrom = now`), so the only additional rows this admits are the
- * ones this very request writes; expired rows stay hidden (`validTo >
- * $valid.from` is untouched). Explicit `sap-valid-*` query options are left
- * alone. Must run before the handler's first DB statement.
+ * Let this request see the temporal slices it writes during index-on-miss: CAP's temporal
+ * filter (`validFrom < $valid.to`) defaults to a `now`..`now+1ms` window fixed at transaction
+ * start, so a slice stamped after the backend fetch would be invisible to the `req.query`
+ * re-read. Only the upper bound moves; explicit `sap-valid-*` options are left alone.
+ * Must run before the handler's first DB statement.
  */
 function widenTemporalWindow(req: Request): void {
   const q = req.http?.req?.query as Record<string, unknown> | undefined;
@@ -46,9 +32,7 @@ function widenTemporalWindow(req: Request): void {
   const now = Date.now();
   const from = new Date(now).toISOString();
   const to = new Date(now + TEMPORAL_WINDOW_SLACK_MS).toISOString();
-  // The DB session context is built from the context the transaction was opened
-  // with — `req` for our `cds.tx(req)`, the root context if a generic handler got
-  // there first — so stamp both bags.
+  // The DB session reads the bag of whichever context opened the transaction; stamp both.
   const r = req as unknown as { _?: Record<string, unknown>; context?: { _?: Record<string, unknown> } };
   for (const bag of new Set([r._, r.context?._])) {
     if (!bag) continue;
@@ -58,11 +42,8 @@ function widenTemporalWindow(req: Request): void {
 }
 
 /**
- * Factory: READ handler with index-on-miss behavior.
- * If a key is provided, checks cache first; indexes if missing — then runs the
- * client's own query so `$expand` / `$select` are honoured on the keyed branch
- * too (KNOWN_ISSUES #13: returning the bare row silently dropped them).
- * If no key, passes through to generic req.query.
+ * Factory: READ handler with index-on-miss. With a key, indexes on a cache miss and then
+ * runs the client's own query so `$expand` / `$select` apply; without a key, passes through.
  */
 function indexOnMissRead<K = string>(
   entity: unknown,
@@ -75,37 +56,25 @@ function indexOnMissRead<K = string>(
   const errMsg = options?.errorMessage || `Invalid ${reqKeyField} format`;
   return async (req: Request) => {
     const key = (req.data as Record<string, unknown>)?.[reqKeyField];
-    // explicit null/undefined check — `key &&` skipped validation for falsy keys
-    // like epoch=0 or an empty string (the latter then hit the backend unvalidated)
+    // Explicit null check: falsy keys such as epoch=0 or '' must still be validated.
     if (key !== undefined && key !== null && validate && !validate(key))
       rejectInvalid(req, dbKey, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
       if (key !== undefined && key !== null) {
-        widenTemporalWindow(req); // before the first DB statement — see doc comment
-        // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
+        widenTemporalWindow(req); // before the first DB statement
+        // The temporal aspect hides expired rows, so a miss here triggers a re-index.
         const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
-        // Populate the row (+ compositions) on a miss, then let CAP run the client's
-        // query — one extra SELECT per keyed read, but $expand/$select (and the
-        // temporal filter of the projection) apply exactly as on the un-keyed path.
         if (!existing) await indexFn(db, key as K);
-        // The client's query is the ONLY authority on what comes back. Falling back
-        // to `existing` (or the indexer's return value) when it matches nothing
-        // answers a request the client never made — a second key that does not
-        // match, or an excluding $filter, would get a sibling row with a 200
-        // instead of a 404 (KNOWN_ISSUES #15). Non-temporal entities always see
-        // their fresh rows here; temporal ones rely on widenTemporalWindow above,
-        // and if that ever stops working the failure is a loud 404 covered by
-        // test/integration/keyed-read-expand.test.ts, not silently wrong data.
+        // The client's query is the only authority on the result: never fall back to
+        // `existing`, or an excluding $filter / second key would yield a sibling row instead of 404.
       }
       return db.run(req.query);
     });
   };
 }
 
-/**
- * Factory: Action handler with required key validation and index-on-miss.
- */
+/** Factory: action handler with required-key validation and index-on-miss. */
 function indexOnMissAction<K = string>(
   actionName: string,
   entity: unknown,
@@ -122,7 +91,7 @@ function indexOnMissAction<K = string>(
     if (!validate(key)) rejectInvalid(req, actionName, errMsg, reqKeyField);
 
     return handleRequest(req, async (db) => {
-      // CAP temporal aspect auto-filters expired records (validTo < now → not returned)
+      // The temporal aspect hides expired rows, so a miss here triggers a re-index.
       const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
       if (!existing) return await indexFn(db, key as K);
       return existing;
@@ -134,20 +103,13 @@ function indexOnMissAction<K = string>(
 // Service Registration
 // ---------------------------------------------------------------------------
 
-/**
- * Cardano Service Implementation
- * Handles various Cardano blockchain data queries with index-on-miss behavior.
- */
+/** CardanoODataService handlers: blockchain read queries with index-on-miss. */
 module.exports = (srv: cds.Service) => {
   logger.debug('Module loaded - registering handlers');
 
-  // NOTE: for entities whose name is already plural-shaped (NetworkInformation,
-  // TransactionMetadata, AssetHistory) cds-typer exports the SINGULAR class under the
-  // plain name and the plural (entity-set) class with a trailing underscore. Handler
-  // registration must use the plural class — under cds 10 registering `srv.on('READ',
-  // <singular proxy>)` no longer matches incoming OData READs, so the generic CRUD
-  // handler silently served those entities (empty results / 404 instead of
-  // index-on-miss). All other names below already resolve to plural classes.
+  // For plural-shaped names (NetworkInformation, TransactionMetadata, AssetHistory) cds-typer
+  // exports the singular class under the plain name and the entity-set class with a trailing
+  // underscore. Handlers must register the entity-set class; a singular one never matches under cds 10.
   const {
     NetworkInformation_: NetworkInformation,
     Blocks,
@@ -166,9 +128,7 @@ module.exports = (srv: cds.Service) => {
     AddressTransactions
   } = require('#cds-models/CardanoODataService');
 
-  // Fail fast if a future edit reintroduces a SINGULAR class here (the cds-10 trap
-  // above): a singular registration silently degrades to the generic CRUD handler.
-  // Every cds-typer proxy carries an explicit is_singular marker we can assert on.
+  // Fail fast on a singular class: it would silently degrade to the generic CRUD handler.
   for (const [name, entity] of Object.entries({
     NetworkInformation, Blocks, Epochs, Addresses, AddressAssets, AddressUTxOs,
     Transactions, TransactionMetadata, Pools, Accounts, Dreps, Assets, AssetHistory,
@@ -183,7 +143,6 @@ module.exports = (srv: cds.Service) => {
     }
   }
 
-  // Helper: shorthand for indexer access
   const indexer = () => getCardanoIndexer();
 
   // ---------------------------------------------------------------------------
@@ -255,26 +214,21 @@ module.exports = (srv: cds.Service) => {
   srv.on('GetAssetInfo', indexOnMissAction('GetAssetInfo', Assets, 'unit', isAssetUnit, (db, u) => indexer().indexAsset(db, u), { errorMessage: 'Invalid asset unit format' }));
 
   // ---------------------------------------------------------------------------
-  // Asset History — read-through (always-fresh)
+  // Asset History
   // ---------------------------------------------------------------------------
-  // Generic READ on AssetHistory is served from DB (no auto-index); consumers
-  // must call GetAssetHistory(unit) first to seed entries for a given asset,
-  // then page via $top/$skip on the AssetHistory entity.
+  // Generic READ is served from the DB only; GetAssetHistory(unit) seeds the rows.
   srv.on('READ', AssetHistory, async (req: Request) => {
     return handleRequest(req, async (db) => db.run(req.query));
   });
 
-  /**
-   * Action: GetAssetHistory - Always-fresh fetch of recent mint/burn events.
-   * Multi-backend: Koios preferred (block timestamps), Blockfrost fallback.
-   */
+  // GetAssetHistory — always-fresh fetch of recent mint/burn events.
   srv.on('GetAssetHistory', async (req: Request) => {
     const { unit, limit } = req.data as { unit?: string; limit?: number };
     if (!unit) return rejectMissing(req, 'GetAssetHistory', 'unit');
     if (!isAssetUnit(unit)) {
       return rejectInvalid(req, 'GetAssetHistory', 'Invalid asset unit format', 'unit');
     }
-    // clamp like GetLatestTransactionsByAddress — unbounded limits page the upstream backend indefinitely
+    // Clamp: an unbounded limit would page the upstream backend indefinitely.
     const effectiveLimit = Math.min(Math.max(typeof limit === 'number' ? limit : 100, 1), 100);
     return handleRequest(req, async (db) => {
       return await indexer().indexAssetHistory(db, unit, effectiveLimit);
@@ -287,9 +241,7 @@ module.exports = (srv: cds.Service) => {
 
   srv.on('READ', Addresses, indexOnMissRead(Addresses, 'address', isValidBech32Address, (db, a) => indexer().indexAddress(db, a), { errorMessage: 'Invalid bech32 address format' }));
   srv.on('GetAddressByBech32', indexOnMissAction('GetAddressByBech32', Addresses, 'address', isValidBech32Address, (db, a) => indexer().indexAddress(db, a), { errorMessage: 'Invalid bech32 address format' }));
-  /**
-   * Action: GetAssetsByAddress - indexes parent address if needed, then queries child assets.
-   */
+  // GetAssetsByAddress — indexes the parent address if needed, then queries child assets.
   srv.on('GetAssetsByAddress', async (req: Request) => {
     const { address } = req.data as { address?: string };
     if (!address) rejectMissing(req, 'GetAssetsByAddress', 'address');
@@ -300,7 +252,7 @@ module.exports = (srv: cds.Service) => {
       if (!existing) await indexer().indexAddress(db, address);
       const assets = await db.run(SELECT.from(AddressAssets).where({ address_address: address }));
 
-      // Deduplicate temporal versions — keep latest validFrom per unit
+      // Keep the latest temporal slice per unit
       const seen = new Map<string, any>();
       for (const asset of assets) {
         if (!seen.has(asset.unit) || asset.validFrom > seen.get(asset.unit).validFrom) {
@@ -311,9 +263,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Action: GetUTxOsByAddress - indexes parent address if needed, then queries child UTxOs.
-   */
+  // GetUTxOsByAddress — indexes the parent address if needed, then queries child UTxOs.
   srv.on('GetUTxOsByAddress', async (req: Request) => {
     const { address } = req.data as { address?: string };
     if (!address) rejectMissing(req, 'GetUTxOsByAddress', 'address');
@@ -323,14 +273,9 @@ module.exports = (srv: cds.Service) => {
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {
-        // No valid cached data — re-index fresh (UPSERT is idempotent, no DELETE needed).
-        // Prefer getAddress-based full indexing (richer: also captures address detail and
-        // returns NotFound for unknown addresses on Blockfrost/Koios). But GetUTxOsByAddress
-        // only needs the UTxO set, which Ogmios serves via getAddressUtxos even though it
-        // doesn't support getAddress — so when NO configured backend can serve getAddress
-        // (AllBackendsFailedError with zero collected errors == every backend skipped it),
-        // fall back to a UTxO-only index instead of failing. getAddress is indexAddress's
-        // first call, so nothing is persisted before this throws — the fallback is clean.
+        // Prefer the full address index; when no configured backend supports getAddress
+        // (AllBackendsFailedError with zero collected errors, e.g. Ogmios only), fall back to a
+        // UTxO-only index. getAddress is indexAddress's first call, so nothing is persisted before.
         try {
           await indexer().indexAddress(db, address);
         } catch (err: unknown) {
@@ -344,7 +289,7 @@ module.exports = (srv: cds.Service) => {
         return fresh;
       }
 
-      // Deduplicate temporal versions — keep latest validFrom per hash+index
+      // Keep the latest temporal slice per hash#index
       const seen = new Map<string, any>();
       for (const utxo of existing) {
         const key = `${utxo.hash}#${utxo.index}`;
@@ -356,12 +301,8 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Action: GetUTxOsByCredential - Koios-only credential-keyed UTxO query.
-   * Always-fresh (no cache check) — credential queries serve dApp state-read use
-   * cases (Indigo CDPs, Liqwid positions) that need current blockchain state.
-   * Throws ProviderUnavailableError if Koios backend is not configured.
-   */
+  // GetUTxOsByCredential — Koios-only, always-fresh credential-keyed UTxO query
+  // (dApp state reads need current data). ProviderUnavailableError without Koios.
   srv.on('GetUTxOsByCredential', async (req: Request) => {
     const { credential } = req.data as { credential?: string };
     if (!credential) return rejectMissing(req, 'GetUTxOsByCredential', 'credential');
@@ -387,10 +328,7 @@ module.exports = (srv: cds.Service) => {
 
   srv.on('READ', TransactionMetadata, indexOnMissRead(TransactionMetadata, 'tx_hash', isTxHash, (db, h) => indexer().indexTransactionMetadata(db, h), { errorMessage: 'Invalid transaction hash format' }));
 
-  /**
-   * Action: GetMetadataByTxHash - returns multiple metadata rows (uses SELECT.from, not SELECT.one).
-   * Takes camelCase `txHash` like every other action (renamed from `tx_hash` in 1.9.4).
-   */
+  // GetMetadataByTxHash — returns all metadata rows of a transaction.
   srv.on('GetMetadataByTxHash', async (req: Request) => {
     const { txHash } = req.data as { txHash?: string };
     if (!txHash) rejectMissing(req, 'GetMetadataByTxHash', 'txHash');
@@ -422,7 +360,7 @@ module.exports = (srv: cds.Service) => {
   });
 
   // ---------------------------------------------------------------------------
-  // Transaction CBOR parsing (pure utility — no backend / DB touch)
+  // Transaction CBOR parsing (pure; no backend or DB access)
   // ---------------------------------------------------------------------------
 
   srv.on('ParseTransactionCbor', async (req: Request) => {

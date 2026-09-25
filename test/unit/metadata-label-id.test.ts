@@ -1,6 +1,6 @@
 /**
  * uint64 metadata labels must fit the int64 `TransactionMetadata.id` key exactly
- * (PostgreSQL rejected labels >= 2^63 as "out of range for type bigint").
+ * (PostgreSQL bigint range).
  */
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -25,7 +25,7 @@ describe('metadataIdFor', () => {
   });
 
   it('wraps labels >= 2^63 into the int64 range (two\'s complement), exactly', () => {
-    // preprod tx ee4f7c88…, block 4441873 – the label that overflowed bigint
+    // preprod tx ee4f7c88…, block 4441873: a label above 2^63
     expect(metadataIdFor('17802948329108123211')).toBe('-643795744601428405');
     expect(metadataIdFor('18446744073709551615')).toBe(-1); // uint64 max
     expect(metadataIdFor('9223372036854775808')).toBe('-9223372036854775808'); // 2^63

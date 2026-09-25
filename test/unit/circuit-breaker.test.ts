@@ -166,7 +166,7 @@ describe('CircuitBreakerManager', () => {
       expect(cb.shouldAttempt('koios')).toBe(true);
       expect(cb.getState('koios')).toBe('half-open');
 
-      // Second shouldAttempt in half-open should still return true (line 68)
+      // Second shouldAttempt in half-open should still return true
       expect(cb.shouldAttempt('koios')).toBe(true);
       expect(cb.getState('koios')).toBe('half-open');
     });

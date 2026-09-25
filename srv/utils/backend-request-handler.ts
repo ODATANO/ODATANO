@@ -4,17 +4,7 @@ import { mapError } from './mappers';
 
 const logger = cds.log('BackendRequestHandler');
 
-/** 
- * BackendRequestHandler - Provides standardized handling for backend requests 
- */
-
-/** 
- * BackendRequestHandler - Wraps a backend method call with standardized error handling
- * @param fn - The async function to execute
- * @param backendName - Name of the backend (for error context)
- * @param resourceName - Name of the resource being accessed (e.g., "Transaction", "Address")
- * @returns {Promise<T>} The result of the backend call or a normalized error
- */
+/** Wraps a backend call and normalizes any thrown error to a BackendError subclass. */
 export async function handleBackendRequest<T>(
   fn: () => Promise<T>,
   backendName: string
@@ -26,19 +16,13 @@ export async function handleBackendRequest<T>(
   }
 }
 
-/**
- * General request handler for CardanoService
- * @param req - The incoming request
- * @param handler - The async function containing business logic
- * @returns {Promise<unknown>} The result of the handler or a mapped error response
- */
+/** Runs a service handler inside the request transaction and maps errors to OData responses. */
 export async function handleRequest(
   req: Request,
   handler: (db: cds.Transaction) => Promise<unknown>):
   Promise<unknown> {
   const context = req.target?.name || req.event;
-  // cds.tx(req) returns the request's managed transaction — CAP auto-rolls back
-  // on req.reject()/req.error() (called by mapError). No explicit rollback needed.
+  // Managed transaction: CAP rolls back on req.reject()/req.error(), no explicit rollback.
   const db = cds.tx(req);
   try {
     return await handler(db);

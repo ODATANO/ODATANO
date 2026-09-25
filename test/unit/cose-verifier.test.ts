@@ -1,11 +1,7 @@
 /**
- * Unit tests for the CIP-30 signData (COSE_Sign1) message-signature verifier.
- *
- * These tests build a REAL COSE_Sign1 + COSE_Key with the same @harmoniclabs
- * crypto primitives the verifier uses: a fresh Ed25519 key signs a genuine COSE
- * Sig_structure, so a passing positive test proves end-to-end byte compatibility
- * (protected-header preservation, tstr "Signature1", empty external_aad), not
- * just that our encoder agrees with our decoder.
+ * CIP-30 signData (COSE_Sign1) verifier. A fresh Ed25519 key signs a genuine COSE
+ * Sig_structure with the same crypto primitives the verifier uses, so a passing positive
+ * test proves byte compatibility (protected-header preservation, "Signature1", empty external_aad).
  */
 
 import { Cbor, CborArray, CborMap, CborTag, CborBytes, CborUInt, CborNegInt, CborText } from '@harmoniclabs/cbor';

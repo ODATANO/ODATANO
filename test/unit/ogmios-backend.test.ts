@@ -273,7 +273,7 @@ describe('OgmiosBackend', () => {
     it('should extract lovelace from Ogmios v6 {ada:{lovelace}} value objects (no "[object Object]")', async () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue([{
-          // real Ogmios v6 shape — .toString() on these produced "[object Object]"
+          // real Ogmios v6 shape: value objects, not numbers
           controlledAmount: { ada: { lovelace: 50_000_000_000n } },
           rewards: { ada: { lovelace: 1_500_000n } },
           withdrawals: { ada: { lovelace: 500_000n } },
@@ -660,7 +660,7 @@ describe('OgmiosBackend', () => {
       return backend;
     }
 
-    it('is no longer declared unsupported', () => {
+    it('is not declared unsupported', () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       expect(backend.unsupportedMethods.has('getDrep')).toBe(false);
     });
@@ -779,7 +779,7 @@ describe('OgmiosBackend', () => {
           'pool1v6': {
             vrf: 'vrf456',
             stake: { ada: { lovelace: 7000000000n } },
-            pledge: { ada: { lovelace: 1000000000n } }, // String() on this gave "[object Object]"
+            pledge: { ada: { lovelace: 1000000000n } }, // ValueAdaOnly object, not a bigint
             margin: '1/20',
             cost: { ada: { lovelace: 340000000n } },
             rewardAccount: 'stake1u8reward'
@@ -795,7 +795,7 @@ describe('OgmiosBackend', () => {
       expect(result.pledge).toBe('1000000000');
       expect(result.fixedCost).toBe('340000000');
       expect(result.margin).toBeCloseTo(0.05, 10);
-      // activeStake is not derivable from pool params — no longer fabricated from pledge
+      // activeStake is not derivable from pool params
       expect(result.activeStake).toBe('0');
     });
 
@@ -998,14 +998,14 @@ describe('OgmiosBackend', () => {
       expect(result[0].address).toBe('addr_test1qfallback');
     });
 
-    it('should map datumHash, scriptRef AND the inline datum (previously dropped)', async () => {
+    it('should map datumHash, scriptRef AND the inline datum', async () => {
       const backend = mkBackend([{
         transaction: { id: 'txhash456' },
         index: 0,
         address: 'addr_test1qscript',
         value: { ada: { lovelace: 2000000 } },
         datumHash: 'datum_hash_abc',
-        datum: 'd87980', // inline datum CBOR hex — was lost before
+        datum: 'd87980', // inline datum CBOR hex
         script: { hash: 'script_hash_def' }
       }]);
 
@@ -1071,7 +1071,6 @@ describe('OgmiosBackend', () => {
       expect(result.slot).toBe(432123);
       expect(result.epoch).toBe(1);
       // preview: 86 400 slots/epoch → epoch 1 starts at slot 86 400
-      // (the old `slot % 432000` yielded 123 here)
       expect(result.epochSlot).toBe(432123 - 86400);
       // Shelley-anchored: previewSystemStart (1666656000) + slot seconds
       expect(result.time).toBe(1666656000 + 432123);
@@ -1180,7 +1179,7 @@ describe('OgmiosBackend', () => {
       expect(result.priceMem).toBeCloseTo(0.0577, 10);
       expect(result.priceStep).toBeCloseTo(0.0000721, 10);
       expect(result.a0).toBeCloseTo(0.3, 10);
-      // ρ = monetaryExpansion, τ = treasuryCut — previously swapped (and NaN)
+      // ρ = monetaryExpansion, τ = treasuryCut
       expect(result.rho).toBeCloseTo(0.003, 10);
       expect(result.tau).toBeCloseTo(0.2, 10);
     });
@@ -1319,10 +1318,6 @@ describe('OgmiosBackend', () => {
       expect(utxo).not.toHaveBeenCalled();
     });
   });
-
-  // Note: createInteractionContext, getAddressUtxos, and getProtocolParameters error handling
-  // is tested through BackendInitError in init() tests - the underlying Ogmios client
-  // errors are wrapped and thrown appropriately by the backend implementation.
 
   describe('resolveOgmiosTip', () => {
     it('should return slot and hash from a normal tip', () => {

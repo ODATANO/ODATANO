@@ -21,22 +21,10 @@ import {
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Confirmation tracker (v2.0, design §7).
- *
- * Watches `submitted` jobs until their tx sits at depth ≥ `confirmationDepth`:
- *  - Crawler hook (preferred, zero extra load): `blockIndexed` events match
- *    submitted tx hashes and carry the advancing tip; `reorg` events invalidate
- *    confirmation points behind the fork and optionally re-submit the SAME
- *    signed CBOR (never a rebuild — the double-spend guard).
- *  - Polling fallback (always on, hook path just accelerates): every
- *    `pollIntervalMs` unfound txs are looked up via `client.getTransaction`
- *    and the tip via `client.getLatestBlock`.
- *
- * A tx that stays unseen past `confirmationTimeoutMs` fails as TX_DROPPED —
- * safe to retry from the caller, because the guard is the on-chain lookup itself.
- *
- * Confirmations are counted as `tipHeight - foundHeight + 1`, so depth 1 means
- * "confirmed as soon as included in a block".
+ * Watches `submitted` jobs until their tx sits at depth >= `confirmationDepth`, via crawler
+ * `blockIndexed`/`reorg` hooks plus an always-on polling fallback. A reorg re-submits the SAME
+ * signed CBOR (never a rebuild); a tx unseen past `confirmationTimeoutMs` fails as TX_DROPPED.
+ * Depth = `tipHeight - foundHeight + 1`, so depth 1 means "included in a block".
  */
 
 export interface TrackedJob {
@@ -51,10 +39,8 @@ export interface TrackedJob {
   foundSlot: number | null;
   foundHeight: number | null;
   /**
-   * Polling round in which the tx was last SEEN on-chain (found or
-   * re-validated). A job found in the current round needs no second lookup
-   * before it is confirmed; one found in an earlier round is re-checked, so a
-   * rollback the crawler did not report (crawler off) cannot slip through.
+   * Polling round in which the tx was last seen on-chain. An inclusion from an earlier
+   * round is re-checked before confirming, so a rollback the crawler did not report cannot slip through.
    */
   seenRound?: number;
 }
@@ -142,7 +128,7 @@ export class ConfirmationTracker {
     }
     const txHashes = new Set(event.txHashes);
     const found = [...this.pending.values()].filter(j => j.foundHeight == null && txHashes.has(j.txHash));
-    // Persist + depth-check detached: hook callers (the crawler) must not await us.
+    // Detached: hook callers (the crawler) must not await us.
     void (async () => {
       for (const job of found) {
         job.foundSlot = event.slot;
@@ -160,16 +146,14 @@ export class ConfirmationTracker {
 
   private async onReorg(event: ReorgEvent): Promise<void> {
     if (!this.running) return;
-    // The pre-fork tip no longer exists — clamp (or drop) lastKnownTipHeight so
-    // confirmations are never counted against it. Without this, a tx re-included
-    // on the new chain would reach "depth" instantly via the stale tip height,
-    // defeating the confirmation-depth guarantee exactly in the rollback case.
+    // Clamp (or drop) the stale pre-fork tip, otherwise a tx re-included on the new
+    // chain would reach depth instantly against it.
     if (event.forkHeight != null) {
       if (this.lastKnownTipHeight != null && this.lastKnownTipHeight > event.forkHeight) {
         this.lastKnownTipHeight = event.forkHeight;
       }
     } else {
-      this.lastKnownTipHeight = null; // unknown fork height → re-learn from the next block/poll
+      this.lastKnownTipHeight = null; // re-learn from the next block/poll
     }
     for (const job of this.pending.values()) {
       if (job.foundSlot != null && job.foundSlot > event.forkSlot) {
@@ -180,11 +164,8 @@ export class ConfirmationTracker {
   }
 
   /**
-   * The recorded inclusion is gone (a reorg the crawler reported, or a polling
-   * re-check that no longer finds the tx): back to watching, and optionally
-   * re-submit the SAME signed CBOR — never a rebuild, that is the double-spend
-   * guard. "Already known" means the tx survived into the new chain's mempool;
-   * that is success, not an error.
+   * Inclusion rolled back: back to watching, optionally re-submitting the SAME signed CBOR
+   * (never a rebuild — the double-spend guard). "Already known" means the tx survived; success.
    */
   private async forgetInclusion(job: TrackedJob): Promise<void> {
     job.foundSlot = null;
@@ -217,8 +198,7 @@ export class ConfirmationTracker {
     this.polling = true;
     this.round++;
     try {
-      // Tip first — also serves the depth check for hook-found entries when the
-      // crawler is off.
+      // Tip first — also the depth check for hook-found entries when the crawler is off.
       try {
         const tip = await this.deps.client.getLatestBlock();
         if (tip.height != null) {
@@ -239,9 +219,8 @@ export class ConfirmationTracker {
           await cds.tx((t) => recordConfirmationPoint(t, job.jobId, { slot: job.foundSlot, height: job.foundHeight }));
           logger.info(`Job ${job.jobId}: tx ${job.txHash} found on-chain at height ${job.foundHeight} (polling)`);
         } catch (err) {
-          // The client's failover wraps per-backend 404s into AllBackendsFailedError,
-          // so a plain `instanceof NotFoundError` check never fires — the helper also
-          // accepts "every consulted backend said 404" as proof of absence.
+          // Failover wraps per-backend 404s into AllBackendsFailedError; the helper
+          // treats "every backend said 404" as proof of absence.
           if (isNotFoundOnAllBackends(err)) {
             // Not on-chain yet — check the mempool-TTL timeout.
             const age = Date.now() - Date.parse(job.submittedAt);
@@ -255,8 +234,7 @@ export class ConfirmationTracker {
         }
       }
 
-      // Polling has no reorg signal, so an inclusion recorded in an EARLIER
-      // round is re-checked before it counts (see stillIncluded).
+      // Polling has no reorg signal: inclusions from an earlier round are re-checked first.
       await this.confirmMature(true);
     } finally {
       this.polling = false;
@@ -266,11 +244,8 @@ export class ConfirmationTracker {
   // ---- Shared -----------------------------------------------------------------
 
   /**
-   * Confirm every found job whose depth requirement is met by the known tip.
-   * `revalidate` (polling path): an inclusion not seen in THIS round is looked
-   * up again first — the crawler's reorg events are the only rollback signal,
-   * and with the crawler off there is none, so a tx that was found at height N
-   * and then rolled back would otherwise be confirmed on the tip alone.
+   * Confirm every found job whose depth is met by the known tip. With `revalidate`
+   * (polling path) an inclusion not seen in this round is looked up again first.
    */
   private async confirmMature(revalidate = false): Promise<void> {
     const tip = this.lastKnownTipHeight;
@@ -284,11 +259,8 @@ export class ConfirmationTracker {
   }
 
   /**
-   * Is the tx still on-chain, and still deep enough? Re-reads it; a tx that
-   * moved to another block (re-included after a rollback) gets its new point
-   * and is judged at the new height; one that is gone is forgotten (back to
-   * watching, optional same-CBOR re-submit) and the tip is re-learned next
-   * round, because the pre-rollback tip may overstate the depth.
+   * Is the tx still on-chain and deep enough? A tx that moved blocks is re-anchored at its
+   * new height; one that is gone goes back to watching and the tip is re-learned next round.
    */
   private async stillIncluded(job: TrackedJob, tip: number): Promise<boolean> {
     try {
@@ -328,13 +300,11 @@ export class ConfirmationTracker {
       });
     } catch (persistErr) {
       logger.error(`Job ${job.jobId}: failed to persist terminal state ${outcome} (next round retries):`, persistErr);
-      return; // keep tracking — the next poll round retries the transition
+      return; // keep tracking — the next round retries
     }
     this.pending.delete(job.jobId);
     if (!transitioned) {
-      // Somebody else (another tracker instance, a reconciliation pass, a
-      // cancel) reached the terminal state first. The job is done either way,
-      // but the stats bump and the terminal event belong to the winner only.
+      // Another actor reached the terminal state first; stats bump and event belong to it.
       logger.debug(`Job ${job.jobId}: ${outcome} transition already applied elsewhere — no event from this tracker`);
       return;
     }

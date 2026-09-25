@@ -1,18 +1,12 @@
 /**
- * Mock Helpers
- * Nock-based HTTP mocking utilities for integration tests
- *
- * IMPORTANT: Only import this file in tests that need HTTP mocking (mock tests).
- * Real backend tests should only import from test-fixtures.ts to avoid
- * loading nock and its @mswjs/interceptors dependency.
+ * Nock-based HTTP mocks for Koios integration tests. Import only in mock tests;
+ * real-backend tests import test-fixtures.ts to avoid loading nock.
  */
 import nock from 'nock';
 import { mockUtxosAdaOnly, mockProtocolParams, TEST_FIXTURES, SCRIPT_UTXO_ADDRESS, scriptUtxoKoiosEntry } from './test-fixtures';
 
-// /address_utxos reply: the script address returns its (live) script UTxO so the
-// BuildPlutusSpendTransaction unspent pre-check passes; every other address returns
-// the configured sender UTxOs. Keeps the script UTxO out of the sender's coin-selection
-// set so the builder still resolves it via getTransaction.
+// The script address answers with its live script UTxO so the BuildPlutusSpendTransaction
+// unspent pre-check passes; every other address gets the configured sender UTxOs.
 function addressUtxosReply(utxos: any[]) {
   return function (_uri: string, body: any) {
     if (Array.isArray(body?._addresses) && body._addresses.includes(SCRIPT_UTXO_ADDRESS)) {
@@ -54,14 +48,12 @@ export function setupTxResponseMock() {
 }
 
 export function setupUtxoMock(utxos: any[]) {
-  // Clear existing mocks but keep nock active
   nock.cleanAll();
 
-  // Re-enable network blocking after cleanAll (cleanAll doesn't reset this, but be safe)
+  // cleanAll() leaves net-connect blocking untouched; re-apply it anyway.
   nock.disableNetConnect();
   nock.enableNetConnect(/localhost/);
 
-  // Setup fresh mocks including /tip for backend initialization
   nock('https://preview.koios.rest')
     .get('/api/v1/tip')
     .reply(200, [{
@@ -108,5 +100,4 @@ export function resetKoiosMocks() {
   nock.enableNetConnect();
 }
 
-// Re-export nock for direct use in tests
 export { nock };

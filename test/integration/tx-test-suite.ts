@@ -14,25 +14,13 @@ vi.setConfig({ testTimeout: 60000, hookTimeout: 60000 });
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 
-/**
- * Cardano Transaction Service Integration Tests
- *
- * Tests the transaction building and submission functionality
- * for the Buildooor transaction builder
- *
- * Uses nock to mock Koios API responses for deterministic testing.
- */
-
-
-/**
- * Create test suite for a specific transaction builder
- */
+/** Transaction building and submission for the given builder against a nock-mocked Koios. */
 export function createTxServiceTestSuite(testConfig: TestConfiguration) {
   describe(`Cardano Transaction Service Tests [${testConfig.txBuilderName.toUpperCase()}] [MOCKED]`, () => {
     const test = cds.test(__dirname + '/../../');
     const expect = test.expect;
 
-    // Create app context once before all tests - nock mocks must be set up first
+    // nock mocks must exist before the app context is created.
     beforeAll(async () => {
       setupNocks();
       setupKoiosMocks();
@@ -41,11 +29,9 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       resetAppContext(testContext);
     });
 
-    // Reset the database and setup nock mocks before each test
     beforeEach(async () => {
       await test.data.reset();
 
-      // Reactivate nock and setup mocks for this test
       setupNocks();
       setupKoiosMocks();
     });
@@ -139,15 +125,12 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody);
           expect(status).to.equal(200);
 
-          // Verify inputs are persisted
           const inputs = await cds.run(SELECT.from(TransactionBuildInputs).where({ build_id: data.id }));
           expect(inputs.length).to.be.greaterThan(0);
 
-          // Verify outputs are persisted
           const outputs = await cds.run(SELECT.from(TransactionBuildOutputs).where({ build_id: data.id }));
           expect(outputs.length).to.be.greaterThan(0);
 
-          // Should have recipient output
           const recipientOutput = outputs.find((o: any) => o.address === TEST_FIXTURES.emptyAddress);
           expect(recipientOutput).to.exist;
           expect(Number(recipientOutput.lovelace)).to.equal(Number(TEST_FIXTURES.lovelaceAmount)); // CAP 10: Lovelace → string
@@ -182,7 +165,6 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data.forcedInputsUsed).to.equal(1);
 
-          // Verify the forced ref made it into the persisted input list
           const inputs = await cds.run(SELECT.from(TransactionBuildInputs).where({ build_id: data.id }));
           const match = inputs.find((i: any) => i.txHash === forcedRef.txHash && i.outputIndex === forcedRef.outputIndex);
           expect(match, 'forced UTxO should appear in TransactionBuildInputs').to.exist;
@@ -339,7 +321,6 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
-          // Transaction should build successfully with change going to senderAddress
           expect(Number(data.fee)).to.be.greaterThan(0);
         });
       });
@@ -428,13 +409,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
         it('POST /BuildMintTransaction - uses evaluated execution units when Ogmios available', async () => {
 
-          // Get the CardanoClient instance and mock the evaluator methods
           const cardanoClient = getCardanoClient();
 
-          // Spy on hasOgmiosBackend to return true
           const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
 
-          // Spy on evaluateTransaction to return mock evaluation results
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
             {
               validator: { purpose: 'mint', index: 0 },
@@ -448,45 +426,38 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
 
-          // Verify the mocks were called (use the global Vitest expect for spy assertions)
+          // chai's expect from cds.test has no spy matchers; use the global vitest expect.
           const viExpect = (global as any).expect;
           viExpect(hasOgmiosSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
-          // The fee should be calculated based on evaluated units
-          // With lower execution units, the fee should be lower than with defaults
           expect(data).to.have.property('fee');
 
-          // Cleanup spies
           hasOgmiosSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
 
         it('POST /BuildMintTransaction - uses default execution units when evaluation fails', async () => {
-          // Get the CardanoClient instance and mock the evaluator methods
           const cardanoClient = getCardanoClient();
 
-          // Spy on hasOgmiosBackend to return true (Ogmios is "available")
           const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
 
-          // Spy on evaluateTransaction to throw an error (evaluation fails)
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
             new Error('Evaluation failed: script execution error')
           );
 
          
-          // Should still succeed - falls back to default execution units
+          // Still succeeds: falls back to default execution units.
           const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMintTransaction', mintingRequestBody);
 
           expect(status).to.equal(200);
           expect(data).to.have.property('unsignedTxCbor');
 
-          // Verify the mocks were called (use the global Vitest expect for spy assertions)
+          // chai's expect from cds.test has no spy matchers; use the global vitest expect.
           const viExpect = (global as any).expect;
           viExpect(hasOgmiosSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
-          // Cleanup spies
           hasOgmiosSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
@@ -861,10 +832,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-2: BuildPlutusSpendTransaction extraOutputsJson
+      // BuildPlutusSpendTransaction extraOutputsJson
       // ============================================================================
 
-      describe('BuildPlutusSpendTransaction extraOutputsJson (FR-2)', () => {
+      describe('BuildPlutusSpendTransaction extraOutputsJson', () => {
         it('POST /BuildPlutusSpendTransaction - builds with two extra outputs and persists them in TransactionBuildOutputs', async () => {
           setupTxInfoMock(mockScriptTxInfo);
 
@@ -902,10 +873,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-1: BuildPlutusSpendTransaction combined spend+mint
+      // BuildPlutusSpendTransaction combined spend+mint
       // ============================================================================
 
-      describe('BuildPlutusSpendTransaction combined spend+mint (FR-1)', () => {
+      describe('BuildPlutusSpendTransaction combined spend+mint', () => {
         it('POST /BuildPlutusSpendTransaction - combined mint returns mintScriptHash alongside scriptHash', async () => {
           setupTxInfoMock(mockScriptTxInfo);
 
@@ -936,10 +907,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-3: BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (Buildooor)
+      // BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (Buildooor)
       // ============================================================================
 
-      describe('BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution (FR-3)', () => {
+      describe('BuildPlutusSpendTransaction __INPUT_IDX__ placeholder resolution', () => {
         it('POST /BuildPlutusSpendTransaction - resolves __INPUT_IDX__ in redeemer to final post-sort index', async () => {
           setupTxInfoMock(mockScriptTxInfo);
 
@@ -954,10 +925,8 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             txHash: inp.utxoRef.id.toString(),
             outputIndex: inp.utxoRef.index,
           }));
-          // Buildooor writes body inputs in insertion order (script input first) but resolves
-          // redeemer Spend indices against the lexicographically-sorted input set — which is how
-          // the ledger reads them on-chain. So the placeholder must resolve to the script UTxO's
-          // position in the SORTED set, not its position in the body's CBOR order.
+          // Buildooor writes body inputs in insertion order but resolves redeemer Spend indices
+          // against the lexicographically sorted set (as the ledger does), so use the sorted position.
           const sortedRefs = sortInputsLikeBuildooor(inputRefs);
 
           const expectedIdx = sortedRefs.findIndex(
@@ -1189,13 +1158,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
         });
 
         it('should create AddressTransactionBuilds association when building a transaction', async () => {
-          // Build a transaction - this should automatically create AddressTransactionBuilds association
 
           const { status: buildStatus, data: buildData } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody);
           expect(buildStatus).to.equal(200);
           const buildId = buildData.id;
 
-          // Verify AddressTransactionBuilds association was created
           const { status, data } = await test.get(`/odata/v4/cardano-transaction/AddressTransactionBuilds?$filter=address_address eq '${TEST_FIXTURES.addressWithFunds}'`);
 
           expect(status).to.equal(200);
@@ -1213,13 +1180,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
       describe('GetTransactionBuildsByAddress Action', () => {
         it('should retrieve transaction builds for a given address', async () => {
-          // Build a transaction first - this creates the AddressTransactionBuilds association
 
           const { status: buildStatus, data: buildData } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody);
           expect(buildStatus).to.equal(200);
           const buildId = buildData.id;
 
-          // Retrieve builds by address using the action
           const { status, data } = await test.post('/odata/v4/cardano-transaction/GetTransactionBuildsByAddress', {
             address: TEST_FIXTURES.addressWithFunds,
           });
@@ -1241,7 +1206,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-A: BuildSimpleAdaTransaction lockOnScript
+      // BuildSimpleAdaTransaction lockOnScript
       // ============================================================================
 
       describe('BuildSimpleAdaTransaction lockOnScript', () => {
@@ -1319,7 +1284,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-B: DeriveScriptAddress utility action
+      // DeriveScriptAddress utility action
       // ============================================================================
 
       describe('DeriveScriptAddress Action', () => {
@@ -1407,7 +1372,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // FR-C: ExtractPaymentKeyHash utility action
+      // ExtractPaymentKeyHash utility action
       // ============================================================================
 
       describe('ExtractPaymentKeyHash Action', () => {
@@ -1466,7 +1431,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       });
 
       // ============================================================================
-      // Cross-feature round-trip: FR-B ↔ FR-A
+      // Cross-feature round-trip: DeriveScriptAddress ↔ lockOnScript
       // ============================================================================
 
       describe('Cross-feature round-trip', () => {

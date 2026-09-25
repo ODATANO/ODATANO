@@ -1,7 +1,7 @@
 /**
- * Chain crawler — PaginatingBackend forward-iteration (C2a/C2b/C7) + CardanoClient
- * capability getters. Blockfrost via SDK mock, Koios via nock (repo conventions);
- * asserts the calls, BlockData mapping, block ordering and init-aware getter selection.
+ * Chain crawler — PaginatingBackend forward-iteration + CardanoClient capability getters.
+ * Blockfrost via SDK mock, Koios via nock; asserts the calls, BlockData mapping, block
+ * ordering and init-aware getter selection.
  */
 import type { Mock } from 'vitest';
 import nock from 'nock';
@@ -107,7 +107,7 @@ describe('BlockfrostBackend.getBlockTransactions', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Koios PaginatingBackend (C2b) — nock against the real REST shapes
+// Koios PaginatingBackend — nock against the real REST shapes
 // ---------------------------------------------------------------------------
 
 import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';

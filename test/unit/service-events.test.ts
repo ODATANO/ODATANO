@@ -1,10 +1,7 @@
 /**
- * CAP service events (v2.0).
- *
- * The crawler and the wallet worker mirror their internal notifications onto their
- * CAP services so consumers can subscribe instead of polling. Because both callers
- * are background loops, the contract that matters here is defensive: an emit must
- * never throw, never block and never fire before the service exists.
+ * CAP service events: the crawler and the wallet worker mirror their notifications onto their
+ * CAP services. Both callers are background loops, so an emit must never throw, block,
+ * or fire before the service exists.
  */
 
 // No static imports at the top, so mark this a module (see the sibling suites).

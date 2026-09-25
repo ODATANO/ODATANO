@@ -26,9 +26,7 @@ import { KoiosBackend } from './backends/koios-backend';
 
 const logger = cds.log('CardanoClient');
 
-/**
- * Method routing configuration - defines which backend type to prefer for each method
- */
+/** Which backend type to prefer per method. */
 const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
   getAddress: { preferLive: true },
@@ -69,12 +67,8 @@ export type CardanoClientConfig = {
 }
 
 /**
- * CardanoClient - Smart Multi-backend Cardano Client
- *
- * Routes requests to appropriate backends:
- * - Live/State queries → Ogmios (if available)
- * - Historical queries → Blockfrost/Koios (if available)
- * - Automatic fallback between backends
+ * Multi-backend Cardano client: live/state queries prefer Ogmios, historical queries prefer
+ * Blockfrost/Koios, with automatic fallback between them.
  */
 export class CardanoClient {
   private config: CardanoClientConfig;
@@ -96,11 +90,7 @@ export class CardanoClient {
   private addrCoalescer = new RequestCoalescer<Address>();
   private credCoalescer = new RequestCoalescer<UTxO[]>();
 
-  /** 
-   * Constructor for CardanoClient
-   * @param liveBackend - Optional backend for live/state queries (typically Ogmios)
-   * @param historicalBackends - Optional backends for historical queries (typically Blockfrost/Koios)
-   */
+  /** Builds the configured backends; throws ConfigError when none is configured. */
   constructor( clientConfig: CardanoClientConfig) {
     this.network = clientConfig.network;
    
@@ -127,9 +117,7 @@ export class CardanoClient {
     }
 
     this.circuitBreaker = new CircuitBreakerManager(clientConfig.circuitBreaker);
-    // Wire the configured cache TTL into the field the indexer actually reads.
-    // Previously max_age_ms stayed hardcoded at 60s and indexTtlMs was dead — the
-    // documented/configurable 1h default never took effect.
+    // indexTtlMs is the cache TTL the indexer reads via max_age_ms
     if (Number.isFinite(clientConfig.indexTtlMs) && clientConfig.indexTtlMs > 0) {
       this.max_age_ms = clientConfig.indexTtlMs;
     }
@@ -146,15 +134,12 @@ export class CardanoClient {
   }
 
   /**
-   * Ensure backends are initialized.
-   * A REJECTED init promise is cleared so the next request retries — previously
-   * a transient startup failure (e.g. Ogmios briefly down) left the client
-   * permanently broken until process restart.
-   * @returns {Promise<void>}
+   * Ensure backends are initialized. A rejected init promise is cleared so the next request
+   * retries instead of leaving the client permanently broken.
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
-    // Use nullish coalescing assignment for atomic operation to prevent race conditions
+    // ??= keeps concurrent callers on one init promise
     this.initPromise ??= this.initBackends().catch((err: unknown) => {
       this.initPromise = null;
       throw err;
@@ -163,10 +148,8 @@ export class CardanoClient {
   }
 
   /**
-   * Transient (retryable) init failures: a backend momentarily unreachable at
-   * startup — e.g. Ogmios's /health response cut short while the node processes
-   * a freshly-arrived block ("Premature close"), or the socket still coming up
-   * (ECONNREFUSED). Config/validation errors are NOT transient.
+   * Transient (retryable) init failures: a backend momentarily unreachable at startup
+   * (connection refused/reset, a cut-short health response). Config/validation errors are not.
    */
   private static isTransientInitError(err: unknown): boolean {
     const e = err as { code?: string; message?: string; cause?: { code?: string; message?: string } };
@@ -177,12 +160,8 @@ export class CardanoClient {
   }
 
   /**
-   * Init a backend, retrying brief transient failures. Deliberately SMALL: the
-   * integration suites bootstrap under a 20s cds.test() hook, so total retry
-   * time must stay well under it (≤3 attempts × 4s init-timeout + 1s backoff
-   * ≈ 14s worst case; in practice "Premature close" returns sub-second). With
-   * the node at tip these failures are momentary block-processing blips, so a
-   * couple of quick retries ride over them; a sustained outage still fails fast.
+   * Init a backend, retrying brief transient failures. Kept small (3 attempts, 1 s backoff) so
+   * a sustained outage still fails fast and the total stays under the test bootstrap hook.
    */
   private async initBackendWithRetry(backend: CardanoBackend): Promise<void> {
     const maxAttempts = 3;
@@ -199,12 +178,8 @@ export class CardanoClient {
   }
 
   /**
-   * Initialize all backends from configuration.
-   * Backends that fail to initialize are KEPT (previously removed permanently)
-   * and tracked in `uninitializedBackends` — the request loops retry their
-   * init lazily, so a backend that comes back online recovers without a
-   * process restart. The circuit breaker bounds the retry cost.
-   * @returns {Promise<void>}
+   * Initialize all backends. Backends whose init fails stay in rotation, tracked in
+   * `uninitializedBackends`, and are retried lazily per request (bounded by the circuit breaker).
    */
   private async initBackends(): Promise<void> {
     const initErrors: BackendInitError[] = [];
@@ -266,13 +241,7 @@ export class CardanoClient {
     }
   }
 
-  /**
-   * Wrap a promise with a timeout
-   * @param promise - the promise to wrap
-   * @param ms - timeout in milliseconds
-   * @param backendName - name of the backend (for error context)
-   * @returns {Promise<T>} the result of the promise or a timeout error
-   */
+  /** Wrap a promise with a timeout that rejects with ProviderUnavailableError. */
   private withTimeout<T>(
     promise: Promise<T>,
     ms: number,
@@ -292,22 +261,15 @@ export class CardanoClient {
     });
   }
 
-  /**
-   * Get timeout for specific backend
-   * @param backend CardanoBackend instance
-   * @returns {number} timeout in milliseconds
-   */
+  /** Per-backend timeout: Koios gets the fallback timeout, everything else the primary one. */
   private getTimeoutForBackend(backend: CardanoBackend): number {
     if (backend.name === 'koios') return this.config.fallbackTimeoutMs;
     return this.config.primaryTimeoutMs;
   }
 
   /**
-   * Run a single-backend call with the same resilience contract as
-   * executeWithPriority: circuit-breaker gate, timeout, success/failure
-   * recording (4xx exempt). For the paths that cannot fail over (Koios-only,
-   * Ogmios-only, batch-capable loops) — these previously bypassed timeout AND
-   * breaker entirely, so a hanging socket blocked the caller indefinitely.
+   * Single-backend call with the executeWithPriority resilience contract (breaker gate, timeout,
+   * success/failure recording, 4xx exempt) for paths that cannot fail over.
    */
   private async callWithResilience<T>(backend: CardanoBackend, fn: () => Promise<T>): Promise<T> {
     if (!this.circuitBreaker.shouldAttempt(backend.name)) {
@@ -331,12 +293,7 @@ export class CardanoClient {
     }
   }
 
-  /** 
-   * Execute with priority-based backend selection and automatic fallback
-   * @param fn function to execute on backend
-   * @param preferLive whether to prefer live backend over historical
-   * @returns {Promise<T>} result from backend
-   */
+  /** Execute on backends in preference order (live vs historical) with automatic fallback. */
   private async executeWithPriority<T>(
     fn: (backend: CardanoBackend) => Promise<T>,
     preferLive: boolean,
@@ -387,10 +344,8 @@ export class CardanoClient {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
 
-        // 4xx are definitive verdicts from a HEALTHY backend (bad input, not found,
-        // conflict, rate limit) — only 5xx/timeouts/transport errors indicate backend
-        // health and may open the circuit. Counting client errors opened the breaker
-        // on user mistakes and took working backends out of rotation.
+        // 4xx are definitive verdicts from a healthy backend and must not open the circuit;
+        // only 5xx/timeouts/transport errors indicate backend health.
         const isClientError = backendError.statusCode >= 400 && backendError.statusCode < 500;
         if (!isClientError) {
           this.circuitBreaker.recordFailure(backend.name);
@@ -406,12 +361,7 @@ export class CardanoClient {
     throw new AllBackendsFailedError(errors);
   }
 
-  /**
-   * Route method call to appropriate backend based on method routing configuration
-   * @param methodName name of the method being called
-   * @param fn function to execute on backend
-   * @returns {Promise<T>} result from backend
-   */
+  /** Route a call by METHOD_ROUTING (default: historical first). */
   private route<T>(
     methodName: string,
     fn: (backend: CardanoBackend) => Promise<T>
@@ -420,43 +370,27 @@ export class CardanoClient {
     return this.executeWithPriority(fn, config.preferLive, methodName);
   }
 
-  /** 
-   * Get transaction by hash with fallback between backends
-   * @param txHash transaction hash (hex)
-   * @returns {Promise<Transaction>} transaction data
-   */
+  /** Transaction by hash (coalesced across concurrent callers). */
   getTransaction(txHash: string): Promise<Transaction> {
     return this.txCoalescer.get(txHash, () =>
       this.route('getTransaction', b => b.getTransaction(txHash))
     );
   }
   
-  /** 
-   * Get address by bech32 address with fallback between backends
-   * @param address bech32 address
-   * @returns {Promise<Address>} address data
-   */
+  /** Address data (coalesced across concurrent callers). */
   getAddress(address: string): Promise<Address> {
     return this.addrCoalescer.get(address, () =>
       this.route('getAddress', b => b.getAddress(address))
     );
   }
 
-  /**
-   * Get address UTxOs with fallback between backends
-   * @param address bech32 address
-   * @returns {Promise<UTxO[]>} list of UTxOs
-   */
   getAddressUtxos(address: string): Promise<UTxO[]> {
     return this.route('getAddressUtxos', b => b.getAddressUtxos(address));
   }
 
   /**
-   * Get UTxOs by 28-byte payment credential. Koios-only — bypasses generic
-   * failover because no other backend exposes a credential-keyed UTxO endpoint.
-   * Throws ProviderUnavailableError if Koios is not configured.
-   * @param credHash 28-byte payment credential as 56-char lowercase hex
-   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms sharing the credential
+   * UTxOs by 28-byte payment credential (56-char hex), across all bech32 forms sharing it.
+   * Koios-only: no other backend has a credential-keyed endpoint, so this throws without Koios.
    */
   getCredentialUtxos(credHash: string): Promise<UTxO[]> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
@@ -470,94 +404,46 @@ export class CardanoClient {
     return this.credCoalescer.get(credHash, () => this.callWithResilience(koios, () => koios.getCredentialUtxos!(credHash)));
   }
 
-  /**
-   * Get address transactions with fallback between backends
-   * @param address bech32 address
-   * @returns {Promise<Transaction[]>} list of transactions for this address
-   */
   getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
     return this.route('getAddressTransactions', b => b.getAddressTransactions(address, limit));
   }
 
-  /**
-   * Get network information with fallback between backends
-   * @returns {Promise<Network>} network information
-   */
   getNetworkInformation(): Promise<NetworkInformation> {
     return this.route('getNetworkInformation', b => b.getNetworkInformation());
   }
 
-  /** 
-   * Get transaction metadata with fallback between backends
-   * @param tx_hash transaction hash (hex)
-   * @returns {Promise<MetadataLabelTx[]>} transaction metadata
-   */
   getTransactionMetadata(tx_hash: string): Promise<MetadataLabelTx[]> {
     return this.route('getTransactionMetadata', b => b.getTransactionMetadata(tx_hash));
   }
 
-  /** 
-   * Get block data with fallback between backends
-   * @param block_hash block hash (hex)
-   * @returns {Promise<BlockData>} block data
-   */
   getBlock(block_hash: string): Promise<BlockData> {
     return this.route('getBlock', b => b.getBlock(block_hash));
   }
 
-  /** 
-   * Get epoch data with fallback between backends
-   * @param epochNumber epoch number
-   * @returns {Promise<EpochData>} epoch data
-   */
   getEpoch(epochNumber: number): Promise<EpochData> {
     return this.route('getEpoch', b => b.getEpoch(epochNumber));
   }
 
-  /** 
-   * Get Pool data with fallback between backends
-   * @param poolId pool id
-   * @returns {Promise<PoolData>} pool data
-   */
   getPool(poolId: string): Promise<PoolData> {
     return this.route('getPool', b => b.getPool(poolId));
   }
 
-  /** 
-   * Get drep data with fallback between backends
-   * @param drepId drep id
-   * @returns {Promise<DrepData>} drep data
-   */
   getDrep(drepId: string): Promise<DrepData> {
     return this.route('getDrep', b => b.getDrep(drepId));
   }
 
-  /**
-   * Get account data with fallback between backends
-   * @param stakeAddress stake address
-   * @returns {Promise<AccountData>} account data
-   */
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
   }
 
-  /**
-   * Get asset info (supply, mint history, CIP-25 + CIP-26 metadata) with fallback.
-   * Both Blockfrost and Koios implement; Ogmios throws "not supported".
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @returns {Promise<AssetInfo>} canonical asset info
-   */
+  /** Asset info (supply, mint history, CIP-25/CIP-26 metadata); Blockfrost and Koios only. */
   getAssetInfo(unit: string): Promise<AssetInfo> {
     return this.route('getAssetInfo', b => b.getAssetInfo(unit));
   }
 
   /**
-   * Get latest mint/burn events for an asset. Prefers Koios because it provides
-   * block timestamps; Blockfrost is the fallback (timestamps left null).
-   * Ogmios doesn't implement — fallback skips it via the optional method check.
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @param limit max number of events (default 100)
-   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events (most recent first)
+   * Latest mint/burn events for an asset, most recent first. Prefers Koios (block timestamps);
+   * Blockfrost is the fallback with timestamps left null.
    */
   getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
@@ -578,15 +464,10 @@ export class CardanoClient {
   //-----------------------------------------------------------------------------
 
   /**
-   * Get transaction hashes for an address (lightweight — no full tx details).
-   * Uses getAddressTransactionHashes() if backend supports it, otherwise
-   * falls back to getAddressTransactions() and extracts hashes.
-   * @param address bech32 address
-   * @param limit maximum number of hashes
-   * @returns {Promise<string[]>} list of transaction hashes
+   * Transaction hashes for an address; falls back to a full getAddressTransactions when no
+   * backend supports the lightweight listing.
    */
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
-    // Try backends with getAddressTransactionHashes support
     const allBackends = this.getOrderedBackends();
     for (const backend of allBackends) {
       if (backend.getAddressTransactionHashes) {
@@ -602,15 +483,8 @@ export class CardanoClient {
     return txs.map(tx => tx.hash);
   }
 
-  /**
-   * Batch fetch multiple transactions by hash.
-   * Uses getTransactionsBatch() if backend supports it, otherwise
-   * falls back to individual getTransaction() calls (still coalesced).
-   * @param txHashes array of transaction hashes
-   * @returns {Promise<Map<string, Transaction>>} map of hash -> Transaction
-   */
+  /** Batch fetch transactions by hash; falls back to individual coalesced getTransaction calls. */
   async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
-    // Try backends with batch support
     const allBackends = this.getOrderedBackends();
     for (const backend of allBackends) {
       if (backend.getTransactionsBatch) {
@@ -628,11 +502,7 @@ export class CardanoClient {
     return new Map(entries);
   }
 
-  /**
-   * Backends in historical-first order. Used by the batch methods — both
-   * always prefer historical data, so the former preferLive parameter was a
-   * dead branch.
-   */
+  /** Backends in historical-first order, for the batch methods. */
   private getOrderedBackends(): CardanoBackend[] {
     const backends: CardanoBackend[] = [...this.historicalBackends];
     if (this.liveBackend) backends.push(this.liveBackend);
@@ -640,11 +510,8 @@ export class CardanoClient {
   }
 
   /**
-   * Get a backend that supports streamed chain-synchronization (Ogmios), or null.
-   * The crawler's primary, reorg-aware source. Checks the live backend first.
-   * Backends whose init() failed are skipped — the crawler uses these instances
-   * DIRECTLY (outside executeWithPriority's lazy-retry/breaker), so handing out an
-   * uninitialized backend would wedge it.
+   * A backend that supports streamed chain-sync (Ogmios), or null. Backends whose init failed
+   * are skipped: the crawler uses these instances directly, outside the lazy-retry/breaker path.
    */
   getChainSyncBackend(): ChainSyncBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
@@ -655,12 +522,8 @@ export class CardanoClient {
   }
 
   /**
-   * getChainSyncBackend(), but retrying the startup init of a chain-sync-capable backend
-   * that failed it. The crawler polls this while it crawls on pagination only because no
-   * chain-sync source was usable when it started: on a box where the node and ODATANO
-   * restart together, the node's chunk validation and ledger replay routinely outlast
-   * ODATANO's startup, so Ogmios refuses the init once and is healthy minutes later.
-   * Without this the crawler would stay on pagination for the rest of the process.
+   * getChainSyncBackend(), retrying a failed startup init. Polled by the crawler while it runs
+   * on pagination because no chain-sync source was usable when it started.
    */
   async recoverChainSyncBackend(): Promise<ChainSyncBackend | null> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
@@ -681,10 +544,8 @@ export class CardanoClient {
   }
 
   /**
-   * Get a backend that can enumerate the full pool/DRep set (Koios), or null. Used by the
-   * crawler's epoch-boundary snapshots; without one they stay off rather than degrade into
-   * thousands of single requests (see EnumeratingBackend).
-   * Skips backends whose init() failed (see getChainSyncBackend).
+   * A backend that can enumerate the full pool/DRep set (Koios), or null; without one the epoch
+   * snapshots stay off instead of degrading into thousands of single requests.
    */
   getEnumeratingBackend(): EnumeratingBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
@@ -695,13 +556,8 @@ export class CardanoClient {
   }
 
   /**
-   * Get a backend that can be walked forward by pagination (Blockfrost/Koios), or null.
-   * The crawler's fallback source when no Ogmios chain-sync is available.
-   * Skips backends whose init() failed (see getChainSyncBackend).
-   *
-   * Koios is preferred over Blockfrost for bulk block-crawling: Koios batches 100 txs
-   * per POST /tx_info, while Blockfrost has no batch endpoint (~3 HTTP calls per tx) —
-   * roughly a 40x difference in request volume per crawled block.
+   * A backend that can be walked forward by pagination (Blockfrost/Koios), or null. Koios is
+   * preferred: it batches 100 txs per call, Blockfrost needs ~3 calls per tx.
    */
   getPaginatingBackend(): PaginatingBackend | null {
     const usable = this.historicalBackends.filter(
@@ -716,11 +572,7 @@ export class CardanoClient {
     return null;
   }
 
-  /**
-   * Get protocol parameters with caching (5 minute TTL)
-   * Protocol parameters rarely change (once per epoch at most), so caching improves performance
-   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
-   */
+  /** Protocol parameters with a 5-minute in-memory cache and coalesced refresh. */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     const now = Date.now();
     if (this.protocolParamsCache && (now - this.protocolParamsCache.fetchedAt) < CardanoClient.PROTOCOL_PARAMS_TTL_MS) {
@@ -728,7 +580,6 @@ export class CardanoClient {
       return this.protocolParamsCache.data;
     }
 
-    // Promise coalescing: deduplicate concurrent requests during cache miss
     if (!this.protocolParamsFetchPromise) {
       logger.debug('Fetching fresh protocol parameters');
       this.protocolParamsFetchPromise = this.route('getProtocolParameters', b => b.getProtocolParameters())
@@ -745,13 +596,10 @@ export class CardanoClient {
     return this.protocolParamsFetchPromise;
   }
 
-  /**
-   * Shutdown all backends (for cleanup in tests)
-   */
+  /** Shut down all backends. */
   async shutdown(): Promise<void> {
     logger.info('Shutting down CardanoClient backends...');
 
-    // Shutdown live backend if it has a shutdown method
     if (this.liveBackend && 'shutdown' in this.liveBackend && typeof this.liveBackend.shutdown === 'function') {
       try {
         await this.liveBackend.shutdown();
@@ -761,7 +609,6 @@ export class CardanoClient {
       }
     }
 
-    // Shutdown historical backends
     for (const backend of this.historicalBackends) {
       if ('shutdown' in backend && typeof backend.shutdown === 'function') {
         try {
@@ -778,77 +625,45 @@ export class CardanoClient {
     logger.info('CardanoClient shutdown complete');
   }
 
-  /**
-   * Get latest block data with fallback between backends
-   * @returns {Promise<BlockData>} latest block data
-   */
   getLatestBlock(): Promise<BlockData> {
     return this.route('getLatestBlock', b => b.getLatestBlock());
   }
 
-  /**
-   * Get latest epoch data with fallback between backends
-   * @returns {Promise<EpochData>} latest epoch data
-   */
   getLatestEpoch(): Promise<EpochData> {
     return this.route('getLatestEpoch', b => b.getLatestEpoch());
   }
 
-  /**
-   * Get the current chain slot with fallback between backends.
-   * @returns {Promise<number>} current chain slot
-   */
   getCurrentSlot(): Promise<number> {
     return this.route('getCurrentSlot', b => b.getCurrentSlot());
   }
 
-  /**
-   * Check whether a UTxO is still unspent with fallback between backends.
-   * @param txHash 64-char lowercase hex transaction hash
-   * @param outputIndex non-negative integer output index
-   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
-   */
+  /** True iff the UTxO exists and is unspent. */
   isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
     return this.route('isUtxoUnspent', b => b.isUtxoUnspent(txHash, outputIndex));
   }
 
   /**
-   * Submit transaction with fallback between backends
-   * @param signedTxCbor signed transaction in CBOR hex format
-   * @returns {Promise<string>} transaction hash
-   *
-   * NOTE on failover semantics: when the preferred backend ACCEPTS the tx but
-   * its response is lost (timeout), the failover resubmits on the next backend,
-   * which may answer 409 "already submitted". Callers should treat a
-   * TransactionAlreadySubmittedError after a submit attempt as success — the
-   * transaction IS in the mempool.
+   * Submit a signed transaction (CBOR hex); returns its hash. On failover after a lost response
+   * the next backend may answer 409 "already submitted" — callers treat that as success.
    */
   submitTransaction(signedTxCbor: string): Promise<string> {
     return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
   }
 
-  /**
-   * Check if Ogmios backend is available for transaction evaluation
-   * @returns {boolean} true if Ogmios is the live backend
-   */
+  /** True when Ogmios is the live backend (script evaluation available). */
   hasOgmiosBackend(): boolean {
     return this.liveBackend?.name === 'ogmios';
   }
 
-  /**
-   * Evaluate transaction script execution units (Ogmios only)
-   * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns {Promise<ScriptEvaluationResult[]>} evaluation results
-   */
+  /** Evaluate script execution units of an unsigned transaction (Ogmios only). */
   async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     await this.ensureInitialized();
 
-    // Evaluation requires an EvaluatingBackend (typically Ogmios)
     if (!this.liveBackend || !isEvaluatingBackend(this.liveBackend)) {
       throw new ProviderUnavailableError('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
     }
 
-    // timeout + breaker — a hanging Ogmios socket previously blocked Plutus builds indefinitely
+    // timeout + breaker, so a hanging socket cannot block Plutus builds
     const backend = this.liveBackend;
     return this.callWithResilience(backend, () => backend.evaluateTransaction(unsignedTxCbor));
   }

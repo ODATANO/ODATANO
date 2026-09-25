@@ -15,218 +15,118 @@ import {
   ScriptEvaluationResult
 } from '../../utils/types';
 
-/**
- * CardanoBackend - Interface Definition for multiple backends (Blockfrost, Koios, Ogmios, etc.)
- *
- * Defines the standard methods that any Cardano backend must implement to be used interchangeably.
- */
+/** Common interface every Cardano backend (Blockfrost, Koios, Ogmios, ...) implements. */
 export interface CardanoBackend {
 
-  /**
-   * Backend name
-   */
+  /** Backend name */
   name: string;
 
   /**
-   * Methods this backend declares as NOT supported. The orchestrator skips the
-   * backend for these without counting a circuit-breaker failure — previously
-   * Ogmios either fabricated placeholder data for them (which preferLive routing
-   * then preferred over correct historical data) or its thrown errors poisoned
-   * the breaker.
+   * Methods this backend declares as NOT supported; the orchestrator skips it for
+   * these without counting a circuit-breaker failure.
    */
   readonly unsupportedMethods?: ReadonlySet<string>;
 
-  /**
-   * Initialize the backend
-   */
+  /** Initialize the backend */
   init(): Promise<boolean>;
 
-  /**
-   * Get Transaction Data
-   * @param txHash transaction hash (hex)
-   * @returns {Promise<Transaction>} transaction data
-   */
+  /** Transaction by hash (hex). */
   getTransaction(txHash: string): Promise<Transaction>;
 
-  /**
-   * Get Address Data
-   * @param address bech32 address
-   * @returns {Promise<Address>} address data
-   */
+  /** Address data by bech32 address. */
   getAddress(address: string): Promise<Address>;
 
-  /**
-   * Get Address UTxOs
-   * @param address bech32 address
-   * @returns {Promise<UTxO[]>} list of UTxOs
-   */
+  /** UTxOs of a bech32 address. */
   getAddressUtxos(address: string): Promise<UTxO[]>;
 
-  /**
-   * Get Address Transactions (lightweight - only tx hashes and basic info)
-   * @param address bech32 address
-   * @returns {Promise<Transaction[]>} list of transactions involving this address
-   */
+  /** Transactions involving a bech32 address (lightweight — hashes and basic info). */
   getAddressTransactions(address: string, limit: number): Promise<Transaction[]>;
 
-  /**
-   * Get Network Information
-   * @returns {Promise<NetworkInformation>} network information
-   */
+  /** Network information (supply, stake). */
   getNetworkInformation(): Promise<NetworkInformation>;
 
-  /**
-   * Get Transaction Metadata
-   * @param txHash transaction hash (hex)
-   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
-   */
+  /** Metadata labels of a transaction (hash hex). */
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]>;
 
-  /**
-   * Get Block Data
-   * @param blockHash block hash (hex)
-   * @returns {Promise<BlockData>} block data
-   */
+  /** Block by hash (hex). */
   getBlock(blockHash: string): Promise<BlockData>;
 
-  /**
-   * Get Epoch Data
-   * @param epochNumber epoch number
-   * @returns {Promise<EpochData>} epoch data
-   */
+  /** Epoch by number. */
   getEpoch(epochNumber: number): Promise<EpochData>;
 
-  /**
-   * Get Latest Epoch Data
-   * @returns {Promise<EpochData>} latest epoch data
-   */
+  /** Latest epoch. */
   getLatestEpoch(): Promise<EpochData>;
 
-  /**
-   * Get Latest Block Data
-   * @returns {Promise<BlockData>} latest block data
-   */
+  /** Latest block. */
   getLatestBlock(): Promise<BlockData>;
 
-  /**
-   * Get the latest chain tip slot.
-   * Throws ProviderUnavailableError when the backend's latest block has no slot.
-   * @returns {Promise<number>} current chain slot
-   */
+  /** Latest chain tip slot; throws ProviderUnavailableError when the latest block has no slot. */
   getCurrentSlot(): Promise<number>;
 
   /**
-   * Check whether a UTxO is still unspent. Returns `false` for txs that don't
-   * exist on chain and for out-of-range output indices.
+   * Whether a UTxO is still unspent. `false` for txs that don't exist on chain and
+   * for out-of-range output indices.
    * @param txHash 64-char lowercase hex
-   * @param outputIndex non-negative integer
-   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
    */
   isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean>;
 
-  /**
-   * Get Pool Data
-   * @param poolId pool id
-   * @returns {Promise<PoolData>} pool data
-   */
+  /** Stake pool by id. */
   getPool(poolId: string): Promise<PoolData>;
 
-  /**
-   * Get Drep Data
-   * @param drepId drep id
-   * @returns {Promise<DrepData>} drep data
-   */
+  /** DRep by id. */
   getDrep(drepId: string): Promise<DrepData>;
 
-  /**
-   * Get Account Data
-   * @param accountId account id
-   * @returns {Promise<AccountData>} account data
-   */
+  /** Account by stake address. */
   getAccount(accountId: string): Promise<AccountData>;
 
-  /**
-   * Get Asset Info (supply, mint history, CIP-25 + CIP-26 metadata)
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @returns {Promise<AssetInfo>} canonical asset info
-   */
+  /** Asset info (supply, mint history, CIP-25 + CIP-26 metadata); unit = policyId + assetNameHex. */
   getAssetInfo(unit: string): Promise<AssetInfo>;
 
   /**
-   * Get latest mint/burn events for an asset (most recent first).
-   * Optional — Ogmios doesn't expose this. Blockfrost lacks block timestamps;
-   * Koios includes block_time per entry.
-   * @param unit policyId + assetNameHex (concatenated hex)
-   * @param limit max number of events (default 100)
-   * @returns {Promise<AssetHistoryEntry[]>} list of mint/burn events
+   * Latest mint/burn events for an asset (most recent first; limit default 100).
+   * Optional — Ogmios doesn't expose this. Blockfrost lacks block timestamps; Koios has block_time per entry.
    */
   getAssetHistory?(unit: string, limit?: number): Promise<AssetHistoryEntry[]>;
 
-  /**
-   * Get Protocol Parameters
-   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
-   */
+  /** Current protocol parameters. */
   getProtocolParameters(): Promise<LedgerProtocolParameters>;
 
-  /**
-   * Submit a signed transaction to the network
-   * @param signedTxCbor signed transaction in CBOR hex format
-   * @returns {Promise<string>} transaction hash
-   */
+  /** Submit a signed transaction (CBOR hex); returns the tx hash. */
   submitTransaction(signedTxCbor: string): Promise<string>;
 
   /**
-   * Get transaction hashes for an address (lightweight — no full tx details).
-   * Used by the indexer to separate hash listing from detail fetching.
-   * Optional: falls back to getAddressTransactions() + map to hashes if not implemented.
-   * @param address bech32 address
-   * @param limit maximum number of transaction hashes to return
-   * @returns {Promise<string[]>} list of transaction hashes (most recent first)
+   * Most recent tx hashes of an address (no details).
+   * Optional — falls back to getAddressTransactions() mapped to hashes.
    */
   getAddressTransactionHashes?(address: string, limit: number): Promise<string[]>;
 
   /**
-   * Batch fetch multiple transactions by hash.
-   * Koios implements natively via POST /tx_info; Blockfrost uses concurrency-limited parallel calls.
-   * Optional: falls back to individual getTransaction() calls if not implemented.
-   * @param txHashes array of transaction hashes (hex)
-   * @returns {Promise<Map<string, Transaction>>} map of txHash -> Transaction
+   * Transactions by hash, as a map txHash -> Transaction.
+   * Optional — falls back to individual getTransaction() calls.
    */
   getTransactionsBatch?(txHashes: string[]): Promise<Map<string, Transaction>>;
 
   /**
-   * Get UTxOs across all bech32 addresses sharing a 28-byte payment credential
-   * (key hash or script hash). Returns UTxOs with their owning bech32 address.
-   * Optional — only Koios implements this natively (`POST /credential_utxos`).
+   * UTxOs across all bech32 addresses sharing a 28-byte payment credential (key or script
+   * hash), each with its owning address. Optional — only Koios has this natively.
    * @param credHash 28-byte payment credential as 56-char lowercase hex
-   * @returns {Promise<UTxO[]>} list of UTxOs across all bech32 forms
    */
   getCredentialUtxos?(credHash: string): Promise<UTxO[]>;
 }
 
-/**
- * Extended backend interface for backends that support transaction evaluation (e.g., Ogmios)
- */
+/** Backend that can evaluate script execution units (Ogmios). */
 export interface EvaluatingBackend extends CardanoBackend {
-  /**
-   * Evaluate transaction script execution units
-   * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns evaluation results with validator and budget
-   */
+  /** Evaluate the script execution units of an unsigned transaction (CBOR hex). */
   evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]>;
 }
 
-/**
- * Type guard to check if a backend supports transaction evaluation
- * @param backend - The backend to check
- * @returns true if the backend supports evaluateTransaction
- */
+/** Type guard: does this backend support transaction evaluation? */
 export function isEvaluatingBackend(backend: CardanoBackend): backend is EvaluatingBackend {
   return typeof (backend as EvaluatingBackend).evaluateTransaction === 'function';
 }
 
 // -----------------------------------------------------
-// Chain crawler / pre-sync (v2.0) — forward iteration
+// Chain crawler / pre-sync — forward iteration
 // -----------------------------------------------------
 
 /** A chain position the crawler can start from, stream to, or roll back to. */
@@ -240,16 +140,14 @@ export interface ChainPoint {
 export interface ChainSyncCallbacks {
   /**
    * A new block (with its full transaction list) extends the chain.
-   * @param tip the node's current chain tip, when the protocol supplies it — lets the
-   *            consumer track sync progress / detect being caught up
+   * @param tip the node's current chain tip when the protocol supplies it (sync progress)
    */
   rollForward(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<void>;
   /** The chain rolled back to `point` (or to genesis). All blocks after it are abandoned. */
   rollBackward(point: ChainPoint | 'origin'): Promise<void>;
   /**
-   * A message-handler error stalled the stream (mapping failure, callback throw). The
-   * stream stops requesting further blocks; the consumer should record the error and
-   * close/restart. Optional — without it such errors are only logged.
+   * A message-handler error stalled the stream; no further blocks are requested and the
+   * consumer should record the error and close/restart. Optional — otherwise only logged.
    */
   onError?(err: unknown): Promise<void>;
 }
@@ -261,21 +159,14 @@ export interface ChainSyncHandle {
 }
 
 /**
- * Backend that can stream the chain forward from a point, emitting ordered
- * rollForward + native rollBackward (reorg) events. Implemented by Ogmios via the
- * chain-synchronization protocol — the crawler's primary, reorg-aware source.
+ * Backend that streams the chain forward from a point, emitting ordered rollForward and
+ * native rollBackward (reorg) events — Ogmios chain-synchronization, the crawler's primary source.
  */
 export interface ChainSyncBackend extends CardanoBackend {
   /**
-   * Open a chain-sync stream starting just after the first of `from` that is still
-   * on the node's chain (or from genesis).
-   * @param from     candidate intersection points, NEWEST FIRST, or 'origin' for a
-   *   fresh sync. Passing ancestors as well as the last-indexed point is what makes
-   *   a reorg that happened while we were disconnected resolvable: the node
-   *   intersects at the last common block and reports it via rollBackward, instead
-   *   of failing the whole stream with "No intersection found".
-   * @param callbacks rollForward / rollBackward handlers
-   * @returns a handle to close the stream
+   * Open a chain-sync stream starting just after the first of `from` still on the node's chain.
+   * @param from intersection candidates NEWEST FIRST (or 'origin'); include ancestors of the
+   *   last-indexed point so a reorg during a disconnect resolves via rollBackward instead of "No intersection found"
    */
   openChainSync(from: ChainPoint[] | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle>;
 }
@@ -286,9 +177,8 @@ export function isChainSyncBackend(backend: CardanoBackend): backend is ChainSyn
 }
 
 /**
- * A backend that can hand out the whole UTxO set as of a recent chain point (a node via
- * Ogmios `queryLedgerState/utxo` after `acquireLedgerState`). Used once, by the
- * crawler.utxoSet snapshot import; the point must lie inside the node's volatile window.
+ * Backend that returns the whole UTxO set as of a chain point (Ogmios `queryLedgerState/utxo`
+ * after `acquireLedgerState`); the point must lie inside the node's volatile window.
  */
 export interface LedgerStateBackend extends CardanoBackend {
   queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]>;
@@ -299,23 +189,20 @@ export function isLedgerStateBackend(backend: CardanoBackend): backend is Ledger
 }
 
 /**
- * Backend that can walk the chain forward by pagination (no live node). The
- * crawler's fallback source when no Ogmios chain-sync is available. Reorgs are
- * detected by the crawler via parent-hash mismatch (not delivered natively).
+ * Backend that walks the chain forward by pagination (no live node) — the crawler's fallback
+ * source. Reorgs are not delivered natively; the crawler detects them via parent-hash mismatch.
  */
 export interface PaginatingBackend extends CardanoBackend {
   /**
-   * Optional: what the crawl wants per block beyond inputs/outputs (crawler.certificates).
-   * A backend that pays per payload (Koios `_certs`/`_withdrawals`) only asks when told to.
+   * Optional: what the crawl wants per block beyond inputs/outputs. A backend that pays per
+   * payload (Koios `_certs`/`_withdrawals`) only asks when told to.
    */
   configureCrawl?(options: { certificates: boolean }): void;
   /** Fetch a block by its height. */
   getBlockByHeight(height: number): Promise<BlockData>;
   /**
    * Fetch up to `count` blocks immediately following `afterHash`, in chain order.
-   * @param afterHeight optional height of `afterHash` when the caller already knows it
-   *                    (the crawler's cursor does) — lets height-listing backends
-   *                    (Koios) skip a hash→height resolution round-trip
+   * @param afterHeight height of `afterHash` when known — lets height-listing backends skip a hash→height round-trip
    */
   getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]>;
   /** Fetch the full transaction list of a block, in block order. */
@@ -331,14 +218,9 @@ export function isPaginatingBackend(backend: CardanoBackend): backend is Paginat
 }
 
 /**
- * Backend that can enumerate the full stake-pool and DRep set and fetch them in batches —
- * what the crawler's epoch-boundary snapshots need (v2.0 analytics coverage).
- *
- * Koios only, and deliberately so: it lists ids (`/pool_list`, `/drep_list`) and resolves
- * them in batches (`POST /pool_info`, `POST /drep_info`), which turns a mainnet snapshot of
- * ~3 200 pools into a handful of requests. Blockfrost can list ids but has no batch info
- * endpoint, so the same snapshot would be thousands of single requests — the snapshots stay
- * off rather than being served that way (same rule as GetUTxOsByCredential).
+ * Backend that enumerates the full stake-pool and DRep set and resolves them in batches
+ * (crawler epoch snapshots). Koios only: `/pool_list` + `POST /pool_info` make a mainnet
+ * snapshot a handful of requests; Blockfrost has no batch info endpoint (thousands of calls).
  */
 export interface EnumeratingBackend extends CardanoBackend {
   /** All known stake-pool ids (bech32). */

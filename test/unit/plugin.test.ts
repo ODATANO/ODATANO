@@ -10,14 +10,8 @@ import security from '../../xs-security.json';
 const cdsBus = cds as unknown as EventEmitter;
 
 /**
- * Plugin bootstrap contract:
- * `src/plugin.ts` registers a `served` handler that initializes the core via
- * dynamic import. If that initialization throws, the failure must be swallowed
- * (logged only) so a host CAP app never crashes because of a plugin error.
- *
- * These tests exercise the `served` handler in isolation by mocking
- * `src/index` to throw from `initialize()`, then emitting `served` and
- * asserting the promise resolves without rejecting.
+ * Plugin bootstrap contract: the `served` handler in src/plugin.ts must swallow (log only)
+ * a failing initialize() so a host CAP app never crashes. Exercised by mocking src/index.
  */
 
 describe('src/plugin.ts — bootstrap fault tolerance', () => {
@@ -43,9 +37,8 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
     expect(packageJson.overrides.esbuild).toBe('0.28.1');
     expect(packageJson.overrides.ws).toBe('7.5.11');
     expect(routerPackageJson.dependencies['@sap/approuter']).toBe('22.0.3');
-    // The router must NOT depend on the root package: a `file:../..` dependency
-    // makes the MTA production install run the root `prepare` build without
-    // devDependencies (cds-typer missing) — removed for 2.0.0.
+    // The router must not depend on the root package: a `file:../..` dependency makes
+    // the MTA production install run the root `prepare` build without devDependencies.
     expect((routerPackageJson.dependencies as Record<string, string | undefined>)['@odatano/core']).toBeUndefined();
     expect((routerPackageJson.dependencies as Record<string, string | undefined>).odatano).toBeUndefined();
     expect(routerPackageJson.overrides['form-data']).toBe('4.0.6');
@@ -65,8 +58,7 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
       name: 'CardanoAdmin',
       'scope-references': expect.arrayContaining(['$XSAPPNAME.Admin']),
     }));
-    // Least privilege (review 2026-08-08): CardanoUser must NOT carry the Admin
-    // scope — operational control (crawler/worker) is CardanoAdmin-only.
+    // Least privilege: CardanoUser must not carry the Admin scope — crawler/worker control is CardanoAdmin-only.
     const cardanoUser = (security['role-templates'] as Array<{ name: string; 'scope-references': string[] }>)
       .find((t) => t.name === 'CardanoUser');
     expect(cardanoUser).toBeDefined();
@@ -110,10 +102,8 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
     }));
     await import('../../src/plugin');
 
-    // The shutdown handler short-circuits when `initialized` is false; this
-    // guards against accidental cleanup work that would crash a host app on
-    // graceful shutdown after a failed init. cds.emit may return a non-Promise
-    // when no async handler runs, so we wrap defensively.
+    // The shutdown handler short-circuits when never initialized. cds.emit may return
+    // a non-Promise when no async handler runs, hence Promise.resolve.
     let caught: unknown;
     try {
       await Promise.resolve(cdsBus.emit('shutdown'));

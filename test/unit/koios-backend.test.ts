@@ -216,7 +216,7 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getAddressTransactions(TEST_ADDR, 2);
 
-      // newest two (heights 300, 200) — previously slice(0,2) returned a,c (arbitrary)
+      // newest two (heights 300, 200)
       expect(batchSpy).toHaveBeenCalledWith(['c'.repeat(64), 'b'.repeat(64)]);
       expect(result.map(t => t.hash)).toEqual(['c'.repeat(64), 'b'.repeat(64)]);
     });
@@ -239,9 +239,8 @@ describe('KoiosBackend', () => {
 
   describe('not found and fallback branches', () => {
     it('should throw when getBlock receives empty results after retry', async () => {
-      // fetchWithRetryOnEmpty does 1 initial call + 3 retries = 4 attempts.
-      // Previous .times(2) let the 3rd/4th attempts hit nock no-match and leak
-      // unhandled async errors into later tests via their setTimeout callbacks.
+      // fetchWithRetryOnEmpty does 1 initial call + 3 retries = 4 attempts; fewer interceptors
+      // would leak no-match errors from the retries' setTimeout callbacks into later tests.
       const blockInfoScope = nock(KOIOS_BASE_URL)
         .post('/api/v1/block_info')
         .times(4)
@@ -267,7 +266,7 @@ describe('KoiosBackend', () => {
     });
 
     it('should throw when latest block tip is empty after retry', async () => {
-      // 1 initial + 3 retries. See note on getBlock test above re: leak into later tests.
+      // 1 initial + 3 retries, all intercepted
       const tipScope = nock(KOIOS_BASE_URL)
         .get('/api/v1/tip')
         .times(4)
@@ -311,8 +310,8 @@ describe('KoiosBackend', () => {
     const DREP_ID = 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0';
     const DREP_HEX = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
 
-    // New Koios schema (observed 2026-07): drep_status/active/expires_epoch_no
-    // replaced expired/retired/last_active_epoch.
+    // Newer Koios drep_info schema: drep_status/active/expires_epoch_no instead of
+    // expired/retired/last_active_epoch.
     const newSchemaRow = {
       drep_id: DREP_ID,
       hex: DREP_HEX,
@@ -385,8 +384,7 @@ describe('KoiosBackend', () => {
     });
 
     it('should retry an instance-specific PostgREST 400 (42703) and succeed', async () => {
-      // Real-world case: one Koios LB instance serves a half-migrated SQL
-      // function while the others are healthy — the retry lands on a healthy one.
+      // One Koios LB instance can serve a half-migrated SQL function while the others are healthy.
       const scope = nock(KOIOS_BASE_URL)
         .post('/api/v1/drep_info')
         .reply(400, { code: '42703', details: null, hint: null, message: 'column dc.live_deleg_count does not exist' })
@@ -786,7 +784,7 @@ describe('KoiosBackend', () => {
       expect(result[0].inlineDatum).toBeNull();
     });
 
-    it('extracts script CBOR bytes from the extended reference_script OBJECT (v1.6.1 refScript)', async () => {
+    it('extracts script CBOR bytes from the extended reference_script OBJECT', async () => {
       const scriptBytes = '5876010100' + 'ab'.repeat(40); // full CBOR-wrapped script hex (>56 chars)
       nock(KOIOS_BASE_URL)
         .post('/api/v1/address_utxos')
@@ -798,7 +796,7 @@ describe('KoiosBackend', () => {
             value: '10000000',
             datum_hash: null,
             inline_datum: null,
-            // _extended:true shape — the old `as string` cast handed this object downstream
+            // _extended:true shape: reference_script is an object, not a string
             reference_script: {
               hash: 'd'.repeat(56),
               size: 42,
@@ -1158,9 +1156,7 @@ describe('KoiosBackend', () => {
       expect(await backend.isUtxoUnspent(TX, 1.5)).toBe(false);
     });
   });
-  // =========================================================================
   // Crawler analytics coverage: mint field + pool/DRep enumeration
-  // =========================================================================
   describe('getBlockTransactions — assets_minted', () => {
     const BLOCK = 'b'.repeat(64);
     const TX = 'c'.repeat(64);

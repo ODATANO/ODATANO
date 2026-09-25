@@ -1,8 +1,6 @@
 /**
- * Unit tests for ExtractPaymentKeyHash decoding logic
- *
- * Exercises the pure bech32 decoding that the handler runs after
- * isValidBech32Address passes. No cds / no backend.
+ * ExtractPaymentKeyHash: the pure bech32 decoding the handler runs after
+ * isValidBech32Address passes. No cds, no backend.
  */
 
 import { bech32 } from 'bech32';

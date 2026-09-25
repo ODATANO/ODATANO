@@ -1,29 +1,13 @@
 /**
- * Integration tests for the wallet worker (v2.0).
- *
- * These cover exactly what the unit suites CANNOT reach, because they run the
- * real CAP server against the real SQLite schema:
- *
- *  - the **deployed** UNIQUE constraint on (walletId, kind, dedupKey). The unit
- *    tests simulate it in an in-memory fake, so dropping `@assert.unique.dedup`
- *    from db/schema.cds would leave every unit test green while idempotency —
- *    the thing that prevents a duplicate payment — silently disappears.
- *  - **real transactions**: insertJob runs on the caller's tx while the worker's
- *    transitions run in their own short ones (the two NIGHTGATE lessons). The
- *    unit fake has no transactions at all, so a commit-ordering or pooling bug
- *    is invisible there.
- *  - the **OData layer**: row-level @restrict, function-vs-action, real users.
- *
- * No network and no funds: the CardanoClient and the CardanoIndexer's build are
- * stubbed, and the dispatch loop is driven manually. Signing, confirmation depth
- * and reorgs against a live chain stay in scripts/testing/wallet-worker-e2e-preview.ts.
+ * Wallet worker against the real CAP server and SQLite: the deployed UNIQUE
+ * (walletId, kind, dedupKey) constraint, real transactions, and the OData layer
+ * (row-level @restrict, functions vs actions). Chain I/O is stubbed, ticks are manual.
  */
 
 import cds from '@sap/cds';
 import { Cbor, CborArray, CborMap } from '@harmoniclabs/cbor';
 import { toHex } from '@harmoniclabs/uint8array-utils';
-// require() shares the native module graph with the booted CAP server
-// (see signing-services.test.ts for the rationale).
+// Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext } =
   require('../../srv/server') as typeof import('../../srv/server');
 const { startWalletWorker, stopWalletWorker, getWalletWorker } =
@@ -46,10 +30,7 @@ const REQUEST = JSON.stringify({
   lovelaceAmount: '2000000',
 });
 
-/**
- * The SIGNER is real (built from the configured key), so the build stub must return
- * something it can actually parse and merge a witness into: [ body(map), witnesses(map) ].
- */
+/** The signer is real, so the build stub must return parseable CBOR: [ body(map), witnesses(map) ]. */
 const MINIMAL_UNSIGNED_TX = toHex(Cbor.encode(new CborArray([new CborMap([]), new CborMap([])])));
 
 /** Build and submit are stubbed — this suite is about persistence, not chain I/O. */
@@ -139,9 +120,8 @@ describe('wallet worker (integration: real CAP + real SQLite)', () => {
       { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: key }, asAlice);
     expect(first.data.deduplicated).to.equal(false);
 
-    // Bypass the read fast-path: insert a second row with the same claim directly.
-    // The UNIQUE(walletId, kind, dedupKey) constraint must reject it. The claim
-    // is scoped to the submitting principal (alice), see dedupKeyFor.
+    // Bypass the read fast-path: a second row with the same claim must be rejected by
+    // UNIQUE(walletId, kind, dedupKey). The claim is scoped to the principal (dedupKeyFor).
     const { dedupKeyFor } = require('../../srv/blockchain/wallet-worker/job-store') as typeof import('../../srv/blockchain/wallet-worker/job-store');
     let rejected = false;
     try {
@@ -242,7 +222,7 @@ describe('wallet worker (integration: real CAP + real SQLite)', () => {
     const job = await GET(`/odata/v4/cardano-worker/GetJobStatus(jobId=${submitted.jobId})`, asAlice);
     expect(job.data.jobId).to.equal(submitted.jobId);
 
-    // POSTing to a function is a 405 — the mistake the docs used to teach.
+    // POSTing to a function is a 405.
     const wrongVerb = await POST('/odata/v4/cardano-worker/GetWorkerStatus', {}, asAlice)
       .catch((err: { response: { status: number } }) => err.response);
     expect(wrongVerb.status).to.be.oneOf([404, 405]);

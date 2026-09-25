@@ -1,16 +1,12 @@
 /**
- * Wallet worker — engine (W3/W6).
- * Drives executeJob/tick against the stateful in-memory CQL fake with mocked
- * client/indexer/signer. Covers: happy path, per-wallet serialization (a
- * submitted job blocks the queue until confirmation), transient retry with
- * backoff, deterministic terminal failure, "already known" submit tolerance,
- * and the durable pre-submit state (`submitting`) with its chain reconciliation.
+ * Wallet worker engine: executeJob/tick over an in-memory CQL fake with mocked client/indexer/signer.
+ * Per-wallet serialization, retry with backoff, terminal failure, the durable `submitting` state
+ * and its chain reconciliation.
  */
 
 vi.mock('@sap/cds', () => {
-  // Query data lives under _q so the chaining METHODS (where/orderBy/columns)
-  // can't clobber the captured where/orderBy DATA of the same name — the
-  // original flat shape silently matched every row.
+  // Query data lives under `_q` so the chaining methods (where/orderBy/columns)
+  // cannot clobber the captured where/orderBy data of the same name.
   const chain = (data: Record<string, unknown>) => ({
     _q: data,
     where: (w: unknown) => chain({ ...data, where: w }),
@@ -745,7 +741,7 @@ describe('engine: dispatch mapping and failure classification', () => {
   });
 });
 
-describe('engine: per-wallet serialization (design §6)', () => {
+describe('engine: per-wallet serialization', () => {
   async function runTick(worker: CardanoWalletWorker): Promise<void> {
     await (worker as unknown as { tick: () => Promise<void> }).tick();
     await Promise.allSettled([...(worker as unknown as { executionPromises: Set<Promise<void>> }).executionPromises]);

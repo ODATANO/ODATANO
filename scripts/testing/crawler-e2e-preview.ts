@@ -1,20 +1,10 @@
 /**
- * Chain-crawler end-to-end on preview: pre-sync the last N blocks.
+ * Chain-crawler end-to-end on preview: boots a server with the crawler enabled,
+ * pre-syncs the last N blocks, then verifies contiguity, sampled block data
+ * against the backend, and the tx/input/output rows.
  *
  *   npx tsx scripts/testing/crawler-e2e-preview.ts
  *   npx tsx scripts/testing/crawler-e2e-preview.ts --blocks 100 --source pagination
- *
- * Self-contained — picks a start point N blocks behind the tip, boots its own
- * server with the crawler enabled, follows the cursor, and shuts down again.
- *
- * Verification is deliberately not "some rows appeared": after the sync it
- *  - checks the crawled heights are CONTIGUOUS (a gap means a lost block),
- *  - re-fetches sample blocks from the backend and compares hash, slot, tx count
- *    against what was persisted (proves the data is right, not just present),
- *  - confirms the transactions of those blocks landed with their inputs/outputs.
- *
- * The crawled range is authoritative (non-temporal, no TTL), so this also shows
- * what a consumer would serve locally instead of hitting a backend per request.
  */
 
 import 'dotenv/config';
@@ -77,10 +67,8 @@ function query<T = Record<string, unknown>>(sql: string, ...params: unknown[]): 
 }
 
 /**
- * Drop the cursor so the configured start point actually applies. Without this a
- * second run resumes where the previous one stopped (by design — the crawler is
- * cursor-resumable), and the "crawl the last N blocks" range would be a no-op.
- * Only touches CardanoSyncState; crawled blocks stay and are re-UPSERTed.
+ * Drops the cursor so the configured start point applies; otherwise the crawler
+ * resumes where the last run stopped. Crawled blocks stay and are re-UPSERTed.
  */
 function resetCursor(): void {
   const db = new DatabaseSync(DB_FILE);
@@ -88,9 +76,8 @@ function resetCursor(): void {
 }
 
 /**
- * Chain-sync is only available when an Ogmios BACKEND exists — a reachable Ogmios
- * process is not enough, the capability guard looks at the configured backends.
- * So if Ogmios answers but BACKENDS omits it, add it for the child process.
+ * Chain-sync needs Ogmios in BACKENDS, not just a reachable process — add it
+ * for the child when Ogmios answers.
  */
 async function resolveBackends(): Promise<{ backends: string; ogmiosUp: boolean }> {
   const configured = (process.env.BACKENDS ?? 'blockfrost').split(',').map((b) => b.trim()).filter(Boolean);
@@ -239,9 +226,8 @@ async function main() {
     log('reorgs logged   :', reorgs);
 
     // ---- 5. Analytics coverage (mint/burn + asset catalogue) ---------------
-    // Acceptance for the analytics FR: after a crawl, and with no API traffic
-    // against this instance, the catalogue must be complete for the range.
-    // one row per amount line, so `lovelace` is in there too — not a catalogue entry
+    // After a crawl, with no API traffic, the catalogue must cover every unit in
+    // the range. `lovelace` shows up as an amount line but is no catalogue entry.
     const units = query<{ unit: string }>(
       "select distinct unit from odatano_cardano_TransactionOutputAssets where unit <> 'lovelace'");
     const catalogued = query<{ c: number }>('select count(*) c from odatano_cardano_Assets')[0].c;

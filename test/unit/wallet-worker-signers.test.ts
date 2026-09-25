@@ -1,8 +1,6 @@
 /**
- * Wallet worker — signers + crypto (W2/W6).
- * Real crypto: SoftwareWorkerSigner key derivation, enterprise address,
- * raw-CBOR vkey-witness merge (verified with verifyEd25519Signature_sync),
- * AES-256-GCM roundtrip, and the createWorkerSigner config guardrails.
+ * Wallet worker signers with real crypto: SoftwareWorkerSigner key derivation, enterprise address,
+ * raw-CBOR vkey-witness merge, AES-256-GCM roundtrip, and the createWorkerSigner guardrails.
  */
 
 vi.mock('@sap/cds', () => {

@@ -1,109 +1,54 @@
-/** 
- * Error codes used throughout the ODATANO backend 
- */
+/** Error codes used throughout the backend. */
 export const ERROR_CODES = {
-  /**
-   * 400 – Invalid input
-   * Indicates that the input provided by the client is invalid (malformed address, invalid transaction hash, etc.)
-   */
+  /** 400: malformed client input (address, tx hash, ...). */
   INVALID_INPUT: 'ODATANO_INVALID_INPUT',
 
-  /**
-   * 403 – Caller lacks the required role
-   * Indicates the caller is authenticated but not authorized for the operation
-   * (e.g. HSM-backed signing without the configured hsm.requiresRole)
-   */
+  /** 403: authenticated but lacking the required role (e.g. hsm.requiresRole). */
   FORBIDDEN: 'ODATANO_FORBIDDEN',
 
-  /**
-   * 404 – Data not found
-   * Indicates that the requested resource could not be found (Empty result set Address with no UTxOs, Transaction hash not found, etc.)
-   */
+  /** 404: requested resource not found (unknown tx hash, address without UTxOs, ...). */
   NOT_FOUND: 'ODATANO_NOT_FOUND',
 
-  /**
-   * 400 – Insufficient funds/assets
-   * Indicates that the address does not have enough funds or assets to complete the transaction
-   */
+  /** 400: address lacks the funds or assets for the transaction. */
   INSUFFICIENT_FUNDS: 'ODATANO_INSUFFICIENT_FUNDS',
 
-  /**
-   * 400 – Transaction validation failed
-   * Indicates that the transaction failed validation (wrong signature, tampered CBOR, etc.)
-   */
+  /** 400: decoded transaction failed validation (wrong signature, tampered CBOR, ...). */
   TX_VALIDATION_FAILED: 'ODATANO_TX_VALIDATION_FAILED',
 
-  /**
-   * 400 – Transaction CBOR parse failed
-   * Indicates that the provided transaction CBOR could not be decoded
-   * (malformed bytes, truncated, not a Cardano Conway tx). Distinct from
-   * TX_VALIDATION_FAILED which applies to decoded-but-invalid transactions.
-   */
+  /** 400: transaction CBOR could not be decoded (malformed, truncated, not a Conway tx). */
   TX_PARSE_FAILED: 'ODATANO_TX_PARSE_FAILED',
 
-  /**
-   * 400 – Plutus script validation failed
-   * Indicates that the ledger cleanly rejected the transaction due to script
-   * evaluation — e.g. PlutusFailure, CekError, overspent budget, script hash
-   * mismatch. Distinct from provider outages (503) and generic tx validation.
-   */
+  /** 400: ledger rejected the tx on script evaluation (PlutusFailure, CekError, budget, hash mismatch). */
   SCRIPT_VALIDATION_FAILURE: 'ODATANO_SCRIPT_VALIDATION_FAILURE',
 
-  /**
-   * 409 – Transaction already submitted
-   * Indicates that the transaction has already been submitted (duplicate/replay)
-   */
+  /** 409: transaction already submitted (duplicate / replay). */
   TX_ALREADY_SUBMITTED: 'ODATANO_TX_ALREADY_SUBMITTED',
 
-  /**
-    * 429 – Rate limiting
-    * indicates temporary unavailability
-    */
+  /** 429: provider rate limit hit. */
   PROVIDER_RATE_LIMITED: 'ODATANO_PROVIDER_RATE_LIMITED',
 
-  /**
-   * 503 – Upstream / connectivity 
-   * Indicates that the Cardano data provider is currently unavailable
-   */
+  /** 503: Cardano data provider unavailable. */
   PROVIDER_UNAVAILABLE: 'ODATANO_PROVIDER_UNAVAILABLE',
 
-  /**
-   * 500 – Internal fallback
-   * Indicates an unexpected internal error
-   */
+  /** 500: unexpected internal error. */
   INTERNAL_ERROR: 'ODATANO_INTERNAL_ERROR',
 
-  /**
-   * 503 – HSM unavailable
-   * Indicates the HSM device or session is not available
-   */
+  /** 503: HSM device or session not available. */
   HSM_UNAVAILABLE: 'ODATANO_HSM_UNAVAILABLE',
 
-  /**
-   * 500 – HSM signing failed
-   * Indicates the HSM signing operation failed
-   */
+  /** 500: HSM signing operation failed. */
   HSM_SIGNING_FAILED: 'ODATANO_HSM_SIGNING_FAILED',
 
-  /**
-   * 400 – HSM not configured
-   * Indicates HSM signing was requested but HSM is not configured
-   */
+  /** 400: HSM signing requested but HSM not configured. */
   HSM_NOT_CONFIGURED: 'ODATANO_HSM_NOT_CONFIGURED',
 
   /**
-   * 503 – Detached transaction could not begin in time
-   * The sign-service could not acquire a pooled DB connection for one of its
-   * detached bookkeeping transactions. Most common cause: an in-process
-   * consumer awaits SubmitVerifiedTransaction/SignAndSubmitWithHsm while its
-   * own request transaction holds the (single) pooled sqlite connection —
-   * see docs/KNOWN_ISSUES.md issue 11.
+   * 503: a detached bookkeeping transaction could not acquire a pooled DB connection in time,
+   * typically because an in-process caller awaits the action while its own request tx holds the single sqlite connection.
    */
   NESTED_TX_TIMEOUT: 'ODATANO_NESTED_TX_TIMEOUT',
 } as const;
 
-/** 
- * EnumType representing all possible error codes
- */
+/** Union of all error code values. */
 export type ErrorCode =
   (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

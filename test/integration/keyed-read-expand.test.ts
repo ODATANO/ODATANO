@@ -1,13 +1,6 @@
 /**
- * Integration tests for KNOWN_ISSUES #13: keyed reads on index-on-miss
- * entities must honour the client's `$expand` / `$select`.
- *
- * `indexOnMissRead` used to answer `Transactions('<hash>')?$expand=inputs,outputs`
- * with the bare row (SELECT.one by key, or the indexer's return value on a
- * miss) — the client's `req.query` only ran on the un-keyed branch, so every
- * `$expand` / `$select` on a keyed read silently degraded to the full bare row.
- * Now the keyed branch indexes on a miss and then runs `req.query`, exactly
- * like the collection form.
+ * Keyed reads on index-on-miss entities honour the client's `$expand` / `$select`:
+ * the keyed branch indexes on a miss and then runs `req.query`, like the collection form.
  */
 
 import cds from '@sap/cds';
@@ -32,7 +25,7 @@ const SVC = '/odata/v4/cardano-odata';
 /** Seeded (cache-hit) transaction — never touches the backend. */
 const SEEDED_TX_HASH = '1111222233334444555566667777888899990000111122223333444455556666';
 
-describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
+describe('Keyed reads honour $expand / $select', () => {
   const test = cds.test(__dirname + '/../../');
 
   beforeAll(async () => {
@@ -115,10 +108,8 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
     expect(data.outputs).toHaveLength(2);
     expect(data.outputs.map((o: any) => o.outputIndex).sort()).toEqual([0, 1]);
     expect(data.outputs.find((o: any) => o.outputIndex === 0).address_address).toBe(TEST_FIXTURES.emptyAddress);
-    // NB: CAP 10 renders `@odata.context` as `$metadata#Transactions/$entity` for
-    // keyed reads regardless of $expand (verified against a plain CAP service) —
-    // the `…(inputs(),outputs())/$entity` form mentioned in KNOWN_ISSUES #13 is
-    // not something CAP emits, so it is deliberately NOT asserted here.
+    // CAP 10 renders `@odata.context` as `$metadata#Transactions/$entity` for keyed
+    // reads regardless of $expand, so the context is deliberately not asserted.
   });
 
   it('keyed read with nested $select inside $expand applies it', async () => {
@@ -135,7 +126,7 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
     expect(status).toBe(200);
     expect(data.hash).toBe(SEEDED_TX_HASH);
     expect(data.fee).toBeDefined();
-    // not selected → not returned (used to come back as the full row)
+    // not selected → not returned
     expect(data.blockHash).toBeUndefined();
     expect(data.size).toBeUndefined();
   });
@@ -190,14 +181,7 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
   });
 
   // ==========================================================================
-  // TEMPORAL entity (Addresses) — the slice written during the request must be
-  // visible to the $expand re-read (temporal window widening in indexOnMissRead)
-  // ==========================================================================
-
-  // ==========================================================================
   // COMPOSITE key (TransactionMetadata: id + tx_hash) — both keys must filter.
-  // The old handler filtered on the factory's single `reqKeyField` (tx_hash)
-  // only, so ANY id returned the tx's FIRST metadata row.
   // ==========================================================================
 
   describe('composite key: TransactionMetadata(id, tx_hash)', () => {
@@ -232,11 +216,8 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
       expect(data.payload).toBeUndefined();
     });
 
-    // KNOWN_ISSUES #15: the handler used to fall back to the row SELECT.one
-    // found for the factory's single key whenever the client's query matched
-    // nothing — so a request for a label the tx does not carry was answered
-    // with a SIBLING label and a 200. The client's query is now the only
-    // authority; no fallback row.
+    // A label the tx does not carry must be a 404: the client's query is the only
+    // authority, there is no fallback row.
     it('a label that does not exist on this tx yields 404, not a sibling row', async () => {
       setupTxInfoMock([]);
       const res = await test
@@ -277,9 +258,8 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
       const { status, data } = await test.get(`${SVC}/Addresses('${ADDR}')?$expand=utxos`);
       expect(status).toBe(200);
       expect(data.address).toBe(ADDR);
-      // Without the temporal-window widening the freshly indexed slice falls
-      // outside the session's [now, now+1ms) window and the re-read returns
-      // nothing → the handler would degrade to the bare row (no utxos here).
+      // Without the temporal-window widening the fresh slice falls outside the session's
+      // [now, now+1ms) window and the handler would degrade to the bare row.
       expect(Array.isArray(data.utxos)).toBe(true);
       expect(data.utxos).toHaveLength(mockUtxosAdaOnly.length);
     });
@@ -316,9 +296,8 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
     });
   });
   describe('temporal entity: Assets — the crawler\'s bare catalogue row', () => {
-    // A bare row written by the crawler is stamped validFrom === validTo, so it is
-    // invisible to a keyed read and the lazy path still enriches it. This is what the
-    // whole "bare catalogue" design rests on.
+    // A bare crawler row is stamped validFrom === validTo, so a keyed read never serves
+    // it as is and the lazy path enriches it.
     const POLICY = 'a1'.repeat(28);
     const NAME_HEX = Buffer.from('SUNDAE').toString('hex');
     const UNIT = POLICY + NAME_HEX;

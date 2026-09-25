@@ -1,5 +1,31 @@
 # Changelog
 
+## [v2.0.0-rc.20] - certificate backfill over crawled blocks
+
+Certificates and withdrawals can be filled in for blocks crawled before `crawler.certificates` was on.
+
+### Added
+
+- `backfillCertificates(fromSlot, toSlot)` on `CardanoIndexerService` (Admin): a second
+  chain-sync stream (Ogmios) over the already crawled range writes `TransactionCertificates`
+  and `TransactionWithdrawals` only, keyed as the crawl writes them, so a repeat is idempotent.
+  `fromSlot` defaults to the crawl start, `toSlot` to the cursor; `toSlot` may not pass the
+  cursor. The stream intersects at the newest crawled block below `fromSlot` (the crawl
+  start point when there is none) and ends at the first block past `toSlot`. A block the
+  index does not hold is skipped. The crawler may keep running; rows are written per 200
+  blocks. Runs detached; `getStatus().certificateBackfill` reports `{status, fromSlot,
+  toSlot, atSlot, blocks, certificates, withdrawals, startedAt, finishedAt, error}`,
+  process-local (`none` after a restart). One backfill per process at a time.
+- `srv/blockchain/crawler/certificate-backfill.ts` (`backfillCertificates`,
+  `intersectionBefore`); unit tests for the range, the skipped block, the end condition and
+  a stream error.
+
+### Fixed
+
+- Ogmios frame guard: every open chain-sync stream registers its own report callback and
+  removes it on close. A second stream no longer replaces the crawler's callback, so an
+  unparseable frame still halts the crawler's stream with an error.
+
 ## [v2.0.0-rc.19] - crawler-fed ledger state: certificates, outpoints, UTxO set
 
 The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a UTxO set of its own.
@@ -142,9 +168,8 @@ The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a 
 
 - No schema change for `cds deploy`. A plain CREATE INDEX locks the table
   against writes while it builds, so on a large live PostgreSQL create the
-  set once beforehand with CONCURRENTLY (ODATANO ACCESS ships
-  `scripts/odatano-indexes-on-box.sh`, same names); the start is then a
-  no-op. On the hosted box the build took 1 to 7 s per index, 230 MB in
+  set once beforehand with CONCURRENTLY under the same names; the start is
+  then a no-op. On the hosted box the build took 1 to 7 s per index, 230 MB in
   all.
 
 ## [v2.0.0-rc.15] - buffered grant usage counters
@@ -155,7 +180,7 @@ The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a 
   PostgreSQL and HANA. Every admitted call was `calls + 1` on the row
   (grant, day, service, action), awaited before the handler ran, so all calls
   of one grant and action queued on that row's lock: 100 parallel reads
-  through ODATANO ACCESS on one grant landed at 30 to 50 calls per second on
+  through the gateway on one grant landed at 30 to 50 calls per second on
   the hosted preprod box while the reads themselves took milliseconds. The
   deltas are now summed in memory and written by one timer per second, one
   UPDATE (or INSERT) per touched key; a refund of a refused request goes to
@@ -413,9 +438,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent = untouched, explicit `null` = cleared; wallet binding immutable;
   `409 GRANT_REVOKED` on a revoked grant) and `GetGrantUsage(grantId, since,
   until)` (admitted calls per service and action over up to 366 days, from the
-  new `CardanoAgentGrantUsage` counters — run `cds deploy`). Semantics mirror
-  NIGHTGATE's agent grants so a gateway drives both products with one code
-  path. `AGENT_GRANT_ADMIN_RATE_LIMIT` / `agentGrants.adminRateLimit` (default
+  new `CardanoAgentGrantUsage` counters — run `cds deploy`). Semantics match
+  the gateway's peer services, so one client drives them all.
+  `AGENT_GRANT_ADMIN_RATE_LIMIT` / `agentGrants.adminRateLimit` (default
   10/h per principal) now covers all four administration actions.
   `CardanoIndexerService.getLiveness()` answers without credentials
   (`@requires: 'any'`); the Docker `HEALTHCHECK` and compose probe use it.
@@ -575,9 +600,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Keyed reads no longer answer with a row the query excludes.** A keyed read whose query legitimately matched nothing — a composite key whose second value does not match (`TransactionMetadata(id=721,tx_hash='…')` for a label the transaction does not carry), or a `$filter` that excludes the row — fell back to the row found for the entity's main key and returned it with a 200. Such requests now return 404. Affects all keyed reads of `Blocks`, `Epochs`, `Pools`, `Accounts`, `Dreps`, `Assets`, `Addresses`, `Transactions` and `TransactionMetadata`.
 - **Keyed reads honour `$expand` / `$select`.** `GET Transactions('<hash>')?$expand=inputs,outputs` (and every other keyed read of `Blocks`, `Epochs`, `Pools`, `Accounts`, `Dreps`, `Assets`, `Addresses`, `Transactions`, `TransactionMetadata`) returned the bare row and dropped the query options; only the collection form honoured them. Keyed reads now index on a miss and then run the client's own query, so they behave exactly like the collection form. For temporal entities the handler widens the request's validity window before its first DB statement so the slice written during the request is visible to that query (expired slices stay hidden). Composite-key reads (`TransactionMetadata(id=…,tx_hash=…)`) honour both keys.
 - **`cds watch` no longer logs `ERR_MODULE_NOT_FOUND` at startup.** The boot-time re-drive of interrupted deferred submissions used an extensionless dynamic `import()` that tsx cannot resolve, so it never ran from TypeScript sources; compiled builds were unaffected. Now a lazy `require`.
-- Hardening pass from the full-branch review: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
+- Hardening pass: wallet-worker request transformation for all job kinds (shared parsers in `srv/utils/tx-request-parsers.ts`), crawler reorg guards (null-slot fork point, Blockfrost `CHAIN_POINT_MISMATCH` signal, Koios partial-batch rejection), confirmation-depth correctness across rollbacks, multi-instance-safe crash recovery and lease CAS, idempotency-key release for cancelled jobs.
 
-#### Wallet worker — payment safety (pre-RC review)
+#### Wallet worker — payment safety
 
 - **HSM-backed wallet jobs now require the configured signing role.** `SubmitWalletJob` was gated on `authenticated-user` only, so any authenticated account could queue a value transfer with an arbitrary recipient and amount that the server-held HSM key would sign — bypassing the `hsm.requiresRole` gate the synchronous `SignWithHsm` path enforces. The role is now checked against both the instance's wallet config and the registered wallet row (403, new `ODATANO_FORBIDDEN` code).
 - **A crash around submit can no longer cause a duplicate payment.** New durable pre-submit state **`submitting`**: the signed CBOR and its hash are committed *before* the transaction can reach a backend, and the row stays non-terminal so it keeps holding its idempotency key. Interrupted submits are reconciled against the chain — the exact stored bytes are re-submitted, never a rebuild — instead of being failed as `PROCESS_RESTART`, which released the key and let the documented caller retry build and pay a *second* transaction.

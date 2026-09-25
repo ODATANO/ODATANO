@@ -393,7 +393,7 @@ describe('CardanoTransactionBuilder', () => {
       expect(result.unsignedTxCbor).toBe('mock-plutus-spend-tx-cbor');
     });
 
-    it('should carry dataHash and referenceScriptHash into the fabricated script UTxO (M5)', async () => {
+    it('should carry dataHash and referenceScriptHash into the fabricated script UTxO', async () => {
       const scriptTxHash = 'f'.repeat(64);
       const datumHash = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
       const refScriptHash = 'c'.repeat(56);
@@ -439,8 +439,7 @@ describe('CardanoTransactionBuilder', () => {
 
       const fabricated = captured!.utxos.find(u => u.txHash === scriptTxHash);
       expect(fabricated).toBeDefined();
-      // Both fields previously dropped — spending a datum-hash-locked UTxO then
-      // failed with MissingRequiredDatums because the hash never reached the builder.
+      // Without these, spending a datum-hash-locked UTxO fails with MissingRequiredDatums.
       expect(fabricated!.datumHash).toBe(datumHash);
       expect(fabricated!.scriptRef).toBe(refScriptHash);
     });

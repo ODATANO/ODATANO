@@ -29,22 +29,9 @@ const { UPSERT, DELETE } = cds.ql;
 const logger = cds.log('LedgerState');
 
 /**
- * One-off import of the UTxO set at the anchor point that `crawler.utxoSet` builds on.
- * Two sources:
- *
- *  - `ogmios`: `queryLedgerState/utxo` for the whole set, acquired at the crawler's
- *    cursor point (which must lie inside the node's volatile window, i.e. the crawl is at
- *    the tip). Fine on preview/preprod; on mainnet the whole-set query is memory-heavy on
- *    the node, use a file.
- *  - `file`: a `cardano-cli query utxo --whole-utxo --out-file` dump. `.json` is parsed
- *    whole (small networks); `.ndjson` / `.jsonl` is streamed line by line, one entry per
- *    line as `jq -c 'to_entries[]'` emits it (`{"key":"tx#ix","value":{…}}`) or as a
- *    one-key object. The anchor is the tip at dump time (`cardano-cli query tip` before
- *    and after; same hash = valid anchor).
- *
- * Preconditions: the crawler is paused (no active lease) and its cursor is not past the
- * anchor — blocks between cursor and anchor are crawled but not applied, blocks after it
- * are. The tables are truncated first, so a re-import is always a full one.
+ * One-off import of the UTxO set at the anchor `crawler.utxoSet` builds on: from Ogmios
+ * (`queryLedgerState/utxo` at the cursor point) or a `cardano-cli query utxo --whole-utxo`
+ * dump (`.json` parsed whole; `.ndjson`/`.jsonl` streamed, one entry or `{key,value}` per line).
  */
 
 export class UtxoSetImportError extends Error {
@@ -99,16 +86,11 @@ export interface CliUtxoValue {
 }
 
 /**
- * `JSON.parse` for a cardano-cli dump that keeps every integer exact. The cli prints
- * quantities as JSON numbers; a token supply above 2^53 would otherwise be rounded before
- * it ever reaches `String()`. A small scanner quotes every integer literal that sits
- * OUTSIDE a string (string contents, escapes included, pass through untouched), so the
- * value arrives as a string — the entry parser stringifies anyway. Floats keep their JSON
- * meaning; a cli dump has none in value position.
+ * `JSON.parse` for a cardano-cli dump that keeps every integer exact: integer literals outside
+ * strings are quoted before parsing, so a quantity above 2^53 is never rounded.
  */
 export function parseJsonLossless<T = unknown>(text: string): T {
-  // One native pass: a string literal is copied as is, an integer literal outside a string is
-  // quoted, floats keep their JSON meaning (a cli dump has none in value position).
+  // string literals pass through untouched; floats keep their JSON meaning
   const rewritten = text.replace(
     /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
     (m) => (m[0] === '"' || !/^-?\d+$/.test(m) ? m : `"${m}"`),
@@ -253,10 +235,8 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
   }, Math.max(1000, Math.floor(CRAWLER_LEASE_TTL_MS / 3)));
   heartbeat.unref();
   /**
-   * Every write runs through here: the lease is re-taken INSIDE the transaction (an UPDATE
-   * conditioned on `leaseOwner = us`, verified by read-back), so a successor that took the
-   * lease between two batches makes this transaction fail before its writes commit. The
-   * heartbeat flag alone only knows what was true at the last tick.
+   * Every write re-takes the lease INSIDE its transaction (conditional UPDATE + read-back), so
+   * a successor that took the lease between two batches fails this transaction before commit.
    */
   const writeTx = <T>(fn: (tx: CapTransaction) => Promise<T>): Promise<T> =>
     cds.tx(async (tx: CapTransaction) => {

@@ -1,25 +1,7 @@
 /**
- * ORDER BY on PostgreSQL: no NULLS clause for NOT NULL columns.
- *
- * @cap-js/postgres renders every ordering term with an explicit null placement,
- * `ASC NULLS FIRST` and `DESC NULLS LAST`, to give SQLite's and HANA's null
- * order on Postgres too. A Postgres btree index is `ASC NULLS LAST` (read
- * backwards `DESC NULLS FIRST`), the opposite placement, so the planner
- * cannot use an index for such an ORDER BY and sorts the whole table before
- * the LIMIT. CAP orders every `$top` read by the entity key, so on the hosted
- * box `Blocks?$top=1` took 0.8 to 7.6 s over 2M rows in NIGHTGATE and every
- * `$top` on a large ODATANO table sorted the same way (measured 2026-09-23,
- * `ORDER BY "$b".ID ASC NULLS FIRST LIMIT 1`, parallel seq scan + top-N sort).
- *
- * A key column, a `not null` column and a temporal `@cds.valid.from` column
- * (part of the persisted primary key, NOT NULL, but neither `key` nor
- * `notNull` in the linked model) hold no NULL, so the placement is
- * meaningless there and is dropped; the plain `ASC` / `DESC` then matches the
- * primary key and the secondary indexes. Nullable columns keep the clause (the
- * semantics stay SQLite's); an explicit `nulls` on the term is always kept.
- * Installed once at start on the Postgres renderer class; a driver without the
- * hook (or no Postgres driver at all) leaves everything as it is, with a
- * warning when the deployment runs on Postgres.
+ * ORDER BY on PostgreSQL: drop the NULLS clause for columns that cannot be NULL.
+ * @cap-js/postgres renders `ASC NULLS FIRST` / `DESC NULLS LAST`, the opposite of a btree index's
+ * placement, so `$top` reads sorted the whole table; key, `not null` and `@cds.valid.from` columns are exempt.
  */
 import cds from '@sap/cds';
 
@@ -47,8 +29,7 @@ export function installPostgresOrderNulls(): boolean {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     PostgresService = require('@cap-js/postgres/lib/PostgresService');
   } catch (err) {
-    // No Postgres driver in this deployment, or a driver that no longer exposes
-    // the module: silent unless the database IS Postgres.
+    // No loadable Postgres driver: silent unless the database is Postgres.
     const dbKind = String(((cds.env?.requires as Record<string, { kind?: string }> | undefined)?.db)?.kind ?? '');
     if (dbKind === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, ORDER BY keeps the NULLS clause: ${String((err as Error)?.message ?? err)}`);
     return false;

@@ -25,12 +25,9 @@ import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 const logger = cds.log('CardanoWorkerService');
 
 /**
- * CardanoWorkerService handlers — thin control surface over the wallet-worker
- * singleton (srv/blockchain/wallet-worker). Engine logic lives there; this only
- * validates inputs, inserts/reads job rows and starts/stops the worker.
- *
- * Validation rejections happen BEFORE handleRequest (project convention); the
- * job INSERT runs on the request's ambient transaction (NIGHTGATE lesson 1).
+ * CardanoWorkerService handlers: control surface over the wallet-worker singleton
+ * (srv/blockchain/wallet-worker). Validates inputs, inserts/reads job rows, starts/stops
+ * the worker. The job INSERT runs on the request's ambient transaction.
  */
 
 function isAdmin(req: Request): boolean {
@@ -38,11 +35,8 @@ function isAdmin(req: Request): boolean {
 }
 
 /**
- * A job on an HSM-backed wallet spends the same server-held key as the synchronous
- * SignWithHsm path, so it inherits that path's role gate (enforceHsmRole in
- * cardano-sign-service.ts) — 'authenticated-user' alone must not reach the HSM.
- * Returns the role the caller is missing, or null when the wallet is not HSM-backed,
- * no role is configured, or the caller holds it.
+ * HSM-backed wallets inherit the SignWithHsm role gate (enforceHsmRole in the sign service).
+ * Returns the role the caller is missing, or null when not HSM-backed, no role configured, or held.
  */
 function missingHsmRole(req: Request, signerType: string | undefined): string | null {
   if (signerType !== 'hsm') return null;
@@ -148,10 +142,8 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       const job = await getJobById(db, jobId);
       if (!job || (!isAdmin(req) && job.createdBy !== req.user?.id)) {
-        // Same 404 for "not found" and "not yours" — no existence oracle.
-        // THROW, don't req.reject: we are inside handleRequest, whose catch would
-        // see a plain CAP error and remap it to 500 (mapError). A BackendError
-        // carries its status through.
+        // Same 404 for "not found" and "not yours" (no existence oracle). Throw, don't
+        // req.reject: inside handleRequest a plain CAP error is remapped to 500.
         throw new NotFoundError(`Job ${jobId}`);
       }
       const cancelled = await markCancelled(db, jobId);

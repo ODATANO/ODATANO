@@ -1,8 +1,4 @@
-/**
- * In-memory sliding-window rate limiter, ported from NIGHTGATE
- * (srv/utils/rate-limiter.ts). Used for grant administration and for failed
- * agent-token attempts; nothing here touches the database.
- */
+/** In-memory sliding-window rate limiter (grant administration, failed agent-token attempts). No DB. */
 
 export interface RateLimiterOptions {
   windowMs: number;
@@ -12,10 +8,8 @@ export interface RateLimiterOptions {
   /** Stale-key sweep interval (default 60 000 ms). */
   sweepIntervalMs?: number;
   /**
-   * Max distinct keys ONE group may hold (default 64). The group is the key up
-   * to its first ':' (the principal in `principal:scope` keys). Bounds what a
-   * single caller can do to the shared table: without it, made-up scopes under
-   * one principal evicted every other caller's window.
+   * Max distinct keys one group (key up to its first ':', the principal) may hold (default 64),
+   * so one caller's made-up scopes cannot evict other callers' windows.
    */
   maxKeysPerGroup?: number;
 }
@@ -32,10 +26,8 @@ function groupOf(key: string): string {
 }
 
 /**
- * Rate-limit key for a CAP request: the principal (user, else client address)
- * plus the scope. Batch parts carry no address and a proxy hides the real one,
- * so the address is the last resort only. The principal is the limiter's GROUP
- * (see maxKeysPerGroup), hence no ':' in it.
+ * Rate-limit key `principal:scope` for a CAP request; the principal is the user, else the client
+ * address (last resort: batch parts and proxies hide it). No ':' in the principal, it is the group.
  */
 export function principalRateKey(req: unknown, scope: string): string {
   const r = req as {
@@ -89,10 +81,7 @@ export class RateLimiter {
     this.groupCounts.clear();
   }
 
-  /**
-   * Consume `count` slots atomically: either ALL fit into the window and are
-   * recorded, or NONE are (a rejected caller has consumed nothing).
-   */
+  /** Consume `count` slots atomically: all fit and are recorded, or none are. */
   checkMany(key: string, count: number): RateCheckResult {
     if (count <= 0) return { allowed: true, retryAfterMs: 0 };
     const now = Date.now();
@@ -103,8 +92,7 @@ export class RateLimiter {
       if ((this.groupCounts.get(group) ?? 0) >= this.maxKeysPerGroup) {
         return { allowed: false, retryAfterMs: this.windowMs };
       }
-      // At capacity a NEW key evicts the least recently used one (the map is
-      // insertion ordered and `set` below re-inserts on every hit).
+      // At capacity a new key evicts the least recently used one (insertion-ordered map, re-inserted per hit).
       if (this.hits.size >= this.maxKeys) {
         const oldest = this.hits.keys().next().value;
         if (oldest !== undefined) this.dropKey(oldest);

@@ -1,19 +1,11 @@
 /**
- * The auth layout of the two services with ONE anonymous operation each
- * (CardanoIndexerService.getLiveness, CardanoSignService.VerifyDataSignature),
- * checked on the compiled model.
+ * Auth layout of the two services with one anonymous operation each
+ * (CardanoIndexerService.getLiveness, CardanoSignService.VerifyDataSignature), pinned on the model.
  *
- * CAP evaluates a SERVICE-level `@requires` on every request before it looks
- * at the operation, so an operation-level `@requires: 'any'` can never open a
- * single operation on an otherwise authenticated service: under basic/XSUAA
- * auth an anonymous caller gets the 401 challenge first (seen live on
- * 2.0.0-rc.6: the Docker HEALTHCHECK on getLiveness() answered 401). The
- * requirement therefore sits on each element. Auto-exposed entities (reached
- * through associations) carry none, and need none: CAP answers a direct
- * request on them with 405 (`@cds.autoexposed` without `@cds.autoexpose`) and
- * authorizes a navigation on the right-most non-autoexposed entity of the path.
- * The integration suite cannot catch a regression here — its unauthenticated
- * requests run as cds.User.Privileged — so this test pins the model shape.
+ * CAP checks a service-level `@requires` before the operation's own, so `@requires: 'any'` on one
+ * operation cannot open it on an otherwise authenticated service; the requirement sits on each element.
+ * Auto-exposed entities need none: a direct request gets 405, a navigation is authorized on the
+ * right-most non-autoexposed entity. The integration suite runs as cds.User.Privileged and cannot catch this.
  */
 
 import cds from '@sap/cds';
@@ -33,9 +25,8 @@ async function definitionsOf(file: string): Promise<Record<string, Def>> {
 function expectElementLevelAuth(defs: Record<string, Def>, svc: string, anonymous: string[]): void {
   const service = defs[svc]!;
   expect(service.kind).toBe('service');
-  // 'any' at the service level: under NODE_ENV=production CAP treats a service
-  // WITHOUT a service-level @requires as authenticated-user before it looks at
-  // the operation, which would 401 the anonymous operation despite its own 'any'.
+  // 'any' at the service level: in production CAP treats a service without a service-level
+  // @requires as authenticated-user, which would 401 the anonymous operation despite its own 'any'.
   expect(service['@requires']).toBe('any');
   expect(service['@restrict']).toBeUndefined();
 

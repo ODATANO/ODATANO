@@ -10,29 +10,22 @@ export function createErrorBackendSuite(backendConfig: TestConfiguration) {
 	configureBackendForTest(backendConfig, originalBlockfrostKey);
 
 	describe(`Error Handling – Backend-Specific [${backendConfig.backendName.toUpperCase()}]`, () => {
-		// Note: do NOT call vi.setConfig({ testTimeout }) here. It is file-scoped (not
-		// describe-scoped), so calling it inside this describe overrode the sibling
-		// createBackendTestSuite's 200s — the longer-running Koios reads (e.g. POST
-		// /GetPoolById cold-action) hit the 20s limit and timed out. Error-handling
-		// cases finish in well under a second, so inheriting the 200s default from
-		// core-test-suite is harmless.
+		// No vi.setConfig here: it is file-scoped and would override the sibling
+		// createBackendTestSuite's 200s budget for the slow live Koios reads.
 
 		// cds.test() starts server which creates AppContext automatically
 		const test = cds.test(__dirname + '/../../');
 		const { GET, POST, expect } = test;
 
-		// Only reset the database before each test
 		beforeEach(async () => {
 			await test.data.reset();
 		});
 
-		// Cleanup app context after all tests
 		afterAll(async () => {
 			await shutdownAppContext();
 		});
 
 		describe('ODATANO Milestone 1 - Error Handling Tests', () => {
-			// Error 404 resource not found with valid-looking inputs
 			describe('Resource Not Found (valid inputs)', () => {
 
 				it('GET / single Transaction with nonexistent hash', async () => {

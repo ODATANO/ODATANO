@@ -13,9 +13,8 @@ const COSE_KEY_LABEL_X = -2;
 const ED25519_PUBKEY_LEN = 32;
 
 /**
- * Input to {@link verifyDataSignature}. Mirrors the CIP-30 `signData` result:
- * `coseSignature` is the hex `signature` field (COSE_Sign1), `coseKey` is the
- * hex `key` field (COSE_Key).
+ * Input to {@link verifyDataSignature}, mirroring the CIP-30 `signData` result:
+ * `coseSignature` = hex `signature` field (COSE_Sign1), `coseKey` = hex `key` field (COSE_Key).
  */
 export interface CoseVerifyInput {
   address: string;
@@ -46,9 +45,8 @@ function findIntLabel(map: CborMap, label: number): CborObj | undefined {
 }
 
 /**
- * Parsed COSE_Sign1: the four positional fields. `protected` is kept as its
- * EXACT received bytes (the inner content of the bstr) — the Sig_structure must
- * re-use them byte-for-byte, so we never decode and re-encode the header map.
+ * Parsed COSE_Sign1. `protectedBytes` keeps the exact received bstr content:
+ * the Sig_structure must re-use it byte-for-byte, so the header map is never re-encoded.
  */
 interface CoseSign1 {
   protectedBytes: Uint8Array;
@@ -98,15 +96,9 @@ function buildSigStructure(protectedBytes: Uint8Array, payload: Uint8Array): Uin
 }
 
 /**
- * Verify a CIP-30 `signData` (COSE_Sign1) message signature against a bech32
- * address. Stateless crypto only & no nonce/replay/session handling.
- * Never throws: all failures are returned as `{ valid: false, reason }`.
- *
- * Checks, in order:
- *   1. COSE_Sign1 + COSE_Key parse
- *   2. signer key hash (blake2b-224) == the address payment credential (key, not script)
- *   3. (optional) signed payload == expectedPayload
- *   4. Ed25519 signature over the COSE Sig_structure
+ * Verify a CIP-30 `signData` (COSE_Sign1) signature against a bech32 address: signer key hash
+ * (blake2b-224) must equal the address payment key credential, optional payload check, then
+ * Ed25519 over the Sig_structure. Stateless, no nonce/replay handling; never throws (`{ valid: false, reason }`).
  */
 export function verifyDataSignature(input: CoseVerifyInput): CoseVerifyResult {
   const result: CoseVerifyResult = { valid: false, reason: '', signedPayload: '', signerVkh: '' };
@@ -118,7 +110,7 @@ export function verifyDataSignature(input: CoseVerifyInput): CoseVerifyResult {
     result.signedPayload = Buffer.from(payload).toString('utf8');
     result.signerVkh = toHex(blake2b_224(pubKey));
 
-    // 2. signer key hash must equal the address payment credential (key hash, not script)
+    // signer key hash must equal the address payment credential (key hash, not script)
     const cred = extractPaymentCredential(input.address);
     if (!cred) {
       result.reason = 'Address could not be decoded or has no payment credential (base/enterprise key-hash address required)';
@@ -133,7 +125,7 @@ export function verifyDataSignature(input: CoseVerifyInput): CoseVerifyResult {
       return result;
     }
 
-    // 3. optional anti-replay payload check
+    // optional anti-replay payload check
     if (input.expectedPayload !== undefined && input.expectedPayload !== null) {
       if (result.signedPayload !== input.expectedPayload) {
         result.reason = 'Signed payload does not match the expected payload';
@@ -141,7 +133,7 @@ export function verifyDataSignature(input: CoseVerifyInput): CoseVerifyResult {
       }
     }
 
-    // 4. Ed25519 signature over the rebuilt Sig_structure
+    // Ed25519 signature over the rebuilt Sig_structure
     const sigStructure = buildSigStructure(protectedBytes, payload);
     if (!verifyEd25519Signature_sync(signature, sigStructure, pubKey)) {
       result.reason = 'Ed25519 signature does not verify against the signed message';

@@ -5,14 +5,8 @@ import { CardanoWalletWorker, type WalletWorkerConfig, type WalletWorkerDeps } f
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Module-level singleton lifecycle for the wallet worker. Mirrors the crawler's
- * srv/blockchain/crawler/index.ts: one active worker per process, started
- * fire-and-forget from the server's `served` hook and controlled (pause/resume/
- * status) via the worker control service.
- *
- * Unlike the crawler there is no standby machinery: every instance may run a
- * dispatch loop — the per-WALLET DB leases decide which instance executes a
- * given wallet's jobs, so failover is inherent.
+ * Process-wide wallet-worker singleton, started from the `served` hook and controlled via the
+ * worker service. No standby: every instance may dispatch, the per-wallet DB leases decide who executes.
  */
 
 let active: CardanoWalletWorker | null = null;

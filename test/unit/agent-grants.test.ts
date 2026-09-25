@@ -1,11 +1,7 @@
 /**
- * Agent grants (AGENT_GRANTS_DESIGN.md): the enforcement ladder, the budget
- * counter, token resolution and grant issuance, against a fake CQL runner.
- *
- * The real @sap/cds is used for cds.ql / cds.User; only the database is faked.
- * The fake understands exactly the statement shapes the module emits (looked
- * up by SET keys and WHERE columns), so a changed statement shape fails here
- * instead of silently passing.
+ * Agent grants: enforcement ladder, budget counter, token resolution and grant
+ * issuance, against a fake CQL runner that knows only the statement shapes the
+ * module emits (so a changed shape fails here instead of silently passing).
  */
 
 import cds from '@sap/cds';
@@ -424,9 +420,8 @@ describe('enforceAgentGrant', () => {
   });
 
   it('refuses never-grantable actions even when a row smuggles them into allowedActions', async () => {
-    // Creation refuses such a list; a row edited by hand must still not open the door
-    // beyond what the hook allows — it only knows the allow list, so the Admin gate
-    // on the action itself is the second wall (role-less principal).
+    // The hook only checks the allow list; the Admin gate on the action itself is
+    // the second wall against a hand-edited row (role-less principal).
     const g = grant({ allowedActions: JSON.stringify(['PauseWorker']) });
     const req = makeReq('PauseWorker', {}, g);
     expect(makeAgentUser(g).is('Admin')).toBe(false);
@@ -687,7 +682,7 @@ describe('GRANTS_ENTITY', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Lifecycle parity with NIGHTGATE (rc.6): rate-limit knob, rotate, update, usage
+// Grant lifecycle: rate-limit knob, rotate, update, usage
 // ---------------------------------------------------------------------------
 
 type Handler = (req: Record<string, unknown>) => Promise<unknown>;
@@ -987,7 +982,7 @@ describe('deferred usage counters (Postgres / HANA): buffered per key, flushed i
     await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, false, SVC);
     expect(pendingGrantUsageKeys()).toBe(0);
     expect(store.usageRows()).toEqual([{ grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 1, refunded: 0 }]);
-    // Sync mode (SQLite): the awaited write, as before.
+    // Sync mode (SQLite): the write is awaited inline.
     __setGrantUsageModeForTests('sync');
     await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
     expect(pendingGrantUsageKeys()).toBe(0);

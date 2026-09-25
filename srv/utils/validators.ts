@@ -3,27 +3,16 @@ import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_
   POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
-// Read the active network from a tiny leaf module rather than from `../server`:
-// importing server here would pull the whole server → indexer graph (which
-// accesses cds.ql at module load) into every consumer of a validator.
+// Leaf module, not `../server`: importing server would pull the whole server/indexer graph in here.
 import { getActiveNetwork } from "./network-context";
-/** 
- * Safely trim a string value
- * @param s - The value to trim
- * @returns { string | null } trimmed string or null if input is not a string or empty after trim
- */
+/** Trimmed string, or null when not a string or empty after trim. */
 function safeTrimString(s: unknown): string | null {
   if (typeof s !== "string") return null;
   const t = s.trim();
   return t.length > 0 ? t : null;
 }
 
-/**
- * Strict bech32 decode with HRP allowlist.
- * @param value - bech32 encoded string
- * @param allowedHrp - list of allowed HRP prefixes
- * @returns { prefix: string; words: number[] } decoded bech32 parts or null if invalid
- */
+/** Strict bech32 decode with HRP allowlist; null when invalid. */
 function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: string; words: number[] } | null {
   try {
     const decoded = bech32.decode(value, BECH32_MAX_LENGTH);
@@ -37,38 +26,25 @@ function tryDecodeBech32WithHrp(value: string, allowedHrp: string[]): { prefix: 
 }
 
 
-/**
- * Convert bech32 words to byte length
- * @param words - bech32 decoded words
- * @returns { number } byte length of decoded words
- */
+/** Byte length of decoded bech32 words (fromWords validates the word range). */
 function wordsToBytesLen(words: number[]): number {
-  // bech32.fromWords validates word range and converts 5-bit words -> bytes
   return Buffer.from(bech32.fromWords(words)).length;
 }
 
-/**
- * Result of JSON validation with limits
- */
+/** Result of JSON validation with limits */
 interface JsonValidationResult {
   valid: boolean;
   error?: string;
   parsed?: unknown;
 }
 
-/**
- * Validate JSON string with size and complexity limits to prevent DoS
- * @param jsonString - The JSON string to validate
- * @param fieldName - Name of the field (for error messages)
- * @returns JsonValidationResult with parsed value or error message
- */
+/** Parse a JSON string under size and complexity limits (DoS prevention); `fieldName` is for messages. */
 export function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
-  // Check size limit first (before parsing)
+  // Size limit before parsing
   if (jsonString.length > MAX_JSON_SIZE) {
     return { valid: false, error: `${fieldName} exceeds maximum size of ${MAX_JSON_SIZE} bytes` };
   }
 
-  // Parse JSON
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonString);
@@ -76,7 +52,6 @@ export function validateJsonWithLimits(jsonString: string, fieldName: string): J
     return { valid: false, error: `Invalid JSON in ${fieldName}` };
   }
 
-  // Validate complexity recursively
   const complexityError = checkJsonComplexity(parsed, 0);
   if (complexityError) {
     return { valid: false, error: `${fieldName}: ${complexityError}` };
@@ -85,20 +60,13 @@ export function validateJsonWithLimits(jsonString: string, fieldName: string): J
   return { valid: true, parsed };
 }
 
-/**
- * Recursively check JSON complexity (depth, keys, array length, string length)
- * @param value - The parsed JSON value
- * @param depth - Current nesting depth
- * @returns Error message if limits exceeded, null otherwise
- */
+/** Recursive complexity check (depth, keys, array length, string length); error message or null. */
 function checkJsonComplexity(value: unknown, depth: number): string | null {
-  // Check depth limit
   if (depth > MAX_DEPTH) {
     return `Maximum nesting depth of ${MAX_DEPTH} exceeded`;
   }
 
   if (value === null || typeof value !== 'object') {
-    // Check string length for primitive strings
     if (typeof value === 'string' && value.length > MAX_STRING_LENGTH) {
       return `String value exceeds maximum length of ${MAX_STRING_LENGTH}`;
     }
@@ -106,22 +74,18 @@ function checkJsonComplexity(value: unknown, depth: number): string | null {
   }
 
   if (Array.isArray(value)) {
-    // Check array length
     if (value.length > MAX_ARRAY_LENGTH) {
       return `Array exceeds maximum length of ${MAX_ARRAY_LENGTH}`;
     }
-    // Recursively check array elements
     for (const item of value) {
       const error = checkJsonComplexity(item, depth + 1);
       if (error) return error;
     }
   } else {
-    // Check object key count
     const keys = Object.keys(value);
     if (keys.length > MAX_KEYS) {
       return `Object exceeds maximum key count of ${MAX_KEYS}`;
     }
-    // Recursively check object values
     for (const key of keys) {
       const error = checkJsonComplexity((value as Record<string, unknown>)[key], depth + 1);
       if (error) return error;
@@ -131,57 +95,35 @@ function checkJsonComplexity(value: unknown, depth: number): string | null {
   return null;
 }
 
-/**
- * Transaction hash: 64-character hexadecimal string
- * @param s - The raw value to validate against transaction hash format
- * @returns { boolean } true if s is a valid transaction hash false otherwise
- */
+/** Transaction hash: 64-character hex string */
 export function isTxHash(s: unknown): s is string {
   return typeof s === "string" && TX_HASH_REGEX.test(s);
 }
 
-/**
- * Asset unit: concatenation of policy ID (56 hex chars) + asset name (0-64 hex chars)
- * @param s - The raw value to validate against asset unit format
- * @returns { boolean } true if v is a valid asset unit false otherwise
- */
+/** Asset unit: policy ID (56 hex chars) + asset name (0-64 hex chars, even length) */
 export function isAssetUnit(s: unknown): s is string {
   if (typeof s !== "string") return false;
   const t = s.trim();
 
-  // Regex ensures: 56-120 hex chars, even length, valid hex
   return ASSET_UNIT_REGEX.test(t);
 }
 
-/**
- * Block hash: 64-character hexadecimal string
- * @param s - The raw value to validate against block hash format
- * @returns { boolean } true if s is a valid block hash false otherwise
- */
+/** Block hash: 64-character hex string */
 export function isBlockHash(s: unknown): s is string {
   return typeof s === "string" && HEX_64_REGEX.test(s);
 }
 
-/**
- * Payment credential: 28-byte hash (key hash or script hash) as 56-char lowercase hex.
- * Used for credential-based UTxO queries (Indigo CDPs, Liqwid positions, etc.).
- * @param s - The raw value to validate against credential format
- * @returns { boolean } true if s is a valid 56-char lowercase hex string
- */
+/** Payment credential: 28-byte key or script hash as 56-char lowercase hex (credential-keyed UTxO queries). */
 export function isValidCredential(s: unknown): s is string {
   return typeof s === "string" && HEX_56_REGEX.test(s);
 }
 
-/**
- * Pool ID: must be bech32-decodable, HRP=pool, payload length 28 bytes.
- * @param poolIdRaw - The raw value to validate against pool ID format
- * @returns { boolean } true if valid pool ID false otherwise
- */
+/** Pool ID: bech32 with HRP "pool" and a 28-byte payload. */
 export function isValidPoolId(poolIdRaw: unknown): poolIdRaw is string {
   const poolId = safeTrimString(poolIdRaw);
   if (!poolId) return false;
 
-  // optional: cheap prefilter (keeps performance high)
+  // cheap prefilter
   if (!POOL_ID_REGEX.test(poolId)) return false;
 
   const decoded = tryDecodeBech32WithHrp(poolId, ["pool"]);
@@ -189,16 +131,12 @@ export function isValidPoolId(poolIdRaw: unknown): poolIdRaw is string {
   return false;
 }
 
-/**
- * DRep ID: must be bech32-decodable, HRP=drep.
- * @param drepRaw - The raw value to validate against drep ID format
- * @returns { boolean } true if valid drep ID false otherwise
- */
+/** DRep ID: bech32 with HRP "drep" and a 29-byte payload. */
 export function isValidDrepId(drepRaw: unknown): drepRaw is string {
   const drepId = safeTrimString(drepRaw);
   if (!drepId) return false;
 
-  // optional cheap prefilter
+  // cheap prefilter
   if (!DREP_ID_REGEX.test(drepId)) return false;
 
   const decoded = tryDecodeBech32WithHrp(drepId, ["drep"]);
@@ -206,50 +144,37 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
   return false;
 }
 
-/**
- * Validate Bech32 address: must be bech32-decodable, HRP based on network config.
- * @param addrRaw - The raw value to validate against bech32 address format
- * @returns { boolean } true if valid bech32 address false otherwise
- */
+/** Bech32 address with the HRP of the active network; false before the app context is ready. */
 export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
-  // get the active network to check the right HRP. If the app context isn't
-  // ready yet (e.g., a backend init failure left it uninitialized) the network
-  // is null — return false so the handler responds with a clean 400 "Invalid
-  // bech32 address format" instead of leaking an init error to the client. The
-  // actual init failure is surfaced via stderr in server.ts.
+  // No network yet (app context not initialized): a clean 400 instead of a leaked init error
   const network = getActiveNetwork();
   if (!network) return false;
 
-  // prefilter from config to make sure it is the right network
+  // network HRP prefilter
   if (!HRP[network].addr.test(addr)) return false;
 
   const allowed = ["addr", "addr_test"];
   const decoded = tryDecodeBech32WithHrp(addr, allowed);
   if (decoded) {
-  // Cardano addresses: 29 bytes (enterprise/reward) to 57 bytes (base address)
+  // 29 bytes (enterprise/reward) to 57 bytes (base address)
   const len = wordsToBytesLen(decoded.words);
   return len >= 29 && len <= 57;
   }
   return false;
 }
 
-/** 
- * Validate Bech32 stake address: must be bech32-decodable, HRP based on network config.
- * @param stakeRaw - The raw value to validate against stake address format
- * @returns { boolean } true if valid bech32 stake address false otherwise
- */
+/** Bech32 stake address with the HRP of the active network; false before the app context is ready. */
 export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string {
   const stake = safeTrimString(stakeRaw);
   if (!stake) return false;
 
-  // Defensive against unset app context — same rationale as isValidBech32Address.
   const network = getActiveNetwork();
   if (!network) return false;
 
-  // prefilter from config to make sure it is the right network
+  // network HRP prefilter
   if (!HRP[network].stake.test(stake)) return false;
 
   const allowed = ["stake", "stake_test"];
@@ -260,44 +185,27 @@ export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string
   return len >= 1 && len <= 64;
 }
 
-/** 
- * Epoch number: non-negative integer within reasonable bounds
- * @param s - The parameter value to validate as epoch number
- * @returns { boolean } true if s is a valid epoch number false otherwise
- */
+/** Epoch number: non-negative integer up to MAX_EPOCH */
 export function isEpochNumber(s: unknown): s is number {
   return typeof s === "number" && s >= 0 && s <= MAX_EPOCH && Number.isInteger(s);
 }
 
-/**
- * Validate CBOR string: must be a non-empty even-length hexadecimal string
- * @param cborRaw - The raw value to validate against CBOR format
- * @returns { boolean } true if valid CBOR false otherwise
- */
+/** CBOR hex: non-empty, even-length hex string */
 export function isValidCbor(cborRaw: unknown): cborRaw is string {
   const cbor = safeTrimString(cborRaw);
   if (!cbor) return false;
-  // basic validation: must be even-length hex string
   return /^[a-f0-9]+$/i.test(cbor) && cbor.length % 2 === 0;
 }
 
-/**
- * Validate a transaction CBOR hex string for the ParseTransactionCbor action.
- * Combines `isValidCbor` with a hard length limit to block memory-exhaustion
- * attacks on the server-side CBOR parser.
- * @param cborRaw - The raw value to validate
- * @returns { boolean } true if valid hex AND within MAX_TX_CBOR_HEX_LENGTH
- */
+/** `isValidCbor` plus the MAX_TX_CBOR_HEX_LENGTH cap (ParseTransactionCbor memory bound). */
 export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
   if (!isValidCbor(cborRaw)) return false;
   return (cborRaw as string).trim().length <= MAX_TX_CBOR_HEX_LENGTH;
 }
 
 /**
- * Extract the payment credential from a Shelley bech32 address.
- * Returns the 28-byte credential hash (hex) plus whether it is a SCRIPT
- * credential (address type bit 0 of the header high nibble), or null when the
- * address cannot be decoded / carries no payment part (stake addresses).
+ * Payment credential of a Shelley bech32 address: 28-byte hash (hex) plus whether it is a script
+ * credential (bit 0 of the header's high nibble); null for undecodable or stake addresses.
  */
 export function extractPaymentCredential(address: string): { hash: string; isScript: boolean } | null {
   try {
@@ -317,12 +225,7 @@ export function extractPaymentCredential(address: string): { hash: string; isScr
   }
 }
 
-/**
- * Validate an array of Ed25519 key hashes (hex, 28 bytes / 56 hex chars each).
- * @param signers - The parsed JSON array to validate
- * @returns validated string array
- * @throws Error if any signer is invalid
- */
+/** Validate an array of Ed25519 key hashes (56 hex chars each); throws on any invalid entry. */
 export function validateRequiredSigners(signers: unknown): string[] {
   if (!Array.isArray(signers)) {
     throw new Error('requiredSignersJson must be a JSON array');
@@ -335,24 +238,19 @@ export function validateRequiredSigners(signers: unknown): string[] {
   return signers as string[];
 }
 
-/**
- * Validation error details for transaction input validation
- */
+/** Validation error details for transaction input validation */
 export interface ValidationError {
   type: 'missing' | 'invalid';
   field: string;
   message: string;
 }
 
-/**
- * Transaction input fields for validation
- */
+/** Transaction input fields for validation */
 export interface TransactionInputs {
   senderAddress?: string;
   recipientAddress?: string;
   changeAddress?: string;
-  // Runtime value is a STRING (OData Lovelace = Decimal(20,0); CAP preserves precision),
-  // but bigint/number are accepted too — validateTransactionInputs coerces via String().
+  // Runtime value is a string (OData Decimal(20,0)); bigint/number are coerced via String()
   lovelaceAmount?: string | number | bigint;
   signedTxCbor?: string;
   metadataJson?: string;
@@ -378,19 +276,13 @@ export interface TransactionInputs {
   validityEndMs?: string;
 }
 
-/**
- * Validate transaction build inputs and return validation errors if any
- * @param inputs - Transaction input fields to validate
- * @param requiredFields - List of required field names
- * @returns Array of validation errors, empty if all valid
- */
+/** Validate transaction build inputs; returns the validation errors (empty when all valid). */
 export function validateTransactionInputs(
   inputs: TransactionInputs,
   requiredFields: (keyof TransactionInputs)[]
 ): ValidationError[] {
   const errors: ValidationError[] = [];
 
-  // Check required fields
   for (const field of requiredFields) {
     if (inputs[field] === undefined || inputs[field] === null || inputs[field] === '') {
       errors.push({
@@ -401,10 +293,8 @@ export function validateTransactionInputs(
     }
   }
 
-  // If required fields are missing, return early
   if (errors.length > 0) return errors;
 
-  // Validate address formats
   if (inputs.senderAddress && !isValidBech32Address(inputs.senderAddress)) {
     errors.push({
       type: 'invalid',
@@ -429,7 +319,7 @@ export function validateTransactionInputs(
     });
   }
 
-  // Validate lovelaceAmount is a positive integer (string-based to avoid precision loss for large values)
+  // String-based positive-integer check avoids precision loss for large values
   if (inputs.lovelaceAmount !== undefined && inputs.lovelaceAmount !== null) {
     const s = String(inputs.lovelaceAmount);
     if (!/^\d+$/.test(s) || s === '0') {
@@ -441,7 +331,7 @@ export function validateTransactionInputs(
     }
   }
 
-  // Validate CBOR format and size (max 65536 hex chars = 32 KB binary)
+  // 65536 hex chars = 32 KB binary
   const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
     errors.push({
@@ -499,7 +389,6 @@ export function validateTransactionInputs(
     }
   }
 
-  // Validate JSON fields with size and complexity limits
   if (inputs.metadataJson) {
     const result = validateJsonWithLimits(inputs.metadataJson, 'metadataJson');
     if (!result.valid) {
@@ -572,10 +461,7 @@ export function validateTransactionInputs(
   return errors;
 }
 
-/**
- * Validate a Posix-ms string field: must be a non-negative integer with at most
- * MAX_POSIX_MS_DIGITS digits. Returns null if valid or absent.
- */
+/** Posix-ms string field: non-negative integer with at most MAX_POSIX_MS_DIGITS digits; null when valid or absent. */
 function validatePosixMsField(value: string | undefined, field: 'validityStartMs' | 'validityEndMs'): ValidationError | null {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' || !/^\d+$/.test(value) || value.length > MAX_POSIX_MS_DIGITS) {

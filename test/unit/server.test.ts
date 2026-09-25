@@ -17,9 +17,6 @@ import { HsmSigner, getHsmSigner, setHsmSigner } from '../../srv/blockchain/sign
 
 describe('server.ts', () => {
 
-  // ============================================================================
-  // loadConfigFromEnv - Config validation
-  // ============================================================================
   describe('loadConfigFromEnv', () => {
     const originalEnv: Record<string, string | undefined> = {};
 
@@ -93,7 +90,7 @@ describe('server.ts', () => {
     });
 
     it('should ignore legacy TX_BUILDERS and always use buildooor', () => {
-      // CSL was removed; TX_BUILDERS is no longer honored — Buildooor is the sole builder.
+      // TX_BUILDERS is not honored; Buildooor is the sole builder.
       env.TX_BUILDERS = 'csl';
       expect(loadConfigFromEnv().transactionBuilders).toEqual(['buildooor']);
       env.TX_BUILDERS = 'unknown';
@@ -112,8 +109,7 @@ describe('server.ts', () => {
       const prev = reqs['odatano-core'];
       reqs['odatano-core'] = { backends: ['koios'], primaryTimeoutMs: 0 };
       try {
-        // 0 is falsy: the old `timeout && …` guard skipped the <=0 check and 0
-        // silently became the 30000 default. Now it is rejected.
+        // 0 is falsy; a truthiness guard would skip the <=0 check and silently default to 30000.
         expect(() => loadConfigFromEnv()).toThrow('Must be a positive number');
       } finally {
         if (prev === undefined) delete reqs['odatano-core']; else reqs['odatano-core'] = prev;
@@ -155,9 +151,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // loadCrawlerConfigFromEnv
-  // ============================================================================
   describe('loadCrawlerConfigFromEnv', () => {
     const crawlerEnvKeys = [
       'CRAWLER_ENABLED',
@@ -333,9 +326,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // getAppContext - Error when not initialized
-  // ============================================================================
   describe('getAppContext', () => {
     it('should throw when called before initialization', () => {
       resetAppContext(null);
@@ -372,9 +362,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // Convenience getters
-  // ============================================================================
   describe('getCardanoIndexer / getCardanoClient / getCardanoTxBuilder', () => {
     afterEach(() => {
       resetAppContext(null);
@@ -403,18 +390,13 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // Bootstrap Guard (B22-B23)
-  // ============================================================================
   describe('Bootstrap guard behavior', () => {
     afterEach(() => {
       resetAppContext(null);
     });
 
     it('should guard against double initialization via resetAppContext', () => {
-      // The cds.on("served") hook checks: if (appContext) return;
-      // We test this behavior through resetAppContext: setting a context
-      // then verifying it stays stable (no overwrite)
+      // The served hook guards with `if (appContext) return;`; resetAppContext is the test seam.
       const mockContext1 = {
         cardanoClient: { name: 'first' } as any,
         cardanoIndexer: { name: 'first' } as any,
@@ -423,8 +405,7 @@ describe('server.ts', () => {
       resetAppContext(mockContext1);
       expect(getAppContext()).toBe(mockContext1);
 
-      // Setting a second context overwrites (this is by design for tests)
-      // In production, the guard prevents this by returning early
+      // resetAppContext overwrites by design (tests only); the served-hook guard prevents it in production.
       const mockContext2 = {
         cardanoClient: { name: 'second' } as any,
         cardanoIndexer: { name: 'second' } as any,
@@ -441,9 +422,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // loadHsmConfigFromEnv
-  // ============================================================================
   describe('loadHsmConfigFromEnv', () => {
     const hsmKeys = ['HSM_ENABLED', 'HSM_PKCS11_MODULE', 'HSM_PIN', 'HSM_SLOT', 'HSM_KEY_ID', 'HSM_KEY_LABEL', 'HSM_REQUIRES_ROLE'];
     const originalEnv: Record<string, string | undefined> = {};
@@ -528,9 +506,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // initializeFromConfig / served hook error paths
-  // ============================================================================
   describe('initializeFromConfig / served hook', () => {
     const baseConfig = {
       network: 'preview',
@@ -602,9 +577,6 @@ describe('server.ts', () => {
     });
   });
 
-  // ============================================================================
-  // shutdownAppContext
-  // ============================================================================
   describe('shutdownAppContext', () => {
     afterEach(() => {
       resetAppContext(null);

@@ -1,22 +1,9 @@
 import { ERROR_CODES, type ErrorCode } from './error-codes';
 import { Request } from '@sap/cds';
-/** 
- * Backend Errors Implementation
- * Defines typed errors for backend communication issues
- */
+/** Typed errors for backend communication and request validation. */
 
-/** 
- * BackendError Base class for all backend-related errors
- */
+/** Base class for all backend-related errors. */
 export class BackendError extends Error {
-  /** Constructor
-   * @param message error message string
-   * @param statusCode error status code
-   * @param code error code
-   * @param backendName name of the backend where the error originated
-   * @param originalError original error object
-   * @param target target resource (if applicable)
-   */
   constructor(
     message: string,
     public readonly statusCode: number = 500,
@@ -31,17 +18,8 @@ export class BackendError extends Error {
   }
 }
 
-/** 
- * NotFoundError - Resource not found in backend (404)
- * This is NOT a provider error - it's a valid response indicating the resource doesn't exist
- * Examples: transaction hash not found, address has no UTxOs
- */
+/** Resource not found (404); a valid response, not a provider fault. */
 export class NotFoundError extends BackendError {
-  /** Constructor
-   * @param resource name of the resource that was not found
-   * @param backendName name of the backend where the error originated
-   * @param originalError original error object
-   */
   constructor(resource: string, backendName?: string, originalError?: unknown) {
     super(
       `${resource} not found`,
@@ -53,18 +31,8 @@ export class NotFoundError extends BackendError {
   }
 }
 
-/**
- * TransactionValidationError - Transaction failed validation (400)
- * Indicates that the transaction failed validation checks
- * Examples: wrong signature, tampered CBOR, invalid witnesses
- */
+/** Transaction failed validation (400): wrong signature, tampered CBOR, invalid witnesses. `code` may be `TX_PARSE_FAILED`. */
 export class TransactionValidationError extends BackendError {
-  /** Constructor
-   * @param message detailed validation failure message
-   * @param originalError original error object
-   * @param code optional override (e.g. `TX_PARSE_FAILED` for CBOR decode failures);
-   *             defaults to `TX_VALIDATION_FAILED`.
-   */
   constructor(
     message: string,
     originalError?: unknown,
@@ -80,18 +48,8 @@ export class TransactionValidationError extends BackendError {
   }
 }
 
-/**
- * ScriptValidationError - Plutus script validation failed on the ledger (400)
- * Distinguishes a clean ledger rejection (PlutusFailure, CekError, overspent
- * budget, script hash mismatch) from provider outages (503). The transaction
- * was well-formed enough to reach phase-2 validation — retrying against a
- * different provider will not help; the tx shape itself is the problem.
- */
+/** Ledger phase-2 script rejection (400): PlutusFailure, CekError, budget, hash mismatch. Not retryable on another provider. */
 export class ScriptValidationError extends BackendError {
-  /** Constructor
-   * @param message detailed script failure message (typically from ledger)
-   * @param originalError original error object
-   */
   constructor(
     message: string,
     originalError?: unknown
@@ -106,16 +64,8 @@ export class ScriptValidationError extends BackendError {
   }
 }
 
-/**
- * TransactionAlreadySubmittedError - Transaction already exists (409)
- * Indicates that the transaction has already been submitted (duplicate/replay)
- * Examples: same txHash already in mempool or on chain
- */
+/** Transaction already in mempool or on chain (409). */
 export class TransactionAlreadySubmittedError extends BackendError {
-  /** Constructor
-   * @param txHash the transaction hash that was already submitted
-   * @param originalError original error object
-   */
   constructor(
     public readonly txHash: string,
     originalError?: unknown
@@ -131,20 +81,10 @@ export class TransactionAlreadySubmittedError extends BackendError {
 }
 
 /**
- * InsufficientFundsError - Not enough funds or assets available (400)
- * Indicates that the address does not have enough of a specific asset to complete the transaction
- * Examples: trying to send more ADA than available, not enough native tokens
+ * Not enough of an asset for the transaction (400). `required`/`available` are 0n when unknown;
+ * `detail` then replaces the amounts in the message.
  */
 export class InsufficientFundsError extends BackendError {
-  /** Constructor
-   * @param assetUnit the asset unit that is insufficient (e.g., "lovelace" or "policyId.assetName")
-   * @param required the required amount (0n when unknown)
-   * @param available the available amount (0n when unknown)
-   * @param originalError original error object
-   * @param detail human-readable cause shown INSTEAD of the amounts — use when
-   *               the amounts are unknown; "required 0, available 0" reads as
-   *               nonsense from the consumer's perspective
-   */
   constructor(
     public readonly assetUnit: string,
     public readonly required: bigint,
@@ -165,16 +105,8 @@ export class InsufficientFundsError extends BackendError {
   }
 }
 
-/** 
- * MixedAssetsError - UTxO contains mixed assets when pure ADA is required (400)
- * Indicates that a UTxO contains native assets in addition to ADA, but the operation requires ADA-only UTxOs
- */
+/** UTxO carries native assets where ADA-only is required (400). `utxoRef` is `txHash#outputIndex`. */
 export class MixedAssetsError extends BackendError {
-  /** Constructor
-   * @param utxoRef UTxO reference (txHash#outputIndex)
-   * @param assets list of non-ADA assets found in the UTxO
-   * @param originalError original error object
-   */
   constructor(
     public readonly utxoRef: string,
     public readonly assets: string[],
@@ -191,18 +123,8 @@ export class MixedAssetsError extends BackendError {
   }
 }
 
-/** 
- * ProviderUnavailableError - Provider unavailable or timeout (503)
- * Indicates a temporary issue - retrying may help
- * Examples: network timeout, 5xx errors, service down
- */
+/** Provider unavailable or timed out (503); retryable. `timeoutMs` is appended to the message. */
 export class ProviderUnavailableError extends BackendError {
-  /** Constructor
-   * @param message error message string
-   * @param backendName name of the backend where the error originated
-   * @param timeoutMs optional timeout duration in milliseconds
-   * @param originalError original error object
-   */
   constructor(message: string, backendName?: string, timeoutMs?: number, originalError?: unknown) {
     const msg = timeoutMs
       ? `${message} (timeout after ${timeoutMs}ms)`
@@ -218,18 +140,8 @@ export class ProviderUnavailableError extends BackendError {
   }
 }
 
-/** 
- * RateLimitError - Provider rate limit exceeded (429)
- * Indicates too many requests - client should back off and retry later
- * Examples: Blockfrost 10 req/sec limit, Koios tier limits
- */
+/** Provider rate limit exceeded (429). `retryAfter` is in seconds. */
 export class RateLimitError extends BackendError {
-  /** Constructor
-   * @param message error message string
-   * @param backendName name of the backend where the error originated
-   * @param retryAfter optional retry-after duration in seconds
-   * @param originalError original error object
-   */
   constructor(message: string, backendName?: string, retryAfter?: number, originalError?: unknown) {
     const msg = retryAfter
       ? `${message} (retry after ${retryAfter}s)`
@@ -245,23 +157,13 @@ export class RateLimitError extends BackendError {
   }
 }
 
-/** 
- * AllBackendsFailedError - All backends failed
- * Aggregates multiple backend errors and returns the most relevant status
- */
+/** Every backend failed; carries the last error's status, or 503 when all were skipped. */
 export class AllBackendsFailedError extends BackendError {
-  /** Constructor
-   * @param errors array of backend errors
-   * @param originalError original error object
-   */
   constructor(public readonly errors: BackendError[], originalError?: unknown) {
     const lastError = errors[errors.length - 1];
 
     super(
-      // Empty errors == every backend was *skipped* (e.g. all declared the method
-      // unsupported), so nothing actually failed/connected: surface 503 (no provider
-      // available) rather than 502 (which implies an upstream backend returned a bad
-      // response). A real backend failure carries its own statusCode via lastError.
+      // Empty errors: every backend was skipped (method unsupported), nothing failed upstream, so 503
       `All backends failed: ${lastError?.message ?? 'unknown error'}`,
       lastError?.statusCode ?? 503,
       lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
@@ -272,13 +174,8 @@ export class AllBackendsFailedError extends BackendError {
 }
 
 /**
- * True when the error proves the resource is absent on EVERY backend that was
- * consulted: either a direct NotFoundError, or an AllBackendsFailedError whose
- * collected per-backend errors are all 404s. CardanoClient's failover wraps
- * per-backend errors (including 404s) into AllBackendsFailedError, so callers
- * that need "definitively not found" (e.g. the wallet-worker's dropped-tx
- * detection) must use this instead of `instanceof NotFoundError`. A mixed
- * result (one backend 404, another 500) is NOT proof of absence.
+ * True when the resource is absent on every consulted backend: a NotFoundError, or an
+ * AllBackendsFailedError whose per-backend errors are all 404. A mixed result is not proof of absence.
  */
 export function isNotFoundOnAllBackends(err: unknown): boolean {
   if (err instanceof NotFoundError) return true;
@@ -287,9 +184,7 @@ export function isNotFoundOnAllBackends(err: unknown): boolean {
     && err.errors.every((e) => e instanceof NotFoundError || e.statusCode === 404);
 }
 
-/**
- *  HttpErrorLike - Simplified interface for HTTP errors from various libraries 
- */
+/** Simplified shape of HTTP errors from various client libraries. */
 export interface HttpErrorLike {
   message?: string;
   code?: string;
@@ -307,15 +202,9 @@ export interface HttpErrorLike {
 }
 
 /**
- * PostgreSQL error-code classes that indicate a fault in the provider's own
- * database/deployment rather than in our request. Koios (PostgREST) surfaces
- * these as HTTP 400 — e.g. code '42703' ("column … does not exist") from a
- * half-migrated SQL function on one load-balanced instance, or '57014'
- * (statement timeout) under load. Client-input errors (class 22, invalid text
- * representation etc.) are deliberately NOT listed — those remain 4xx.
- * Classes: 08 connection, 42 syntax/undefined object, 53 insufficient
- * resources, 57 operator intervention (incl. query_canceled), 58 system
- * error, XX internal error.
+ * PostgreSQL error-code classes that mean a provider-side fault, which PostgREST (Koios) returns as HTTP 400:
+ * 08 connection, 42 undefined object, 53 resources, 57 operator intervention, 58 system, XX internal.
+ * Client-input classes (22 etc.) stay 4xx.
  */
 const PG_SERVER_ERROR_CODE_CLASSES = ['08', '42', '53', '57', '58', 'XX'];
 
@@ -324,55 +213,34 @@ export function isPostgrestServerErrorCode(code: unknown): boolean {
   return typeof code === 'string' && PG_SERVER_ERROR_CODE_CLASSES.some(c => code.startsWith(c));
 }
 
-/**
- * Utility functions to extract status and message from HttpErrorLike
- * @param err error object
- * @returns {number} status code
- */
+/** HTTP status of an HttpErrorLike, default 500. */
 export function getErrorStatus(err: HttpErrorLike | unknown): number {
   const e = (err ?? {}) as HttpErrorLike;
   return e.status ?? e.response?.status ?? 500;
 }
 
-/**
- * Utility functions to extract status and message from HttpErrorLike
- * @param err error object
- * @returns {string} error message
- */
+/** Message of an HttpErrorLike: `response.data.error` (Koios), else `message`. */
 export function getErrorMessage(err: HttpErrorLike | unknown): string {
   const e = (err ?? {}) as HttpErrorLike;
 
-  // Check Axios response.data.error (Koios format)
   if (e.response?.data?.error) return e.response.data.error;
 
-  // Check direct message property
   if (e.message) return e.message;
 
   return 'Unknown error';
 }
 
 /**
- * Normalizes any backend error into a typed BackendError
- *
- * Priority (checked in order):
- * 1. TX Submission — Already submitted/duplicate → 409
- * 2. TX Submission — Plutus script validation failure → 400 (ScriptValidationError)
- * 3. TX Submission — Validation/Signature errors → 400
- * 4. Message indicates "not found" → 404 (even if provider returns 5xx)
- * 5. Rate limiting (status 429 or message patterns) → 429
- * 6. Explicit 404 status → 404
- * 7. 5xx errors → 503 (Provider unavailable, retry-able)
- * 8. Other 4xx → 503
- * 9. Unknown/network errors → 503 (default fallback)
+ * Normalizes any backend error into a typed BackendError. Message hints are checked in priority
+ * order (already submitted, script failure, validation, not found, rate limit) before the HTTP status.
  */
 export function normalizeBackendError(
   err: unknown,
   backendName?: string,
 ): BackendError {
-  // Already normalized
   if (err instanceof BackendError) return err;
 
-  // Check for uninitialized backend client (TypeError from calling methods on null/undefined client)
+  // TypeError from calling a method on an uninitialized (null) backend client
   if (err instanceof TypeError &&
       (err.message.includes('Cannot read properties of null') ||
        err.message.includes('Cannot read properties of undefined') ||
@@ -388,7 +256,7 @@ export function normalizeBackendError(
   const status = getErrorStatus(err);
   const messageLower = message.toLowerCase();
 
-  // Priority 1: TX Submission - Already submitted/duplicate → 409
+  // Already submitted / duplicate: 409
   const alreadySubmittedHints = [
     'already exists',
     'already submitted',
@@ -398,14 +266,11 @@ export function normalizeBackendError(
     'in mempool',
   ];
   if (alreadySubmittedHints.some(h => messageLower.includes(h))) {
-    // Try to extract txHash from message
     const txHashMatch = message.match(/([a-f0-9]{64})/i);
     return new TransactionAlreadySubmittedError(txHashMatch?.[1] || 'unknown', err);
   }
 
-  // Priority 2: TX Submission - Plutus script validation → 400 (ScriptValidationError)
-  // Must precede the generic validation block: these are ledger phase-2 rejections
-  // (tx was well-formed), not provider outages and not generic witness/CBOR issues.
+  // Ledger phase-2 script rejection: 400, before the generic validation hints
   const scriptValidationHints = [
     'plutusfailure',
     'plutus failure',
@@ -426,9 +291,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 3a: Address-shaped lookup errors → 404. MUST precede the generic
-  // validation hints — 'malformed' there used to shadow 'malformed address',
-  // turning a Blockfrost 400 on a read into a TransactionValidationError.
+  // Address-shaped lookup errors: 404, before 'malformed' in the validation hints can catch them
   const addressNotFoundHints = [
     'invalid address',
     'malformed address',
@@ -437,7 +300,7 @@ export function normalizeBackendError(
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 3: TX Submission - Validation/Signature errors → 400
+  // Validation / signature errors: 400
   const validationErrorHints = [
     'signature',
     'witness',
@@ -454,13 +317,8 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 3b: PostgREST server-side SQL faults surfaced as HTTP 400 (Koios).
-  // Body shape: { code: '42703', message: 'column … does not exist' } (broken
-  // SQL function on one LB instance) or { code: '57014' } (statement timeout).
-  // These are provider faults, not request validation — classify as retry-able
-  // 503 so multi-backend failover and the circuit breaker treat them like any
-  // other provider outage. Checked before Priority 4: the PostgREST message
-  // ("column … does not exist") would otherwise be misread as a resource 404.
+  // PostgREST server-side SQL faults arrive as HTTP 400 with a PG code: retryable 503 for failover.
+  // Before the not-found hints, whose 'does not exist' would match "column ... does not exist".
   const pgErrorBody = (err as HttpErrorLike)?.response?.data;
   if ((status === 400 || status === 422) && isPostgrestServerErrorCode(pgErrorBody?.code)) {
     return new ProviderUnavailableError(
@@ -471,11 +329,8 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 4: Message indicates "not found" or equivalent → always 404.
-  // This also handles providers returning wrong status codes for missing
-  // resources. Deliberately NOT here: 'not available' / bare 'no data' — those
-  // also appear in provider OUTAGE messages, and classifying an outage as 404
-  // would make it circuit-breaker-exempt (4xx) on top of hiding the 503.
+  // Not-found messages: 404 regardless of status. 'not available' / bare 'no data' are excluded,
+  // they also appear in outage messages and a 404 would be circuit-breaker-exempt.
   const notFoundHints = [
     'not found',
     'has not been found',
@@ -489,12 +344,11 @@ export function normalizeBackendError(
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 5: Rate limiting detection (status 429 or message patterns)
+  // Rate limiting: status 429 or message patterns
   if (status === 429 ||
     messageLower.includes('rate limit') ||
     messageLower.includes('too many requests') ||
     messageLower.includes('quota exceeded')) {
-    // Try to extract retry-after header
     const headers = (err as HttpErrorLike).response?.headers;
     const retryAfter = (headers?.["retry-after"] as string | undefined) ||
       (headers?.["x-ratelimit-reset"] as string | undefined);
@@ -506,12 +360,11 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 6: Explicit 404 status
   if (status === 404) {
     return new NotFoundError('Resource', backendName, err);
   }
 
-  // Priority 7: 5xx errors → Provider unavailable (retry-able)
+  // 5xx: provider unavailable (retryable)
   if (status >= 500) {
     return new ProviderUnavailableError(
       message || 'Provider returned server error',
@@ -521,7 +374,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 8: Other 4xx → differentiate by status code
+  // Other 4xx by status code
   if (status === 400 || status === 422) {
     return new TransactionValidationError(
       message || `Provider returned ${status}: invalid request`, err);
@@ -540,7 +393,7 @@ export function normalizeBackendError(
     );
   }
 
-  // Priority 9: Unknown/network errors → treat as unavailable (default fallback)
+  // Unknown / network errors: unavailable
   return new ProviderUnavailableError(
     message || 'Unknown backend error',
     backendName,
@@ -549,10 +402,7 @@ export function normalizeBackendError(
   );
 }
 
-/**
- * HsmError - Error related to HSM operations (signing, session, key access)
- * Indicates that the Hardware Security Module is unavailable or signing failed
- */
+/** HSM operation failed (session, key access, signing). */
 export class HsmError extends BackendError {
   constructor(
     message: string,
@@ -565,10 +415,7 @@ export class HsmError extends BackendError {
   }
 }
 
-/**
- * ConfigError - Error in configuration settings
- * Captures configuration-related issues
- */
+/** Configuration error. */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -577,19 +424,10 @@ export class ConfigError extends Error {
 }
 
 /**
- * ChainSyncFrameError - Ogmios delivered a frame the client cannot turn into an object.
- *
- * Raised by the frame guard (see `backends/ogmios-frame-guard.ts`) once the client's parser
- * and the depth-safe fallback have both failed. The block is named so `lastError` points at
- * it instead of leaving an empty status behind, and so the crawler can take that one block
- * through the paginating backend instead of waiting on a stream that will never deliver it.
+ * Ogmios chain-sync frame that could not be parsed. Names the block (when readable from the raw
+ * text) so the crawler can fetch that one block through the paginating backend instead.
  */
 export class ChainSyncFrameError extends BackendError {
-  /** Constructor
-   * @param height block height the frame belonged to, when it could be read off the raw text
-   * @param id block hash, when readable
-   * @param reason why the frame could not be parsed
-   */
   constructor(
     public readonly height: number | null,
     public readonly id: string | null,
@@ -604,10 +442,7 @@ export class ChainSyncFrameError extends BackendError {
   }
 }
 
-/**
- * BackendInitError - Error initializing a specific backend
- * Captures backend name and original error
- */
+/** A backend failed to initialize. */
 export class BackendInitError extends BackendError {
   constructor(
     backendName: string,
@@ -624,10 +459,7 @@ export class BackendInitError extends BackendError {
   }
 }
 
-/** 
- * AllBackendsInitFailedError - All backends failed to initialize
- * Aggregates multiple backend initialization errors
- */
+/** Every backend failed to initialize. */
 export class AllBackendsInitFailedError extends Error {
   constructor(public readonly errors: BackendInitError[]) {
     const summary = errors
@@ -638,14 +470,7 @@ export class AllBackendsInitFailedError extends Error {
   }
 }
 
-/** 
- * Function to reject requests with standardized error messages
- * @param req - The incoming request
- * @param ctx - Context string for the error
- * @param message - Detailed error message
- * @param target - Optional target resource
- * @throws {BackendError} BackendError with 400 status code
- */
+/** Throws a 400 INVALID_INPUT BackendError `<ctx>: <message>`. */
 export function rejectInvalid(req: Request, ctx: string, message: string, target?: string): never {
   throw new BackendError(
     `${ctx}: ${message}`,
@@ -657,13 +482,7 @@ export function rejectInvalid(req: Request, ctx: string, message: string, target
   );
 }
 
-/**
- * Function to reject requests for missing required fields
- * @param req - The incoming request
- * @param ctx - Context string for the error
- * @param field - Name of the missing field
- * @throws {BackendError} BackendError with 400 status code
-*/
+/** Throws a 400 INVALID_INPUT BackendError for a missing required field. */
 export function rejectMissing(req: Request, ctx: string, field: string): never {
   throw new BackendError(
     `${ctx}: ${field} is required`,
@@ -675,22 +494,14 @@ export function rejectMissing(req: Request, ctx: string, field: string): never {
   );
 }
 
-/**
- * Validation error from validators.ts
- */
+/** Validation error from validators.ts */
 interface ValidationError {
   type: 'missing' | 'invalid';
   field: string;
   message: string;
 }
 
-/**
- * Throw BackendError for the first validation error in the list
- * @param req - The incoming request
- * @param ctx - Context string for the error
- * @param errors - Array of validation errors from validateTransactionInputs
- * @throws {BackendError} if errors array is not empty
- */
+/** Throws a BackendError for the first validation error, if any. */
 export function throwIfValidationErrors(req: Request, ctx: string, errors: ValidationError[]): void {
   if (errors.length === 0) return;
 

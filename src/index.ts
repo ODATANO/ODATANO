@@ -26,9 +26,7 @@ export {
 // Re-export HSM signer for programmatic access
 export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
 
-// Agent grants (v2.0, AGENT_GRANTS_DESIGN.md): the programmatic seams other
-// packages build on — @odatano/x402 sells grants through issueAgentGrant and
-// adds its payment lane through registerTransportLane.
+// Agent grants: programmatic seams for packages that issue grants or add transport lanes.
 export {
   issueAgentGrant,
   updateAgentGrant,
@@ -71,9 +69,8 @@ export type {
 } from '../srv/cbor';
 
 /**
- * Initialize the ODATANO plugin.
- * Loads configuration from cds.env.requires["odatano-core"] OR environment variables,
- * then initializes all blockchain components.
+ * Initialize the plugin: config from cds.env.requires["odatano-core"] or env vars,
+ * then all blockchain components plus the optional crawler and wallet worker.
  */
 export async function initialize(): Promise<void> {
   const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig, getAppContext } = await import('../srv/server');
@@ -91,30 +88,21 @@ export async function initialize(): Promise<void> {
     logger.info('ODATANO core initialized');
   }
 
-  // Start the pre-sync crawler if configured (plugin mode). Non-fatal.
+  // Optional subsystems; each is non-fatal.
   const { startCrawlerIfConfigured, startWalletWorkerIfConfigured, redriveInterruptedSubmissionsIfConfigured } = await import('../srv/server');
   await startCrawlerIfConfigured();
-
-  // Start the wallet worker if configured (plugin mode). Non-fatal.
   await startWalletWorkerIfConfigured();
-
-  // Re-drive deferred submissions interrupted by a restart (plugin mode). Non-fatal.
   await redriveInterruptedSubmissionsIfConfigured();
 }
 
-/**
- * Shutdown the ODATANO plugin.
- * Cleans up all backend connections (especially Ogmios WebSocket).
- */
+/** Shut down the plugin and close all backend connections. */
 export async function shutdown(): Promise<void> {
   const { shutdownAppContext } = await import('../srv/server');
   await shutdownAppContext();
   logger.info('ODATANO core shutdown');
 }
 
-/**
- * Get the current status of the plugin.
- */
+/** Current plugin status. */
 export function getStatus(): { initialized: boolean; network?: string; backends?: string[] } {
   try {
     const { getAppContext } = require('../srv/server');

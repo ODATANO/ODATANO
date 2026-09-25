@@ -140,8 +140,8 @@ AGENT_TOKEN_CACHE_MS=10000           # a resolved token is reused this long befo
    Wallet jobs are pinned to the grant's wallet and visible only to the grant that queued them.
 3. `GET /odata/v4/cardano-agent/GetGrantStatus()` tells the agent what it may do and how much budget
    is left; `RevokeAgentGrant` turns the token into an unknown token immediately.
-4. Lifecycle (Admin, same semantics as NIGHTGATE's agent grants so a gateway drives both with one
-   code path): `UpdateAgentGrant` changes label, allow list, job kinds, daily budget or expiry
+4. Lifecycle (Admin; the same semantics as the gateway's peer services, so one client drives
+   them all): `UpdateAgentGrant` changes label, allow list, job kinds, daily budget or expiry
    (absent = untouched, explicit `null` = cleared; the wallet binding is immutable, 409
    `GRANT_REVOKED` on a revoked grant); `RotateAgentGrantToken` returns a fresh token once, the old
    one is unknown from the next request; `GetGrantUsage(grantId, since, until)` lists admitted calls

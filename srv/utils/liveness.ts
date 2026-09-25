@@ -1,13 +1,6 @@
 /**
- * Liveness body for CardanoIndexerService.getLiveness() (unauthenticated,
- * `@requires: 'any'`): process facts only. Never touches the app context, the
- * backends or the DB, so it answers while those are still initializing or have
- * failed — that is what a liveness probe is for; readiness stays with
- * getStatus and the backend health entities, which remain authenticated.
- *
- * No secrets, no backend names, no API key state. Mirrors NIGHTGATE's
- * `/api/v1/indexer/getLiveness()` (status 'alive', timestamp, uptime), plus the
- * package version and the configured network.
+ * Unauthenticated liveness body for CardanoIndexerService.getLiveness(): process facts only,
+ * never touches app context, backends or DB, so it answers while those initialize or fail.
  */
 
 import cds from '@sap/cds';
@@ -31,8 +24,7 @@ let cachedVersion: string | null = null;
 function packageVersion(): string {
   if (cachedVersion !== null) return cachedVersion;
   try {
-    // srv/utils → package root; the build compiles in place, so this holds in
-    // standalone and plugin mode alike.
+    // srv/utils → package root; the in-place build keeps this path in plugin mode too.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require(path.resolve(__dirname, '..', '..', 'package.json')) as { version?: unknown };
     cachedVersion = String(pkg.version ?? '');

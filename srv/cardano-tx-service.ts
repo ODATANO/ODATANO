@@ -18,10 +18,7 @@ const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoTxService');
 
 
-/**
- * Cardano Transaction Service Implementation
- * Handles transaction building and submission operations & some additional data queries.
- */
+/** CardanoTransactionService handlers: transaction building, submission and script helpers. */
 module.exports = (srv: cds.Service) => {
   logger.debug('Module loaded - registering handlers');
 
@@ -31,15 +28,10 @@ module.exports = (srv: cds.Service) => {
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
 
-  /**
-   * Build a simple ADA-only transaction
-   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, changeAddress)
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // BuildSimpleAdaTransaction — ADA (optionally with assets / datum) to one recipient or a script.
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
-    // validate inputs
     const errors = validateTransactionInputs(
       { senderAddress, recipientAddress, lovelaceAmount, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount']
@@ -49,10 +41,8 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid changeAddress format', 'changeAddress');
     }
 
-    // parse optional output datum
     const cleanData = { ...req.data };
 
-    // parse optional forceInputsJson
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', forceInputsResult.error, 'forceInputsJson');
     cleanData.forceInputs = forceInputsResult.parsed;
@@ -64,7 +54,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.outputDatumJson;
     }
 
-    // parse optional assets JSON (for locking native assets at script addresses)
+    // Native assets to lock at a script address
     const assetsResult = parseAssetsArray(assetsJson, 'assetsJson');
     if (assetsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', assetsResult.error, 'assetsJson');
     if (assetsResult.parsed) {
@@ -72,7 +62,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.assetsJson;
     }
 
-    // parse optional scriptParamsJson (for parameterized validators)
+    // Parameters for a parameterized validator
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
@@ -83,12 +73,11 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
-    // lockOnScript requires a validatorScript to derive the target address from
     if (lockOnScript && !validatorScript) {
       return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'lockOnScript requires validatorScript to derive the script address', 'validatorScript');
     }
 
-    // Pre-compute script hash + address when lockOnScript is set; override recipient before build.
+    // lockOnScript: derive script hash + address and override the recipient before the build.
     let derivedScriptHash: string | undefined;
     let derivedScriptAddress: string | undefined;
     if (lockOnScript && validatorScript) {
@@ -114,13 +103,12 @@ module.exports = (srv: cds.Service) => {
     }
     delete cleanData.referenceScriptHex;
 
-    // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug({ senderAddress, recipientAddress: cleanData.recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson, lockOnScript: !!lockOnScript }, 'Building simple ADA transaction');
 
       const buildResult = await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
 
-      // Persist derived script address + hash on the build record when lockOnScript was applied
+      // Persist the derived script address + hash on the build record
       if (lockOnScript && derivedScriptHash && derivedScriptAddress && buildResult.id) {
         buildResult.scriptHash = derivedScriptHash;
         buildResult.scriptAddress = derivedScriptAddress;
@@ -135,15 +123,10 @@ module.exports = (srv: cds.Service) => {
       return buildResult;
     });
   });
-  /**
-   * Build a transaction with metadata
-   * @param req - CDS request object
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // BuildTransactionWithMetadata — ADA transfer with auxiliary metadata.
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
 
-    // validate inputs (includes JSON parsing validation)
     const errors = validateTransactionInputs(
       { senderAddress, recipientAddress, lovelaceAmount, metadataJson },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
@@ -153,10 +136,9 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid changeAddress format', 'changeAddress');
     }
 
-    // Parse metadataJson (already validated as valid JSON)
+    // Already validated as JSON above
     const parsedMetadata = JSON.parse(metadataJson);
 
-    // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, metadataKeyCount: Object.keys(parsedMetadata).length },
@@ -167,15 +149,10 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Build a multi-asset transaction
-   * @param req CDS request object
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // BuildMultiAssetTransaction — ADA plus native assets to one recipient.
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
-    // validate inputs (includes JSON parsing validation)
     const errors = validateTransactionInputs(
       { senderAddress, recipientAddress, lovelaceAmount, assetsJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
@@ -185,7 +162,6 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid changeAddress format', 'changeAddress');
     }
 
-    // Parse and validate assetsJson entries (unit + quantity, like parseExtraOutputs)
     const assetsResult = parseAssetsArray(assetsJson, 'assetsJson');
     if (assetsResult.error) return rejectInvalid(req, 'BuildMultiAssetTransaction', assetsResult.error, 'assetsJson');
     const parsedAssets = assetsResult.parsed;
@@ -193,11 +169,9 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must contain at least one asset', 'assetsJson');
     }
 
-    // Validation BEFORE handleRequest
     const cleanData = { ...req.data };
     delete cleanData.assetsJson;
 
-    // parse optional output datum
     if (outputDatumJson) {
       const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
@@ -210,7 +184,6 @@ module.exports = (srv: cds.Service) => {
     }
     delete cleanData.referenceScriptHex;
 
-    // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets, hasDatum: !!outputDatumJson },
@@ -222,15 +195,10 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Build a minting transaction
-   * @param req CDS request object
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // BuildMintTransaction — mint/burn under one or more Plutus policies.
   srv.on('BuildMintTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, extraOutputsJson, metadataJson, validityStartMs, validityEndMs } = req.data;
 
-    // validate inputs (includes JSON and CBOR validation)
     const errors = validateTransactionInputs(
       { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'mintActionsJson', 'mintingPolicyScript']
@@ -240,7 +208,7 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildMintTransaction', 'Invalid changeAddress format', 'changeAddress');
     }
 
-    // Parse mintActionsJson and convert quantity strings to bigint
+    // Mint actions: quantities become bigint; bare asset names are expanded with the policy id.
     const parsedMintActionsRaw = JSON.parse(mintActionsJson);
     if (!Array.isArray(parsedMintActionsRaw)) {
       return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
@@ -249,7 +217,7 @@ module.exports = (srv: cds.Service) => {
       if (!action || typeof action !== 'object') {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
       }
-      // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson.
+      // Optional per-action mintingPolicyScript + redeemerJson
       const policyFields = parseMintActionPolicyFields(action as unknown as Record<string, unknown>, actionIndex);
       if (policyFields.error) {
         return rejectInvalid(req, 'BuildMintTransaction', policyFields.error, 'mintActionsJson');
@@ -300,12 +268,10 @@ module.exports = (srv: cds.Service) => {
       }
     });
 
-    // Parse and validate optional requiredSignersJson
     const requiredSignersResult = parseRequiredSigners(requiredSignersJson);
     if (requiredSignersResult.error) return rejectInvalid(req, 'BuildMintTransaction', requiredSignersResult.error, 'requiredSignersJson');
     const requiredSigners = requiredSignersResult.parsed;
 
-    // Parse and validate optional scriptParamsJson
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
@@ -316,7 +282,6 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
-    // Parse and validate optional inlineDatumJson
     let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
       const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
@@ -324,7 +289,6 @@ module.exports = (srv: cds.Service) => {
       inlineDatum = jsonResult.parsed as JSONValue;
     }
 
-    // Parse and validate optional mintRedeemerJson
     let mintRedeemer: JSONValue | undefined;
     if (mintRedeemerJson) {
       const jsonResult = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
@@ -332,28 +296,24 @@ module.exports = (srv: cds.Service) => {
       mintRedeemer = jsonResult.parsed as JSONValue;
     }
 
-    // Validate lockOnScript requires scriptParamsJson
     if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
       return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
-    // Parse and validate optional extraOutputsJson (FR-2 on mint: each minted
-    // token can sit on its own output with its own inline datum)
+    // extraOutputsJson: each minted token can sit on its own output with its own inline datum
     const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
     if (extraOutputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', extraOutputsResult.error, 'extraOutputsJson');
     const extraOutputs = extraOutputsResult.parsed;
 
-    // Parse and validate optional forceInputsJson
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
 
-    // Parse and validate optional referenceInputsJson (CIP-31)
+    // CIP-31 reference inputs
     const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
     if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
     const referenceInputs = refInputsResult.parsed;
 
-    // Parse and validate optional metadataJson
     let parsedMetadata: JSONValue | undefined;
     if (metadataJson) {
       try {
@@ -367,14 +327,12 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
-    // handle the request / building the transaction / indexing the build result / returning build details
     return handleRequest(req, async (db) => {
       logger.debug(
         { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0, hasMetadata: !!parsedMetadata },
         'Building minting transaction'
       );
 
-      // Create clean request object with parsed mintActions (remove mintActionsJson, add mintActions)
       const cleanData = { ...req.data };
       delete cleanData.mintActionsJson;
       delete cleanData.requiredSignersJson;
@@ -396,14 +354,12 @@ module.exports = (srv: cds.Service) => {
       }
       delete cleanData.referenceScriptHex;
 
-      // Apply script parameters if provided (for parameterized validators)
+      // Parameterized policy: apply params, then expand bare asset names with the applied hash.
       let finalMintingPolicyScript = mintingPolicyScript;
       let effectivePolicyId: string | undefined;
       if (scriptParams && scriptParams.length > 0) {
         try {
           finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
-
-          // BUG 7 fix: expand assetName-only entries to full assetUnit using the applied script's policyId.
           const appliedScript = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex'));
           effectivePolicyId = appliedScript.hash.toString();
         } catch (err: unknown) {
@@ -416,7 +372,7 @@ module.exports = (srv: cds.Service) => {
           }
         }
 
-        // lockOnScript: route output to the enterprise script address derived from applied script hash
+        // lockOnScript: route the output to the enterprise address of the applied script
         if (lockOnScript) {
           const scriptAddr = scriptHashToEnterpriseAddress(effectivePolicyId, getCardanoClient().network);
           cleanData.recipientAddress = scriptAddr;
@@ -426,10 +382,11 @@ module.exports = (srv: cds.Service) => {
         try {
           effectivePolicyId = Script.fromCbor(Buffer.from(mintingPolicyScript, 'hex')).hash.toString();
         } catch {
-          // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+          // Invalid script CBOR: skip the prefix check, the builder rejects it with its own message.
         }
       }
 
+      // Every action without its own policy must carry the top-level policy id prefix.
       if (effectivePolicyId) {
         const policyId = effectivePolicyId;
         const mismatch = parsedMintActions.find(
@@ -457,17 +414,13 @@ module.exports = (srv: cds.Service) => {
         extraOutputs
       });
 
-      // Post-build: compute CIP-14 fingerprint and scriptAddress
+      // Post-build: CIP-14 fingerprint and scriptAddress
       if (buildResult.scriptHash) {
         const policyId = buildResult.scriptHash;
         const updates: Record<string, string> = {};
 
-        // CIP-14 asset fingerprint for the first minted asset. The unit is always a
-        // full policyId+assetName here: bare names were expanded before the build and
-        // the prefix checks rejected everything else (a 56-hex unit is an empty
-        // asset name, not a bare 28-byte name). The policy id comes from the UNIT,
-        // not from buildResult.scriptHash: with a per-action mintingPolicyScript the
-        // first action may mint under a different policy than the top-level script.
+        // Fingerprint of the first minted asset. The policy id is taken from the unit, not from
+        // buildResult.scriptHash: a per-action policy may differ from the top-level script.
         if (parsedMintActions.length > 0) {
           const firstAssetUnit = parsedMintActions[0].assetUnit;
           const firstPolicyId = firstAssetUnit.slice(0, POLICY_ID_HEX_LENGTH);
@@ -476,7 +429,7 @@ module.exports = (srv: cds.Service) => {
           updates.fingerprint = buildResult.fingerprint;
         }
 
-        // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
+        // lockOnScript: persist the derived script address on the build record
         if (lockOnScript && scriptParams && scriptParams.length > 0) {
           buildResult.scriptAddress = scriptHashToEnterpriseAddress(policyId, getCardanoClient().network);
           updates.scriptAddress = buildResult.scriptAddress;
@@ -492,15 +445,10 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Build a Plutus spending transaction (consume UTxO at script address)
-   * @param req - CDS request object (with senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, changeAddress)
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // BuildPlutusSpendTransaction — consume a UTxO at a script address, optionally minting too.
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
-    // Validate inputs
     const errors = validateTransactionInputs(
       { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, referenceScriptHex, validityStartMs, validityEndMs },
       ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'validatorScript', 'scriptTxHash', 'redeemerJson']
@@ -510,23 +458,18 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Invalid changeAddress format', 'changeAddress');
     }
 
-    // Validate scriptOutputIndex separately (it's a number, not caught by required-fields check for empty string)
+    // A number: not covered by the required-fields check
     if (scriptOutputIndex === undefined || scriptOutputIndex === null) {
       return rejectMissing(req, 'BuildPlutusSpendTransaction', 'scriptOutputIndex');
     }
 
-    // Parse redeemer JSON
     const parsedRedeemer = JSON.parse(redeemerJson);
-
-    // Parse optional datum JSON
     const parsedDatum = datumJson ? JSON.parse(datumJson) : undefined;
 
-    // Parse and validate optional requiredSignersJson
     const requiredSignersResult = parseRequiredSigners(requiredSignersJson);
     if (requiredSignersResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', requiredSignersResult.error, 'requiredSignersJson');
     const requiredSigners = requiredSignersResult.parsed;
 
-    // Parse and validate optional scriptParamsJson
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
       const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
@@ -537,7 +480,6 @@ module.exports = (srv: cds.Service) => {
       }
     }
 
-    // Parse and validate optional inlineDatumJson
     let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
       const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
@@ -545,22 +487,19 @@ module.exports = (srv: cds.Service) => {
       inlineDatum = jsonResult.parsed as JSONValue;
     }
 
-    // Validate lockOnScript requires scriptParamsJson
     if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
       return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
     }
 
-    // Parse and validate optional forceInputsJson
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
 
-    // Parse and validate optional referenceInputsJson (CIP-31)
+    // CIP-31 reference inputs
     const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
     if (refInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', refInputsResult.error, 'referenceInputsJson');
     const referenceInputs = refInputsResult.parsed;
 
-    // Parse and validate optional extraOutputsJson
     const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
     if (extraOutputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', extraOutputsResult.error, 'extraOutputsJson');
     const extraOutputs = extraOutputsResult.parsed;
@@ -588,8 +527,7 @@ module.exports = (srv: cds.Service) => {
         if (typeof action.assetUnit !== 'string') {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must have assetUnit string', 'mintActionsJson');
         }
-        // Multi-policy mint FR: optional per-action mintingPolicyScript + redeemerJson
-        // (same rules as BuildMintTransaction).
+        // Optional per-action mintingPolicyScript + redeemerJson (same rules as BuildMintTransaction)
         const policyFields = parseMintActionPolicyFields(action, actionIndex);
         if (policyFields.error) {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', policyFields.error, 'mintActionsJson');
@@ -643,7 +581,6 @@ module.exports = (srv: cds.Service) => {
         'Building Plutus spending transaction'
       );
 
-      // Apply script parameters if provided (for parameterized validators)
       let finalValidatorScript = validatorScript;
       if (scriptParams && scriptParams.length > 0) {
         try {
@@ -654,8 +591,8 @@ module.exports = (srv: cds.Service) => {
         }
       }
 
-      // FR-1: when the mint policy is byte-equal to the validator (multi-purpose script),
-      // re-use the script-params-applied validator hex. Otherwise pass the policy through unchanged.
+      // A mint policy byte-equal to the validator (multi-purpose script) reuses the
+      // params-applied validator hex; any other policy passes through unchanged.
       let finalMintingPolicyScript: string | undefined;
       if (parsedMintActions) {
         finalMintingPolicyScript = (mintingPolicyScript === validatorScript)
@@ -677,21 +614,18 @@ module.exports = (srv: cds.Service) => {
           }
         }
 
-        // BUG 9 fix: same policyId-prefix check as BuildMintTransaction — the builder
-        // mints every action under the mint script's hash and parseAssetUnit silently
-        // discards the unit's first 56 hex chars, so a mismatched prefix would mint a
-        // truncated asset name.
+        // Policy-id prefix check as in BuildMintTransaction: the builder discards the unit's
+        // first 56 hex chars, so a mismatched prefix would mint a truncated asset name.
         if (finalMintingPolicyScript) {
           let mintPolicyId: string | undefined;
           try {
             mintPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
           } catch {
-            // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+            // Invalid script CBOR: skip the prefix check, the builder rejects it with its own message.
           }
           if (mintPolicyId) {
             const policyId = mintPolicyId;
-            // Actions with their own per-action script were already checked
-            // against THAT script's policy id during parsing.
+            // Actions with a per-action script were already checked against that policy id.
             const mismatch = parsedMintActions.find(
               (action) => !action.mintingPolicyScript && !action.assetUnit.toLowerCase().startsWith(policyId)
             );
@@ -741,7 +675,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.mintRedeemerJson;
       delete cleanData.referenceScriptHex;
 
-      // lockOnScript: route continuing output to enterprise script address
+      // lockOnScript: route the continuing output to the enterprise script address
       if (lockOnScript && scriptParams && scriptParams.length > 0) {
         try {
           const appliedScript = Script.fromCbor(Buffer.from(finalValidatorScript, 'hex'));
@@ -757,7 +691,7 @@ module.exports = (srv: cds.Service) => {
 
       const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData as TxBuildPlutusSpendRequest);
 
-      // lockOnScript: persist the derived script address on the build record (only when scriptParams were applied)
+      // lockOnScript: persist the derived script address on the build record
       if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash && buildResult.id) {
         const scriptAddr = scriptHashToEnterpriseAddress(buildResult.scriptHash, getCardanoClient().network);
         buildResult.scriptAddress = scriptAddr;
@@ -769,19 +703,13 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Get build details for previously built transaction
-   * @param req - CDS request object (with buildId)
-   * @returns {TransactionBuild} Transaction build details
-   */
+  // GetBuildDetails — an existing transaction build by id.
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
 
-    // Validate inputs
     const errors = validateTransactionInputs({ buildId }, ['buildId']);
     throwIfValidationErrors(req, 'GetBuildDetails', errors);
 
-    // handle the request / fetching the build details
     return handleRequest(req, async (db) => {
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) throw new NotFoundError(`Build '${buildId}'`);
@@ -789,13 +717,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Set up a collateral UTxO for Plutus transactions.
-   * Checks if the address already has >= 2 UTxOs with >= 5 ADA each.
-   * If not, builds a self-send transaction to create a 5 ADA collateral UTxO.
-   * @param req - CDS request object (with address)
-   * @returns {TransactionBuild} Transaction build details for the collateral setup
-   */
+  // SetCollateral — ensures >= 2 UTxOs of >= 5 ADA; otherwise builds a self-send that creates one.
   srv.on('SetCollateral', async (req: Request) => {
     const { address } = req.data;
 
@@ -805,11 +727,8 @@ module.exports = (srv: cds.Service) => {
     }
 
     return handleRequest(req, async (db) => {
-      // Inside handleRequest: getCardanoClient() throwing (e.g. uninitialized after
-      // a failed bootstrap → ProviderUnavailableError) and backend errors from
-      // getAddressUtxos both get caught and properly mapped via mapError.
-      // Use rejectInvalid (throws BackendError 400) instead of req.reject so
-      // mapError sees a typed BackendError and preserves the 400 status.
+      // Inside handleRequest use rejectInvalid (typed BackendError 400), not req.reject,
+      // so mapError preserves the status.
       const utxos = await getCardanoClient().getAddressUtxos(address);
 
       if (utxos.length === 0) {
@@ -850,37 +769,29 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Submit signed transaction built previously
-   * Handler validates, checks build exists, submits to blockchain, delegates persistence to indexer
-   * @param req - CDS request object (with buildId, signedTxCbor)
-   * @returns {TransactionSubmission} Transaction submission details
-   */
+  // SubmitTransaction — submit the signed CBOR of a previous build.
   srv.on('SubmitTransaction', async (req: Request) => {
     logger.debug('SubmitTransaction Action handler called');
     const { buildId, signedTxCbor } = req.data;
 
-    // Validate inputs (includes CBOR format validation)
     const errors = validateTransactionInputs({ buildId, signedTxCbor }, ['buildId', 'signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitTransaction', errors);
 
     return handleRequest(req, async (db) => {
       logger.debug({ buildId }, 'Submitting signed transaction');
 
-      // Validate build exists
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) throw new NotFoundError(`Build '${buildId}'`);
 
-      // Verify the signed CBOR is for this build (audit-trail integrity)
+      // The signed CBOR must belong to this build (audit-trail integrity)
       const signedTxHash = getTxHashFromCbor(signedTxCbor);
       if (signedTxHash !== existing.txBodyHash) {
         return rejectInvalid(req, 'SubmitTransaction', `signedTxCbor hash '${signedTxHash}' does not match build txBodyHash '${existing.txBodyHash}'`, 'signedTxCbor');
       }
 
-      // Use txBodyHash from build
       const txHash = existing.txBodyHash;
 
-      // Two-phase submit: persist with 'pending', then submit to blockchain
+      // Two-phase submit: persist as 'pending', then submit
       const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
@@ -893,9 +804,8 @@ module.exports = (srv: cds.Service) => {
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
 
-        // Invalidate stale UTxO cache: spent input refs + output addresses from
-        // the signed CBOR, plus the build's sender address. Best-effort — a
-        // failure here must not fail the already-successful submit.
+        // Best-effort UTxO cache invalidation (spent inputs, output addresses, sender);
+        // a failure must not fail the successful submit.
         try {
           const addrBuild = await db.run(
             SELECT.one.from(AddressTransactionBuilds).where({ txBuild_id: buildId })
@@ -919,33 +829,24 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Submit signed transaction without prior build
-   * Handler validates, submits to blockchain, delegates persistence to indexer
-   * Two-phase: persist with 'pending' first, then update to 'submitted' or 'failed'
-   * @param req - CDS request object (with signedTxCbor, network)
-   * @returns {TransactionSubmission} Transaction submission details
-   */
+  // SubmitSignedTransaction — submit externally built signed CBOR (no prior build).
   srv.on('SubmitSignedTransaction', async (req: Request) => {
     logger.debug('SubmitSignedTransaction Action handler called');
     const { signedTxCbor, network } = req.data;
 
-    // Validate inputs (includes CBOR format validation)
     const errors = validateTransactionInputs({ signedTxCbor }, ['signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitSignedTransaction', errors);
 
     return handleRequest(req, async (db) => {
-      // The declared network param was previously ignored — verify it against the
-      // configured network so a caller targeting the wrong deployment gets a clear 400.
+      // A caller targeting the wrong deployment gets a clear 400
       const configuredNetwork = getCardanoClient().network;
       if (network && network !== configuredNetwork) {
         return rejectInvalid(req, 'SubmitSignedTransaction', `network '${network}' does not match this deployment's network '${configuredNetwork}'`, 'network');
       }
 
-      // Extract txHash from signed CBOR
       const txHash = getTxHashFromCbor(signedTxCbor);
 
-      // Two-phase submit: persist with 'pending', then submit to blockchain
+      // Two-phase submit: persist as 'pending', then submit
       const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
         signedTxCbor,
         txHash,
@@ -958,7 +859,7 @@ module.exports = (srv: cds.Service) => {
         await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
         submissionRecord.status = 'submitted';
 
-        // Invalidate stale UTxO cache (spent inputs + output addresses) — best-effort
+        // Best-effort UTxO cache invalidation
         try {
           await getCardanoIndexer().invalidateUtxoCacheForTx(db, extractTxCacheTargets(signedTxCbor));
         } catch (invalidateErr: unknown) {
@@ -975,24 +876,15 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Check submission status (bound action on TransactionSubmissions)
-   * @flow.status validates @from: [#submitted] automatically (409 if wrong state)
-   * Queries blockchain for transaction confirmation and updates status accordingly
-   * @param req - CDS request with entity key in params
-   * @returns {TransactionSubmission} The updated transaction submission status
-   */
+  // CheckSubmissionStatus — bound action; the @from: [#submitted] state gate is enforced by CAP.
   srv.on('CheckSubmissionStatus', async (req: Request) => {
     logger.debug('CheckSubmissionStatus Action handler called');
     const { id: submissionId } = req.params[0] as { id: string };
-
-    // @from: [#submitted] validated by framework — no manual status check needed
 
     return handleRequest(req, async (db) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
       if (!submission) throw new NotFoundError(`Submission '${submissionId}'`);
 
-      // Query blockchain for confirmation
       try {
         const txDetails = await getCardanoClient().getTransaction(submission.txHash);
         if (txDetails) {
@@ -1007,10 +899,9 @@ module.exports = (srv: cds.Service) => {
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         if (err instanceof NotFoundError || (err as { statusCode?: number })?.statusCode === 404) {
-          // Transaction genuinely not yet confirmed on chain
           logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
         } else {
-          // Provider error — don't mask as "pending", let caller know
+          // A provider error must not be masked as "pending"
           logger.warn({ submissionId, txHash: submission.txHash, error: errMsg }, 'Failed to check transaction confirmation status');
           throw err;
         }
@@ -1020,27 +911,18 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Get all existing transaction builds by address
-   * @param req - CDS request object (with address)
-   * @returns {AddressTransactionBuilds} Address transaction build associations
-   */
+  // GetTransactionBuildsByAddress — address ↔ build associations.
   srv.on('GetTransactionBuildsByAddress', async (req: Request) => {
     logger.debug('GetTransactionBuildsByAddress Action handler called');
     const { address } = req.data;
-    // Validate inputs
     if (!address) return rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
     if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
-    // Fetch the address-build associations
     return handleRequest(req, async (db) => {
       return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
     });
   });
 
-  /**
-   * Derive the enterprise script address + script hash for a validator script,
-   * optionally after applying PlutusData parameters. No transaction is built.
-   */
+  // DeriveScriptAddress — enterprise address + hash of a validator, optionally parameterized.
   srv.on('DeriveScriptAddress', async (req: Request) => {
     const { validatorScript, scriptParamsJson, network } = req.data;
 
@@ -1064,9 +946,7 @@ module.exports = (srv: cds.Service) => {
     }
 
     return handleRequest(req, async () => {
-      // getCardanoClient() throws ProviderUnavailableError (503) when the app context
-      // is uninitialized. Resolving the network outside the inner CBOR try/catch
-      // keeps that 503 distinct from the 400 used for malformed validatorScript bytes.
+      // Resolved outside the CBOR try/catch so an uninitialized client stays a 503, not a 400.
       const targetNetwork: DeriveNetwork = network
         ? (network as DeriveNetwork)
         : (getCardanoClient().network as DeriveNetwork);
@@ -1085,10 +965,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  /**
-   * Extract the 28-byte payment credential (key hash or script hash) from a Bech32
-   * Cardano address. Pure local decoding — no blockchain call.
-   */
+  // ExtractPaymentKeyHash — 28-byte payment credential of a bech32 address; pure local decoding.
   srv.on('ExtractPaymentKeyHash', async (req: Request) => {
     const { address } = req.data;
 
@@ -1100,7 +977,7 @@ module.exports = (srv: cds.Service) => {
     try {
       const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
       const bytes = Buffer.from(bech32.fromWords(decoded.words));
-      // Cardano address: 1 header byte + 28-byte payment credential + (optional 28-byte stake credential)
+      // 1 header byte + 28-byte payment credential (+ optional 28-byte stake credential)
       if (bytes.length < 29) {
         return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address is too short to contain a payment credential', 'address');
       }

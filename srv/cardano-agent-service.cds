@@ -4,7 +4,7 @@ using {odatano.cardano as db} from '../db/schema';
  * Cardano Agent Service (v2.0)
  *
  * Agent grants: scoped, budgeted bearer capabilities an Admin hands to an agent
- * instead of a full user (see AGENT_GRANTS_DESIGN.md).
+ * instead of a full user.
  *
  * - CreateAgentGrant / UpdateAgentGrant / RotateAgentGrantToken / RevokeAgentGrant:
  *   Admin-only administration, rate limited per principal per hour
@@ -17,10 +17,6 @@ using {odatano.cardano as db} from '../db/schema';
  *   is left, when do I expire. What an MCP tool needs to describe itself honestly.
  * - GetGrantUsage: admitted calls per service and action over a window — an Admin
  *   for any grant, a token for its own (a partner usage view, ledger reconciliation).
- *
- * Names are this repo's PascalCase; semantics mirror NIGHTGATE's agent grants
- * (createAgentGrant / updateAgentGrant / rotateAgentGrantToken / revokeAgentGrant /
- * getGrantUsage), so a gateway drives both products with one code path.
  *
  * A token request never inherits the operator's roles: `@requires: 'Admin'` on the
  * four actions, on PauseWorker / ResumeWorker / pauseCrawler / resumeCrawler and on

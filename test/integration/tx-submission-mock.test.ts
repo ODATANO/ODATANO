@@ -17,18 +17,13 @@ delete process.env.OGMIOS_WS_URL;
 delete process.env.BLOCKFROST_API_KEY;
 
 /**
- * Transaction Submission Tests with Mocked Koios Backend
- *
- * This test suite focuses on testing the transaction submission functionality of the CardanoTransactionService
- * using a mocked Koios backend via the nock library. It ensures that transaction submissions are handled correctly
- * without making real network calls.
+ * Transaction submission through CardanoTransactionService against a nock-mocked Koios.
  */
 
 describe('Transaction Submission Tests [MOCKED]', () => {
   const test = cds.test(__dirname + '/../../');
   const expect = test.expect;
 
-  // Create app context once before all tests
   beforeAll(async () => {
     nock.cleanAll();
     nock.disableNetConnect();
@@ -57,7 +52,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
   describe('Koios Backend - TX Submission Mock', () => {
     it('SubmitSignedTransaction - successful submission without prior build', async () => {
-      // Mock Koios TX Submit (raw CBOR via /submittx)
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
         .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
@@ -77,7 +71,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
     it('SubmitTransaction - successful submission with prior build', async () => {
 
-      // create a mock transaction build in the database
       const mockBuildId = 'test-build-123';
       const { INSERT } = cds.ql;
       const now = Date.now();
@@ -98,12 +91,10 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         })
       );
 
-      // Mock Koios TX Submit (raw CBOR via /submittx)
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
         .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
 
-      // Submit with Build ID
       const submitResponse = await test.post(
         '/odata/v4/cardano-transaction/SubmitTransaction',
         {
@@ -126,7 +117,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     describe('Error Scenarios', () => {
 
       it('SubmitSignedTransaction - should return 400 for invalid signature', async () => {
-        // Mock Koios TX Submit returning signature error
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {
@@ -149,7 +139,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       });
 
       it('SubmitSignedTransaction - should return 503 for network timeout', async () => {
-        // Mock Koios TX Submit with 503 response (simulating backend unavailability)
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(503, {
@@ -172,7 +161,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       });
 
       it('SubmitSignedTransaction - should return 409 for duplicate transaction', async () => {
-        // Mock Koios TX Submit returning already submitted error
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {
@@ -195,7 +183,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       });
 
       it('SubmitSignedTransaction - should return 503 for backend unavailable', async () => {
-        // Mock Koios TX Submit with 502 Bad Gateway (simulating backend connection issues)
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(502, {
@@ -217,7 +204,6 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       });
 
       it('SubmitSignedTransaction - should return 400 for malformed CBOR', async () => {
-        // Mock Koios TX Submit returning deserialization error
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {

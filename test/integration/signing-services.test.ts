@@ -1,14 +1,10 @@
 /**
- * Integration tests for Signing Services
- *
- * Tests the external signing workflow with minimal tests for maximum coverage
+ * External signing workflow through CardanoSignService, incl. HSM actions with a mock signer.
  */
 
 import cds from '@sap/cds';
-// The CAP server booted by cds.test() loads srv/* through Node's native
-// require — an ESM import here would create a second module instance whose
-// app context / HSM singleton / error classes the service handlers never
-// see. require() shares the native graph (NIGHTGATE pattern).
+// Native require: the CAP server booted by cds.test() loads srv/* through Node's
+// require, so an ESM import would create a second module instance the handlers never see.
 const { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } =
   require('../../srv/server') as typeof import('../../srv/server');
 const { TransactionAlreadySubmittedError } =
@@ -33,7 +29,7 @@ describe('Signing Services Integration Tests', () => {
 
   let testBuildId: string;
 
-  // Create app context once before all tests - nock mocks must be set up first
+  // nock mocks must exist before the app context is created.
   beforeAll(async () => {
     setupNocks();
     setupKoiosMocks();
@@ -45,20 +41,17 @@ describe('Signing Services Integration Tests', () => {
   beforeEach(async () => {
     await test.data.reset();
 
-    // Reactivate nock for each test
     setupNocks();
     setupKoiosMocks();
 
-    // Create test build
     const now = Date.now();
     testBuildId = 'test-build-1234';
     await cds.run(
       INSERT.into('CardanoSignService.TransactionBuilds').entries({
         id: testBuildId,
         network: TEST_FIXTURES.network,
-        // Fee-payer key binding (resolveRequiredSigners) requires the senderAddress'
-        // payment credential to match a witness. addressWithFunds' cred == the key the
-        // signedTxCbor1/witnessSetCbor fixtures actually sign with (374610…0a1).
+        // Fee-payer key binding: the senderAddress' payment credential must match a witness;
+        // addressWithFunds' cred is the key signedTxCbor1/witnessSetCbor sign with.
         senderAddress: TEST_FIXTURES.addressWithFunds,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
@@ -77,9 +70,7 @@ describe('Signing Services Integration Tests', () => {
   });
 
   afterAll(async () => {
-    // Cleanup nock
     teardownKoiosMocks();
-    // Shutdown app context to close backend connections
     await shutdownAppContext();
   });
 
@@ -89,7 +80,6 @@ describe('Signing Services Integration Tests', () => {
 
   describe('CreateSigningRequest', () => {
     it('should create signing request with all required fields and return existing if duplicate', async () => {
-      // Test creation
       const { status, data } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
@@ -100,7 +90,6 @@ describe('Signing Services Integration Tests', () => {
       expect(data).to.have.property('unsignedTxCbor', TEST_FIXTURES.unsignedTxCbor);
       expect(data).to.have.property('status', 'pending');
 
-      // Test duplicate returns same request
       const { data: duplicateData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
@@ -108,12 +97,10 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should reject invalid inputs', async () => {
-      // Missing buildId
       const { status: status1 } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {})
         .catch(err => err.response);
       expect(status1).to.equal(400);
 
-      // Non-existent build
       const { status: status2, data: data2 } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: 'non-existent',
       }).catch(err => err.response);
@@ -133,14 +120,12 @@ describe('Signing Services Integration Tests', () => {
       });
       const signingRequestId = createData.id;
 
-      // Test retrieval
       const { status, data } = await test.post('/odata/v4/cardano-sign/GetSigningRequest', {
         signingRequestId,
       });
       expect(status).to.equal(200);
       expect(data.id).to.equal(signingRequestId);
 
-      // Test expiration handling
       await cds.run(
         UPDATE.entity('CardanoSignService.SigningRequests')
           .set({ expiresAt: new Date(Date.now() - 60000).toISOString() })
@@ -189,7 +174,6 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should reject expired requests and missing signedTxCbor', async () => {
-      // Test expired request
       await cds.run(
         UPDATE.entity('CardanoSignService.SigningRequests')
           .set({ expiresAt: new Date(Date.now() - 60000).toISOString() })
@@ -203,7 +187,6 @@ describe('Signing Services Integration Tests', () => {
       expect(status1).to.equal(400);
       expect(data1.error.message).to.include('expired');
 
-      // Test missing signedTxCbor
       const { data: newReq } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', { buildId: testBuildId });
       const { status: status2 } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
         signingRequestId: newReq.id,
@@ -279,7 +262,6 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should reject already-submitted requests', async () => {
-      // First submit succeeds
       await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
         signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,
@@ -296,9 +278,8 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('finalizes as submitted when submit reports the tx is already in the mempool', async () => {
-      // Lost-response duplicate: the node already holds the tx, so submit throws 409
-      // (TransactionAlreadySubmittedError). That is success — the request must finalize as
-      // 'submitted', not record a spurious 'failed'.
+      // Lost-response duplicate: the node already holds the tx, so submit throws 409;
+      // that is success and the request must finalize as 'submitted'.
       const spy = vi.spyOn(getCardanoClient(), 'submitTransaction')
         .mockRejectedValue(new TransactionAlreadySubmittedError('a'.repeat(64)));
       try {
@@ -315,12 +296,10 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should reject expired requests', async () => {
-      // Create new request for expiration test
       const { data: newData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
 
-      // Expire it
       await cds.run(
         UPDATE.entity('CardanoSignService.SigningRequests')
           .set({ expiresAt: new Date(Date.now() - 60000).toISOString() })
@@ -338,12 +317,10 @@ describe('Signing Services Integration Tests', () => {
 
   describe('GetSigningRequestsByAddress Action', () => {
     it('should retrieve signing requests for a given address via action', async () => {
-      // Create a signing request first
       await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
 
-      // Call the actual GetSigningRequestsByAddress action
       const { status, data } = await test.post('/odata/v4/cardano-sign/GetSigningRequestsByAddress', {
         address: TEST_FIXTURES.addressWithAssets,
       });
@@ -379,23 +356,19 @@ describe('Signing Services Integration Tests', () => {
       });
       const signingRequestId = createData.id;
 
-      // Test read all
       const { status: allStatus, data: allData } = await test.get('/odata/v4/cardano-sign/SigningRequests');
       expect(allStatus).to.equal(200);
       expect(allData.value).to.be.an('array');
       expect(allData.value.length).to.be.greaterThan(0);
 
-      // Test read by ID
       const { status: byIdStatus, data: byIdData } = await test.get(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})`);
       expect(byIdStatus).to.equal(200);
       expect(byIdData.id).to.equal(signingRequestId);
 
-      // Test filter by status
       const { status: filterStatus, data: filterData } = await test.get('/odata/v4/cardano-sign/SigningRequests?$filter=status eq \'pending\'');
       expect(filterStatus).to.equal(200);
       filterData.value.forEach((req: any) => expect(req.status).to.equal('pending'));
 
-      // Test expand build
       const { status: expandStatus, data: expandData } = await test.get(`/odata/v4/cardano-sign/SigningRequests(${signingRequestId})?$expand=build`);
       expect(expandStatus).to.equal(200);
       expect(expandData.build).to.have.property('id', testBuildId);
@@ -413,23 +386,19 @@ describe('Signing Services Integration Tests', () => {
       });
       const verificationId = verifyData.id;
 
-      // Test read all
       const { status: allStatus, data: allData } = await test.get('/odata/v4/cardano-sign/SignatureVerifications');
       expect(allStatus).to.equal(200);
       expect(allData.value).to.be.an('array');
       expect(allData.value.length).to.be.greaterThan(0);
 
-      // Test read by ID
       const { status: byIdStatus, data: byIdData } = await test.get(`/odata/v4/cardano-sign/SignatureVerifications(${verificationId})`);
       expect(byIdStatus).to.equal(200);
       expect(byIdData.id).to.equal(verificationId);
 
-      // Test filter by isValid
       const { status: filterStatus, data: filterData } = await test.get('/odata/v4/cardano-sign/SignatureVerifications?$filter=isValid eq true');
       expect(filterStatus).to.equal(200);
       filterData.value.forEach((v: any) => expect(v.isValid).to.equal(true));
 
-      // Test expand signingRequest
       const { status: expandStatus, data: expandData } = await test.get(`/odata/v4/cardano-sign/SignatureVerifications(${verificationId})?$expand=signingRequest`);
       expect(expandStatus).to.equal(200);
       expect(expandData.signingRequest).to.have.property('id', createData.id);
@@ -442,7 +411,6 @@ describe('Signing Services Integration Tests', () => {
       });
       const signingRequestId = createData.id;
 
-      // Read AddressSigningRequests filtered by address
       const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithFunds}'`);
 
       expect(status).to.equal(200);
@@ -459,19 +427,16 @@ describe('Signing Services Integration Tests', () => {
 
   describe('Complete Signing Workflow', () => {
     it('should execute end-to-end workflow from creation to submission', async () => {
-      // Step 1: Create signing request
       const { data: createData } = await test.post('/odata/v4/cardano-sign/CreateSigningRequest', {
         buildId: testBuildId,
       });
       expect(createData.status).to.equal('pending');
 
-      // Step 2: Get signing request
       const { data: getData } = await test.post('/odata/v4/cardano-sign/GetSigningRequest', {
         signingRequestId: createData.id,
       });
       expect(getData.id).to.equal(createData.id);
 
-      // Step 3: Verify signature
       const { data: verifyData } = await test.post(`/odata/v4/cardano-sign/VerifySignature`, {
         signingRequestId: createData.id,
         signedTxCbor: TEST_FIXTURES.signedTxCbor1,
@@ -479,7 +444,6 @@ describe('Signing Services Integration Tests', () => {
       });
       expect(verifyData.isValid).to.equal(true);
 
-      // Step 4: Submit transaction
       setupTxResponseMock();
 
       const { data: submitData } = await test.post(`/odata/v4/cardano-sign/SubmitVerifiedTransaction`, {
@@ -490,7 +454,6 @@ describe('Signing Services Integration Tests', () => {
       expect(submitData.status).to.equal('submitted');
       expect(submitData.txHash).to.exist;
 
-      // Step 5: Verify final state
       const { data: finalData } = await test.post('/odata/v4/cardano-sign/GetSigningRequest', {
         signingRequestId: createData.id,
       });
@@ -527,7 +490,6 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       });
 
-      // Manually set status to 'verified'
       await cds.run(
         UPDATE.entity('CardanoSignService.SigningRequests')
           .set({ status: 'verified' })
@@ -564,7 +526,6 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       });
 
-      // Set status to 'verified' so it's not 'pending'
       await cds.run(
         UPDATE.entity('CardanoSignService.SigningRequests')
           .set({ status: 'verified' })
@@ -595,7 +556,6 @@ describe('Signing Services Integration Tests', () => {
     });
 
     it('should reject signing request with no associated build', async () => {
-      // Insert signing request directly with no build_id
       const reqId = 'no-build-req-1234';
       await cds.run(
         INSERT.into('CardanoSignService.SigningRequests').entries({
@@ -623,7 +583,6 @@ describe('Signing Services Integration Tests', () => {
 
   describe('Branch Coverage: SignWithHsm address mismatch', () => {
     it('should reject when build sender does not match HSM address', async () => {
-      // Create a build with a different sender address
       const mismatchBuildId = 'mismatch-build-1234';
       await cds.run(
         INSERT.into('CardanoSignService.TransactionBuilds').entries({
@@ -702,7 +661,6 @@ describe('Signing Services Integration Tests', () => {
           publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
         }),
         signTransaction: (unsignedTxCbor: string) => {
-          // Produce CBOR with fake (invalid) signature
           const txObj = Cbor.parse(fromHex(unsignedTxCbor));
           const vkeyWitness = new CborArray([
             new CborBytes(Buffer.alloc(32, 0xaa)),
@@ -962,9 +920,8 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   return {
     isConnected: () => connected,
-    // HSM address must match the build sender (addressWithFunds) — the HSM flow only
-    // gates on senderAddress === getAddress(), then verifies the signature's crypto
-    // validity (no fee-payer key binding), so the real random keypair below still passes.
+    // The HSM flow only gates on senderAddress === getAddress() and then checks the
+    // signature's crypto validity, so a random real keypair passes.
     getAddress: () => TEST_FIXTURES.addressWithFunds,
     getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({

@@ -1,47 +1,7 @@
 /**
- * Guard against Ogmios chain-sync frames that the client's JSON parser cannot handle.
- *
- * `@cardano-ogmios/client` parses every WebSocket frame with `safeJSON.parse`, which is
- * `sanitize(JSONBig.parse(raw))`. Both halves recurse once per nesting level: the
- * `@cardanosolutions/json-bigint` parser is Crockford's recursive descent, and `sanitize`
- * walks the parsed tree recursively. A native script nests one JSON object per clause, and
- * nested clauses cost only a few bytes each in CBOR — so an ordinary-looking block can
- * expand into JSON that is ten thousand levels deep and exhaust the V8 stack.
- *
- * That is not a theoretical shape. Preprod block 5183974 carries a native script nested
- * 10 774 levels deep (`{"clause":"all","from":[ … ]}` down to a single signature clause).
- * The block is 43 kB on chain and 205 kB as a chain-sync frame.
- *
- * The crash is fatal rather than merely annoying, because of where the parse happens
- * (`ChainSynchronization/Client.js`):
- *
- *     socket.on('message', async (message) => {
- *       await responseHandler(util_1.safeJSON.parse(message));
- *     });
- *
- * `safeJSON.parse` throws synchronously inside an `async` handler that nobody awaits, so
- * the `RangeError` surfaces as an unhandled rejection and Node takes the process down. The
- * crawler's poison-block latch cannot help: it guards the persist path, and the server is
- * gone long before a block reaches it. Docker restarts, the crawler resumes at the same
- * block, and the loop repeats — 53 restarts in seven minutes on the hosted box.
- *
- * This guard wraps `safeJSON.parse` (a public export of the client package) so that the
- * fast path is untouched and only an overflowing frame takes the recovery route:
- *
- *  1. the original parser, so every ordinary frame keeps its exact BigInt handling;
- *  2. on `RangeError`, `widenBigIntegers()` rewrites integer literals that a double cannot
- *     hold into JSON strings, then plain `JSON.parse` — V8's parser is iterative, so depth
- *     is no longer a limit. `sanitize` is skipped, because it would overflow on the very
- *     same structure;
- *  3. if even that fails, the frame is reported to the caller and a sentinel is returned.
- *     The guard never throws, because throwing here is what kills the process.
- *
- * Measured against the real frame (node 22, 205 728 bytes, depth 10 774): json-bigint and
- * `JSON.parse` with a reviver both overflow — a reviver walk is recursive too — while plain
- * `JSON.parse` completes in 17 ms.
- *
- * Upstream: a recursive parser on untrusted chain data is a denial-of-service against every
- * consumer of the client, mainnet included. This guard is a local mitigation, not the cure.
+ * Guard for Ogmios chain-sync frames the client's `safeJSON.parse` cannot handle: it recurses per
+ * nesting level, so a deeply nested native script overflows the stack inside an un-awaited socket
+ * handler and ends the process. On RangeError fall back to iterative `JSON.parse` (big ints as strings).
  */
 import { safeJSON } from '@cardano-ogmios/client';
 import cds from '@sap/cds';
@@ -59,13 +19,9 @@ export interface UnparseableFrame {
 }
 
 /**
- * Integers outside the safe double range, written into JSON strings so that plain
- * `JSON.parse` cannot round them. Runs as one linear pass with an explicit in-string state,
- * never recursing, so it is immune to the nesting that sent us here in the first place.
- *
- * Only numbers in value position are touched: digits inside strings (hashes, CBOR, asset
- * names) are skipped, and so are floats and exponents, which are doubles by nature and have
- * no exact integer to preserve.
+ * Wrap integers outside the safe double range in JSON strings so plain `JSON.parse` cannot
+ * round them. One linear pass, no recursion; digits inside strings, floats and exponents
+ * are left alone.
  */
 export function widenBigIntegers(text: string): string {
   const SAFE_DIGITS = String(Number.MAX_SAFE_INTEGER).length; // 16
@@ -114,11 +70,7 @@ export function widenBigIntegers(text: string): string {
   return last === 0 ? text : out + text.slice(last);
 }
 
-/**
- * Block header fields out of a frame we could not parse. They sit near the front of a
- * chain-sync response and at shallow depth, so a narrow match finds them even when the
- * body is unusable — enough to name the offending block in a log line and in `lastError`.
- */
+/** Block height/id from the front of an unparseable frame, to name the block in logs and `lastError`. */
 function readBlockHeader(text: string): { height: number | null; id: string | null } {
   const head = text.slice(0, 4096);
   const id = /"id"\s*:\s*"([0-9a-fA-F]{64})"/.exec(head);
@@ -127,18 +79,19 @@ function readBlockHeader(text: string): { height: number | null; id: string | nu
 }
 
 let installed = false;
+const reporters = new Set<(frame: UnparseableFrame) => void>();
 
 /**
- * Wrap `safeJSON.parse` once per process. Idempotent: a second call only replaces the
- * report callback, so reopening the chain-sync stream never stacks wrappers.
- *
- * @param onUnparseableFrame called when a frame survives neither parser. The guard returns
- *        a sentinel instead of throwing, so the caller owns what happens next — the stream
- *        itself stalls, because the client drops anything that is not a nextBlock response.
+ * Wrap `safeJSON.parse` once per process and register a report callback; returns its
+ * unregister function. The parser is shared by every open chain-sync socket and cannot tell
+ * which one a frame came from, so an unusable frame goes to every registered callback.
+ * After a reported frame the stream stalls (the client drops non-nextBlock responses),
+ * so the caller decides what happens next.
  */
-export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableFrame) => void): void {
-  report = onUnparseableFrame;
-  if (installed) return;
+export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableFrame) => void): () => void {
+  reporters.add(onUnparseableFrame);
+  const unregister = (): void => { reporters.delete(onUnparseableFrame); };
+  if (installed) return unregister;
 
   const original = safeJSON.parse.bind(safeJSON);
   installed = true; // only once the original is safely in hand
@@ -165,20 +118,22 @@ export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableF
           `chain-sync frame unparseable (block ${where.height ?? '?'} ${where.id ?? ''}, ` +
           `${text.length} bytes): ${reason}`
         );
-        report({ ...where, reason, bytes: text.length });
+        const frame = { ...where, reason, bytes: text.length };
+        for (const r of [...reporters]) {
+          try { r(frame); } catch (cbErr) { logger.error('frame guard report callback failed:', cbErr); }
+        }
         // Never throw: this runs in an async socket handler nobody awaits, so a throw
         // becomes an unhandled rejection and ends the process.
         return {};
       }
     }
   };
+  return unregister;
 }
-
-let report: (frame: UnparseableFrame) => void = () => { /* replaced on install */ };
 
 /** Tests only — drop the wrapper so each case starts from the untouched client. */
 export function resetOgmiosFrameGuardForTests(originalParse?: typeof safeJSON.parse): void {
   if (originalParse) safeJSON.parse = originalParse;
   installed = false;
-  report = () => { /* noop */ };
+  reporters.clear();
 }

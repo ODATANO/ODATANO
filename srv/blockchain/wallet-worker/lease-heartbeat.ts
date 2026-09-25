@@ -4,25 +4,9 @@ import { WORKER_LEASE_TTL_MS } from './job-store';
 const logger = cds.log('CardanoWalletWorker');
 
 /**
- * Keeps a per-wallet lease alive for as long as a job execution runs.
- *
- * Building and signing a transaction can easily outlast WORKER_LEASE_TTL_MS (a
- * multi-backend build plus an HSM round-trip); a single renewal before the build
- * is therefore not enough. Without a heartbeat the lease silently expires
- * mid-execution, another instance adopts the wallet, fails this executor's row as
- * orphaned and starts the next job — two executors on one wallet, which is exactly
- * what the per-wallet lease exists to prevent.
- *
- * Renewals run at a third of the TTL, so two consecutive misses (slow DB, event
- * loop hiccup) are tolerated before the lease can lapse. A process that is truly
- * wedged stops beating and correctly loses the wallet.
- *
- * Two failure semantics, on purpose:
- *  - the periodic `beat` is lenient: a DB error is logged and retried next tick,
- *    only a definitive "not yours" marks the lease lost.
- *  - `fence()` is strict: it is called right before an irreversible step, where
- *    "cannot prove ownership" must be treated as "not ours". Aborting there is
- *    free (nothing has been sent yet); guessing wrong is a double spend.
+ * Keeps a per-wallet lease alive while a job executes (build+sign can outlast the TTL).
+ * Renews at a third of the TTL, so two consecutive misses are tolerated. `beat` is lenient
+ * (DB error → retry next tick); `fence()` is strict (unprovable ownership = lost, before irreversible steps).
  */
 export const LEASE_HEARTBEAT_INTERVAL_MS = Math.floor(WORKER_LEASE_TTL_MS / 3);
 
@@ -50,7 +34,7 @@ export class LeaseHeartbeat {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
-  /** True once a renewal proved the lease is no longer ours — abort the execution. */
+  /** True once a renewal proved the lease is not ours anymore — abort the execution. */
   isLost(): boolean {
     return this.lost;
   }

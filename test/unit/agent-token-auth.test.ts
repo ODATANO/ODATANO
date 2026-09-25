@@ -1,9 +1,7 @@
 /**
- * The `x-agent-token` lane (AGENT_GRANTS_DESIGN.md §3) inside the
- * @odatano/cap-auth middleware with a stub delegate: a token on the six
- * service paths is authenticated here, everything else is the delegate's.
- * Token resolution is stubbed at the module boundary; its own tests live in
- * agent-grants.test.ts.
+ * The `x-agent-token` transport lane with a stub delegate: a token on the service
+ * paths is authenticated here, everything else goes to the delegate.
+ * Token resolution is stubbed; its own tests live in agent-grants.test.ts.
  */
 
 const { grantsMock } = vi.hoisted(() => ({
@@ -186,9 +184,8 @@ describe('agent-token lane', () => {
 });
 
 describe('a host with its own auth.impl keeps it as the delegate', () => {
-  // The fixture rejects everything without x-host-key. Before agent grants were
-  // switched on it answered 401 to such requests; it must still do so after,
-  // on ODATANO paths and on foreign ones: the lane only adds the token path.
+  // The fixture rejects everything without x-host-key; the lane only adds the token
+  // path, so the custom gate still answers 401 on service and foreign paths alike.
   const options = { kind: 'mocked', delegateImpl: 'test/fixtures/custom-auth.cjs', hostKey: 'sesame' };
 
   beforeEach(() => {

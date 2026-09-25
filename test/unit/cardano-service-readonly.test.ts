@@ -2,14 +2,9 @@ import cds from '@sap/cds';
 import path from 'path';
 
 /**
- * Guard for the cache-poisoning fix: every entity projection of the read service
- * must be @readonly so generic CREATE/UPDATE/DELETE requests are rejected with 405
- * (CAP's check_readonly generic handler) instead of writing into the cache that is
- * then served as "blockchain data".
- *
- * Internal indexer writes are unaffected: they run on cds.tx(req) — the database
- * service — which does not carry application-service generic handlers (and the
- * UPSERT event is not in CAP's WRITE_EVENTS to begin with).
+ * Every entity projection of the read service must be @readonly so generic
+ * CREATE/UPDATE/DELETE requests get 405 instead of writing into the cache.
+ * Internal indexer writes run on the database service and are unaffected.
  */
 describe('CardanoODataService — @readonly entities', () => {
   it('annotates every entity projection as @readonly', async () => {
@@ -18,7 +13,6 @@ describe('CardanoODataService — @readonly entities', () => {
       ([name, def]) => name.startsWith('CardanoODataService.') && def.kind === 'entity'
     );
 
-    // 20 + PoolEpochSnapshots + DrepEpochSnapshots (v2.0.0-rc.12 analytics coverage)
     expect(entities.length).toBe(29);
     for (const [name, def] of entities) {
       // include the name in the assertion so a failure pinpoints the entity

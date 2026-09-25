@@ -1,23 +1,13 @@
 /**
- * Agent grants end to end (AGENT_GRANTS_DESIGN.md), against the real CAP server
- * and the real SQLite schema:
- *
- *  - the transport lane installed by src/plugin.ts (AGENT_GRANTS_ENABLED) admits
- *    `x-agent-token` and delegates everything else to mocked auth;
- *  - CardanoAgentService: Admin-only administration, token self-service;
- *  - the enforcement hook on the other services: allow list, wallet pinning,
- *    daily budget, and the role-less principal hitting every Admin gate;
- *  - row-level narrowing through `$user.grantId` and `createdBy = $user`.
- *
- * No network and no funds: the wallet worker is configured but never started,
- * so a queued job stays `pending` (which is all the ownership checks need).
+ * Agent grants end to end against the real CAP server and SQLite: the transport lane,
+ * Admin-only administration, token self-service, the enforcement hook (allow list,
+ * wallet pinning, daily budget) and row-level narrowing.
  */
 
 import cds from '@sap/cds';
 
-// Read by activateAgentGrants() when srv/server.ts loads (standalone mode: CAP
-// never loads this project's own cds-plugin.js), so these MUST precede the
-// require() below — imports are hoisted, require() is not.
+// Read when srv/server.ts loads, so these must precede the require() below
+// (imports are hoisted, require() is not).
 process.env.AGENT_GRANTS_ENABLED = 'true';
 process.env.AGENT_GRANTS_DELEGATE = 'mocked';
 process.env.SKIP_AUTO_INIT = 'true';
@@ -238,7 +228,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     await expectStatus(GET(`${AGENT}/AgentGrants`, asBob), 403);
   });
 
-  // ---- lifecycle parity with NIGHTGATE (rc.6) ------------------------------------
+  // ---- lifecycle: rotate, update, usage ------------------------------------------
 
   const GRANTS = 'odatano.cardano.CardanoAgentGrants';
   const NOBODY = '00000000-0000-4000-8000-000000000000';

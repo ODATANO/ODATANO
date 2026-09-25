@@ -1,13 +1,8 @@
 /**
- * Chain crawler — pool/DRep snapshots at epoch boundaries (analytics coverage).
- * Drives persistBlock through the chain-sync callback and asserts that the
- * snapshot runs ONCE per epoch, ONLY at the tip, outside the block transaction, never fails
- * the crawl, and respects a snapshot another run already recorded. cds + entity proxies
- * mocked in the repo's style (see crawler-lifecycle.test.ts).
- *
- * Network is 'preview' throughout: 86 400 slots per epoch anchored at slot 0, so epoch 3 is
- * slots 259 200..345 599 and epoch 4 starts at 345 600. Block and tip slots below are chosen
- * to be consistent with that geometry — the tip guard derives the tip's epoch from its slot.
+ * Chain crawler — pool/DRep snapshots at epoch boundaries: once per epoch, only at the tip,
+ * outside the block transaction, never failing the crawl, honouring snapshots another run recorded.
+ * Preview geometry: 86 400 slots/epoch from slot 0, so epoch 3 = slots 259 200..345 599 and
+ * epoch 4 starts at 345 600; the tip guard derives the tip's epoch from its slot.
  */
 
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };

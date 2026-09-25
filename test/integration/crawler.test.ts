@@ -1,24 +1,11 @@
 /**
- * Integration tests for the chain crawler (v2.0) — real Ogmios, real SQLite.
- *
- * Read-only against the chain: the crawler ingests blocks, it never submits, so
- * this needs no funds. It covers what the unit suites cannot:
- *
- *  - **chain-sync really ingests** into the deployed schema, contiguously, with
- *    hashes that match the backend (the unit fake has no schema and no chain);
- *  - **recovery from a fork the crawler slept through** — the regression that
- *    used to kill the ingest pipeline with "No intersection found" and latch the
- *    cluster off. Unit tests cover the intersection ladder in isolation; only a
- *    real Ogmios proves the node answers it with a rollBackward.
- *
- * Self-skipping: CI runs the suite in two configurations (with and without a
- * synced node), so these tests stand down when Ogmios is unreachable or not at
- * the tip instead of failing the no-Ogmios lane.
+ * Chain crawler against a real Ogmios and real SQLite: contiguous chain-sync ingest with
+ * hashes matching the backend, recovery from a fork slept through (intersection ladder →
+ * rollBackward) and the analytics by-products. Self-skips without a synced node.
  */
 
 import cds from '@sap/cds';
-// require() shares the native module graph with the booted CAP server
-// (see signing-services.test.ts for the rationale).
+// Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext } =
   require('../../srv/server') as typeof import('../../srv/server');
 const { startCrawler, stopCrawler } =
@@ -161,10 +148,8 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
     const reached = await waitForHeight(target);
     expect(reached, 'crawler did not reach the target tip').to.be.at.least(target);
 
-    // Every NATIVE-ASSET unit that appears on an output must have a catalogue row — that
-    // is the acceptance criterion of the bare catalogue, checked with no API traffic against the instance.
-    // TransactionOutputAssets holds one row per amount line, so it carries `lovelace`
-    // too; that is not a catalogue entry and never gets an Assets row.
+    // Every native-asset unit on an output needs a catalogue row. TransactionOutputAssets
+    // also carries `lovelace`, which is never an Assets row.
     const outputUnits = await rows(
       SELECT.from('odatano.cardano.TransactionOutputAssets').columns('unit'),
     );
@@ -204,8 +189,7 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
     expect(reached).to.be.at.least(target);
     await stopCrawler();
 
-    // Stage the fork exactly as an orphaned chain would leave it: the last few
-    // crawled blocks carry hashes that are not on the canonical chain, and the
+    // Stage an orphaned chain: the last crawled blocks get off-chain hashes and the
     // cursor points at that dead tip.
     const tail = (await rows(
       SELECT.from('odatano.cardano.Blocks').columns('height', 'hash').orderBy('height'),

@@ -709,6 +709,23 @@ stay empty and the crawler logs a warning once. The current pool or DRep of a st
 GET /odata/v4/cardano-odata/TransactionCertificates?$filter=stakeAddress eq 'stake_test1…' and kind eq 'pool_delegation'&$orderby=tx/slot desc&$top=1
 ```
 
+Blocks crawled before `certificates` was switched on can be filled in afterwards. Turn the knob on
+first, so new blocks carry the rows from then on, then run the backfill once for the gap:
+
+```
+POST /odata/v4/cardano-indexer/backfillCertificates   { "fromSlot": "…", "toSlot": "…" }
+GET  /odata/v4/cardano-indexer/getStatus()            # → certificateBackfill.status: running | done | failed
+```
+
+Both slots are optional: `fromSlot` defaults to the crawl start, `toSlot` to the crawler cursor, and a
+`toSlot` past the cursor is refused. The backfill opens a second Ogmios chain-sync stream that starts
+at the newest crawled block below `fromSlot` and ends at the first block past `toSlot`. It writes
+`TransactionCertificates` and `TransactionWithdrawals` only, keyed like the crawl, so a repeat is
+idempotent; a block the index does not hold (rolled back since) is skipped. The crawler may keep
+running. Rows are committed per 200 blocks, and `getStatus().certificateBackfill` reports range,
+`atSlot`, counts and timestamps. One backfill runs per process at a time; the status is kept in
+memory and reads `none` after a restart. Requires Ogmios (Admin).
+
 Independent of any knob, every `TransactionInputs` row written since this version carries the
 outpoint it consumed (`spentTxHash`, `spentOutputIndex`), so a UTxO can be traced from the output
 that created it to the input that spent it. Rows indexed earlier keep `null` there until the range is
@@ -791,7 +808,7 @@ metadata — those arrive the first time someone reads that asset through the AP
 with `"enrich"`). Setting `assetCatalogue` to `"off"` and `assetHistory` to `false` restores the
 pre-2.0.0-rc.12 behaviour exactly.
 
-**Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10). See `CRAWLER_DESIGN.md` for the architecture.
+**Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10).
 
 ---
 

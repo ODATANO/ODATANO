@@ -1,8 +1,7 @@
 /**
- * Chain crawler — sync-state cursor helpers (C1/C7).
- * Mocks the @sap/cds CQL layer (matching the repo's indexer-test style) and drives the
- * cursor primitives through a fake `db.run`, asserting the CQL payloads and the CAP-10
- * numeric-as-string normalization.
+ * Chain crawler — sync-state cursor helpers. Mocks the @sap/cds CQL layer and drives the
+ * cursor primitives through a fake `db.run`, asserting the CQL payloads, the cluster lease
+ * and the CAP-10 numeric-as-string normalization.
  */
 
 // UPDATE/INSERT builders echo their payload so tests can inspect what would be written.
@@ -159,9 +158,8 @@ describe('sync-state: cluster lease', () => {
   });
 
   it('an errored release keeps the cluster runnable — a restart must resume', async () => {
-    // The regression this guards: a dropped chain-sync socket (node restart,
-    // provider blip) used to clear desiredRunning, which no restart undoes. The
-    // pre-sync then stayed silently down until someone called resumeCrawler.
+    // A dropped chain-sync socket (node restart, provider blip) must not clear desiredRunning,
+    // or the pre-sync stays silently down until an operator calls resumeCrawler.
     const { db, state } = stateDb({ ...base, leaseOwner: 'owner-a', leaseUntil: '2099-01-01T00:00:00.000Z' });
 
     await releaseCrawlerLease(db as never, 'owner-a', 'error');

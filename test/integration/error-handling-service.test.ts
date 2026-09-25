@@ -14,7 +14,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 	const test = cds.test(__dirname + '/../../');
 	const expect = test.expect;
 
-	// Only reset the database before each test
 	beforeEach(async () => {
 		await test.data.reset();
 	});
@@ -25,7 +24,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 	describe('ODATANO Milestone 1 - Error Handling Tests', () => {
 
-		// Transactions – invalid inputs handled by service
 		describe('Transaction with Invalid Input', () => {
 			it('READ / Transactions with invalid transaction hash', async () => {
 				const response = await test.GET(`/odata/v4/cardano-odata/Transactions(hash='invalidhash')`).catch(err => err.response);
@@ -104,7 +102,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Blocks – invalid inputs handled by service
 		describe('Blocks – Invalid Input', () => {
 			it('POST / GetBlockByHash without blockHash parameter', async () => {
 				const response = await test.POST(`/odata/v4/cardano-odata/GetBlockByHash`, {}).catch(err => err.response);
@@ -131,7 +128,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Epochs – invalid inputs handled by service
 		describe('Epochs – Invalid Input', () => {
 			it('POST / GetEpochByNumber with non-numeric epochNumber', async () => {
 				const response = await test.POST(`/odata/v4/cardano-odata/GetEpochByNumber`, { epochNumber: '22222222' }).catch(err => err.response);
@@ -158,7 +154,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Addresses – invalid inputs handled by service
 		describe('Addresses – Invalid Input', () => {
 			it('POST / GetAddressByBech32 without address parameter', async () => {
 				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, {}).catch(err => err.response);
@@ -221,7 +216,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// GetLatestTransactionsByAddress - Invalid Input
 		describe('GetLatestTransactionsByAddress - Invalid Input', () => {
 			it('POST /GetLatestTransactionsByAddress - missing address parameter', async () => {
 				const response = await test.POST('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', {})
@@ -246,7 +240,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Accounts – invalid inputs handled by service
 		describe('Accounts – Invalid Input', () => {
 			it('POST / GetAccountByStakeAddress with invalid stake address format', async () => {
 				const response = await test.post(`/odata/v4/cardano-odata/GetAccountByStakeAddress`, { stakeAddress: 'invalid_stake_addr' }).catch(err => err.response);
@@ -267,7 +260,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Pools – invalid inputs handled by service
 		describe('Pools – Invalid Input', () => {
 			it('POST / GetPoolById with invalid poolId format (random string)', async () => {
 				const response = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: 'invalid_pool' }).catch(err => err.response);
@@ -300,7 +292,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Dreps – invalid inputs handled by service
 		describe('Dreps – Invalid Input', () => {
 			it('POST / GetDrepById with invalid drepId format', async () => {
 				const response = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: 'invalid_drep' }).catch(err => err.response);
@@ -321,7 +312,6 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 		});
 
-		// Service availability checks
 		describe('Service – Availability', () => {
 			it('Invalid endpoint returns 404', async () => {
 				try {

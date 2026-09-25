@@ -1,19 +1,11 @@
 import cds from '@sap/cds';
 
 /**
- * Last line of defence before writes to PostgreSQL.
- *
- * PostgreSQL cannot store U+0000 in `text`, and @cap-js/postgres passes bulk
- * INSERT/UPSERT rows as one JSON document whose parser rejects the escape
- * sequence for NUL ("unsupported Unicode escape sequence"). A single decoded
- * string with a NUL character therefore fails the whole write — a crawled block
- * or a lazily indexed request alike. Mappers avoid producing such strings (see
- * decodeAssetName); installDbSanitizer() guarantees it for every row this plugin
- * writes, whatever the source (provider JSON such as Koios' asset_name_ascii or
- * pool metadata included), by hooking the database service once per process.
+ * Strips U+0000 from every row this plugin writes: PostgreSQL cannot store NUL in `text`, and
+ * @cap-js/postgres bulk rows go through a JSON parser that rejects the NUL escape, failing the whole write.
  */
 
-/** Remove U+0000 from every string value of the row (nested plain objects included). Returns the same row when nothing changed. */
+/** Remove U+0000 from every string value of the row (nested objects included); same row when unchanged. */
 export function stripNulStrings<T>(row: T): T {
   if (typeof row === 'string') return (row.includes('\u0000') ? row.replaceAll('\u0000', '') : row) as T;
   if (row === null || typeof row !== 'object' || Buffer.isBuffer(row)) return row;
@@ -43,7 +35,7 @@ export function sanitizeRows<T>(rows: T[]): T[] {
   return out ?? rows;
 }
 
-/** Only this plugin's entities are rewritten — a consumer's own data is never touched. */
+/** Only this plugin's entities are rewritten; a consumer's own data is never touched. */
 const OWN_NAMESPACE = 'odatano.cardano.';
 
 interface CqnWrite {
@@ -58,10 +50,7 @@ export interface DbWriteRequest {
   target?: { name?: string } | null;
 }
 
-/**
- * `before` handler for the database service: strips U+0000 from the rows of an
- * INSERT / UPSERT / UPDATE against one of this plugin's entities, in place.
- */
+/** `before` handler for the db service: strips U+0000 from INSERT / UPSERT / UPDATE rows in place. */
 export function sanitizeDbRequest(req: DbWriteRequest): void {
   if (!req.target?.name?.startsWith(OWN_NAMESPACE)) return;
   const q = req.query as CqnWrite | undefined;
@@ -81,9 +70,7 @@ interface HookableService {
 const installed = new WeakSet<object>();
 
 /**
- * Hook the sanitizer into the database service (idempotent per service instance).
- * Called from the app-context bootstrap; a missing/unconnected db is a no-op so
- * unit tests and early programmatic initialize() calls never fail here.
+ * Hook the sanitizer into the database service (idempotent per instance; no-op without a db).
  * @returns true when the hook was installed by this call
  */
 export function installDbSanitizer(db: HookableService | undefined = cds.db as unknown as HookableService | undefined): boolean {

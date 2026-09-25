@@ -7,15 +7,9 @@ const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoCrawler');
 
 /**
- * Chain crawler cursor helpers (v2.0 pre-sync).
- *
- * `CardanoSyncState` is a singleton row (key = SINGLETON_ID) that records how far
- * the crawler has indexed the chain, so a restart resumes instead of re-crawling.
- *
- * NOTE (CAP 10): Integer64 / Decimal columns are read back from SQLite/HANA as
- * STRINGS, not JS numbers — the same change that makes them strings over OData.
- * Every read here therefore coerces numeric fields with `num()`; callers get a
- * clean numeric `SyncCursor` and never have to think about it.
+ * Cursor helpers for `CardanoSyncState`, the singleton row recording how far the crawler
+ * has indexed. Integer64/Decimal columns come back from the DB as strings, so every read
+ * coerces numeric fields; callers get a numeric `SyncCursor`.
  */
 
 export const SINGLETON_ID = 'SINGLETON';
@@ -66,11 +60,7 @@ export interface SyncCursor {
   utxoSet: UtxoSetState;
 }
 
-/**
- * Coerce a CAP-10 numeric-as-string (or number/bigint/null) into a JS number.
- * Separate optional/required helpers avoid overload declarations (and the
- * no-redeclare lint false-positive they caused).
- */
+/** Coerce a numeric-as-string (or number/bigint/null) into a JS number. */
 function optionalNum(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -88,8 +78,8 @@ function timestamp(v: unknown): string | null {
 }
 
 /**
- * Import-lease read-back: ownership and deadline only. The crawler variant below also
- * requires `desiredRunning`, which `pauseCrawler` clears — and an import runs exactly then.
+ * Import-lease read-back: ownership and deadline only. Unlike the crawler lease it does not
+ * require `desiredRunning`, which is cleared while an import runs.
  */
 function importLeaseHeld(cursor: SyncCursor | null, owner: string, expectedMs: number): boolean {
   if (!cursor || cursor.leaseOwner !== owner || !cursor.leaseUntil) return false;
@@ -133,10 +123,8 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
 }
 
 /**
- * Idempotently ensure the singleton cursor row exists and return it.
- * On first call (fresh DB) the row is created with the configured start point
- * (if given) and status 'stopped'. Subsequent calls just return the current row.
- * Safe to call from both the crawler and the control service.
+ * Ensure the singleton cursor row exists and return it; a fresh DB gets the configured
+ * start point and status 'stopped'.
  */
 export async function ensureSyncStateSingleton(
   db: CapTransaction,
@@ -195,9 +183,8 @@ export function isCrawlerLeaseActive(cursor: SyncCursor | null, now = new Date()
 }
 
 /**
- * Atomically acquire an expired/unowned lease with compare-and-swap semantics.
- * The post-update read is intentional: CAP adapters consistently return the row
- * for SELECT, whereas affected-row return shapes differ between SQLite and HANA.
+ * Acquire an expired/unowned lease with compare-and-swap semantics. Verified by a read-back
+ * SELECT: affected-row return shapes differ between SQLite and HANA.
  */
 export async function tryAcquireCrawlerLease(
   db: CapTransaction,
@@ -213,15 +200,9 @@ export async function tryAcquireCrawlerLease(
   const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
   if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
 
-  // CAS on the observed OWNER only (a plain string that round-trips identically
-  // on every adapter). If two instances race, the first writer changes leaseOwner
-  // and the loser's UPDATE matches 0 rows → its read-back verification fails.
-  // Deliberately NOT comparing leaseUntil: HANA/driver timestamp normalization can
-  // make the read-back representation differ from what the WHERE serializes, so a
-  // timestamp-equality CAS may NEVER match again after a leader crash — the lease
-  // would be stuck until the row is cleared by hand. The residual race (the old
-  // owner renewing concurrently) resolves via fencing: its next renew no longer
-  // matches leaseOwner and it halts.
+  // CAS on the observed OWNER only, verified by read-back. leaseUntil is deliberately not
+  // compared: timestamp normalization on some adapters would make that CAS never match again
+  // after a leader crash. A concurrently renewing old owner is fenced by its next renew.
   const where: Record<string, unknown> = {
     ID: SINGLETON_ID,
     leaseOwner: raw.leaseOwner ?? null,
@@ -257,13 +238,8 @@ export async function renewCrawlerLease(
 }
 
 /**
- * Release only the caller's lease; a stale process can never clear a successor.
- *
- * `pauseCluster` clears `desiredRunning`, which no restart undoes — every instance
- * then refuses to start until an operator calls resumeCrawler. Reserve it for
- * failures a restart genuinely cannot fix (misconfiguration, no resume point). A
- * crashed stream, a provider outage or a node restart must NOT latch: those are
- * exactly the cases where coming back up should resume the pre-sync by itself.
+ * Release only the caller's lease. `pauseCluster` clears `desiredRunning`, which no restart
+ * undoes — reserve it for failures a restart cannot fix (misconfiguration, no resume point).
  */
 export async function releaseCrawlerLease(
   db: CapTransaction,
@@ -280,9 +256,8 @@ export async function releaseCrawlerLease(
 }
 
 /**
- * Persist the pause/resume intent shared by every app instance. Resuming also clears
- * the error streak: the operator says the cause is fixed, and a stale streak would
- * otherwise keep the standby backoff at its cap for the first retry.
+ * Persist the pause/resume intent shared by every instance. Resuming clears the error
+ * streak so the standby backoff restarts at its base.
  */
 export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunning: boolean): Promise<void> {
   const set: Record<string, unknown> = { desiredRunning };
@@ -292,11 +267,8 @@ export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunnin
 }
 
 /**
- * Latch the cluster off because of a poison block (a block whose data the database
- * deterministically rejects). Deliberately NOT lease-scoped, unlike releaseCrawlerLease:
- * the poison is a property of the block, not of the instance that observed it, and
- * that instance may have lost its lease while the failure was being recorded. Only
- * an operator's resumeCrawler brings the crawler back.
+ * Latch the cluster off because of a poison block. Deliberately not lease-scoped: the poison
+ * is a property of the block, not of the instance. Only resumeCrawler brings the crawler back.
  */
 export async function latchPoisonBlock(db: CapTransaction, message: string): Promise<void> {
   await db.run(UPDATE.entity(CardanoSyncState).set({
@@ -308,9 +280,8 @@ export async function latchPoisonBlock(db: CapTransaction, message: string): Pro
 }
 
 /**
- * Advance the cursor to a freshly-indexed block. Sets the status (default 'syncing';
- * pass 'synced' when the block is at the tip), clears the error streak, and refreshes
- * lastIndexedAt. Optionally records the latest known tip (for progress).
+ * Advance the cursor to a freshly indexed block, clear the error streak and optionally
+ * record the latest known tip. Pass status 'synced' when the block is at the tip.
  */
 export async function advanceCursor(
   db: CapTransaction,
@@ -338,11 +309,8 @@ export async function advanceCursor(
 }
 
 /**
- * Lease for the UTxO set import: the same `leaseOwner` / `leaseUntil` columns the crawler
- * uses, so a crawler start on ANY instance is refused while the import holds it (its CAS
- * sees a foreign owner with a live deadline) and a second import is refused the same way.
- * Unlike the crawler lease it does not require `desiredRunning` — the cluster is paused
- * during an import by design.
+ * Lease for the UTxO set import, on the crawler's lease columns: a crawler start on any
+ * instance and a second import are refused while it is held. Does not require `desiredRunning`.
  */
 export async function tryAcquireImportLease(
   db: CapTransaction,

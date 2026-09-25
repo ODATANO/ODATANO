@@ -1,11 +1,6 @@
 /**
- * BlockfrostBackend customBackend integration tests
- *
- * Self-contained: uses the real @blockfrost/blockfrost-js SDK against nock,
- * to prove that customBackend URLs are actually hit (not just stored on the
- * options object). The unit tests at test/unit/blockfrost-backend.test.ts
- * mock the SDK constructor and only assert the option is forwarded — this
- * file closes the loop end-to-end.
+ * Proves customBackend URLs are actually hit: the real @blockfrost/blockfrost-js SDK
+ * against nock (the unit tests only assert the option is forwarded).
  */
 import nock from 'nock';
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';

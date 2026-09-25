@@ -1,24 +1,18 @@
 /**
- * Blockfrost Backend Integration Tests
- * 
- * This test file runs the CardanoService integration tests specifically only with the Blockfrost backend.
- * It ensures that Blockfrost is tested independently without fallback to Koios masking failures.
+ * Runs the shared CardanoService and error-handling suites against Blockfrost only,
+ * so no Koios fallback can mask a failure.
  */
 
-// Configure environment to use only Blockfrost backend
 process.env.BACKENDS = 'blockfrost';
 
-// Import and run the shared test suite
 import { createBackendTestSuite } from './core-test-suite';
 import { createErrorBackendSuite } from './error-handling.backend';
 
-// Run tests only if Blockfrost API key is configured
 if (process.env.BLOCKFROST_API_KEY) {
   createBackendTestSuite({
     backendName: 'blockfrost',
     txBuilderName: 'buildooor',
   });
-  // Also include backend-focused error handling suite
   createErrorBackendSuite({
     backendName: 'blockfrost',
     txBuilderName: 'buildooor',

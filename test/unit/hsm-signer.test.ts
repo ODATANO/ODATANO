@@ -16,9 +16,7 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
-// ---------------------------------------------------------------------------
 // Mock PKCS#11 infrastructure
-// ---------------------------------------------------------------------------
 
 // Ed25519 test key pair (RFC 8032 Test Vector 1)
 const TEST_PUBLIC_KEY = Buffer.from(
@@ -118,9 +116,8 @@ function createMockPkcs11(options?: {
 // Default mock setup
 let mockPkcs11: ReturnType<typeof createMockPkcs11>;
 
-// The SUT loads pkcs11js via native require, which no module mock can
-// intercept under vitest (and the optional native binding may not even build
-// on this machine). Inject the fake module through the loader seam instead.
+// pkcs11js is loaded via native require, which no vitest module mock can intercept;
+// the fake module is injected through the loader seam instead.
 setPkcs11Loader(() => {
   if (!mockPkcs11) throw new Error('mockPkcs11 not initialized');
   return mockPkcs11 as any;
@@ -129,9 +126,7 @@ setPkcs11Loader(() => {
 afterAll(() => setPkcs11Loader(null));
 
 
-// ---------------------------------------------------------------------------
 // Default config
-// ---------------------------------------------------------------------------
 
 const DEFAULT_HSM_CONFIG: HsmConfig = {
   enabled: true,
@@ -142,18 +137,10 @@ const DEFAULT_HSM_CONFIG: HsmConfig = {
   keyId: '0x0001',
 };
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe('HsmSigner', () => {
   beforeEach(() => {
     mockPkcs11 = createMockPkcs11();
   });
-
-  // =========================================================================
-  // Constructor
-  // =========================================================================
 
   describe('constructor', () => {
     it('should create instance with config', () => {
@@ -162,10 +149,6 @@ describe('HsmSigner', () => {
       expect(signer.isConnected()).toBe(false);
     });
   });
-
-  // =========================================================================
-  // init()
-  // =========================================================================
 
   describe('init()', () => {
     it('should initialize successfully with DER-wrapped public key', async () => {
@@ -233,10 +216,6 @@ describe('HsmSigner', () => {
     });
   });
 
-  // =========================================================================
-  // sign()
-  // =========================================================================
-
   describe('sign()', () => {
     let signer: HsmSigner;
 
@@ -282,10 +261,6 @@ describe('HsmSigner', () => {
       }).toThrow(/CKR_DEVICE_ERROR/);
     });
   });
-
-  // =========================================================================
-  // signTransaction()
-  // =========================================================================
 
   describe('signTransaction()', () => {
     let signer: HsmSigner;
@@ -346,10 +321,6 @@ describe('HsmSigner', () => {
     });
   });
 
-  // =========================================================================
-  // getStatus()
-  // =========================================================================
-
   describe('getStatus()', () => {
     it('should return status when connected', async () => {
       const signer = new HsmSigner(DEFAULT_HSM_CONFIG);
@@ -374,10 +345,6 @@ describe('HsmSigner', () => {
     });
   });
 
-  // =========================================================================
-  // shutdown()
-  // =========================================================================
-
   describe('shutdown()', () => {
     it('should close session and set disconnected', async () => {
       const signer = new HsmSigner(DEFAULT_HSM_CONFIG);
@@ -398,10 +365,6 @@ describe('HsmSigner', () => {
       expect(() => signer.shutdown()).not.toThrow();
     });
   });
-
-  // =========================================================================
-  // Error code verification
-  // =========================================================================
 
   describe('error codes', () => {
     it('should use HSM_UNAVAILABLE for connection errors', async () => {
@@ -434,10 +397,6 @@ describe('HsmSigner', () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// Singleton tests
-// ---------------------------------------------------------------------------
 
 describe('HSM Signer Singleton', () => {
   it('should export getHsmSigner and setHsmSigner', async () => {

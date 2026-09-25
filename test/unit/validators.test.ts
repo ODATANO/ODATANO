@@ -13,8 +13,7 @@ import {
   validateTransactionInputs,
   extractPaymentCredential,
 } from '../../srv/utils/validators';
-// Network-aware validators read the active network from this leaf module
-// (no longer from srv/server — that back-dependency was removed).
+// Network-aware validators read the active network from this leaf module.
 import { setActiveNetwork } from '../../srv/utils/network-context';
 
 describe('Validator Helper Methods and Type Guards', () => {
@@ -24,9 +23,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     setActiveNetwork('preview');
   });
 
-  // ==========================================================================
-  // isTxHash
-  // ==========================================================================
   describe('isTxHash', () => {
     it('should return true for valid 64-char hex transaction hash', () => {
       const validHash = 'a'.repeat(64);
@@ -67,9 +63,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isAssetUnit
-  // ==========================================================================
   describe('isAssetUnit', () => {
     it('should return true for valid asset unit (policy + asset name)', () => {
       const policyId = 'a'.repeat(56);
@@ -126,9 +119,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isBlockHash
-  // ==========================================================================
   describe('isBlockHash', () => {
     it('should return true for valid 64-char hex block hash', () => {
       const validHash = 'f'.repeat(64);
@@ -151,9 +141,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isValidCredential
-  // ==========================================================================
   describe('isValidCredential', () => {
     it('returns true for 56-char lowercase hex (28-byte hash)', () => {
       expect(isValidCredential('a'.repeat(56))).toBe(true);
@@ -183,9 +170,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isValidPoolId
-  // ==========================================================================
   describe('isValidPoolId', () => {
     it('should return true for valid pool ID', () => {
       // Valid mainnet pool ID (bech32 encoded, 28 bytes payload)
@@ -227,9 +211,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isValidDrepId
-  // ==========================================================================
   describe('isValidDrepId', () => {
 
     it('should return true for valid DRep ID', () => {
@@ -259,9 +240,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isValidBech32Address
-  // ==========================================================================
   describe('isValidBech32Address', () => {
 
     it('should return true for valid testnet address', () => {
@@ -302,9 +280,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isValidBech32StakeAddress
-  // ==========================================================================
   describe('isValidBech32StakeAddress', () => {
 
     it('should return true for valid testnet stake address', () => {
@@ -334,9 +309,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // isEpochNumber
-  // ==========================================================================
   describe('isEpochNumber', () => {
     it('should return true for valid epoch number 0', () => {
       expect(isEpochNumber(0)).toBe(true);
@@ -412,9 +384,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // validateRequiredSigners
-  // ==========================================================================
   describe('validateRequiredSigners', () => {
     it('should return signers when all key hashes are valid', () => {
       const signers = ['a'.repeat(56), 'b'.repeat(56)];
@@ -434,9 +403,6 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // validateTransactionInputs
-  // ==========================================================================
   describe('validateTransactionInputs', () => {
     // Valid test addresses (testnet)
     const validSenderAddress = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp';
@@ -885,9 +851,6 @@ describe('Validator Helper Methods and Type Guards', () => {
       });
     });
 
-    // ========================================================================
-    // Plutus Spending Fields
-    // ========================================================================
     describe('Plutus spending fields', () => {
       const validScriptCbor = 'aabbccdd';
       const validScriptTxHash = 'a'.repeat(64);
@@ -1157,9 +1120,7 @@ describe('Validator Helper Methods and Type Guards', () => {
     });
   });
 
-  // ==========================================================================
-  // extractPaymentCredential (signature-binding support)
-  // ==========================================================================
+  // extractPaymentCredential — signature-binding support
   describe('extractPaymentCredential', () => {
     // type-0 base address (key payment credential)
     const KEY_ADDRESS = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';

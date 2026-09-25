@@ -1,51 +1,25 @@
 import { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from "../../utils/types";
 import { CardanoClient } from "../cardano-client";
 
-/** 
- * CardanoTxBuilder - Interface Definition for the Cardano transaction builder (Buildooor)
- * Defines the standard methods that any Cardano transaction builder must implement to be used interchangeably.
- */
+/** Interface for the Cardano transaction builder (Buildooor). */
 export interface CardanoTxBuilder {
-  /** 
-   * Builder name 
-   */
+  /** Builder name */
   name: string;
   /**
-   * Initialize the builder
-   * @param client - The CardanoClient instance
-   * @param protocolParams - Optional protocol parameters (if not provided, fetched from backend)
+   * Initialize the builder.
+   * @param protocolParams - optional; fetched from the backend when omitted
    */
   init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void>;
 
-  /**
-   * Build unsigned transfer transaction (ADA-only or with native assets)
-   * @param req transaction build request
-   * @param ctx transaction build context
-   * @returns {Promise<TxBuildResult>} transaction build result
-   */
+  /** Build an unsigned transfer transaction (ADA-only or with native assets). */
   buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
-  /**
-   * Build unsigned transaction with metadata
-   * @param req transaction build request
-   * @param ctx transaction build context
-   * @returns {Promise<TxBuildResult>} transaction build result
-   */
+  /** Build an unsigned transaction with attached metadata. */
   buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
-  /**
-   * Build unsigned Plutus SC transaction
-   * @param req transaction build request
-   * @param ctx transaction build context
-   * @returns {Promise<TxBuildResult>} transaction build result
-   */
+  /** Build an unsigned Plutus mint transaction. */
   buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 
-  /**
-   * Build unsigned Plutus spending transaction (consume UTxO at script address)
-   * @param req transaction build request with plutusScriptExecution
-   * @param ctx transaction build context
-   * @returns {Promise<TxBuildResult>} transaction build result
-   */
+  /** Build an unsigned Plutus spending transaction (consume a UTxO at a script address). */
   buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult>;
 }

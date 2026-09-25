@@ -41,15 +41,10 @@ describe('Error Path Tests', () => {
   beforeEach(() => nock.cleanAll());
   afterEach(() => nock.cleanAll());
 
-  // ==========================================================================
-  // 503 - Provider Unavailable with Failover
-  // ==========================================================================
-
   describe('503 Provider Unavailable – Failover', () => {
     it('should failover from blockfrost 503 to koios', async () => {
-      // Blockfrost init succeeds but network query returns 503.
-      // .persist() because got retries 5xx internally; a single .reply() gets
-      // consumed by the first attempt and retries hit ERR_NOCK_NO_MATCH.
+      // Blockfrost init succeeds but the network query returns 503.
+      // .persist(): got retries 5xx internally, so a single .reply() is consumed by the first attempt.
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
         .persist()
@@ -84,14 +79,9 @@ describe('Error Path Tests', () => {
     });
   });
 
-  // ==========================================================================
-  // 429 - Rate Limiting
-  // ==========================================================================
-
   describe('429 Rate Limiting', () => {
     it('should failover on 429 rate limit from first backend', async () => {
-      // Blockfrost returns 429.
-      // .persist() because got retries 429 internally (same reason as the 503 test above).
+      // Blockfrost returns 429; .persist() because got retries 429 internally.
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
         .persist()
@@ -125,15 +115,9 @@ describe('Error Path Tests', () => {
     });
   });
 
-  // ==========================================================================
-  // Timeout Failover
-  // ==========================================================================
-
   describe('Timeout Failover', () => {
     it('should failover when first backend times out', async () => {
-      // Blockfrost init succeeds but hangs on query.
-      // .persist() because got retries on timeout/error; a single .reply() gets
-      // consumed by the first attempt and retries hit ERR_NOCK_NO_MATCH.
+      // Blockfrost init succeeds but hangs on the query; .persist() because got retries on timeout.
       setupBlockfrostHealth();
       nock(BLOCKFROST_BASE)
         .persist()
@@ -169,10 +153,6 @@ describe('Error Path Tests', () => {
     }, 10000);
   });
 
-  // ==========================================================================
-  // Circuit Breaker Integration
-  // ==========================================================================
-
   describe('Circuit Breaker Integration', () => {
     it('should skip backend after repeated failures', async () => {
       const config = createConfig({
@@ -184,9 +164,8 @@ describe('Error Path Tests', () => {
       setupBlockfrostHealth();
       setupKoiosTip();
 
-      // Blockfrost fails on every HTTP attempt. Use .persist() because got (inside
-      // blockfrost-js) retries 5xx internally — a single backend-level call may
-      // consume multiple HTTP requests, so nock .times(N) counting is unreliable.
+      // Blockfrost fails on every HTTP attempt. .persist() because got retries 5xx
+      // internally, so nock .times(N) counting is unreliable.
       nock(BLOCKFROST_BASE)
         .persist()
         .get('/api/v0/network')
@@ -203,9 +182,8 @@ describe('Error Path Tests', () => {
         }]);
 
       const client = new CardanoClient(config);
-      // Spy on the blockfrost backend after init so we can count how many times the
-      // circuit breaker actually let the request through (independent of HTTP retries).
-      // Only ogmios is a live backend; blockfrost + koios live in historicalBackends.
+      // Spy on the backend to count how often the circuit breaker let a request through
+      // (independent of HTTP retries). Blockfrost + koios live in historicalBackends.
       const blockfrostBackend = (client as any).historicalBackends.find(
         (b: any) => b.name === 'blockfrost'
       );
@@ -216,8 +194,7 @@ describe('Error Path Tests', () => {
       await client.getNetworkInformation();
       await client.getNetworkInformation();
 
-      // Third call: blockfrost circuit is open → must be skipped at the CardanoClient
-      // layer before hitting the backend.
+      // Third call: blockfrost circuit is open → skipped before hitting the backend.
       const result = await client.getNetworkInformation();
       expect(result).toBeDefined();
 
@@ -249,8 +226,7 @@ describe('Error Path Tests', () => {
         await expect(client.getTransaction('nonexistent')).rejects.toThrow(AllBackendsFailedError);
       }
 
-      // Circuit should still be closed (404s don't count as failures)
-      // The 3rd call should still have attempted the backend (not skipped)
+      // Circuit still closed: the 3rd call reached the backend
       expect(nock.isDone()).toBe(true);
     });
   });

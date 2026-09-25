@@ -15,18 +15,9 @@ const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('LedgerState');
 
 /**
- * Crawler-fed ledger state (`crawler.utxoSet`): a UTxO set with
- * per-address and per-stake-key running sums, maintained from the blocks the crawler
- * already holds. Separate, non-temporal tables (`LedgerUTxOs`, `LedgerAddresses`,
- * `LedgerAccounts`) so the lazy, provider-fed `Addresses` / `AddressUTxOs` path and its
- * TTL semantics stay untouched.
- *
- * Correctness rests on an anchor: the set is imported once at a recent point
- * (`utxo-set-import.ts`) and only blocks AFTER that point are applied here. A reorg past
- * the anchor invalidates the set; a reorg after it is undone by `undoLedgerForTransactions`
- * (reopen what the rolled-back blocks spent, drop what they created, recount the touched
- * addresses from the open rows — the recount, not a mirror of the forward logic, is the
- * undo). Everything runs inside the caller's block transaction.
+ * Crawler-fed ledger state (`crawler.utxoSet`): UTxO set + per-address/per-stake-key running
+ * sums in non-temporal tables. Only blocks AFTER the imported anchor are applied; a reorg past
+ * the anchor invalidates the set, one after it is undone by a recount of the open rows.
  */
 
 /** The point the imported UTxO set describes; blocks with slot > anchor.slot are applied. */

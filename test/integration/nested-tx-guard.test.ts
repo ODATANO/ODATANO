@@ -1,17 +1,11 @@
 /**
- * Integration tests for the detachedTx deadlock guard (KNOWN_ISSUES #11).
- *
- * Reproduces the FINCA shape: a consumer handler whose request transaction has
- * begun (first SELECT holds sqlite's single pooled connection) awaits
- * SubmitVerifiedTransaction in-process. Without the guard this hangs forever
- * (zero CPU); with the guard it fails fast with 503 ODATANO_NESTED_TX_TIMEOUT
- * and — critically — the orphaned late acquire must NOT claim the request
- * after the caller already saw the error.
+ * detachedTx deadlock guard: a consumer whose request transaction holds sqlite's single
+ * pooled connection awaits SubmitVerifiedTransaction in-process. The guard must fail fast
+ * with 503 ODATANO_NESTED_TX_TIMEOUT, and the orphaned late acquire must not claim the request.
  */
 
 import cds from '@sap/cds';
-// require() shares the native module graph with the booted CAP server
-// (see signing-services.test.ts for the rationale).
+// Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext, shutdownAppContext } =
   require('../../srv/server') as typeof import('../../srv/server');
 import { TEST_FIXTURES } from './test-fixtures';
@@ -27,7 +21,7 @@ process.env.TX_BUILDERS = 'buildooor';
 // Short guard budget so the deadlock test completes quickly.
 process.env.ODATANO_DETACHED_TX_TIMEOUT_MS = '2000';
 
-describe('detachedTx deadlock guard (KNOWN_ISSUES #11)', () => {
+describe('detachedTx deadlock guard', () => {
   const test = cds.test(__dirname + '/../../');
   const expect = test.expect;
 
@@ -100,7 +94,7 @@ describe('detachedTx deadlock guard (KNOWN_ISSUES #11)', () => {
     expect(err, 'expected the nested submit to fail instead of succeeding').to.not.equal(null);
     const message = err instanceof Error ? err.message : String(err);
     expect(message).to.include('ODATANO_NESTED_TX_TIMEOUT');
-    expect(message).to.include('KNOWN_ISSUES');
+    expect(message).to.include('detached DB transaction');
   });
 
   it('does not claim the signing request from the orphaned late acquire after the timeout', async () => {
@@ -114,9 +108,8 @@ describe('detachedTx deadlock guard (KNOWN_ISSUES #11)', () => {
         .catch(() => undefined);
     });
 
-    // The outer tx has committed and released the connection: the orphaned
-    // acquire now gets its turn. The abort flag must make it roll back without
-    // claiming — give it a moment, then verify.
+    // The outer tx has committed and released the connection, so the orphaned acquire
+    // runs now; the abort flag must make it roll back without claiming.
     await new Promise((r) => setTimeout(r, 300));
 
     const row = await cds.run(
@@ -129,8 +122,8 @@ describe('detachedTx deadlock guard (KNOWN_ISSUES #11)', () => {
     const signingRequestId = await createSigningRequest();
     setupTxResponseMock();
 
-    // FINCA-after-fix shape: reads happened in a committed tx that has already
-    // released the connection; the plugin call runs with no ambient claim on it.
+    // Reads happened in a committed tx that already released the connection; the
+    // plugin call runs with no ambient claim on it.
     const signSrv = await cds.connect.to('CardanoSignService');
     const result = await signSrv.send('SubmitVerifiedTransaction', {
       signingRequestId,

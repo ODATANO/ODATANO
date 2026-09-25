@@ -27,24 +27,13 @@ vi.setConfig({ testTimeout: 60000, hookTimeout: 60000 });
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 
-/**
- * Cardano Transaction Service Integration Tests
- *
- * Tests the transaction building and submission functionality
- * for the Buildooor transaction builder
- *
- * Uses nock to mock Koios API responses for deterministic testing.
- */
-
-/**
- * Create test suite for a specific transaction builder
- */
+/** Transaction-building error paths for the given builder against a nock-mocked Koios. */
 export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
   describe(`Cardano Transaction Error Tests [${txBuilderConfig.txBuilderName.toUpperCase()}] [MOCKED]`, () => {
     const test = cds.test(__dirname + '/../../');
     const expect = test.expect;
 
-    // Create app context once before all tests - nock mocks must be set up first
+    // nock mocks must exist before the app context is created.
     beforeAll(async () => {
       setupNocks();
       setupKoiosMocks();
@@ -53,7 +42,6 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
       resetAppContext(testContext);
     });
 
-    // Reset database and nock mocks before each test
     beforeEach(async () => {
       await test.data.reset();
 
@@ -80,7 +68,6 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
         const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildSimpleAdaTransaction', simpleRequestBody2).catch(err => err.response);
         expect(data).to.have.property('error');
         expect(data.error).to.have.property('message');
-        // Error message should indicate insufficient funds (mapped from builder error)
         expect(data.error.message).to.match(/Insufficient|not enough|balance/i);
         expect(status).to.equal(400);
       });
@@ -96,7 +83,6 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
         const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildTransactionWithMetadata', metaDataRequestBody2).catch(err => err.response);
         expect(data).to.have.property('error');
         expect(data.error).to.have.property('message');
-        // Error message should indicate insufficient funds (mapped from builder error)
         expect(data.error.message).to.match(/Insufficient|not enough|balance/i);
         expect(status).to.equal(400);
       });
@@ -115,7 +101,6 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
         const { status, data } = await test.post('/odata/v4/cardano-transaction/BuildMultiAssetTransaction', multiAssetRequestBody3).catch(err => err.response);
         expect(data).to.have.property('error');
         expect(data.error).to.have.property('message');
-        // Error message should indicate insufficient funds/assets (mapped from builder error)
         expect(data.error.message).to.match(/Insufficient|not enough|balance/i);
         expect(status).to.equal(400);
       });
@@ -149,7 +134,6 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
         expect(status).to.equal(400);
         expect(data).to.have.property('error');
         expect(data.error).to.have.property('message');
-        // Error message should indicate insufficient funds (mapped from builder error)
         expect(data.error.message).to.match(/Insufficient|not enough|balance/i);
       });
 

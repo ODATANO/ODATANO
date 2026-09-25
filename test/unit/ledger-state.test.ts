@@ -1,9 +1,7 @@
 /**
- * Crawler-fed ledger state: applyBlockToLedger / undoLedgerForTransactions /
- * recountLedgerAddresses against a tiny in-memory table store that interprets the CQL the
- * module issues (UPSERT by key, SELECT with in/eq/null, UPDATE, DELETE). The arithmetic is
- * what matters here: running sums after apply, and after a reorg undo the same numbers a
- * fresh recount yields.
+ * Crawler-fed ledger state (apply / undo / recount) against a tiny in-memory table store
+ * that interprets the module's CQL. Checks the running sums, and that a reorg undo
+ * yields the same numbers as a fresh recount.
  */
 
 type Row = Record<string, unknown>;

@@ -76,11 +76,6 @@ export interface CrawlerConfig {
   confirmationDepth: number;
   /** Poll cadence when caught up / on transient errors (pagination path). */
   pollIntervalMs: number;
-  /**
-   * Analytics coverage of the crawl. All three are
-   * by-products of blocks the crawler already holds, except `assetCatalogue: 'enrich'` and
-   * `epochSnapshots`, which do talk to a provider.
-   */
   /** Write mint/burn rows into AssetHistory. Free — no provider call. */
   assetHistory: boolean;
   /**
@@ -105,38 +100,20 @@ export interface CrawlerConfig {
 }
 
 /**
- * CardanoCrawler — pre-sync engine (v2.0). Streams the chain forward from a configured
- * start block and bulk-indexes Blocks + Transactions (+ inputs/outputs/assets) into the
- * DB, so consumers can query local data instead of hitting a backend per request.
- *
- * Two sources (see CRAWLER_DESIGN.md):
- *  - **Ogmios chain-sync** (primary): ordered rollForward + native rollBackward (reorg).
- *  - **Blockfrost/Koios pagination** (fallback): forward walk + parent-hash reorg recovery.
- *
- * Lifecycle: start() launches the ingest pipeline detached so the HTTP server binds
- * immediately, but the pipeline promise is retained — stop() halts the loops (waking
- * any pending poll sleep) and AWAITS the pipeline, so shutdown never races in-flight
- * block writes. All per-block writes are atomic. The crawler NEVER crawls from genesis
- * implicitly — it requires an explicit configured start point or an existing cursor.
+ * Pre-sync engine: streams the chain forward from a start block and bulk-indexes it. Sources:
+ * Ogmios chain-sync (primary, native rollBackward) or Blockfrost/Koios pagination (fallback).
+ * Per-block writes are atomic; stop() awaits the detached pipeline; no implicit genesis crawl.
  */
 export class CardanoCrawler {
   /** Transient-failure retries per block before giving up. */
   private static readonly PERSIST_RETRIES = 3;
-  /**
-   * A block whose persist keeps failing across crawler restarts is a poison block
-   * (e.g. data PostgreSQL rejects). After this many failed persistBlock() calls for
-   * the same hash the crawler latches off (desiredRunning=false) instead of
-   * restarting forever; an operator fixes the cause and calls resumeCrawler().
-   */
+  /** Final persist failures for the same block across restarts before the crawler latches off (poison block). */
   private static readonly POISON_BLOCK_THRESHOLD = 5;
   /** Process-wide, survives instance restarts: the block currently failing and how often. */
   private static poison: { hash: string; failures: number } | null = null;
   /**
-   * Database errors that are deterministic for the block's data — the same bytes fail
-   * the same way on every restart. Only these count towards the poison-block latch:
-   * a DB outage, a statement timeout or an exhausted pool fails the same block too,
-   * but a restart fixes those, and latching on them would disable the pre-sync for
-   * good (the contract of halt()).
+   * Errors deterministic for the block's data — only these count towards the poison latch.
+   * Outages, statement timeouts and exhausted pools are fixed by a restart and must not latch.
    */
   private static readonly DATA_REJECTION_PATTERNS: readonly RegExp[] = [
     /unsupported unicode escape sequence/i, // PostgreSQL: U+0000 inside a JSON document
@@ -151,35 +128,19 @@ export class CardanoCrawler {
   ];
   /** Timeout for direct backend calls (the crawler bypasses the client's resilience layer). */
   private static readonly CALL_TIMEOUT_MS = 60_000;
-  /**
-   * Epoch snapshots are ~100 batched provider requests on mainnet, so they get a wider
-   * bound than an ordinary call — still bounded, and cancelled by beginHalt.
-   */
+  /** Epoch snapshots are ~100 batched provider requests on mainnet; wider bound, cancelled by beginHalt. */
   private static readonly SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
-  /**
-   * Backoff after a failed snapshot attempt, doubling up to the cap. Without it a provider
-   * outage would re-trigger a full pool/DRep enumeration on every single block for the rest
-   * of the epoch — the marker is only set on success, by design.
-   */
+  /** Backoff after a failed snapshot attempt, doubling up to the cap; the marker is only set on success. */
   private static readonly SNAPSHOT_RETRY_BASE_MS = 30_000;
   private static readonly SNAPSHOT_RETRY_MAX_MS = 10 * 60_000;
-  /**
-   * How often a crawl that runs on pagination for lack of a chain-sync backend retries
-   * that backend's init. Pagination is roughly fifty times slower than chain-sync, so
-   * the cadence errs on the frequent side; the probe is free when no chain-sync backend
-   * is configured at all and bounded by the backend's init timeout when it is down.
-   */
+  /** Retry cadence for a chain-sync backend's init while the crawl runs on pagination. */
   private static readonly CHAIN_SYNC_RETRY_MS = 30_000;
 
   private running = false;
   private chainSyncHandle: ChainSyncHandle | null = null;
   /** What the ingest loop is currently reading from; null while stopped. */
   private activeSource: CrawlSource | null = null;
-  /**
-   * Chain-sync init retry while the crawl runs on pagination for lack of one: its own
-   * timer (independent of the pagination cadence — a poll sleep can be an hour long),
-   * the in-flight recover call, and its outcome.
-   */
+  /** Chain-sync init retry while on pagination: own timer, in-flight probe, outcome. */
   private chainSyncProbeTimer: ReturnType<typeof setTimeout> | null = null;
   private chainSyncProbe: Promise<void> | null = null;
   private chainSyncRecovered = false;
@@ -192,11 +153,7 @@ export class CardanoCrawler {
   /** Chain-sync callback promises outlive openChainSync(); stop() explicitly drains them. */
   private readonly inFlightCallbacks = new Set<Promise<unknown>>();
   private haltPromise: Promise<void> | null = null;
-  /**
-   * Set when a chain-sync frame could not be parsed at all. The stream cannot deliver that
-   * block, so the ingest loop takes it through the paginating backend and then reopens
-   * chain-sync — see runIngestPipeline().
-   */
+  /** An unparseable chain-sync frame; the ingest loop fetches that block via pagination, then reopens chain-sync. */
   private frameFailure: ChainSyncFrameError | null = null;
   /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
   private streamEnded: (() => void) | null = null;
@@ -231,11 +188,7 @@ export class CardanoCrawler {
     return !this.running && this.finalStatus === 'error';
   }
 
-  /**
-   * The source this crawler is ingesting from right now, or null while it is not
-   * running. Lets an operator see a crawl that degraded to pagination — it still makes
-   * progress, so the cursor alone looks healthy.
-   */
+  /** Source ingested from right now, or null while not running (a crawl degraded to pagination still advances the cursor). */
   getActiveSource(): CrawlSource | null {
     return this.running ? this.activeSource : null;
   }
@@ -283,9 +236,8 @@ export class CardanoCrawler {
     // Ledger state is only ever applied from a known anchor — no snapshot, no writes.
     if (this.config.utxoSet) {
       const u = cursor.utxoSet;
-      // Blocks crawled while the mode was off (or after an invalidation that was then
-      // flipped back on) never reached the ledger tables: the cursor is ahead of the last
-      // applied slot. The set is stale and cannot be caught up — invalidate it explicitly.
+      // Blocks crawled while the mode was off never reached the ledger tables: the cursor is
+      // ahead of the last applied slot and the set cannot be caught up — invalidate it.
       const lastApplied = u.appliedSlot ?? u.anchorSlot;
       if (u.status === 'active' && lastApplied != null && cursor.lastSlot > lastApplied) {
         const error = `cursor at slot ${cursor.lastSlot} is past the last ledger-applied slot ${lastApplied} — blocks were crawled without the set; re-import`;
@@ -322,10 +274,8 @@ export class CardanoCrawler {
   }
 
   /**
-   * Stop crawling and WAIT for the pipeline to finish its in-flight step: halts the
-   * loops (waking any pending poll sleep), closes the chain-sync stream, records the
-   * final status, then awaits the detached pipeline so callers (shutdownAppContext)
-   * can safely tear down backends/DB afterwards.
+   * Stop crawling and await the pipeline's in-flight step, so callers can tear down
+   * backends/DB afterwards.
    */
   async stop(finalStatus: CrawlSyncStatusValue = 'stopped'): Promise<void> {
     this.beginHalt(finalStatus);
@@ -334,25 +284,15 @@ export class CardanoCrawler {
   }
 
   /**
-   * Halt without awaiting the pipeline — the variant safe to call FROM INSIDE the
-   * pipeline (persistBlock failure, stream onError), where awaiting the pipeline
-   * would deadlock.
-   */
-  /**
-   * @param latch clears `desiredRunning`, so NO restart brings the crawler back —
-   *   only an operator's resumeCrawler does. Reserved for failures a restart cannot
-   *   fix (misconfiguration, missing resume point). Runtime failures — a dropped
-   *   chain-sync socket, a provider outage, a node restart — must leave it false,
-   *   otherwise a routine node restart silently disables the pre-sync for good.
+   * Halt without awaiting the pipeline — safe to call from inside it.
+   * @param latch clears `desiredRunning` so no restart brings the crawler back; only for failures
+   *   a restart cannot fix (misconfiguration, missing resume point), never for runtime outages.
    */
   private async halt(finalStatus: CrawlSyncStatusValue = 'stopped', latch = false): Promise<void> {
     this.beginHalt(finalStatus, latch);
   }
 
-  /**
-   * Start teardown without awaiting it. Internal callers can therefore halt from
-   * inside a tracked callback/pipeline without waiting on their own promise.
-   */
+  /** Start teardown without awaiting it, so tracked callbacks can halt from inside themselves. */
   private beginHalt(finalStatus: CrawlSyncStatusValue, latch = false): void {
     if (latch) this.latchOnHalt = true;
     // Once a real failure was observed, a concurrent shutdown must not hide it.
@@ -400,10 +340,8 @@ export class CardanoCrawler {
     while (this.running) {
       const chainSync = this.config.source !== 'pagination' ? this.client.getChainSyncBackend() : null;
       if (chainSync) {
-        // One pass per chain-sync stream. A frame the client's parser cannot turn into an
-        // object ends the stream without ending the crawler: pagination fetches that one
-        // block over HTTP, and chain-sync takes over again as soon as it is behind the
-        // cursor. Any other stream error still halts, as it always did.
+        // One pass per chain-sync stream. An unparseable frame ends the stream, not the crawler:
+        // pagination fetches that block, then chain-sync takes over again. Other errors halt.
         while (this.running) {
           const streamEnd = new Promise<void>((resolve) => { this.streamEnded = resolve; });
           await this.runChainSync(chainSync);
@@ -430,12 +368,8 @@ export class CardanoCrawler {
         await this.runPagination();
         return;
       }
-      // 'auto', and no chain-sync backend is usable right now. After a restart of a box
-      // that hosts node and ODATANO together this is the normal case, not the exception:
-      // the node validates its chunks and replays the ledger for minutes while ODATANO is
-      // up in seconds, so Ogmios refused its init. Crawl on pagination meanwhile, but
-      // keep retrying chain-sync — a crawl that makes progress at a fiftieth of the
-      // speed looks healthy to every monitor that watches only the cursor.
+      // 'auto' with no usable chain-sync backend (typical while the node still replays after a
+      // restart): crawl on pagination and keep retrying chain-sync.
       logger.warn('No chain-sync backend usable — crawling on pagination and retrying chain-sync periodically');
       await this.runPagination({ untilChainSync: true });
       // Returned because chain-sync came back (or we stopped): the loop reopens it.
@@ -443,14 +377,9 @@ export class CardanoCrawler {
   }
 
   /**
-   * Retry the init of a chain-sync backend that was unusable when the crawl began, on
-   * its own timer: the pagination loop may be asleep for a whole poll interval (up to
-   * an hour) or inside a slow batch, and neither must delay the retry. The probe runs
-   * in the background so no pagination round waits for it, and one at a time so a node
-   * that is still replaying is not hammered. On success `chainSyncRecovered` is set and
-   * a pending poll sleep is cut short; the pagination loop leaves at its next check
-   * (between rounds, or between blocks of a batch — the block in flight completes) and
-   * the ingest loop reopens chain-sync from the cursor.
+   * Retry the init of a chain-sync backend on its own timer (a poll sleep can be an hour long),
+   * one probe at a time. On success `chainSyncRecovered` is set and a pending sleep is cut short;
+   * the pagination loop leaves at its next check and the ingest loop reopens chain-sync.
    */
   private startChainSyncProbing(): void {
     this.chainSyncRecovered = false;
@@ -577,11 +506,8 @@ export class CardanoCrawler {
   }
 
   /**
-   * Can this unparseable frame be worked around by fetching the block over HTTP instead?
-   *
-   * Requires a height to walk to, a paginating backend to walk with, and an operator who has
-   * not pinned the source to 'ogmios' — that setting means chain-sync only, and silently
-   * degrading to the weaker pagination reorg handling would defeat the point of it.
+   * Whether an unparseable frame can be worked around over HTTP: needs a height, a paginating
+   * backend, and a source not pinned to 'ogmios' (chain-sync only).
    */
   private canDegradeToPagination(err: ChainSyncFrameError): boolean {
     return err.height != null
@@ -590,9 +516,8 @@ export class CardanoCrawler {
   }
 
   /**
-   * End the chain-sync stream and hand control back to the ingest loop, which continues on
-   * pagination past the offending block. Records the error first, so `lastError` names the
-   * block rather than leaving the empty status a crashed process used to leave behind.
+   * End the chain-sync stream and hand back to the ingest loop, which continues on pagination
+   * past the offending block. The error is recorded first so `lastError` names the block.
    */
   private async degradeToPagination(err: ChainSyncFrameError): Promise<void> {
     const streak = await this.recordCrawlerError(err);
@@ -609,16 +534,9 @@ export class CardanoCrawler {
   }
 
   /**
-   * Candidate intersection points, NEWEST FIRST: the cursor, then an exponentially
-   * spaced ladder of our own already-crawled ancestors, then the configured start
-   * block as the deepest anchor.
-   *
-   * Why more than the cursor: if the cursor's block was orphaned while the crawler
-   * was down, a single-point intersection fails outright ("No intersection found")
-   * and the stream never opens. With ancestors on the list the node intersects at
-   * the last common block and reports it as a rollBackward — the ordinary reorg path
-   * that handleReorg already implements. Doubling offsets cover ~32k blocks with 16
-   * points; anything deeper is past any realistic rollback and should fail loudly.
+   * Candidate intersection points, newest first: the cursor, a ladder of already-crawled
+   * ancestors, then the configured start block. If the cursor's block was orphaned while the
+   * crawler was down, the node intersects at the last common ancestor and reports a rollBackward.
    */
   private async buildIntersectionPoints(cursor: Awaited<ReturnType<typeof readCursor>>): Promise<ChainPoint[]> {
     const points: ChainPoint[] = [];
@@ -632,11 +550,8 @@ export class CardanoCrawler {
     if (cursor?.lastBlockHash) {
       add({ slot: cursor.lastSlot, hash: cursor.lastBlockHash, height: cursor.lastHeight });
 
-      // Dense over the last DENSE_DEPTH blocks, doubling after that. Real rollbacks
-      // are a handful of blocks deep, and those must intersect EXACTLY — a gap in
-      // the ladder is not wrong (rolling back too far only re-crawls), but it costs
-      // needless work on the common case. The doubling tail keeps the deep-reorg
-      // reach without sending hundreds of points.
+      // Dense over the last DENSE_DEPTH blocks (real rollbacks are shallow and must intersect
+      // exactly), doubling after that for deep-reorg reach without hundreds of points.
       const DENSE_DEPTH = 10;
       const heights: number[] = [];
       const pushHeight = (height: number) => { if (height > 0 && !heights.includes(height)) heights.push(height); };
@@ -674,13 +589,9 @@ export class CardanoCrawler {
   // ---------------------------------------------------------------------------
 
   /**
-   * @param untilHeight when set, return as soon as the cursor has reached it instead of
-   *   looping forever. Used to walk past a block the chain-sync stream cannot deliver and
-   *   then hand back to it — pagination is roughly seven times slower, so staying on it
-   *   for the rest of a backfill would be a poor trade.
-   * @param untilChainSync when set, keep retrying a chain-sync backend in the background
-   *   and return once one is usable, so the ingest loop can hand over to it. Used when
-   *   the crawl started without one (source 'auto', node still coming up).
+   * @param untilHeight return once the cursor reaches it — walks past a block chain-sync
+   *   cannot deliver, then hands back.
+   * @param untilChainSync retry a chain-sync backend in the background; return once one is usable.
    */
   private async runPagination(opts: { untilHeight?: number; untilChainSync?: boolean } = {}): Promise<void> {
     if (opts.untilChainSync) this.startChainSyncProbing();
@@ -702,9 +613,8 @@ export class CardanoCrawler {
     this.activeSource = 'pagination';
     logger.info('Crawler running (pagination)');
 
-    // Tip cache: during deep catch-up the exact tip is irrelevant (only "am I still
-    // behind the target" matters) — refetching it every round wasted one HTTP call
-    // per batch. Refresh only when the cursor reaches the cached target.
+    // Tip cache, refreshed only when the cursor reaches the cached target; during catch-up
+    // the exact tip is irrelevant.
     let tip: BlockData | null = null;
     let target = Number.NEGATIVE_INFINITY;
 
@@ -789,10 +699,8 @@ export class CardanoCrawler {
   }
 
   /**
-   * Poll pause between pagination rounds. Skipped when a handover to chain-sync is
-   * already due: the probe's wake-up only reaches a sleep that has begun, so a probe
-   * that succeeded while the round was still fetching (tip, blocks) would otherwise be
-   * followed by a full poll interval — up to an hour — before the loop notices.
+   * Poll pause between pagination rounds; skipped when a chain-sync handover is already due,
+   * since the probe's wake-up only reaches a sleep that has begun.
    */
   private async pollPause(untilChainSync: boolean): Promise<void> {
     if (untilChainSync && this.chainSyncRecovered) return;
@@ -825,10 +733,8 @@ export class CardanoCrawler {
       const ours = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).where({ height: h }))) as { hash?: string } | undefined;
       if (ours?.hash && onChain.hash === ours.hash) {
         if (h === cursor.lastHeight) return false; // tip still matches → not a reorg
-        // handleReorg deletes everything with slot > forkSlot. A null provider slot
-        // (BlockData.slot is nullable) would make forkSlot 0 and wipe the ENTIRE
-        // crawled dataset — abort this round instead; the next round can retry with
-        // a healthy provider response. (Same guard philosophy as the height axis.)
+        // A null provider slot would make forkSlot 0 and wipe the entire crawled dataset —
+        // abort this round instead.
         if (onChain.slot == null) return false;
         await this.handleReorg({ slot: onChain.slot, hash: onChain.hash, height: h });
         return true;
@@ -842,10 +748,8 @@ export class CardanoCrawler {
   // ---------------------------------------------------------------------------
 
   /**
-   * Persist one block atomically and advance the cursor. Transient failures are retried
-   * a few times (recording the error streak); only repeated failure stops the crawler —
-   * the cursor is not advanced on failure, so a resume re-syncs cleanly from it.
-   * Marks the cursor 'synced' when the block is at the reported tip.
+   * Persist one block atomically and advance the cursor. Transient failures are retried; the
+   * cursor is not advanced on failure, so a resume re-syncs from it. Marks 'synced' at the tip.
    * @returns true when the block was persisted, false when the crawler was stopped
    */
   private async persistBlock(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<boolean> {
@@ -925,9 +829,8 @@ export class CardanoCrawler {
           const cause = err instanceof Error ? err.message : String(err);
           const message = `poison block ${block.hash} @${block.height ?? '?'} failed ${failures}x: ${cause}`;
           logger.error(`persistBlock failed for ${block.hash} (height ${block.height}) ${failures}x across restarts — poison block, latching the crawler off. Fix the cause, then resumeCrawler():`, err);
-          // Lease-independent on purpose (see latchPoisonBlock). The memory is only
-          // forgotten once the latch is durable, so a failed write is retried after
-          // the next restart instead of restarting the count from one.
+          // Lease-independent on purpose (see latchPoisonBlock); the memory is only forgotten
+          // once the latch is durable, so a failed write is retried after the next restart.
           const latched = await cds.tx((tx) => latchPoisonBlock(tx, message)).then(
             () => true,
             (e: unknown) => { logger.error('poison-block latch could not be written — retried after the next restart:', e); return false; },
@@ -952,25 +855,9 @@ export class CardanoCrawler {
   }
 
   /**
-   * Take the epoch snapshot of pools and DReps once per epoch, detached from the block that
-   * triggered it (v2.0 analytics coverage, opt-in via `epochSnapshots`).
-   *
-   * ONLY AT THE TIP. The providers that can enumerate the pool and DRep set report their
-   * CURRENT state — Koios `/pool_info` and `/drep_info` take no epoch parameter. Snapshotting
-   * while the crawl is still backfilling would therefore write today's stake and vote power
-   * under every historical epoch number it passes: a table that reads as a time series but is
-   * a constant. So the block's epoch must be the epoch the reported tip is in; otherwise the
-   * epoch is skipped, permanently and by design. Backfilled ranges have no snapshots, live
-   * ones do.
-   *
-   * Detached on purpose: the snapshot is a few thousand rows plus ~100 provider requests, and
-   * the crawl must not wait for it or fail because of it. It is tracked as an in-flight
-   * callback, so a shutdown still drains it, and bounded by a timeout that beginHalt cancels.
-   *
-   * "Once per epoch" survives a restart: the process-local marker only skips work, the
-   * authority is a `PoolEpochSnapshots` row for that epoch — so a crawler restarted right
-   * after a boundary still records the epoch, and one restarted mid-epoch does not redo it.
-   * A failed attempt leaves the marker unset and backs off (see SNAPSHOT_RETRY_BASE_MS).
+   * Pool/DRep snapshot once per epoch, detached from the triggering block and ONLY at the tip:
+   * the enumerating providers report current state (no epoch parameter), so epochs passed
+   * during a backfill are skipped permanently. Authority is the `PoolEpochSnapshots` row.
    */
   private maybeSnapshotEpoch(block: BlockData, tip?: ChainPoint): void {
     if (!this.config.epochSnapshots || block.epoch == null) return;
@@ -1024,14 +911,9 @@ export class CardanoCrawler {
   }
 
   /**
-   * Handle a chain rollback: in one transaction, delete every block after the fork point
-   * and exactly the transactions belonging to those blocks (plus their child rows), reset
-   * the cursor to the fork, and write a CardanoReorgLog audit row.
-   *
-   * The cut runs on the absolute-slot axis of Blocks (same axis as the fork point), and
-   * transactions are resolved via their blockHash — so:
-   *  - an unresolvable fork height can never widen the delete (no height-0 fallback), and
-   *  - lazily-indexed transactions of blocks the crawler never wrote are left untouched.
+   * Chain rollback in one transaction: delete blocks with slot > fork (absolute-slot axis, never
+   * height), their transactions resolved via blockHash (lazily indexed txs of other blocks are
+   * untouched), reset the cursor to the fork and write a CardanoReorgLog row.
    */
   private async handleReorg(point: ChainPoint | 'origin'): Promise<void> {
     const forkSlot = point === 'origin' ? (this.config.startSlot ?? 0) : point.slot;
@@ -1092,10 +974,8 @@ export class CardanoCrawler {
         await tx.run(DELETE.from(Blocks).where({ hash: { in: blockChunk } }));
       }
 
-      // Crawler-fed ledger state, driven by the PERSISTED state so a process with the mode
-      // off still keeps the set consistent: a fork after the anchor is undone (drop created,
-      // reopen spent, recount touched addresses) and the progress marker follows the cursor
-      // back; a fork before the anchor invalidates the whole set.
+      // Ledger state, driven by the PERSISTED status: a fork after the anchor is undone and the
+      // progress marker follows the cursor back; a fork before the anchor invalidates the set.
       const persisted = (await readCursor(tx))?.utxoSet;
       if (persisted?.status === 'active' && persisted.anchorSlot != null) {
         if (forkSlot < persisted.anchorSlot) {

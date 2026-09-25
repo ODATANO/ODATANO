@@ -1,17 +1,11 @@
 /**
- * Integration tests for the deferred-submit path (KNOWN_ISSUES #11, Layer 2).
- *
- * deferSubmit: true lets an in-process consumer submit WITHOUT restructuring
- * its handler: verify + claim run on the caller's transaction (joining its
- * pooled connection — no deadlock), the action returns immediately with the
- * tx hash (= body hash), and the network submit runs detached after the
- * caller's commit. Interrupted submissions (claimed but never submitted) are
- * re-driven at boot from the persisted signed CBOR.
+ * Deferred submit: with deferSubmit the verify + claim run on the caller's transaction,
+ * the action returns the tx hash at once and the network submit runs after the caller's
+ * commit. Interrupted submissions are re-driven at boot from the persisted signed CBOR.
  */
 
 import cds from '@sap/cds';
-// require() shares the native module graph with the booted CAP server
-// (see signing-services.test.ts for the rationale).
+// Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } =
   require('../../srv/server') as typeof import('../../srv/server');
 const { TransactionAlreadySubmittedError, ProviderUnavailableError } =
@@ -44,7 +38,7 @@ async function waitForStatus(signingRequestId: string, expected: string[], timeo
   return status;
 }
 
-describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
+describe('deferred submit', () => {
   const test = cds.test(__dirname + '/../../');
   const expect = test.expect;
 
@@ -102,8 +96,8 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
     const signSrv = await cds.connect.to('CardanoSignService');
     setupTxResponseMock();
 
-    // FINCA shape: the consumer's transaction has begun (SELECT holds the
-    // pooled connection) — with deferSubmit this must NOT deadlock.
+    // The consumer's transaction has begun (SELECT holds the pooled connection);
+    // with deferSubmit this must not deadlock.
     const result = await cds.tx(async (tx: cds.Transaction) => {
       await tx.run(SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId }));
       return signSrv.send('SubmitVerifiedTransaction', {
@@ -173,7 +167,7 @@ describe('deferred submit (KNOWN_ISSUES #11, Layer 2)', () => {
     expect(result?.status).to.equal('pending');   // action itself succeeded
 
     const status = await waitForStatus(signingRequestId, ['submitted', 'failed']);
-    expect(status).to.equal('failed');            // I2: durable although the caller succeeded
+    expect(status).to.equal('failed');            // durable although the caller succeeded
   });
 
   it('re-drives an interrupted deferred submission at boot (idempotent via already-submitted)', async () => {

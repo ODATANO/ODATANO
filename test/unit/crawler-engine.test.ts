@@ -1,8 +1,7 @@
 /**
- * Chain crawler — engine reorg handling (C4/C7).
- * Mocks the @sap/cds CQL + tx layer and drives CardanoCrawler.handleReorg directly,
- * asserting the slot-axis block cut, the blockHash-join transaction delete (lazily
- * indexed txs of unrelated blocks stay untouched), cursor reset and ReorgLog audit.
+ * Chain crawler — engine reorg handling, source semantics and intersection points.
+ * Mocks the @sap/cds CQL + tx layer and drives CardanoCrawler.handleReorg directly:
+ * slot-axis block cut, blockHash-join transaction delete, cursor reset, ReorgLog audit.
  */
 
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };
@@ -214,8 +213,8 @@ describe('CardanoCrawler intersection points (reorg across a restart)', () => {
 
     expect(points[0]).toEqual({ slot: 5_000, hash: 'c'.repeat(64), height: 1_000 });
     expect(points.slice(1, 4).map(p => p.height)).toEqual([999, 998, 995]);
-    // A single point is what used to make Ogmios answer "No intersection found"
-    // when the cursor block had been orphaned while the crawler was down.
+    // A single point makes Ogmios answer "No intersection found" when the cursor
+    // block was orphaned while the crawler was down.
     expect(points.length).toBeGreaterThan(1);
   });
 

@@ -1,8 +1,7 @@
 /**
- * CardanoCrawler lifecycle (C4/C7): start refusal, chain-sync wiring (persist, tip →
- * synced, stop race, onError), pagination loop (synced detection, batch persist,
- * error streak), persistBlock bounded retries, tryReorgRecovery fork search, and the
- * crawler/index.ts singleton. cds + entity proxies mocked in the repo's style.
+ * CardanoCrawler lifecycle: start refusal, chain-sync wiring, pagination loop, frame
+ * failure handover, persistBlock retries, poison-block latch, tryReorgRecovery fork
+ * search and the crawler/index.ts singleton. cds + entity proxies are mocked.
  */
 
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };
@@ -545,7 +544,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     await cbs().onError!(frameError());
     await settle(() => openChainSync.mock.calls.length > 1, 2000);
 
-    // the crashed process used to leave an empty lastError behind — that was the worst part
+    // lastError must name the block, not stay empty
     expect(updatesWith(s => typeof s.lastError === 'string' && s.lastError.includes('41')).length)
       .toBeGreaterThan(0);
     await crawler.stop();

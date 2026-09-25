@@ -1,26 +1,10 @@
 /**
- * Chain-crawler reorg recovery on preview.
+ * Chain-crawler reorg recovery on preview. A testnet cannot be rolled back, so
+ * the fork is staged locally: the last K crawled blocks and the cursor get
+ * synthetic hashes; the restarted crawler must roll back, log the reorg, re-index.
  *
  *   npx tsx scripts/testing/crawler-reorg-preview.ts
  *   npx tsx scripts/testing/crawler-reorg-preview.ts --blocks 30 --fork 5
- *
- * A public testnet cannot be told to roll back, so the fork is staged in the
- * crawler's own state — which is exactly what an orphaned fork leaves behind:
- * the last K crawled blocks carry hashes that are not on the canonical chain,
- * and the cursor points at that dead tip. The crawler cannot tell this apart
- * from having followed a fork that lost.
- *
- * Sequence:
- *   1. crawl N blocks normally and remember the real hashes of the last K
- *   2. rewrite those K blocks + the cursor to synthetic hashes  (the "fork")
- *   3. restart the crawler and watch it recover
- *
- * What must happen (asserted):
- *   - the backend rejects the dead cursor (CHAIN_POINT_MISMATCH) and the crawler
- *     walks back to the last common block instead of erroring out
- *   - a CardanoReorgLog row records the fork slot/height and the rollback size
- *   - the orphaned rows are gone and the real chain is re-indexed in their place
- *   - the range is contiguous again and the cursor moves past the fork
  */
 
 import 'dotenv/config';

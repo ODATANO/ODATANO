@@ -9,11 +9,8 @@ import { SignatureVerificationResult, VerificationOptions } from '../../utils/ty
 const logger = cds.log('SignatureVerifier');
 
 /**
- * blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0).
- * subCborRef preserves the exact received bytes, so the hash matches what was signed
- * and re-serialization can never drift it. (Historically this also sidestepped the
- * ledger-ts AuxiliaryData.fromCbor bug on metadata-only aux_data — fixed in 0.5.6 —
- * but byte-exactness remains the reason to stay at the raw-CBOR level.)
+ * blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0). subCborRef
+ * preserves the exact received bytes, so the hash matches what was signed.
  */
 function computeBodyHash(txBytes: Uint8Array): string {
   const tx = Cbor.parse(txBytes);
@@ -36,9 +33,8 @@ function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signat
   let arr = entry.v;
   if (arr instanceof CborTag) arr = arr.data;
   if (!(arr instanceof CborArray)) return [];
-  // Parse defensively: a malformed witness entry (wrong shape or non-bytes members)
-  // would otherwise throw a TypeError and surface as an opaque internal error. Skip
-  // any entry that isn't a [vkey, signature] pair of byte strings.
+  // Skip entries that are not a [vkey, signature] pair of byte strings instead of
+  // surfacing an opaque TypeError.
   const witnesses: { pubKey: Uint8Array; signature: Uint8Array }[] = [];
   let skipped = 0;
   for (const pair of arr.array) {
@@ -55,23 +51,11 @@ function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signat
 }
 
 /**
- * SignatureVerifier - Verifies transaction signatures without accessing private keys
- *
- * This module provides signature verification for externally signed transactions.
- * It ensures:
- * 1. The signed CBOR is valid and parseable
- * 2. The transaction body hash matches the expected hash (integrity check)
- * 3. Required signatures are present (when specified)
- * 4. No tampering occurred between build and sign steps
+ * Verifies externally signed transactions without private keys: CBOR parse, body-hash
+ * integrity against the build, required signers present, Ed25519 check per witness.
  */
 export class SignatureVerifier {
-  /**
-   * Verify a signed transaction
-   *
-   * @param signedTxCbor - The signed transaction in CBOR hex format
-   * @param options - Verification options
-   * @returns Verification result with details
-   */
+  /** Verify a signed tx (hex CBOR); all failures are reported in the result, never thrown. */
   public verify(signedTxCbor: string, options: VerificationOptions = {}): SignatureVerificationResult {
     const result: SignatureVerificationResult = {
       isValid: false,
@@ -82,8 +66,7 @@ export class SignatureVerifier {
     };
 
     try {
-      // Compute the body hash over the original CBOR body bytes (no re-serialization),
-      // matching exactly what was signed.
+      // Body hash over the original body bytes — exactly what was signed.
       const txBytes = fromHex(signedTxCbor);
       const computedHash = computeBodyHash(txBytes);
       result.txBodyHash = computedHash;
@@ -166,13 +149,7 @@ export class SignatureVerifier {
     return result;
   }
 
-  /**
-   * Verify signature and throw on failure
-   *
-   * @param signedTxCbor - The signed transaction in CBOR hex format
-   * @param options - Verification options
-   * @throws {TransactionValidationError} if verification fails
-   */
+  /** Like verify(), but throws TransactionValidationError on failure. */
   public verifyOrThrow(signedTxCbor: string, options: VerificationOptions = {}): SignatureVerificationResult {
     const result = this.verify(signedTxCbor, options);
 
@@ -186,13 +163,7 @@ export class SignatureVerifier {
     return result;
   }
 
-  /**
-   * Extract transaction body hash from unsigned or signed CBOR
-   *
-   * @param txCbor - Transaction CBOR (signed or unsigned)
-   * @returns Transaction body hash as hex string
-   * @throws {Error} if CBOR is invalid
-   */
+  /** Body hash (hex) of an unsigned or signed tx CBOR; throws BackendError 400 on invalid CBOR. */
   public extractTxBodyHash(txCbor: string): string {
     try {
       return computeBodyHash(fromHex(txCbor));
@@ -206,12 +177,7 @@ export class SignatureVerifier {
     }
   }
 
-  /**
-   * Check if a transaction is signed (has witnesses)
-   *
-   * @param txCbor - Transaction CBOR
-   * @returns true if transaction has at least one witness
-   */
+  /** True when the tx carries at least one vkey witness. */
   public isSigned(txCbor: string): boolean {
     try {
       return extractVkeyWitnesses(fromHex(txCbor)).length > 0;
@@ -220,12 +186,7 @@ export class SignatureVerifier {
     }
   }
 
-  /**
-   * Get witness count from transaction
-   *
-   * @param txCbor - Transaction CBOR
-   * @returns Number of witnesses
-   */
+  /** Number of vkey witnesses in the tx (0 on invalid CBOR). */
   public getWitnessCount(txCbor: string): number {
     try {
       return extractVkeyWitnesses(fromHex(txCbor)).length;
@@ -238,9 +199,7 @@ export class SignatureVerifier {
 // Singleton instance
 let verifierInstance: SignatureVerifier | null = null;
 
-/**
- * Get the singleton SignatureVerifier instance
- */
+/** Singleton SignatureVerifier. */
 export function getSignatureVerifier(): SignatureVerifier {
   if (!verifierInstance) {
     verifierInstance = new SignatureVerifier();

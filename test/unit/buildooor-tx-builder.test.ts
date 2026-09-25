@@ -192,11 +192,11 @@ describe('BuildooorTxBuilder', () => {
         lovelaceAmount: '2000000',
         mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
         mintingPolicyScript: VALID_PLUTUS_SCRIPT,
-        inlineDatum: { constructor: 0, fields: [] },  // exercises lines 257-259
+        inlineDatum: { constructor: 0, fields: [] },  // exercises the inlineDatum path
       };
 
       const ctx: TxBuildContext = {
-        utxos: [multiAssetUtxo],  // no ADA-only → throws at 265-267
+        utxos: [multiAssetUtxo],  // no ADA-only → throws
         protocolParameters: {} as any,
       };
 
@@ -243,7 +243,7 @@ describe('BuildooorTxBuilder', () => {
     it('should throw when no ADA-only collateral — also exercises changeAddress fallback and multi-asset loop', async () => {
       const scriptTxHash = '1234123412341234123412341234123412341234123412341234123412341234';
 
-      // Script UTxO has lovelace + native asset → exercises multi-asset loop (lines 427-432)
+      // Script UTxO has lovelace + native asset → exercises the multi-asset loop
       const scriptUtxo: UTxO = {
         txHash: scriptTxHash,
         outputIndex: 0,
@@ -270,7 +270,7 @@ describe('BuildooorTxBuilder', () => {
         senderAddress: TEST_ADDRESS,
         recipientAddress: TEST_ADDRESS,
         lovelaceAmount: '2000000',
-        // No changeAddress → exercises fallback to senderAddress (line 422)
+        // No changeAddress → exercises fallback to senderAddress
         plutusScriptExecution: {
           validatorScript: VALID_SPENDING_SCRIPT,
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
@@ -292,7 +292,7 @@ describe('BuildooorTxBuilder', () => {
   // _partitionForcedInputs — pure function tests
   // =========================================================================
 
-  describe('_buildMintEntries — per-action policy (multi-policy mint FR)', () => {
+  describe('_buildMintEntries — per-action mint policy', () => {
     const parseScript = (hex: string) => (builder as any)._parsePlutusV3Script(hex, 'test');
     const entriesOf = (actions: unknown[], defaultRedeemer?: unknown) =>
       (builder as any)._buildMintEntries(actions, parseScript(VALID_PLUTUS_SCRIPT), defaultRedeemer);
@@ -360,7 +360,7 @@ describe('BuildooorTxBuilder', () => {
     });
   });
 
-  describe('_extraOutputsFundingAfterMint (FR-2 on mint)', () => {
+  describe('_extraOutputsFundingAfterMint (extraOutputsJson on mint)', () => {
     const OTHER_UNIT = 'a'.repeat(56) + 'cc';
     const funding = (mintActions: unknown[], extraOutputs: unknown[]) =>
       (builder as any)._extraOutputsFundingAfterMint(mintActions, extraOutputs);
@@ -483,10 +483,10 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // FR-2: _appendExtraOutputs — extraOutputs handling
+  // _appendExtraOutputs — extraOutputsJson handling
   // =========================================================================
 
-  describe('_appendExtraOutputs (FR-2)', () => {
+  describe('_appendExtraOutputs (extraOutputsJson)', () => {
     // Initialised builder with mocked Buildooor TxBuilder that exposes getMinimumOutputLovelaces.
     // We avoid full init() because that needs a CardanoClient; the helper only uses txBuilder.
     let initialisedBuilder: BuildooorTxBuilder;
@@ -553,10 +553,10 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // FR-3: _computeSortedInputs / _resolveExtraOutputPlaceholders / _extractFundingRefs
+  // __INPUT_IDX__ placeholders: _computeSortedInputs / _resolveExtraOutputPlaceholders / _extractFundingRefs
   // =========================================================================
 
-  describe('_computeSortedInputs (FR-3)', () => {
+  describe('_computeSortedInputs (__INPUT_IDX__ placeholders)', () => {
     const compute = (script: any, forced: any[], funding: any[]) =>
       (builder as any)._computeSortedInputs(script, forced, funding);
 
@@ -586,7 +586,7 @@ describe('BuildooorTxBuilder', () => {
     });
   });
 
-  describe('_resolveExtraOutputPlaceholders (FR-3)', () => {
+  describe('_resolveExtraOutputPlaceholders (__INPUT_IDX__ placeholders)', () => {
     const resolve = (extras: any, sortedInputs: any[]) =>
       (builder as any)._resolveExtraOutputPlaceholders(extras, { sortedInputs });
 
@@ -620,7 +620,7 @@ describe('BuildooorTxBuilder', () => {
     });
   });
 
-  describe('_extractFundingRefs (FR-3)', () => {
+  describe('_extractFundingRefs (__INPUT_IDX__ placeholders)', () => {
     const extract = (inputs: any[]) => (builder as any)._extractFundingRefs(inputs);
 
     it('maps Buildooor funding-input shape to InputRef list (txHash + outputIndex)', () => {
@@ -636,12 +636,12 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // FR-1: Combined spend+mint — branch / extra-field coverage
+  // Combined spend+mint — branch / extra-field coverage
   // =========================================================================
 
-  describe('buildUnsignedPlutusSpendTransaction — combined spend+mint (FR-1)', () => {
+  describe('buildUnsignedPlutusSpendTransaction — combined spend+mint', () => {
     it('exercises the hasMint branch (parses mintingPolicyScript) before failing on no ADA-only collateral', async () => {
-      // ALL UTxOs carry native assets → no ADA-only available → throws AFTER FR-1 setup ran.
+      // ALL UTxOs carry native assets → no ADA-only available → throws after the mint setup ran.
       const scriptTxHash = '1234123412341234123412341234123412341234123412341234123412341234';
       const scriptUtxo: UTxO = {
         txHash: scriptTxHash,
@@ -672,7 +672,7 @@ describe('BuildooorTxBuilder', () => {
           scriptUtxo: { txHash: scriptTxHash, outputIndex: 0 },
           redeemer: { constructor: 0, fields: [] },
         },
-        // FR-1 inputs:
+        // combined spend+mint inputs:
         mintActions: [{ assetUnit: ASSET_UNIT, quantity: 1n }],
         mintingPolicyScript: VALID_PLUTUS_SCRIPT,
         mintRedeemer: { constructor: 0, fields: [] },
@@ -683,12 +683,12 @@ describe('BuildooorTxBuilder', () => {
         protocolParameters: {} as any,
       };
 
-      // FR-1 setup runs (Script.fromCbor on mintingPolicyScript), then setup throws on collateral
+      // mint setup runs (Script.fromCbor on mintingPolicyScript), then collateral setup throws
       await expect(builder.buildUnsignedPlutusSpendTransaction(req, ctx))
         .rejects.toThrow('No ADA-only UTxO available for collateral');
     });
 
-    it('skips FR-1 setup entirely when mintActions is empty (no mintScriptHash branch)', async () => {
+    it('skips the mint setup entirely when mintActions is empty (no mintScriptHash branch)', async () => {
       const scriptTxHash = '5678567856785678567856785678567856785678567856785678567856785678';
       const scriptUtxo: UTxO = {
         txHash: scriptTxHash,
@@ -727,7 +727,7 @@ describe('BuildooorTxBuilder', () => {
     });
   });
 
-  describe('_buildResult — mintScriptHash forwarding (FR-1)', () => {
+  describe('_buildResult — mintScriptHash forwarding (combined spend+mint)', () => {
     beforeEach(() => {
       (builder as any).cardanoClient = { network: 'preview' };
     });
@@ -806,7 +806,7 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _buildInputRefScript — input-side refScript preservation (Fix C)
+  // _buildInputRefScript — input-side refScript preservation
   // =========================================================================
 
   describe('_buildInputRefScript', () => {
@@ -843,7 +843,7 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _appendExtraOutputs — per-entry refScript (Fix A)
+  // _appendExtraOutputs — per-entry refScript
   // =========================================================================
 
   describe('_appendExtraOutputs — per-entry referenceScript', () => {
@@ -924,9 +924,8 @@ describe('BuildooorTxBuilder', () => {
       expect(invalidAfter).toBeDefined();
     });
 
-    // Regression: passthrough must not default the unspecified bound, otherwise
-    // `validityStartMs` alone could produce invalidBefore > invalidAfter and the
-    // ledger would reject on submit.
+    // Passthrough must not default the unspecified bound: `validityStartMs` alone would
+    // otherwise yield invalidBefore > invalidAfter and the ledger rejects on submit.
     it('emits only invalidBefore when passthrough supplies just validityStartMs', () => {
       const startMs = 1700000000000;
       const result = resolve({ validityStartMs: String(startMs) }, 'passthrough');
@@ -962,9 +961,8 @@ describe('BuildooorTxBuilder', () => {
       expect(result.size).toBe(2);
     });
 
-    // Regression: tiny validators were hitting ledger overspend by ~10k–30k CPU
-    // because metadata presence shifted the real tx body vs evaluator's simulated
-    // ScriptContext. Fixed absolute cushion (ABS_*_BUFFER) guards that gap.
+    // The absolute cushion (ABS_*_BUFFER) covers the gap between the evaluator's simulated
+    // ScriptContext and the real tx body (e.g. metadata presence) for tiny budgets.
     it('adds absolute cushion on top of the relative buffer for small budgets', async () => {
       const evaluator = async () => [
         { validator: { purpose: 'spend', index: 0 }, budget: { memory: 100, cpu: 1000 } }
@@ -1116,11 +1114,9 @@ describe('BuildooorTxBuilder', () => {
     };
 
     /**
-     * Independent consistency check: re-parse the produced CBOR and recompute the
-     * script data hash from the *parsed* witness set (exact wire bytes) with the same
-     * language views the builder uses. A stale-witness hash (the TxBuilder
-     * overrideTxRedeemers bug) or any stamping inconsistency fails this check —
-     * on-chain it would surface as a PPViewHashesDontMatch phase-1 rejection.
+     * Re-parse the produced CBOR and recompute the script data hash from the parsed
+     * witness set with the builder's language views; a stale-witness hash or stamping
+     * inconsistency fails here (on-chain: PPViewHashesDontMatch phase-1 rejection).
      */
     const assertScriptDataHashConsistent = (unsignedTxCbor: string) => {
       const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
@@ -1190,9 +1186,8 @@ describe('BuildooorTxBuilder', () => {
       expect(BigInt(parsed.body.fee)).toBeGreaterThan(BigInt(parsedNoEval.body.fee));
     });
 
-    // CBOR-wrapped flat UPLC for `(program 1.1.0 (error))` — a policy that always fails
-    // phase-2. Local CEK evaluation errors out, which previously produced a transaction
-    // carrying the partial budget (collateral-forfeiting if submitted).
+    // CBOR-wrapped flat UPLC for `(program 1.1.0 (error))`: a policy that always fails
+    // phase-2, so local CEK evaluation errors out.
     const ALWAYS_FAIL_SCRIPT = '4401010061';
 
     it('rejects with a clear error when local evaluation fails and no evaluator is configured', async () => {
@@ -1235,10 +1230,9 @@ describe('BuildooorTxBuilder', () => {
 
     it('propagates an authoritative Ogmios ScriptValidationError instead of falling back to local units', async () => {
       await initBuilder();
-      // VALID_PLUTUS_SCRIPT evaluates fine locally, so the ONLY failure signal is Ogmios's
-      // ledger phase-2 rejection (normalizeBackendError surfaces PlutusFailure/CekError as
-      // ScriptValidationError). That must propagate — silently returning local buffered units
-      // would hand back a transaction the node has already rejected.
+      // The script evaluates fine locally, so the only failure signal is the evaluator's phase-2
+      // rejection (surfaced as ScriptValidationError). Falling back to local units would hand
+      // back a transaction the node has already rejected.
       const req: TxBuildMintRequest = { ...mintReq(), mintingPolicyScript: VALID_PLUTUS_SCRIPT };
       const ctx: TxBuildContext = {
         utxos: [adaOnlyUtxo, fundingUtxo],
@@ -1283,8 +1277,7 @@ describe('BuildooorTxBuilder', () => {
     it('names the collateral partition when funding is insufficient after the reservation', async () => {
       await initBuilder();
       // 6 ADA UTxO becomes collateral (smallest ≥ 5 ADA floor); only 4.4 ADA remains
-      // for funding a 4.4 ADA mint output + fee → insufficient. The old message was
-      // "required 0, available 0" with the reservation invisible.
+      // for funding a 4.4 ADA mint output + fee → insufficient.
       const smallFunding: UTxO = {
         txHash: 'ee'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
         amount: [{ unit: 'lovelace', quantity: '4400000' }],
@@ -1307,8 +1300,7 @@ describe('BuildooorTxBuilder', () => {
       const { getScriptDataHash, costModelsToLanguageViewCbor, defaultProtocolParameters } =
         require('@harmoniclabs/buildooor');
 
-      // Simulate a chain serving MORE V3 entries than this costmodels-ts release
-      // knows (as protocol-11 did against the 297-entry Chang-2 releases).
+      // Simulate a chain serving more V3 entries than this costmodels-ts release knows.
       const v3Extended = [
         ...Object.values(defaultProtocolParameters.costModels.PlutusScriptV3).map(Number),
         ...Array.from({ length: 53 }, (_, i) => 1_000_000 + i),
@@ -1444,10 +1436,10 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _mapMultiAssetUtxoToLedgerUtxo — datum mapping (M5)
+  // _mapMultiAssetUtxoToLedgerUtxo — datum mapping
   // =========================================================================
 
-  describe('_mapMultiAssetUtxoToLedgerUtxo — datum mapping (M5)', () => {
+  describe('_mapMultiAssetUtxoToLedgerUtxo — datum mapping', () => {
     const { Hash32 } = require('@harmoniclabs/cardano-ledger-ts');
     // blake2b-256 of PlutusData Constr 0 []
     const DATUM_HASH = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
@@ -1477,10 +1469,10 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (M5 E2E)
+  // buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (end-to-end)
   // =========================================================================
 
-  describe('buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (M5 E2E)', () => {
+  describe('buildUnsignedPlutusSpendTransaction — datum-hash-locked UTxO (end-to-end)', () => {
     // Script address of VALID_SPENDING_SCRIPT (testnet) and the hash of Constr 0 []
     const SCRIPT_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmrcwgm';
     const DATUM_HASH = '923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec';
@@ -1541,15 +1533,14 @@ describe('BuildooorTxBuilder', () => {
       const { hashData } = require('@harmoniclabs/buildooor');
       const parsed = Tx.fromCbor(result.unsignedTxCbor!);
       const datums = parsed.witnesses.datums ?? [];
-      // Without the datumHash mapping the preimage was silently dropped here
-      // (empty witness datums → MissingRequiredDatums on submit).
+      // An empty witness datum set would mean MissingRequiredDatums on submit.
       expect(datums.length).toBe(1);
       expect(Buffer.from(hashData(datums[0])).toString('hex')).toBe(DATUM_HASH);
     });
   });
 
   // =========================================================================
-  // _mapLedgerParametersToBuildooorParams (M3) — full mapping with null guards
+  // _mapLedgerParametersToBuildooorParams — full mapping with null guards
   // =========================================================================
 
   describe('_mapLedgerParametersToBuildooorParams', () => {
@@ -1560,7 +1551,7 @@ describe('BuildooorTxBuilder', () => {
 
     it('keeps library defaults for missing/null fields instead of degrading to 0', () => {
       const mapped = mapParams({ coinsPerUtxoSize: null, minFeeA: undefined, maxTxSize: '' });
-      // Number(null) === 0 previously set utxoCostPerByte = 0, disabling min-ADA checks
+      // Number(null) === 0 would set utxoCostPerByte = 0 and disable min-ADA checks
       expect(mapped.utxoCostPerByte).toBe(defaultProtocolParameters.utxoCostPerByte);
       expect(mapped.utxoCostPerByte).not.toBe(0);
       expect(mapped.txFeePerByte).toBe(defaultProtocolParameters.txFeePerByte);
@@ -1670,7 +1661,7 @@ describe('BuildooorTxBuilder', () => {
   });
 
   // =========================================================================
-  // _ensureCurrentProtocolParameters (M4) — per-request param refresh
+  // _ensureCurrentProtocolParameters — per-request param refresh
   // =========================================================================
 
   describe('_ensureCurrentProtocolParameters', () => {

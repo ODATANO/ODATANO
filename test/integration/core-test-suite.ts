@@ -7,33 +7,26 @@ import {
 } from './test-fixtures';
 const { SELECT, INSERT } = cds.ql;
 
-// Helper function to create test suite for a specific backend
 export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
   // Configure environment BEFORE cds.test() - server will use these automatically via cds.on('served')
   configureBackendForTest(backendConfig);
 
   describe(`Complete Service Tests Cardano Service [${backendConfig.backendName.toUpperCase()}]`, () => {
-    // 200s — covers slow live-network reads (Koios pool/account lookups can take 10-30s).
-    // Set inside the describe so the value is snapshotted when these tests are registered;
-    // the sibling error-handling suite reverts to a tighter 20s for its own tests.
+    // 200s covers slow live-network reads (Koios pool/account lookups take 10-30s);
+    // set inside the describe so the value is snapshotted for these tests only.
     vi.setConfig({ testTimeout: 200000, hookTimeout: 200000 });
 
     // cds.test() starts server which triggers cds.on('served') → creates AppContext automatically
     const test = cds.test(__dirname + '/../../');
     const expect = test.expect;
 
-    // Only reset the database before each test - AppContext already created by server
     beforeEach(async () => {
       await test.data.reset();
     });
 
-    // Note: shutdownAppContext is NOT called here. core.{blockfrost,koios}.test.ts
-    // registers createErrorBackendSuite as a sibling suite right after this one in
-    // the same file. Calling shutdownAppContext here would null appContext while
-    // the same cds.test() server keeps running — every handler call in the next
-    // suite would then throw "Application not initialized". The error-handling
-    // suite owns the file-level teardown.
+    // No shutdownAppContext here: the backend entry files register the error-handling
+    // suite as a sibling on the same server; that suite owns the file-level teardown.
 
     describe('ODATANO Milestone 1 - CardanoService Tests', () => {
       // ============================================================================
@@ -63,29 +56,22 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('GET /NetworkInformation – cold read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { NetworkInformation } = CardanoService.entities
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(NetworkInformation));
             expect(before.length).to.equal(0);
-            // call the GET endpoint
             const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
             expect(status).to.equal(200);
-            // verify data persisted
             const after = await cds.run(SELECT.from(NetworkInformation));
             expect(after.length).to.be.equal(1);
-            // verify response data
             expect(data.value[0]).to.have.property('circulatingSupply');
           });
 
           it('POST /GetNetworkInformation – cold action read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { NetworkInformation } = CardanoService.entities
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(NetworkInformation));
             expect(before.length).to.equal(0);
-            // call the POST endpoint
             const { status } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
             expect(status).to.equal(200);
-            // verify data persisted
             const after = await cds.run(SELECT.from(NetworkInformation));
             expect(after.length).to.be.equal(1);
           });
@@ -111,7 +97,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             }));
 
             const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
-            // verify response data served from DB Not re-indexed
             // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
             expect(Number(data.value[0].maxSupply)).to.equal(4500000000000000);
             expect(Number(data.value[0].circulatingSupply)).to.equal(4500000000000000);
@@ -138,7 +123,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             }));
 
             const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
-            // verify response data served from DB Not re-indexed
             // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
             expect(Number(data.maxSupply)).to.equal(4500000000000000);
             expect(Number(data.circulatingSupply)).to.equal(4500000000000000);
@@ -170,13 +154,10 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('GET /Blocks – cold read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Blocks } = CardanoService.entities;
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(before.length).to.equal(0);
-            // call the GET endpoint
             const { status } = await test.get(`/odata/v4/cardano-odata/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
             expect(status).to.equal(200);
-            // verify data persisted
             const after = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(after.length).to.be.equal(1);
           });
@@ -184,13 +165,10 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('POST /GetBlockByHash – cold action read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Blocks } = CardanoService.entities;
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(before.length).to.equal(0);
-            // call the POST endpoint
             const { status } = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
             expect(status).to.equal(200);
-            // verify data persisted
             const after = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(after.length).to.be.equal(1);
           });
@@ -212,7 +190,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               txCount: 10,
             }));
             const { status, data } = await test.get(`/odata/v4/cardano-odata/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
-            // verify response data served from DB Not re-indexed
             expect(data.hash).to.equal(TEST_FIXTURES.validBlockHash);
             expect(data.height).to.equal(123456);
             expect(status).to.equal(200);
@@ -233,7 +210,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               txCount: 10,
             }));
             const { status, data } = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
-            // verify response data served from DB Not re-indexed
             expect(data.hash).to.equal(TEST_FIXTURES.validBlockHash);
             expect(data.height).to.equal(123456);
             expect(status).to.equal(200);
@@ -244,11 +220,9 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       // Epochs
       // ============================================================================
       describe('Epochs Entity Tests', () => {
-        // Dynamically resolve epoch numbers from the live network to avoid flaky tests.
-        // Backends occasionally have gaps for single historical epochs (e.g. Blockfrost
-        // preview answered 404 for epoch 1416 while 1415/1417 were fine), so we probe
-        // downwards from the preferred offset and take the first epoch the backend serves.
-        // Rows indexed by the probe are wiped by the beforeEach reset before any test runs.
+        // Epoch numbers come from the live network; backends occasionally miss single
+        // historical epochs, so probe downwards from the preferred offset and take the
+        // first one served. Rows indexed by the probe are wiped by the beforeEach reset.
         let recentEpoch: number;
         let coldEpoch: number;
 
@@ -294,10 +268,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('GET /Epochs – cold read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(before.length).to.equal(0);
-            // call the GET endpoint
             const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=${recentEpoch})`);
             const after = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(after.length).to.equal(1);
@@ -307,10 +279,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('POST /GetEpochByNumber – cold action read triggers indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Epochs } = CardanoService.entities;
-            // make sure DB is empty
             const before = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(before.length).to.equal(0);
-            // call the POST endpoint
             const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: coldEpoch });
             const after = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(after.length).to.equal(1);
@@ -515,9 +485,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('GET /TransactionMetadata(key) – read TransactionMetadata by composite key', async () => {
-            // The composite key is (tx_hash, id) where `id` IS the numeric metadata
-            // label, so it has to come from the data — a label the tx does not carry
-            // now yields 404 (it used to be answered with the tx's first row).
+            // The composite key is (tx_hash, id) where `id` is the numeric metadata label, so
+            // it has to come from the data; a label the tx does not carry yields 404.
             const { data: metadata } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             const id = metadata.value[0].id;
 
@@ -558,7 +527,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Transactions, TransactionMetadata } = CardanoService.entities as any;
 
-            // ensure transaction exists
             await cds.run(
               INSERT.into(Transactions).entries({
                 hash: TEST_FIXTURES.validTxHash,
@@ -566,7 +534,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 blockHeight: 1,
               }),
             );
-            // seed metadata
             await cds.run(
               INSERT.into(TransactionMetadata).entries({
                 id: 0,
@@ -577,7 +544,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             );
 
             const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.validTxHash });
-            // get first row 
             const firstrow = data.value[0];
 
             expect(status).to.equal(200);
@@ -590,7 +556,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('READ /TransactionMetadata(key) – warm key read without re-index', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Transactions, TransactionMetadata } = CardanoService.entities as any;
-            // ensure transaction exists
             await cds.run(
               INSERT.into(Transactions).entries({
                 hash: TEST_FIXTURES.validTxHash,
@@ -598,7 +563,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 blockHeight: 1,
               }),
             );
-            // seed metadata
             await cds.run(
               INSERT.into(TransactionMetadata).entries({
                 id: 1,
@@ -629,7 +593,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('GET /Addresses – read Addresses collection', async () => {
             const { status, data } = await test.get(`/odata/v4/cardano-odata/Addresses`);
 
-            // For initial empty DB, expect empty collection
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
@@ -710,7 +673,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { AddressUTxOs, Addresses } = CardanoService.entities as any;
 
-            // seed address
             await cds.run(
               INSERT.into(Addresses).entries({
                 address: TEST_FIXTURES.addressWithFunds,
@@ -721,7 +683,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 totalLovelace: 0,
               }),
             );
-            // seed UTxO
             await cds.run(
               INSERT.into(AddressUTxOs).entries({
                 address_address: TEST_FIXTURES.addressWithFunds,
@@ -732,7 +693,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 validTo: new Date(Date.now() + 60000).toISOString(),
               }),
             );
-            // Ensure seed is really present
             const seeded = await cds.run(SELECT.from(AddressUTxOs).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(seeded.length).to.be.greaterThan(0);
 
@@ -746,7 +706,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { AddressAssets, Addresses } = CardanoService.entities as any;
 
-            // seed address
             await cds.run(
               INSERT.into(Addresses).entries({
                 address: TEST_FIXTURES.addressWithFunds,
@@ -757,7 +716,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 validTo: new Date(Date.now() + 60000).toISOString(),
               }),
             );
-            // seed asset
             await cds.run(
               INSERT.into(AddressAssets).entries({
                 address_address: TEST_FIXTURES.addressWithFunds,
@@ -773,7 +731,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 },
               }),
             );
-            // Ensure seed is really present
             const seeded = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(seeded.length).to.be.greaterThan(0);
 
@@ -828,7 +785,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('Addresses Sub-Entities Reads', () => {
           it('GET /AddressAssets – read AddressAssets collection', async () => {
             const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressAssets`);
-            // For initial empty DB, expect empty collection
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
@@ -853,7 +809,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
           it('GET /AddressUTxOs – read AddressUTxOs collection', async () => {
             const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressUTxOs`);
-            // For initial empty DB, expect empty collection
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
@@ -861,7 +816,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
           it('GET /UTxOAssets – read UTxOAssets collection', async () => {
             const { status, data } = await test.get(`/odata/v4/cardano-odata/UTxOAssets`);
-            // For initial empty DB, expect empty collection
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
@@ -1248,7 +1202,6 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         it('GET /AddressTransactions – read AddressTransactions collection', async () => {
           const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressTransactions`);
-          // For initial empty DB, expect empty collection
           expect(Array.isArray(data.value)).to.be.true;
           expect(data.value.length).to.be.equal(0);
           expect(status).to.equal(200);
@@ -1267,9 +1220,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         });
 
         it('POST /GetLatestTransactionsByAddress – return existing from cache', async () => {
-          // First call indexes data from backend
           await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
-          // Second call should return existing from DB (cache hit)
           const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
           expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
           expect(status).to.be.equal(200);

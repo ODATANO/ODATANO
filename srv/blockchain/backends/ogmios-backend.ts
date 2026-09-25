@@ -40,9 +40,7 @@ import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
 
-/**
- * Type definitions for Ogmios API responses (not fully typed in @cardano-ogmios/client)
- */
+/** Ogmios response shapes not fully typed in @cardano-ogmios/client. */
 interface OgmiosStakePool {
   vrf?: string;
   vrfKeyHash?: string;
@@ -65,9 +63,8 @@ interface OgmiosRewardAccountSummary {
 }
 
 /**
- * First absolute slot of the given epoch, from the network's Shelley anchor.
- * Replaces the old `epoch * 432000` math, which was wrong on preview (86 400
- * slots per epoch) and on mainnet/preprod (Byron offset).
+ * First absolute slot of an epoch, from the network's Shelley anchor
+ * (86 400 slots per epoch on preview; Byron offset on mainnet/preprod).
  */
 function epochStartSlot(network: Network, epoch: number): number {
   const cfg = EPOCH_CONFIG_BY_NETWORK[network];
@@ -75,20 +72,15 @@ function epochStartSlot(network: Network, epoch: number): number {
 }
 
 /**
- * Absolute POSIX seconds for a slot, via the same Shelley-anchored genesis infos
- * the transaction builder uses for validity windows. The previous code treated
- * Ogmios' `eraStart.time` (RelativeTime since SYSTEM start) as a Unix timestamp.
+ * Absolute POSIX seconds for a slot via the Shelley-anchored genesis infos. Ogmios'
+ * `eraStart.time` is RelativeTime since system start, not a Unix timestamp.
  */
 function slotToPosixSeconds(network: Network, slot: number): number {
   const genesis = GENESIS_INFOS_BY_NETWORK[network];
   return Math.floor((genesis.systemStartPosixMs + (slot - genesis.startSlotNo) * genesis.slotLengthMs) / 1000);
 }
 
-/**
- * Parse an Ogmios `Ratio` ("num/den" string, e.g. "3/1000") into a number.
- * `Number("3/1000")` is NaN — previously every ratio-typed protocol parameter
- * (priceMem, priceStep, a0, rho, tau) came out as NaN.
- */
+/** Parse an Ogmios `Ratio` ("num/den", e.g. "3/1000") into a number; `Number("3/1000")` is NaN. */
 function parseOgmiosRatio(ratio: string | number | undefined | null): number {
   if (ratio === null || ratio === undefined) return 0;
   if (typeof ratio === 'number') return ratio;
@@ -101,11 +93,7 @@ function parseOgmiosRatio(ratio: string | number | undefined | null): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/**
- * Extract a lovelace amount from Ogmios' value shapes. Ogmios v6 returns
- * `{ ada: { lovelace } }` objects — calling `.toString()` on those yields
- * "[object Object]", which previously ended up in the AccountData fields.
- */
+/** Lovelace amount from Ogmios' value shapes; v6 returns `{ ada: { lovelace } }` objects. */
 function ogmiosValueToLovelaceString(value: OgmiosRewardAccountSummary['rewards']): string {
   if (value === null || value === undefined) return '0';
   if (typeof value === 'bigint' || typeof value === 'number') return String(value);
@@ -114,11 +102,8 @@ function ogmiosValueToLovelaceString(value: OgmiosRewardAccountSummary['rewards'
 }
 
 /**
- * Ogmios v6 `queryLedgerState/delegateRepresentatives` summary (local wire type —
- * `@cardano-ogmios/schema` is only a transitive dependency, same trade-off as the
- * other Ogmios* interfaces in this file). Only the `registered` variant carries an
- * id; the `noConfidence` / `abstain` pseudo-DReps have none and are never returned
- * for a credential-filtered query.
+ * Ogmios v6 `queryLedgerState/delegateRepresentatives` summary (local wire type; the schema
+ * package is only a transitive dependency). Only the `registered` variant carries an id.
  */
 interface OgmiosDrepSummary {
   type: 'registered' | 'noConfidence' | 'abstain';
@@ -137,10 +122,8 @@ interface OgmiosRpcEnvelope<T> {
 }
 
 /**
- * Decode a CIP-129 DRep ID (`drep1…`, 29 bytes) into its credential hash and
- * type. Header byte: high nibble 0x2 = DRep, low nibble 0x2 = key hash /
- * 0x3 = script hash. The validators already enforce HRP + length before the
- * request reaches a backend, so this only has to split the payload.
+ * Decode a CIP-129 DRep ID (`drep1…`, 29 bytes) into credential hash and type. Header byte:
+ * high nibble 0x2 = DRep, low nibble 0x2 = key hash / 0x3 = script hash.
  */
 export function decodeDrepId(drepId: string): { hashHex: string; isScript: boolean } {
   const decoded = bech32.decode(drepId, BECH32_MAX_LENGTH);
@@ -165,14 +148,8 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
 }
 
 /**
- * Ogmios Backend Implementation for Cardano Backend Interface
- * Implements the CardanoBackend interface using Ogmios WebSocket client for local node interaction
- */
-/**
- * Minimal structural views of the Ogmios chain-sync `BlockPraos` / `Transaction`
- * JSON we consume (Shelley-era onward). Declared locally rather than importing the
- * full `@cardano-ogmios/schema` union so the crawler mapper isn't coupled to a
- * transitive dependency; fields not needed for indexing are omitted.
+ * Structural views of the Ogmios chain-sync `BlockPraos` / `Transaction` JSON we consume
+ * (Shelley-era onward); declared locally so the mapper is not coupled to the schema package.
  */
 interface OgmiosChainSyncTx {
   id: string;
@@ -186,10 +163,7 @@ interface OgmiosChainSyncTx {
   fee?: { ada: { lovelace: number | bigint } };
   /** `total_collateral` from the body — optional there, so absent on many phase-2 failures. */
   totalCollateral?: { ada: { lovelace: number | bigint } };
-  /**
-   * The body's mint field (`Assets` in the Ogmios schema): policyId -> assetName -> signed
-   * quantity, negative for a burn. Never contains `ada`.
-   */
+  /** Body mint field: policyId -> assetName -> signed quantity (negative = burn). Never contains `ada`. */
   mint?: Record<string, Record<string, number | bigint>>;
   metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
   certificates?: OgmiosCertificate[];
@@ -221,15 +195,13 @@ interface OgmiosPraosBlock {
   transactions?: OgmiosChainSyncTx[];
 }
 
+/** CardanoBackend implementation over an Ogmios WebSocket (local node). */
 export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend {
   public readonly name = 'ogmios';
   /**
-   * Capability declaration — the orchestrator skips Ogmios for these without
-   * counting circuit failures. Historic queries are out of protocol scope;
-   * getAddress/getNetworkInformation previously FABRICATED placeholder data
-   * (type:'base'/isScript:false/stakeAddress:null resp. maxSupply as
-   * total/circulating) which preferLive routing then preferred over correct
-   * Blockfrost/Koios data.
+   * Capability declaration — the orchestrator skips Ogmios for these without counting
+   * circuit failures. Historic queries are out of protocol scope, and address/network
+   * aggregates cannot be derived from state queries.
    */
   public readonly unsupportedMethods: ReadonlySet<string> = new Set([
     // getEpoch is NOT listed: Ogmios can serve the CURRENT epoch and only
@@ -254,9 +226,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   private ogmiosUrl: string;
 
 
-  /** 
-   * Constructor 
-   */
   constructor(network: Network, timeoutMs: number, ogmiosUrl: string) {
     if (!ogmiosUrl) {
       throw new BackendInitError('ogmios', new Error('ogmiosUrl is not set'));
@@ -267,21 +236,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Force fresh (non-keep-alive) HTTP connections for the Ogmios `/health` probe.
-   *
-   * createInteractionContext() opens the WebSocket, but FIRST probes
-   * `GET http://<ogmios>/health` via the library's `cross-fetch` → node-fetch v2
-   * → Node-core `http`. Since Node 19, `http.globalAgent` defaults to
-   * keepAlive:true, so node-fetch reuses pooled sockets. Against Ogmios' Warp
-   * server on Node 22/24 a reused socket the server has already half-closed
-   * yields "Invalid response body … Premature close" the instant the body is
-   * read — deterministically (Node 20's older http client tolerated it; `curl`
-   * does too, so the /health response itself is well-formed and the node is
-   * healthy). The lib pins cross-fetch even in 7.0 and exposes no way to inject
-   * an agent into that internal fetch, so we neutralise keep-alive process-wide
-   * for `http://`. Blast radius is tiny: the only `http://` consumer is the local
-   * Ogmios probe — Blockfrost/Koios run over `https` with their own axios agents
-   * and are unaffected. Runs once, lazily, only when Ogmios is actually used.
+   * Force non-keep-alive HTTP for the Ogmios `/health` probe: node-fetch v2 uses `http.globalAgent`,
+   * whose pooled sockets (kept alive since Node 19) fail with "Premature close" once Ogmios' Warp server
+   * half-closes them. No agent hook exists, so keep-alive is disabled process-wide for `http://` only.
    */
   private static keepAliveDisabled = false;
   private static disableHttpKeepAlive(): void {
@@ -312,17 +269,12 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Bound an init step in time. A hung WebSocket connect/handshake (e.g. the
-   * node is alive but too busy catching up to answer) would otherwise block
-   * forever — there is no built-in connect timeout — hanging the whole
-   * app-context bootstrap (seen as a 6h CI job timeout). On timeout we reject
-   * with a message containing "timeout" so the orchestrator's transient-error
-   * retry picks it up instead of dying.
+   * Bound an init step in time: the WebSocket connect/handshake has no built-in timeout and
+   * can hang when the node is busy. The rejection message contains "timeout" so the
+   * orchestrator's transient-error retry picks it up.
    */
   private withInitTimeout<T>(p: Promise<T>, label: string): Promise<T> {
-    // Keep this SHORT: the orchestrator retries init a few times within the
-    // integration suite's 20s cds.test() hook, so each attempt must be brief.
-    // Still bounds a genuinely hung connect in production.
+    // Short on purpose: the orchestrator retries init several times within a bounded bootstrap window.
     const ms = Math.max(1, Math.min(this.timeoutMs, 4000));
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<T>((_, reject) => {
@@ -333,10 +285,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Force-release an Ogmios interaction socket after a failed/expired open or
-   * close step. The runtime uses `ws` (and therefore supports `terminate`), but
-   * the close fallback keeps the helper compatible with the public structural
-   * InteractionContext type and lightweight test doubles.
+   * Force-release an interaction socket after a failed/expired open or close. The runtime
+   * socket is `ws` (has `terminate`); the `close` fallback keeps test doubles working.
    */
   private forceCloseContext(context: Awaited<ReturnType<typeof createInteractionContext>>): void {
     const socket = context.socket as unknown as {
@@ -356,9 +306,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
   }
 
-  /**
-   * Initialize the Ogmios backend connection
-   */
+  /** Open the interaction context and the query/submission clients. */
   async init(): Promise<boolean> {
     OgmiosBackend.disableHttpKeepAlive();
     OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
@@ -373,9 +321,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       /* c8 ignore next */
       (err) => logger.error(`[OgmiosBackend] Interaction context error: ${err.message}`),
       () => {
-        // Socket closed: clear the clients so the next request reconnects via
-        // ensureConnected — previously this handler only logged and the backend
-        // stayed dead until process restart.
+        // Socket closed: clear the clients so the next request reconnects via ensureConnected.
         if (this.isShutdown) return;
         logger.warn('[OgmiosBackend] WebSocket closed — will reconnect on next request');
         this.stateQueryClient = null;
@@ -398,10 +344,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Reconnect when the WebSocket has died since the last successful init.
-   * No-op when never initialized (test-injected clients) — startup-init
-   * recovery is the orchestrator's job (lazy init retry in CardanoClient).
-   * Concurrent callers share one reconnect attempt.
+   * Reconnect when the WebSocket died since the last init. No-op when never initialized
+   * (test-injected clients); concurrent callers share one reconnect attempt.
    */
   private async ensureConnected(): Promise<void> {
     this.ensureNotShutdown();
@@ -438,8 +382,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
-      
-      // Get current epoch directly via epoch() query
+
       const currentEpoch = await this.stateQueryClient!.epoch();
 
       // Ogmios only supports current epoch queries
@@ -447,7 +390,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         throw new NotFoundError(`Historic Epoch ${epochNumber} not supported (current: ${currentEpoch})`, this.name);
       }
 
-      // Return current epoch data
       return this.getLatestEpoch();
     }, this.name);
   }
@@ -475,19 +417,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Get DRep data from the live ledger state (`queryLedgerState/delegateRepresentatives`).
-   *
-   * The client package (6.14) ships the schema types but no wrapper for this query,
-   * so it goes through the exported `Method()` primitive on our interaction context —
-   * the same building block the client uses for `stakePools` & co.
-   *
-   * Semantics vs. Blockfrost/Koios: Ogmios only lists REGISTERED DReps, so a retired
-   * or unknown DRep is a NotFoundError here (never `retired: true`), and there is no
-   * last-activity epoch — `expired` is derived from the mandate epoch instead.
-   * Routing keeps `getDrep` historical-preferred; this is the Ogmios-only fallback.
-   *
+   * DRep data from the live ledger state (`queryLedgerState/delegateRepresentatives`) via the
+   * raw `Method()` primitive, since the client ships no wrapper. Ogmios lists only REGISTERED
+   * DReps: retired/unknown → NotFoundError; `expired` is derived from the mandate epoch.
    * @param drepId CIP-129 bech32 DRep ID (`drep1…`)
-   * @returns {Promise<DrepData>} drep data
    */
   async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
@@ -533,8 +466,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         hex: hashHex,
         amount: ogmiosValueToLovelaceString(drep.stake),
         hasScript: isScript || drep.from === 'script',
-        // Ogmios reports the mandate (expiry) epoch, not the last activity — keep 0,
-        // matching what the Koios mapper does since its schema change.
+        // Ogmios reports the mandate (expiry) epoch, not the last activity — keep 0.
         lastActiveEpoch: 0,
         expired: typeof mandateEpoch === 'number' && mandateEpoch < Number(currentEpoch),
         retired: false,
@@ -553,12 +485,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Get specific Network Information (not supported — Ogmios state queries
-   * expose no supply/stake aggregates; the previous implementation fabricated
-   * maxSupply as total/circulating, which preferLive routing then preferred
-   * over correct Blockfrost/Koios data)
-   */
+  /** Not supported — Ogmios state queries expose no supply/stake aggregates. */
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(async () => {
       throw new ProviderUnavailableError('Network information not supported by Ogmios backend — use Blockfrost/Koios', this.name);
@@ -566,10 +493,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Get current specific Address Data (not supported — address type, script
-   * flag and stake address are not derivable from Ogmios state queries; the
-   * previous implementation fabricated type:'base'/isScript:false/
-   * stakeAddress:null. UTxOs remain available via getAddressUtxos.)
+   * Not supported — address type, script flag and stake address are not derivable from
+   * state queries. UTxOs remain available via getAddressUtxos.
    */
   async getAddress(_address: string): Promise<Address> {
     return handleBackendRequest(async () => {
@@ -599,24 +524,19 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       txHash: u.transaction?.id || '',
       outputIndex: u.index || 0,
       address: u.address || fallbackAddress,
-      // convert Ogmios value format to standard amount array
       amount: this.convertOgmiosValue(u.value),
       blockHash: '',
       datumHash: u.datumHash,
-      // Ogmios delivers the inline datum as CBOR hex in `datum` — it was
-      // dropped before, breaking inline-datum spends when Ogmios serves UTxOs
+      // Ogmios delivers the inline datum as CBOR hex in `datum`
       inlineDatum: typeof u.datum === 'string' ? u.datum : null,
       scriptRef: (u.script as { hash?: string } | undefined)?.hash,
     };
   }
 
   /**
-   * The whole UTxO set as of `point` (LedgerStateBackend — crawler.utxoSet snapshot import).
-   * Opens a SEPARATE WebSocket connection for it: the local-state-query protocol keeps one
-   * acquired point per connection, so a client on the shared socket would move every live
-   * query to the historical anchor for the duration. The point must be inside the node's
-   * volatile window (the last 2160 blocks) or the node refuses the acquisition. Whole-set
-   * queries are fine on preview/preprod; on mainnet prefer a cardano-cli file.
+   * Whole UTxO set as of `point` (crawler snapshot import) on a SEPARATE WebSocket: local-state-query
+   * holds one acquired point per connection, so the shared socket would pin live queries to the past.
+   * The point must be inside the node's volatile window (last 2160 blocks) or acquisition is refused.
    */
   async queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
@@ -640,12 +560,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Get Address Transactions (not supported by Ogmios - use historical backend)
-   * Ogmios is a live state query backend and does not provide historical transaction data
-   * @param _address bech32 address
-   * @returns {Promise<Transaction[]>} always throws - use historical backend instead
-   */
+  /** Not supported — Ogmios is a live state-query backend; use Blockfrost/Koios. */
   async getAddressTransactions(_address: string): Promise<Transaction[]> {
     throw new NotFoundError(
       'Address transactions not available via Ogmios - use historical backend (Blockfrost/Koios)',
@@ -665,7 +580,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       // Query from tip (no acquire needed) with stake included
       const pools = await this.stateQueryClient!.stakePools([{ id: poolId }], true) as Record<string, OgmiosStakePool>;
 
-      // Extract pool from response - stakePools returns object keyed by poolId
+      // stakePools returns an object keyed by poolId
       const pool = pools[poolId];
       if (!pool) throw new NotFoundError('Pool', this.name);
 
@@ -682,8 +597,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         // of fabricating it from the pledge
         activeStake: '0',
         activeSize: 0,
-        // pledge/cost are ValueAdaOnly objects in Ogmios v6 — String() on those
-        // yielded "[object Object]"; margin is a Ratio string ("1/10")
+        // pledge/cost are ValueAdaOnly objects in Ogmios v6; margin is a Ratio string ("1/10")
         pledge: ogmiosValueToLovelaceString(pool.pledge),
         margin: parseOgmiosRatio(pool.margin),
         fixedCost: ogmiosValueToLovelaceString(pool.cost),
@@ -707,7 +621,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         ? rawResult
         : Object.values(rawResult as Record<string, OgmiosRewardAccountSummary>);
 
-      // Ogmios API returns array of account summaries
       const account = summaries && summaries.length > 0 ? summaries[0] : null;
       
       if (!account) {
@@ -802,7 +715,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         eMax: params.stakePoolRetirementEpochBound || 0,
         nOpt: params.desiredNumberOfStakePools || 0,
         a0: parseOgmiosRatio(params.stakePoolPledgeInfluence),
-        // ρ = monetaryExpansion, τ = treasuryExpansion (was swapped; Koios maps it correctly)
+        // ρ = monetaryExpansion, τ = treasuryExpansion
         rho: parseOgmiosRatio(params.monetaryExpansion),
         tau: parseOgmiosRatio(params.treasuryExpansion),
         decentralisationParam: 0,
@@ -867,7 +780,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       const { slot, hash } = resolveOgmiosTip(tip);
       const height = resolveOgmiosHeight(blockHeight);
 
-      // network-aware slot-in-epoch (the old `slot % 432000` was wrong on every network)
+      // network-aware slot-in-epoch
       const epochSlot = Math.max(0, slot - epochStartSlot(this.network, epoch));
 
       return {
@@ -901,11 +814,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Check whether a UTxO is still unspent via Ogmios `queryLedgerState/utxo`
-   * with an outputReferences filter. Empty result means spent or nonexistent.
+   * Unspent check via `queryLedgerState/utxo` with an outputReferences filter; empty = spent or nonexistent.
    * @param txHash 64-char lowercase hex
    * @param outputIndex non-negative integer
-   * @returns {Promise<boolean>} true iff the UTxO exists and is unspent
    */
   async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
     if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
@@ -918,10 +829,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Shutdown the Ogmios Backend
-   * Closes all connections and marks as shutdown
-   */
+  /** Close the WebSocket and mark the backend as shut down. */
   async shutdown(): Promise<void> {
     if (this.isShutdown) return;
     this.isShutdown = true;
@@ -952,9 +860,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     this.context = null;
   }
 
-  /**
-   * Check if backend is connected
-   */
   isConnected(): boolean {
     if (this.isShutdown || !this.context?.socket) {
       return false;
@@ -967,9 +872,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /**
-   * Ensure the client is not shutdown before operations
-   */
   private ensureNotShutdown(): void {
     if (this.isShutdown) {
       throw new ProviderUnavailableError('Ogmios client has been shutdown', this.name);
@@ -977,14 +879,12 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Convert Ogmios value format to odatano amount array
-   * Ogmios: { ada: { lovelace: 1000000 }, policyId: { assetName: quantity } }
-   * Standard: [{ unit: 'lovelace', quantity: '1000000' }, { unit: 'policyId.assetName', quantity: 'N' }]
+   * Ogmios value `{ ada: { lovelace }, policyId: { assetName: qty } }` →
+   * `[{ unit: 'lovelace', quantity }, { unit: policyId+assetName, quantity }]`.
    */
   private convertOgmiosValue(value: { ada?: { lovelace?: number | bigint } } & Record<string, unknown>): Array<{ unit: string; quantity: string }> {
     const amounts: Array<{ unit: string; quantity: string }> = [];
 
-    // Handle ADA (lovelace)
     if (value.ada?.lovelace) {
       amounts.push({
         unit: 'lovelace',
@@ -992,7 +892,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       });
     }
 
-    // handle native assets (policy.assetName)
     for (const [policyId, assets] of Object.entries(value)) {
       if (policyId === 'ada') continue;
 
@@ -1007,21 +906,13 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   // ---------------------------------------------------------------------------
-  // ChainSyncBackend — streamed forward sync for the chain crawler (v2.0)
+  // ChainSyncBackend — streamed forward sync for the chain crawler
   // ---------------------------------------------------------------------------
 
   /**
-   * Open a dedicated chain-synchronization stream. Uses its own InteractionContext
-   * (a separate WebSocket) from the query/submission clients, because it is a
-   * long-lived stream. `sequential: true` + `inFlight: 1` deliver blocks one at a
-   * time in order, which the crawler needs for reorg detection and serial persist.
-   *
-   * KNOWN LIMITATIONS (documented, to harden against a live node — see CRAWLER_DESIGN.md):
-   *  - Input address/amount are left empty: Ogmios chain-sync inputs are bare
-   *    references ({txId,index}); the indexer resolves them from already-indexed
-   *    outputs (indexBlockFull, C3).
-   *  - Per-tx `size` and `deposit` are not surfaced by chain-sync (set 0).
-   *  - Output `referenceScriptHash` is not derived from the inline script yet.
+   * Open a long-lived chain-sync stream on its own WebSocket. `sequential: true` + `inFlight: 1`
+   * deliver blocks strictly in order (required by reorg detection and serial persist). Inputs arrive
+   * as bare references (resolved by the indexer from indexed outputs); per-tx size/deposit are not surfaced.
    */
   async openChainSync(from: ChainPoint[] | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle> {
     OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
@@ -1048,12 +939,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       }
     };
 
-    // A frame the client's own parser cannot handle never reaches this class: it throws
-    // inside the library's socket handler, where nothing awaits it, and ends the process.
-    // The guard intercepts that and routes the unusable frame here instead, as an ordinary
-    // stream error naming the block. Installed per open (one stream at a time) and
-    // idempotent, so reopening only swaps the callback.
-    installOgmiosFrameGuard(({ height, id, reason }) => {
+    // A frame the client's parser cannot handle throws inside the library's un-awaited socket
+    // handler and would end the process; the guard routes it here as a stream error instead.
+    // Registered per open and removed on close, so concurrent streams each get the report.
+    const unregisterFrameGuard = installOgmiosFrameGuard(({ height, id, reason }) => {
       void reportStreamError(new ChainSyncFrameError(height, id, reason));
     });
 
@@ -1082,15 +971,14 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       // A timeout rejects our race but cannot cancel the library's health probe /
       // handshake. If it resolves later, close that late socket as well.
       intentionalClose = true;
+      unregisterFrameGuard();
       void contextPromise.then(lateContext => this.forceCloseContext(lateContext)).catch(() => undefined);
       throw err;
     }
 
-    // Both handlers are fully try/caught: the ogmios client lib awaits them with NO
-    // catch of its own, and with sequential+inFlight:1 a throw before nextBlock()
-    // stalls the stream forever. On error we deliberately do NOT call nextBlock()
-    // (stopping deterministically instead of skipping a block) and surface the error
-    // via callbacks.onError so the consumer can record it and close/restart.
+    // Both handlers are fully try/caught: the client awaits them without a catch, and with
+    // sequential+inFlight:1 a throw before nextBlock() stalls the stream. On error nextBlock()
+    // is deliberately NOT called (stop, don't skip a block); the error goes to callbacks.onError.
     const handlers: Parameters<typeof createChainSynchronizationClient>[1] = {
       rollForward: async ({ block, tip }, nextBlock) => {
         try {
@@ -1136,6 +1024,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       );
     } catch (err) {
       intentionalClose = true;
+      unregisterFrameGuard();
       if (client) {
         try {
           await this.withInitTimeout(client.shutdown(), 'chainSync/failedOpenShutdown');
@@ -1153,6 +1042,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         // Idempotency matters when an operator stop races an onError-triggered halt.
         if (!closePromise) {
           intentionalClose = true;
+          unregisterFrameGuard();
           closePromise = (async () => {
             try {
               await this.withInitTimeout(client.shutdown(), 'chainSync/shutdown');
@@ -1168,13 +1058,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Map an Ogmios Praos block into our BlockData + its transactions. Block-level
-   * fees are the sum of per-tx fees; epoch/epochSlot are derived from the slot via
-   * the network's Shelley anchor (same config the tx-builder uses).
-   *
-   * A phase-2 failure whose body declares no `total_collateral` still carries its
-   * declared fee here, because the collateral inputs are not resolved yet. The indexer
-   * corrects both the transaction and this sum in applyCollateralFees().
+   * Map an Ogmios Praos block to BlockData + transactions. Block fees are the sum of per-tx
+   * fees; epoch/epochSlot derive from the slot via the Shelley anchor. A phase-2 failure without
+   * `total_collateral` still carries its declared fee here; applyCollateralFees() corrects it.
    */
   private mapOgmiosBlock(block: OgmiosPraosBlock): { block: BlockData; txs: Transaction[] } {
     const txs = (block.transactions ?? []).map((t, i) => this.mapOgmiosTx(t, block, i));
@@ -1182,8 +1068,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
 
     const cfg = EPOCH_CONFIG_BY_NETWORK[this.network];
     const epoch = cfg.shelleyStartEpoch + Math.floor((block.slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
-    // reuse the Shelley-anchored helper (carries the preview/preprod/Byron-offset fix)
-    // instead of a second inline modulo formula
+    // Shelley-anchored helper (handles preview/preprod geometry and the Byron offset)
     const epochSlot = block.slot - epochStartSlot(this.network, epoch);
 
     const blockData: BlockData = {
@@ -1202,12 +1087,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Map a single Ogmios chain-sync transaction into our Transaction. Outputs, fee
-   * and metadata are mapped fully; inputs are kept as bare references (address/amount
-   * resolved downstream by the indexer). `spends` selects the ledger-applied
-   * partition: a phase-2-invalid transaction consumes collaterals and creates only
-   * its collateral-return output, never its declared regular inputs/outputs. The fee
-   * follows that partition too — see the `spendsCollaterals` branch below.
+   * Map one chain-sync transaction. Inputs stay bare references (resolved by the indexer).
+   * `spends` selects the ledger-applied partition: a phase-2-invalid tx consumes collaterals
+   * and creates only its collateral-return output; the fee follows that partition too.
    */
   private mapOgmiosTx(tx: OgmiosChainSyncTx, block: OgmiosPraosBlock, index: number): Transaction {
     const mapInput = (
@@ -1259,10 +1141,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         }))
       : [];
 
-    // A phase-2 failure does not pay the fee declared in the body — the ledger consumes
-    // the collateral instead. `total_collateral` is that amount and the ledger enforces
-    // the equality, so prefer it; the body omits it often enough that the indexer derives
-    // the rest from the resolved collateral inputs once it has them.
+    // A phase-2 failure pays `total_collateral`, not the declared fee; the body often omits it,
+    // so the indexer derives the rest from the resolved collateral inputs later.
     const declaredFee = (tx.fee?.ada?.lovelace ?? 0).toString();
     const totalCollateral = tx.totalCollateral ? tx.totalCollateral.ada.lovelace.toString() : null;
 
@@ -1297,11 +1177,9 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Normalize Ogmios certificates onto the shared `CertificateKind` vocabulary.
-   * A `stakeDelegation` carrying both a pool and a DRep target is split into two entries
-   * with the same index, matching what Koios (db-sync) reports for the Conway combined
-   * certificate. Ogmios credentials are bare hashes; they are re-encoded as bech32 here so
-   * the rows carry the same identifiers as every other table.
+   * Normalize Ogmios certificates onto the shared `CertificateKind` vocabulary. A `stakeDelegation`
+   * with both pool and DRep target is split into two entries with the same index (as db-sync
+   * reports it); bare credential hashes are re-encoded as bech32 to match the other tables.
    */
   private mapOgmiosCertificates(certs: OgmiosCertificate[]): TxCertificate[] {
     const out: TxCertificate[] = [];
