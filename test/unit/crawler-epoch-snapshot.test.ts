@@ -1,6 +1,6 @@
 /**
- * Chain crawler — pool/DRep snapshots at epoch boundaries (FR "crawler coverage for
- * analytics"). Drives persistBlock through the chain-sync callback and asserts that the
+ * Chain crawler — pool/DRep snapshots at epoch boundaries (analytics coverage).
+ * Drives persistBlock through the chain-sync callback and asserts that the
  * snapshot runs ONCE per epoch, ONLY at the tip, outside the block transaction, never fails
  * the crawl, and respects a snapshot another run already recorded. cds + entity proxies
  * mocked in the repo's style (see crawler-lifecycle.test.ts).
@@ -58,6 +58,8 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
   PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
+  TransactionCertificates: 'odatano.cardano.TransactionCertificates',
+  TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
 }));
 
 import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler/crawler';
@@ -67,7 +69,7 @@ import type { BlockData } from '../../srv/utils/types';
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 1000, startBlockHash: 'start'.padEnd(64, '0'), startHeight: 10,
   source: 'auto', batchSize: 5, confirmationDepth: 3, pollIntervalMs: 10,
-  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: true,
+  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: true, certificates: false, utxoSet: false,
 };
 
 const CURSOR_ROW = {
@@ -109,6 +111,7 @@ function makeIndexer(snapshotEpoch = vi.fn().mockResolvedValue({ pools: 2, dreps
   return {
     indexer: {
       indexBlockFull: vi.fn(),
+      setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null),
       prefetchCrawlEpoch: vi.fn(),
       configureCrawlCoverage: vi.fn(),
       stopAssetEnrichment: vi.fn(),

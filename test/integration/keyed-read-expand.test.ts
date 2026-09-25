@@ -318,7 +318,7 @@ describe('Keyed reads honour $expand / $select (KNOWN_ISSUES #13)', () => {
   describe('temporal entity: Assets — the crawler\'s bare catalogue row', () => {
     // A bare row written by the crawler is stamped validFrom === validTo, so it is
     // invisible to a keyed read and the lazy path still enriches it. This is what the
-    // whole "bare catalogue" design rests on (FR "crawler coverage for analytics").
+    // whole "bare catalogue" design rests on.
     const POLICY = 'a1'.repeat(28);
     const NAME_HEX = Buffer.from('SUNDAE').toString('hex');
     const UNIT = POLICY + NAME_HEX;

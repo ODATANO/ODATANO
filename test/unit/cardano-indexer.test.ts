@@ -79,6 +79,8 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter',
   AddressTransactions: 'AddressTransactions',
+  TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
+  LedgerUTxOs: 'LedgerUTxOs', LedgerUTxOAssets: 'LedgerUTxOAssets', LedgerAddresses: 'LedgerAddresses', LedgerAddressAssets: 'LedgerAddressAssets', LedgerAccounts: 'LedgerAccounts',
 }));
 
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter

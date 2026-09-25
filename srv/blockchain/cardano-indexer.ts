@@ -14,6 +14,8 @@ import {
   TransactionOutputs,
   TransactionOutputAssets,
   TransactionMetadata,
+  TransactionCertificates,
+  TransactionWithdrawals,
   NetworkInformation,
   UTxOAssets,
   Block,
@@ -60,6 +62,8 @@ import {
   mapTransactionInputAssets,
   mapTransactionOutputs,
   mapTransactionOutputAssets,
+  mapTransactionCertificates,
+  mapTransactionWithdrawals,
   mapAddress,
   mapAddressAssets,
   mapAddressUtxos,
@@ -88,6 +92,8 @@ import {
 
 import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
+import { applyBlockToLedger, type LedgerAnchor } from './ledger-state';
+import { readCursor, setUtxoSetState } from './crawler/sync-state';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -134,12 +140,31 @@ export class CardanoIndexer {
   private crawlEpochPrevious: number | null = null;
 
   /**
-   * Analytics coverage of the crawl path (v2.0, FR "crawler coverage for analytics"). The
+   * Analytics coverage of the crawl path (v2.0). The
    * defaults mirror the crawler config defaults, so an indexer the crawler never configured
    * (unit tests, the lazy-only path) behaves exactly like a configured one.
    */
   private crawlAssetHistory = true;
   private crawlAssetCatalogue: 'off' | 'bare' | 'enrich' = 'bare';
+  /** Certificates + withdrawals per block (ledger-state coverage). Opt-in. */
+  private crawlCertificates = false;
+  /** Logged once per process: the active source reports no certificates (Blockfrost). */
+  private certificatesUnreportedWarned = false;
+  /**
+   * Crawler-fed ledger state (`crawler.utxoSet`). Blocks after `utxoAnchor` are
+   * applied to the Ledger* tables; no anchor (nothing imported, or invalidated by a reorg
+   * past it) means the mode is configured but inactive.
+   */
+  private crawlUtxoSet = false;
+  private utxoAnchor: LedgerAnchor | null = null;
+  /** The anchor block was found in the crawled chain (checked once, before the first apply). */
+  private utxoAnchorVerified = false;
+  /**
+   * Invalidation decided inside a block transaction. The in-memory anchor stays until the
+   * crawler confirms the commit (`takeLedgerInvalidation`), so a rolled-back attempt neither
+   * loses the anchor nor leaves the DB saying `active` while this process stopped applying.
+   */
+  private ledgerInvalidation: string | null = null;
 
   /** Units known to have an `Assets` row, so a repeat sighting costs no DB round-trip. */
   private static readonly ASSET_MEMO_CAP = 200_000;
@@ -164,11 +189,67 @@ export class CardanoIndexer {
     assetHistory: boolean;
     assetCatalogue: 'off' | 'bare' | 'enrich';
     assetEnrichRate?: number;
+    certificates?: boolean;
+    utxoSet?: boolean;
   }): void {
     this.crawlAssetHistory = coverage.assetHistory;
     this.crawlAssetCatalogue = coverage.assetCatalogue;
+    this.crawlCertificates = coverage.certificates ?? false;
+    this.crawlUtxoSet = coverage.utxoSet ?? false;
     this.enrichRate = coverage.assetEnrichRate ?? this.enrichRate;
     if (coverage.assetCatalogue !== 'enrich') this.stopAssetEnrichment();
+  }
+
+  /** The anchor the imported UTxO set describes (null = ledger mode inactive). */
+  setUtxoAnchor(anchor: LedgerAnchor | null): void {
+    this.utxoAnchor = anchor;
+    this.utxoAnchorVerified = false;
+    this.ledgerInvalidation = null;
+  }
+
+  /**
+   * The imported set describes the chain AT the anchor block. Before the first block past
+   * it is applied, that block has to be the one the crawler actually followed — a snapshot
+   * taken on a fork that was dropped again without a rollback the crawler saw (the fork was
+   * never in its cursor) would otherwise seed the set with the wrong balances.
+   *
+   * The check is against the cursor, not the Blocks table: when the first block past the
+   * anchor arrives, the cursor (not yet advanced in this transaction) IS the block the
+   * crawler followed last, so it must equal the anchor exactly. That also covers the
+   * bootstrap case — the configured start block sits in the cursor without a Blocks row of
+   * its own. Once a block has been applied (`utxoAppliedSlot` set, same transaction), the
+   * anchor was verified and a restart skips the check.
+   */
+  private async verifyUtxoAnchor(tx: CapTransaction, anchor: LedgerAnchor): Promise<boolean> {
+    const cursor = await readCursor(tx);
+    if (cursor?.utxoSet.appliedSlot != null) return true;
+    if (cursor && cursor.lastSlot === anchor.slot && (cursor.lastBlockHash ?? '').toLowerCase() === anchor.hash.toLowerCase()) return true;
+    const reason = cursor
+      ? `anchor ${anchor.slot}/${anchor.hash} is not the block the crawler followed (cursor ${cursor.lastSlot}/${cursor.lastBlockHash})`
+      : `no crawler cursor to verify the anchor ${anchor.slot}/${anchor.hash} against`;
+    logger.error(`UTxO set invalidated: ${reason} — the snapshot describes a fork; re-import at the crawler cursor`);
+    await setUtxoSetState(tx, { status: 'invalid', error: reason.slice(0, 500) });
+    this.ledgerInvalidation = reason;
+    return false;
+  }
+
+  /** Null while the mode is off, nothing is imported, or an invalidation awaits its commit. */
+  getUtxoAnchor(): LedgerAnchor | null {
+    return this.crawlUtxoSet && !this.ledgerInvalidation ? this.utxoAnchor : null;
+  }
+
+  /**
+   * Called by the crawler right after a block transaction committed: hands out a pending
+   * invalidation (and drops the anchor) exactly once, or null.
+   */
+  takeLedgerInvalidation(): string | null {
+    const reason = this.ledgerInvalidation;
+    if (reason) {
+      this.ledgerInvalidation = null;
+      this.utxoAnchor = null;
+      this.utxoAnchorVerified = false;
+    }
+    return reason;
   }
 
   /**
@@ -738,6 +819,16 @@ export class CardanoIndexer {
     const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
     const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
     const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
+    // Certificates + withdrawals are block content the source already delivered (Ogmios
+    // chain-sync natively, Koios via the same /tx_info call) — keyed (tx, certIndex, kind) /
+    // (tx, stakeAddress), so a re-crawl is idempotent and a reorg removes them with their tx.
+    const certificateRows = this.crawlCertificates
+      ? txs.flatMap(t => mapTransactionCertificates(t.hash, t.certificates ?? []))
+      : [];
+    const withdrawalRows = this.crawlCertificates
+      ? txs.flatMap(t => mapTransactionWithdrawals(t.hash, t.withdrawals ?? []))
+      : [];
+    if (this.crawlCertificates) this.warnIfCertificatesUnreported(txs);
     // Mint/burn is derived from rows already in hand — keyed (unit, txHash), so a re-crawl is
     // idempotent and a reorg removes these rows with their transactions (crawler handleReorg).
     const assetHistoryRows = this.crawlAssetHistory ? this.buildAssetHistoryRows(blockData, txs) : [];
@@ -748,6 +839,25 @@ export class CardanoIndexer {
     if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
     if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
     if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+    if (certificateRows.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certificateRows));
+    if (withdrawalRows.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawalRows));
+    // Ledger state (crawler.utxoSet): only blocks AFTER the anchor the imported set describes;
+    // same transaction, so the UTxO set can never be a block ahead of or behind the cursor.
+    if (this.crawlUtxoSet && this.utxoAnchor && (blockData.slot ?? 0) > this.utxoAnchor.slot) {
+      if (this.ledgerInvalidation) {
+        // Decided in an earlier attempt of this block whose transaction rolled back: re-write
+        // the verdict so whichever attempt commits carries it; nothing is applied meanwhile.
+        await setUtxoSetState(tx, { status: 'invalid', error: this.ledgerInvalidation.slice(0, 500) });
+      } else if (this.utxoAnchorVerified || (this.utxoAnchorVerified = await this.verifyUtxoAnchor(tx, this.utxoAnchor))) {
+        const ledger = await applyBlockToLedger(tx, blockData, txs);
+        if (ledger.missing) {
+          logger.warn(
+            `ledger: block ${blockData.hash} consumed ${ledger.missing} outpoint(s) with no open row — ` +
+            'the set is incomplete relative to the crawl (snapshot gap?); balances of those addresses drift'
+          );
+        }
+      }
+    }
     if (assetHistoryRows.length) await tx.run(UPSERT.into(AssetHistory).entries(assetHistoryRows));
 
     // Catalogue last: it reads what the block just wrote conceptually, and a block without
@@ -769,6 +879,23 @@ export class CardanoIndexer {
    * tx's output in the same block), then batch-reads previously-indexed outputs from the
    * DB. Inputs that already carry an address (Blockfrost/Koios) are skipped.
    */
+  /**
+   * `crawler.certificates` is on but the block's transactions carry no `certificates` field at
+   * all — the source does not report them (Blockfrost: a per-tx enumeration would be six extra
+   * calls per transaction). `[]` means "none", undefined means "unreported"; only the latter is
+   * worth a warning, and only once — the crawl itself is unaffected.
+   */
+  private warnIfCertificatesUnreported(txs: ProviderTransaction[]): void {
+    if (this.certificatesUnreportedWarned || !txs.length) return;
+    if (txs.some(t => t.certificates !== undefined)) return;
+    this.certificatesUnreportedWarned = true;
+    logger.warn(
+      'crawler.certificates is enabled but the active source reports no certificates/withdrawals ' +
+      '(Blockfrost pagination) — TransactionCertificates/TransactionWithdrawals stay empty until ' +
+      'the crawl runs on Ogmios chain-sync or Koios'
+    );
+  }
+
   private async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
     // 1. In-memory index of this block's outputs (txHash#outputIndex -> {address, amount})
     const blockOutputs = new Map<string, { address: string; amount: Amount[] }>();
@@ -841,7 +968,8 @@ export class CardanoIndexer {
    *
    * Applies to every backend that reports phase-2 validity — the chain-sync path (`spends`)
    * and Blockfrost (`valid_contract`), whose declared `fees` are likewise never collected on a
-   * failed script phase. Koios carries `spendsCollaterals` as undefined and passes through
+   * failed script phase, and Koios (`valid_contract` + collateral inputs/output on `/tx_info`).
+   * A source without the field carries `spendsCollaterals` as undefined and passes through
    * untouched.
    */
   private applyCollateralFees(blockData: BlockData, txs: ProviderTransaction[]): void {
@@ -967,7 +1095,7 @@ export class CardanoIndexer {
 
   /**
    * Keep the `Assets` catalogue complete for every unit the crawl meets, from the data already
-   * in hand — no provider call (FR "crawler coverage for analytics", variant "bare row").
+   * in hand — no provider call (analytics coverage, variant "bare row").
    *
    * `Assets` is temporal, so its key is `(validFrom, unit)` and a row is a slice. The bare row
    * therefore carries the fixed epoch-zero stamp (`BARE_ASSET_STAMP`), which no wall-clock slice

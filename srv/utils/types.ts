@@ -54,6 +54,56 @@ export interface TxOutputLine {
   referenceScriptHash?: Hex | null;
 }
 
+/**
+ * Normalized certificate kinds. Both crawler sources map onto this vocabulary; a type
+ * neither knows is passed through as the raw source string so nothing is dropped.
+ * A Conway stake+vote delegation is SPLIT into a `pool_delegation` and a `vote_delegation`
+ * entry sharing one `certIndex` — Koios (db-sync) reports it that way natively, the
+ * Ogmios mapper splits to match, so both sources yield identical rows.
+ */
+export type CertificateKind =
+  | 'stake_registration'
+  | 'stake_deregistration'
+  | 'pool_delegation'
+  | 'vote_delegation'
+  | 'pool_registration'
+  | 'pool_retirement'
+  | 'drep_registration'
+  | 'drep_update'
+  | 'drep_retirement'
+  | 'committee_hot_auth'
+  | 'committee_resign'
+  | 'genesis_delegation'
+  | 'treasury_mir'
+  | 'reserve_mir'
+  | 'pot_transfer'
+  | 'param_proposal'
+  | (string & {});
+
+/** One certificate of a transaction (crawler ledger-state coverage). */
+export interface TxCertificate {
+  /** Position in the transaction's certificate list as the source reports it. */
+  certIndex: number;
+  kind: CertificateKind;
+  /** Reward account (bech32) the certificate concerns, when it has one. */
+  stakeAddress?: string | null;
+  /** Stake pool (bech32) for delegation / registration / retirement. */
+  poolId?: string | null;
+  /** DRep (CIP-129 bech32), or `drep_always_abstain` / `drep_always_no_confidence`. */
+  drepId?: string | null;
+  /** Deposit paid or refunded, lovelace as string. */
+  deposit?: Lovelace | string | null;
+  /** Retirement epoch of a pool retirement. */
+  epoch?: number | null;
+}
+
+/** One reward-account withdrawal of a transaction. */
+export interface TxWithdrawal {
+  stakeAddress: string;
+  /** Lovelace as string. */
+  amount: Lovelace | string;
+}
+
 /** 
  * Transaction Data Structure Type - Normalized transaction structure 
  */
@@ -99,6 +149,14 @@ export interface Transaction {
   inputs: TxInputLine[];
   outputs: TxOutputLine[];
   metadata?: MetadataLabelTx[];
+  /**
+   * Certificates as the source reports them; `[]` when the transaction carries none,
+   * undefined when the source does not report the field at all (Blockfrost — a per-tx
+   * enumeration would cost six extra calls per transaction, so it stays unreported there).
+   */
+  certificates?: TxCertificate[];
+  /** Reward-account withdrawals; same `[]` vs undefined convention as `certificates`. */
+  withdrawals?: TxWithdrawal[];
 }
 
 /**

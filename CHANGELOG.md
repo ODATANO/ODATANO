@@ -1,5 +1,67 @@
 # Changelog
 
+## [Unreleased] - crawler-fed ledger state: certificates, outpoints, UTxO set
+
+The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a UTxO set of its own.
+
+### Added
+
+- `crawler.utxoSet` / `CRAWLER_UTXO_SET` (default `false`): the crawl maintains its own UTxO
+  set in new non-temporal tables `LedgerUTxOs` (+`LedgerUTxOAssets`), `LedgerAddresses`
+  (+`LedgerAddressAssets`), `LedgerAccounts`, exposed read-only on `CardanoODataService`.
+  Unspent = `spentTxHash eq null`; running `totalLovelace` / `utxoCount` / asset balances per
+  address, `controlledAmount` per stake key. Applied inside the block transaction.
+- `importUtxoSet(source, filePath, anchorSlot, anchorHash)` on `CardanoIndexerService`
+  (Admin): one-off anchor import, `source: ogmios` at the crawler cursor or `source: file`
+  from a `cardano-cli query utxo --whole-utxo` dump (`.json`, or `.ndjson` via
+  `jq -c 'to_entries[]'`). Crawler must be paused; cursor must not be past the anchor. Runs
+  detached; `getStatus().utxoSet` reports `{enabled, status, anchorSlot, anchorHash,
+  importedAt, error}`. Anchor and status persist in `CardanoSyncState.utxoSet*`.
+- Only blocks after the anchor are applied; a reorg after it drops what the rolled-back
+  blocks created, reopens what they spent and recounts the touched addresses; a reorg
+  before it marks the set `invalid` (re-import). Without an active anchor the knob is inert
+  and the crawler logs an error at start.
+- Safety: the import holds the cursor lease for its duration and re-takes it inside every
+  write transaction (crawler start and a second import are refused cluster-wide, a
+  takeover aborts before the next commit and writes nothing further); the anchor is
+  verified against the crawler cursor before the first apply (covers the configured start
+  block); `CardanoSyncState.utxoAppliedSlot` tracks ledger progress, a reorg moves it back
+  with the cursor and a cursor ahead of it invalidates the set at start; cardano-cli dumps
+  are parsed losslessly (`parseJsonLossless`); the Ogmios whole-set query runs on its own
+  WebSocket connection so live queries stay at the tip.
+- Koios `/tx_info` mapper now carries `valid_contract`, `collateral_inputs`,
+  `collateral_output` and `reference_inputs` (`spendsCollaterals`, `isCollateral`,
+  `isReference`), so the collateral-fee, mint-delta and ledger paths are exact on Koios too.
+  Certificates/withdrawals are requested from Koios only while `crawler.certificates` is on
+  (`PaginatingBackend.configureCrawl`).
+- Import lease read-back no longer requires `desiredRunning` (the cluster is paused during
+  an import); a ledger invalidation decided inside a block transaction takes effect in
+  memory only after that transaction committed; the reorg undo and the progress-marker
+  reset run from the persisted set state, also in a process with the mode off.
+- Known limitation (documented, pre-existing): `@cap-js/sqlite` stores every `Decimal` as
+  a double, so amounts above 2^53 lovelace are rounded on SQLite in all tables; exact on
+  PostgreSQL and HANA.
+- `decodeShelleyAddress()` in `srv/utils/mappers.ts` (type, script flag, stake address from
+  the address bytes); `LedgerStateBackend` (`queryUtxoSetAt`) on the Ogmios backend; five
+  new secondary indexes on the ledger tables.
+
+- `TransactionInputs.spentTxHash` / `spentOutputIndex`: the consumed outpoint on every
+  input row, all paths, no knob. Null on rows written before this version.
+- `TransactionCertificates` (key `tx, certIndex, kind`; `stakeAddress`, `poolId`, `drepId`,
+  `deposit`, `epoch`) and `TransactionWithdrawals` (key `tx, stakeAddress`; `lovelace`),
+  exposed read-only on `CardanoODataService`, compositions on `Transactions`.
+- `crawler.certificates` / `CRAWLER_CERTIFICATES` (default `false`): writes both tables per
+  block in the block transaction. Ogmios chain-sync and Koios `/tx_info` (`_certs`,
+  `_withdrawals` on the batch call); Blockfrost reports none and the indexer warns once.
+- Certificate kinds normalized across sources (`stake_registration`, `pool_delegation`,
+  `vote_delegation`, `pool_retirement`, `drep_registration`, …); a Conway stake+vote
+  delegation is two rows with one `certIndex`; unknown types keep the raw source name.
+- `credentialToStakeAddress()` / `credentialToDrepId()` in `srv/utils/mappers.ts` for the
+  bare Ogmios credentials.
+- Reorg deletes the new rows with their transactions; five new secondary indexes
+  (`spentTxHash, spentOutputIndex`; certificate `stakeAddress`, `poolId`, `drepId`;
+  withdrawal `stakeAddress`).
+
 ## [v2.0.0-rc.18] - start-up fixes reach the standalone server
 
 ### Fixed

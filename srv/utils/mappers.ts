@@ -13,6 +13,8 @@ import {
   UTxO as UtxosProviderData,
   TxInputLine as TxInputProviderData,
   TxOutputLine as TxOutputProviderData,
+  TxCertificate as TxCertificateProviderData,
+  TxWithdrawal as TxWithdrawalProviderData,
   Amount as AmountProviderData,
   NetworkInformation as NetworkInfoProviderData,
   BlockData as BlockProviderData,
@@ -37,6 +39,8 @@ import {
   TransactionInputAsset as TransactionInputAssetRow,
   TransactionOutput as TransactionOutputRow,
   TransactionOutputAsset as TransactionOutputAssetRow,
+  TransactionCertificate as TransactionCertificateRow,
+  TransactionWithdrawal as TransactionWithdrawalRow,
   NetworkInformation as NetworkInfoRow,
   TransactionMetadata as TransactionMetadataRow,
   Block as BlockRow,
@@ -128,6 +132,10 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
       utxoData_dataHash: input.dataHash || null,
       utxoData_inlineDatum: input.inlineDatum || null,
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
+      // Outpoint of the consumed UTxO — every source carries it in memory (the chain-sync
+      // path needs it for resolveInputs), the row just never kept it before.
+      spentTxHash: input.txHash || null,
+      spentOutputIndex: Number.isInteger(input.outputIndex) ? input.outputIndex : null,
       isCollateral: Boolean(input.isCollateral),
       isReference: Boolean(input.isReference),
       hasAddresses: hasAddress,
@@ -166,6 +174,47 @@ export function mapTransactionInputAssets(
       };
     });
   });
+}
+
+/**
+ * Map Transaction Certificates (crawler coverage, `crawler.certificates`).
+ * @param txHash transaction hash
+ * @param certificates normalized certificates from the source
+ * @returns {TransactionCertificateRow[]} one row per (certIndex, kind)
+ */
+export function mapTransactionCertificates(
+  txHash: string,
+  certificates: TxCertificateProviderData[]
+): TransactionCertificateRow[] {
+  return certificates.map((c) => ({
+    tx_hash: txHash,
+    certIndex: c.certIndex,
+    kind: c.kind,
+    stakeAddress: c.stakeAddress || null,
+    poolId: c.poolId || null,
+    drepId: c.drepId || null,
+    deposit: c.deposit != null ? String(c.deposit) : null,
+    epoch: c.epoch ?? null,
+  }));
+}
+
+/**
+ * Map Transaction Withdrawals (crawler coverage, `crawler.certificates`).
+ * @param txHash transaction hash
+ * @param withdrawals normalized withdrawals from the source
+ * @returns {TransactionWithdrawalRow[]} one row per reward account
+ */
+export function mapTransactionWithdrawals(
+  txHash: string,
+  withdrawals: TxWithdrawalProviderData[]
+): TransactionWithdrawalRow[] {
+  return withdrawals
+    .filter((w) => !!w.stakeAddress)
+    .map((w) => ({
+      tx_hash: txHash,
+      stakeAddress: w.stakeAddress,
+      lovelace: String(w.amount ?? '0'),
+    }));
 }
 
 /** 
@@ -737,7 +786,7 @@ export const BARE_ASSET_STAMP = '1970-01-01T00:00:00.000Z';
  * Map a bare asset row from an asset unit alone — everything derivable without a provider
  * call: policyId, assetNameHex, the decoded name and the CIP-14 fingerprint. Used by the
  * crawler to keep the `Assets` catalogue complete for units it meets in a block, at zero
- * network cost (FR "crawler coverage for analytics").
+ * network cost (analytics coverage).
  *
  * The row is stamped as ALREADY EXPIRED (`validTo === validFrom`). That is deliberate: CAP's
  * temporal filter hides it from OData reads, so the first keyed read still counts as a miss
@@ -1184,6 +1233,85 @@ export function scriptHashToEnterpriseAddress(
   const words = bech32.toWords(payload);
   const hrp = network === 'mainnet' ? 'addr' : 'addr_test';
   return bech32.encode(hrp, words, 120);
+}
+
+/**
+ * Encode a stake credential as a bech32 reward account (stake address).
+ * Header: type nibble 0xe (key) / 0xf (script), network nibble 1 (mainnet) / 0 (testnets).
+ */
+export function credentialToStakeAddress(
+  credentialHex: string,
+  isScript: boolean,
+  network: 'mainnet' | 'preprod' | 'preview'
+): string {
+  const header = (isScript ? 0xf0 : 0xe0) | (network === 'mainnet' ? 0x01 : 0x00);
+  const payload = Buffer.alloc(29);
+  payload[0] = header;
+  Buffer.from(credentialHex, 'hex').copy(payload, 1);
+  const hrp = network === 'mainnet' ? 'stake' : 'stake_test';
+  return bech32.encode(hrp, bech32.toWords(payload), 120);
+}
+
+export interface DecodedAddress {
+  type: 'base' | 'pointer' | 'enterprise' | 'reward' | 'byron' | 'unknown';
+  /** Payment credential is a script hash. */
+  isScript: boolean;
+  /** Reward account (bech32) of a base address; null for every other type. */
+  stakeAddress: string | null;
+  /** Network nibble of the header (1 = mainnet, 0 = testnets); null when not a Shelley address. */
+  networkId: number | null;
+}
+
+/**
+ * Decode the Shelley address header (CIP-19) without a provider: type, script flag and,
+ * for base addresses, the embedded stake credential re-encoded as a reward account.
+ * Byron (base58) and anything unparseable come back as `byron` / `unknown` with no stake.
+ */
+export function decodeShelleyAddress(address: string): DecodedAddress {
+  const none: DecodedAddress = { type: 'unknown', isScript: false, stakeAddress: null, networkId: null };
+  if (typeof address !== 'string' || !address.length) return none;
+  let bytes: Buffer;
+  try {
+    const decoded = bech32.decode(address, 120);
+    if (decoded.prefix !== 'addr' && decoded.prefix !== 'addr_test' && decoded.prefix !== 'stake' && decoded.prefix !== 'stake_test') return none;
+    bytes = Buffer.from(bech32.fromWords(decoded.words));
+  } catch {
+    // Byron addresses are base58 and start with Ae2 / DdzFF (mainnet) or 2cWKM… (testnets)
+    return /^(Ae2|DdzFF|2cWKM|37btj|KjgoiX)/.test(address) ? { ...none, type: 'byron' } : none;
+  }
+  if (!bytes.length) return none;
+  const header = bytes[0];
+  const type = header >> 4;
+  const networkId = header & 0x0f;
+  const net = networkId === 1 ? 'mainnet' : 'preview';
+  switch (type) {
+    case 0: case 1: case 2: case 3: {
+      const stakeAddress = bytes.length >= 57
+        ? credentialToStakeAddress(bytes.subarray(29, 57).toString('hex'), type >= 2, net)
+        : null;
+      return { type: 'base', isScript: type === 1 || type === 3, stakeAddress, networkId };
+    }
+    case 4: case 5:
+      return { type: 'pointer', isScript: type === 5, stakeAddress: null, networkId };
+    case 6: case 7:
+      return { type: 'enterprise', isScript: type === 7, stakeAddress: null, networkId };
+    case 14: case 15:
+      return { type: 'reward', isScript: type === 15, stakeAddress: address, networkId };
+    default:
+      return { ...none, networkId };
+  }
+}
+
+/**
+ * Encode a DRep credential as a CIP-129 DRep ID (`drep1…`, 29 bytes).
+ * Header byte: high nibble 0x2 = DRep, low nibble 0x2 = key hash / 0x3 = script hash —
+ * the inverse of `decodeDrepId` in the Ogmios backend.
+ */
+export function credentialToDrepId(credentialHex: string, isScript: boolean): string {
+  const payload = Buffer.alloc(29);
+  payload[0] = isScript ? 0x23 : 0x22;
+  Buffer.from(credentialHex, 'hex').copy(payload, 1);
+  return bech32.encode('drep', bech32.toWords(payload), 120);
 }
 
 /**

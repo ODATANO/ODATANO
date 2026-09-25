@@ -24,7 +24,11 @@ import {
   AssetInfo,
   AssetHistoryEntry,
   Amount,
-  LedgerProtocolParameters
+  LedgerProtocolParameters,
+  TxCertificate,
+  CertificateKind,
+  TxInputLine,
+  TxOutputLine
 } from '../../utils/types';
 import { Network } from '../cardano-client';
 
@@ -67,12 +71,25 @@ interface KoiosTxInfo {
   metadata?: Record<string, unknown> | null;
   inputs: KoiosTxIO[];
   outputs: KoiosTxIO[];
+  /** False when the script phase failed (collateral consumed, regular ins/outs not applied). Absent on older Koios. */
+  valid_contract?: boolean | null;
+  collateral_inputs?: KoiosTxIO[] | null;
+  collateral_output?: KoiosTxIO[] | null;
+  reference_inputs?: KoiosTxIO[] | null;
   /**
    * Net mint/burn of the transaction (`_assets: true`), quantity signed — negative is a burn.
    * Absent on older Koios versions; the indexer then derives the delta from inputs/outputs,
    * which is exact here because Koios resolves every input's `asset_list`.
    */
   assets_minted?: Array<{ policy_id?: string; asset_name?: string | null; quantity?: string | number }> | null;
+  /** `_withdrawals: true` only (crawler batch path); null/absent otherwise. */
+  withdrawals?: Array<{ amount?: string | number; stake_addr?: string }> | null;
+  /**
+   * `_certs: true` only (crawler batch path). `type` is Koios' own vocabulary
+   * (stake_registration, pool_delegation, vote_delegation, pool_update, pool_retire, …);
+   * `info` carries the certificate fields, named per type.
+   */
+  certificates?: Array<{ index?: number | null; type?: string; info?: Record<string, unknown> | null }> | null;
 }
 
 
@@ -1068,6 +1085,13 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     );
   }
 
+  /** crawler.certificates: ask /tx_info for certificates + withdrawals on the crawl's batch call. */
+  private crawlCertificates = false;
+
+  configureCrawl(options: { certificates: boolean }): void {
+    this.crawlCertificates = Boolean(options.certificates);
+  }
+
   /**
    * Batch fetch multiple transactions by hash using Koios POST /tx_info.
    * Sends all hashes in one request (chunked at 100 per Koios limit).
@@ -1087,8 +1111,10 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             _inputs: true,
             _metadata: true,
             _assets: true,
-            _withdrawals: false,
-            _certs: false,
+            // crawler coverage (`crawler.certificates`): same request, larger payload —
+            // only asked for when the crawl will write them
+            _withdrawals: this.crawlCertificates,
+            _certs: this.crawlCertificates,
             _scripts: false,
             _bytecode: false,
           });
@@ -1405,52 +1431,113 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             }))
         : undefined,
       size: tx.tx_size,
-      inputs: tx.inputs.map((input: KoiosTxIO) => {
-        const amount: Amount[] = [
-          { unit: 'lovelace', quantity: input.value }
-        ];
-        if (input.asset_list && Array.isArray(input.asset_list)) {
-          for (const asset of input.asset_list) {
-            amount.push({
-              unit: `${asset.policy_id}${asset.asset_name}`,
-              quantity: asset.quantity
-            });
-          }
-        }
-        return {
-          address: input.payment_addr?.bech32 || input.address || '',
-          txHash: input.tx_hash,
-          outputIndex: input.tx_index,
-          amount: amount,
-          dataHash: input.datum_hash || null,
-          inlineDatum: inlineDatumToHex(input.inline_datum),
-          referenceScriptHash: koiosRefScriptHash(input.reference_script),
-        };
-      }),
-      outputs: tx.outputs.map((output: KoiosTxIO) => {
-        const amount: Amount[] = [
-          { unit: 'lovelace', quantity: output.value }
-        ];
-        if (output.asset_list && Array.isArray(output.asset_list)) {
-          for (const asset of output.asset_list) {
-            amount.push({
-              unit: `${asset.policy_id}${asset.asset_name}`,
-              quantity: asset.quantity
-            });
-          }
-        }
-        return {
-          address: output.payment_addr?.bech32 || output.address || '',
-          amount: amount,
-          txHash: tx.tx_hash,
-          outputIndex: output.tx_index,
-          dataHash: output.datum_hash || null,
-          inlineDatum: inlineDatumToHex(output.inline_datum),
-          isCollateral: false,
-          referenceScriptHash: koiosRefScriptHash(output.reference_script),
-        };
-      }),
-      metadata: labels
+      // Phase-2 validity as db-sync records it; undefined on a Koios without the field, so the
+      // indexer keeps treating such a source as "no phase-2 information".
+      spendsCollaterals: typeof tx.valid_contract === 'boolean' ? tx.valid_contract === false : undefined,
+      inputs: [
+        ...(tx.inputs ?? []).map((input) => mapKoiosInput(input)),
+        ...(tx.collateral_inputs ?? []).map((input) => mapKoiosInput(input, { isCollateral: true })),
+        ...(tx.reference_inputs ?? []).map((input) => mapKoiosInput(input, { isReference: true })),
+      ],
+      outputs: [
+        ...(tx.outputs ?? []).map((output) => mapKoiosOutput(tx.tx_hash, output, false)),
+        // CIP-40 collateral return: produced only when the script phase failed
+        ...(tx.collateral_output ?? []).map((output) => mapKoiosOutput(tx.tx_hash, output, true)),
+      ],
+      metadata: labels,
+      // undefined (not []) when the call did not ask for them (`_certs: false` on the lazy
+      // path) — the indexer tells "none" from "not reported" by exactly this.
+      certificates: Array.isArray(tx.certificates) ? mapKoiosCertificates(tx.certificates) : undefined,
+      withdrawals: Array.isArray(tx.withdrawals)
+        ? tx.withdrawals
+            .filter((w) => !!w.stake_addr)
+            .map((w) => ({ stakeAddress: String(w.stake_addr), amount: String(w.amount ?? '0') }))
+        : undefined,
     };
   }
+}
+
+function koiosAmount(io: KoiosTxIO): Amount[] {
+  const amount: Amount[] = [{ unit: 'lovelace', quantity: io.value }];
+  for (const asset of Array.isArray(io.asset_list) ? io.asset_list : []) {
+    amount.push({ unit: `${asset.policy_id}${asset.asset_name}`, quantity: asset.quantity });
+  }
+  return amount;
+}
+
+function mapKoiosInput(input: KoiosTxIO, flags: { isCollateral?: boolean; isReference?: boolean } = {}): TxInputLine {
+  return {
+    address: input.payment_addr?.bech32 || input.address || '',
+    txHash: input.tx_hash,
+    outputIndex: input.tx_index,
+    amount: koiosAmount(input),
+    dataHash: input.datum_hash || null,
+    inlineDatum: inlineDatumToHex(input.inline_datum),
+    referenceScriptHash: koiosRefScriptHash(input.reference_script),
+    ...flags,
+  };
+}
+
+function mapKoiosOutput(txHash: string, output: KoiosTxIO, isCollateral: boolean): TxOutputLine {
+  return {
+    address: output.payment_addr?.bech32 || output.address || '',
+    amount: koiosAmount(output),
+    txHash,
+    outputIndex: output.tx_index,
+    dataHash: output.datum_hash || null,
+    inlineDatum: inlineDatumToHex(output.inline_datum),
+    isCollateral,
+    referenceScriptHash: koiosRefScriptHash(output.reference_script),
+  };
+}
+
+/** Koios certificate `type` → shared `CertificateKind`; anything else passes through raw. */
+const KOIOS_CERT_KINDS: Record<string, CertificateKind> = {
+  stake_registration: 'stake_registration',
+  stake_deregistration: 'stake_deregistration',
+  pool_delegation: 'pool_delegation',
+  // older Koios releases named the pool delegation plainly
+  delegation: 'pool_delegation',
+  vote_delegation: 'vote_delegation',
+  pool_update: 'pool_registration',
+  pool_retire: 'pool_retirement',
+  drep_registration: 'drep_registration',
+  drep_update: 'drep_update',
+  drep_retire: 'drep_retirement',
+  drep_deregistration: 'drep_retirement',
+  committee_hot_auth: 'committee_hot_auth',
+  committee_resign: 'committee_resign',
+  treasury_MIR: 'treasury_mir',
+  reserve_MIR: 'reserve_mir',
+  pot_transfer: 'pot_transfer',
+  param_proposal: 'param_proposal',
+};
+
+/**
+ * Normalize Koios `/tx_info` certificates (`_certs: true`). Field names inside `info`
+ * differ per type (`stake_address`, `pool_id_bech32`, `drep_id`, `deposit`,
+ * `retiring_epoch` — spelled `retiring epoch` with a space in current Koios), so every
+ * alias is read. Exported for the unit tests.
+ */
+export function mapKoiosCertificates(
+  certs: NonNullable<KoiosTxInfo['certificates']>
+): TxCertificate[] {
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.length ? v : null);
+  const num = (v: unknown): number | null => {
+    const n = typeof v === 'string' ? Number(v) : v;
+    return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  };
+  return certs.map((c, position) => {
+    const info = c.info ?? {};
+    const deposit = info.deposit;
+    return {
+      certIndex: num(c.index) ?? position,
+      kind: (c.type && KOIOS_CERT_KINDS[c.type]) || c.type || 'other',
+      stakeAddress: str(info.stake_address) ?? str(info.stake_addr),
+      poolId: str(info.pool_id_bech32) ?? str(info.pool),
+      drepId: str(info.drep_id),
+      deposit: deposit != null && deposit !== '' ? String(deposit) : null,
+      epoch: num(info.retiring_epoch) ?? num(info['retiring epoch']),
+    };
+  });
 }

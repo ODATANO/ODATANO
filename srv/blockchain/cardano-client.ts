@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -667,6 +667,15 @@ export class CardanoClient {
     for (const b of candidates) {
       if (!b || !isChainSyncBackend(b)) continue;
       if (await this.ensureBackendInitialized(b)) return b;
+    }
+    return null;
+  }
+
+  /** The first usable backend that can dump the UTxO set at a point (Ogmios) — crawler.utxoSet import. */
+  getLedgerStateBackend(): LedgerStateBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isLedgerStateBackend(b)) return b;
     }
     return null;
   }

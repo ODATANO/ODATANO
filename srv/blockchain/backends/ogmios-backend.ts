@@ -12,7 +12,7 @@ import { bech32 } from 'bech32';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
-import { normalizeCostModels } from '../../utils/mappers';
+import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId } from '../../utils/mappers';
 import {
   Transaction,
   BlockData,
@@ -29,10 +29,11 @@ import {
   ScriptEvaluationResult,
   Amount,
   TxInputLine,
-  TxOutputLine
+  TxOutputLine,
+  TxCertificate
 } from '../../utils/types';
 
-import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint } from './cardano-backend';
+import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend } from './cardano-backend';
 
 import { BECH32_MAX_LENGTH, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
@@ -191,6 +192,22 @@ interface OgmiosChainSyncTx {
    */
   mint?: Record<string, Record<string, number | bigint>>;
   metadata?: { labels?: Record<string, { json?: unknown; cbor?: string }> };
+  certificates?: OgmiosCertificate[];
+  /** Keyed by reward account (bech32 `stake…` / `stake_test…`). */
+  withdrawals?: Record<string, { ada?: { lovelace?: number | bigint } }>;
+}
+/**
+ * Ogmios v6 `Certificate` (cardano.json), structurally typed for the fields we index.
+ * Unknown `type` values pass through as the raw kind so nothing is silently dropped.
+ */
+interface OgmiosCertificate {
+  type: string;
+  /** Stake credential hash (hex) + origin for stake* certificates. */
+  credential?: string;
+  from?: 'verificationKey' | 'script';
+  deposit?: { ada?: { lovelace?: number | bigint } };
+  stakePool?: { id?: string; retirementEpoch?: number };
+  delegateRepresentative?: { type: 'registered' | 'noConfidence' | 'abstain'; id?: string; from?: 'verificationKey' | 'script' };
 }
 interface OgmiosPraosBlock {
   type: string; // 'praos' | 'ebb' | 'bft' — only 'praos' carries indexable txs
@@ -204,7 +221,7 @@ interface OgmiosPraosBlock {
   transactions?: OgmiosChainSyncTx[];
 }
 
-export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
+export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend {
   public readonly name = 'ogmios';
   /**
    * Capability declaration — the orchestrator skips Ogmios for these without
@@ -569,23 +586,57 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
       await this.ensureConnected();
       
       const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
-      return utxos.map((u: typeof utxos[number]) => {
-        // convert Ogmios value format to standard amount array
-        const amount = this.convertOgmiosValue(u.value);
+      return utxos.map((u: typeof utxos[number]) => this.mapOgmiosUtxo(u, address));
+    }, this.name);
+  }
 
-        return {
-          txHash: u.transaction?.id || '',
-          outputIndex: u.index || 0,
-          address: u.address || address,
-          amount: amount,
-          blockHash: '',
-          datumHash: u.datumHash,
-          // Ogmios delivers the inline datum as CBOR hex in `datum` — it was
-          // dropped before, breaking inline-datum spends when Ogmios serves UTxOs
-          inlineDatum: typeof u.datum === 'string' ? u.datum : null,
-          scriptRef: (u.script as { hash?: string } | undefined)?.hash
-        };
-      });
+  /** Ogmios `Utxo` entry → normalized UTxO line (shared by the address query and the set import). */
+  private mapOgmiosUtxo(
+    u: { transaction?: { id: string }; index?: number; address?: string; value: Parameters<OgmiosBackend['convertOgmiosValue']>[0]; datumHash?: string; datum?: unknown; script?: unknown },
+    fallbackAddress = '',
+  ): UTxO {
+    return {
+      txHash: u.transaction?.id || '',
+      outputIndex: u.index || 0,
+      address: u.address || fallbackAddress,
+      // convert Ogmios value format to standard amount array
+      amount: this.convertOgmiosValue(u.value),
+      blockHash: '',
+      datumHash: u.datumHash,
+      // Ogmios delivers the inline datum as CBOR hex in `datum` — it was
+      // dropped before, breaking inline-datum spends when Ogmios serves UTxOs
+      inlineDatum: typeof u.datum === 'string' ? u.datum : null,
+      scriptRef: (u.script as { hash?: string } | undefined)?.hash,
+    };
+  }
+
+  /**
+   * The whole UTxO set as of `point` (LedgerStateBackend — crawler.utxoSet snapshot import).
+   * Opens a SEPARATE WebSocket connection for it: the local-state-query protocol keeps one
+   * acquired point per connection, so a client on the shared socket would move every live
+   * query to the historical anchor for the duration. The point must be inside the node's
+   * volatile window (the last 2160 blocks) or the node refuses the acquisition. Whole-set
+   * queries are fine on preview/preprod; on mainnet prefer a cardano-cli file.
+   */
+  async queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]> {
+    return handleBackendRequest(async () => {
+      const url = new URL(this.ogmiosUrl);
+      const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
+      const context = await createInteractionContext(
+        (err) => logger.error(`[OgmiosBackend] snapshot context error: ${err.message}`),
+        () => { /* closed by shutdown() below */ },
+        { connection }
+      );
+      let client: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
+      try {
+        client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
+        const utxos = await client.utxo();
+        return utxos.map((u: typeof utxos[number]) => this.mapOgmiosUtxo(u));
+      } finally {
+        // shutdown() closes THIS connection only; the backend's own socket is untouched
+        if (client) { try { await client.shutdown(); } catch { /* best effort */ } }
+        else this.forceCloseContext(context);
+      }
     }, this.name);
   }
 
@@ -1237,6 +1288,75 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend {
       // undefined (not []) when absent — matches the Blockfrost path so
       // mapTransaction's hasMetadata flag stays false for metadata-less txs
       metadata: metadataEntries.length ? metadataEntries : undefined,
+      certificates: this.mapOgmiosCertificates(tx.certificates ?? []),
+      withdrawals: Object.entries(tx.withdrawals ?? {}).map(([stakeAddress, value]) => ({
+        stakeAddress,
+        amount: (value?.ada?.lovelace ?? 0).toString(),
+      })),
     };
+  }
+
+  /**
+   * Normalize Ogmios certificates onto the shared `CertificateKind` vocabulary.
+   * A `stakeDelegation` carrying both a pool and a DRep target is split into two entries
+   * with the same index, matching what Koios (db-sync) reports for the Conway combined
+   * certificate. Ogmios credentials are bare hashes; they are re-encoded as bech32 here so
+   * the rows carry the same identifiers as every other table.
+   */
+  private mapOgmiosCertificates(certs: OgmiosCertificate[]): TxCertificate[] {
+    const out: TxCertificate[] = [];
+    const lovelace = (v?: { ada?: { lovelace?: number | bigint } }): string | null =>
+      v?.ada?.lovelace != null ? v.ada.lovelace.toString() : null;
+    const stakeAddr = (c: OgmiosCertificate): string | null =>
+      c.credential ? credentialToStakeAddress(c.credential, c.from === 'script', this.network) : null;
+    const drepId = (d?: OgmiosCertificate['delegateRepresentative']): string | null => {
+      if (!d) return null;
+      if (d.type === 'abstain') return 'drep_always_abstain';
+      if (d.type === 'noConfidence') return 'drep_always_no_confidence';
+      return d.id ? credentialToDrepId(d.id, d.from === 'script') : null;
+    };
+    certs.forEach((c, certIndex) => {
+      switch (c.type) {
+        case 'stakeCredentialRegistration':
+          out.push({ certIndex, kind: 'stake_registration', stakeAddress: stakeAddr(c), deposit: lovelace(c.deposit) });
+          break;
+        case 'stakeCredentialDeregistration':
+          out.push({ certIndex, kind: 'stake_deregistration', stakeAddress: stakeAddr(c), deposit: lovelace(c.deposit) });
+          break;
+        case 'stakeDelegation': {
+          const stakeAddress = stakeAddr(c);
+          if (c.stakePool?.id) out.push({ certIndex, kind: 'pool_delegation', stakeAddress, poolId: c.stakePool.id });
+          if (c.delegateRepresentative) out.push({ certIndex, kind: 'vote_delegation', stakeAddress, drepId: drepId(c.delegateRepresentative) });
+          break;
+        }
+        case 'stakePoolRegistration':
+          out.push({ certIndex, kind: 'pool_registration', poolId: c.stakePool?.id ?? null });
+          break;
+        case 'stakePoolRetirement':
+          out.push({ certIndex, kind: 'pool_retirement', poolId: c.stakePool?.id ?? null, epoch: c.stakePool?.retirementEpoch ?? null });
+          break;
+        case 'delegateRepresentativeRegistration':
+          out.push({ certIndex, kind: 'drep_registration', drepId: drepId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
+          break;
+        case 'delegateRepresentativeUpdate':
+          out.push({ certIndex, kind: 'drep_update', drepId: drepId(c.delegateRepresentative) });
+          break;
+        case 'delegateRepresentativeRetirement':
+          out.push({ certIndex, kind: 'drep_retirement', drepId: drepId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
+          break;
+        case 'constitutionalCommitteeDelegation':
+          out.push({ certIndex, kind: 'committee_hot_auth' });
+          break;
+        case 'constitutionalCommitteeRetirement':
+          out.push({ certIndex, kind: 'committee_resign' });
+          break;
+        case 'genesisDelegation':
+          out.push({ certIndex, kind: 'genesis_delegation' });
+          break;
+        default:
+          out.push({ certIndex, kind: c.type });
+      }
+    });
+    return out;
   }
 }

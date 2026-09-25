@@ -172,6 +172,8 @@ describe('server.ts', () => {
       'CRAWLER_ASSET_CATALOGUE',
       'CRAWLER_ASSET_ENRICH_RATE',
       'CRAWLER_EPOCH_SNAPSHOTS',
+      'CRAWLER_CERTIFICATES',
+      'CRAWLER_UTXO_SET',
     ];
     const originalEnv: Record<string, string | undefined> = {};
     let previousCoreConfig: unknown;
@@ -220,6 +222,8 @@ describe('server.ts', () => {
         assetCatalogue: 'bare',
         assetEnrichRate: 2,
         epochSnapshots: false,
+        certificates: false,
+        utxoSet: false,
       });
     });
 
@@ -236,6 +240,8 @@ describe('server.ts', () => {
       env.CRAWLER_ASSET_CATALOGUE = 'enrich';
       env.CRAWLER_ASSET_ENRICH_RATE = '20';
       env.CRAWLER_EPOCH_SNAPSHOTS = 'true';
+      env.CRAWLER_CERTIFICATES = 'true';
+      env.CRAWLER_UTXO_SET = 'true';
 
       expect(loadCrawlerConfigFromEnv()).toEqual({
         enabled: true,
@@ -250,6 +256,8 @@ describe('server.ts', () => {
         assetCatalogue: 'enrich',
         assetEnrichRate: 20,
         epochSnapshots: true,
+        certificates: true,
+        utxoSet: true,
       });
     });
 
@@ -265,19 +273,20 @@ describe('server.ts', () => {
       expect(() => loadCrawlerConfigFromEnv()).toThrow('Invalid CRAWLER_ASSET_CATALOGUE');
     });
 
-    it.each(['CRAWLER_ASSET_HISTORY', 'CRAWLER_EPOCH_SNAPSHOTS'])('rejects a non-boolean %s', (key) => {
+    it.each(['CRAWLER_ASSET_HISTORY', 'CRAWLER_EPOCH_SNAPSHOTS', 'CRAWLER_CERTIFICATES', 'CRAWLER_UTXO_SET'])('rejects a non-boolean %s', (key) => {
       env[key] = 'sometimes';
       expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);
     });
 
     it('lets CDS config override the coverage knobs, including explicit false', () => {
       env.CRAWLER_ASSET_HISTORY = 'true';
-      setCdsCrawlerConfig({ assetHistory: false, assetCatalogue: 'off', epochSnapshots: true });
+      setCdsCrawlerConfig({ assetHistory: false, assetCatalogue: 'off', epochSnapshots: true, certificates: true });
 
       const config = loadCrawlerConfigFromEnv();
       expect(config.assetHistory).toBe(false);
       expect(config.assetCatalogue).toBe('off');
       expect(config.epochSnapshots).toBe(true);
+      expect(config.certificates).toBe(true);
     });
 
     it('rejects non-boolean enabled values', () => {

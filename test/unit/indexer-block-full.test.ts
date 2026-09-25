@@ -9,6 +9,9 @@ type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
 const runs: Q[] = [];
 /** Units the `Assets` table already holds, as the catalogue's existence check sees them. */
 let knownAssets: string[] = [];
+/** The crawler cursor the ledger anchor verification reads (readCursor is mocked below). */
+let cursorRow: { lastSlot: number; lastBlockHash: string | null; utxoSet: { appliedSlot: number | null } } | null =
+  { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
 const mockTx = {
   run: vi.fn(async (q: Q) => {
     runs.push(q);
@@ -58,6 +61,16 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   PoolEpochSnapshots: 'PoolEpochSnapshots', DrepEpochSnapshots: 'DrepEpochSnapshots',
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
+  TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
+}));
+
+// ledger-state reads the DB-level entities; the indexer only forwards to it
+vi.mock('../../srv/blockchain/ledger-state', () => ({
+  applyBlockToLedger: vi.fn(async () => ({ created: 1, spent: 0, missing: 0, addresses: 1 })),
+}));
+vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
+  setUtxoSetState: vi.fn(async () => undefined),
+  readCursor: vi.fn(async () => cursorRow),
 }));
 
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
@@ -79,6 +92,8 @@ vi.mock('#cds-models/CardanoSignService', () => ({
 
 import type { Mock } from 'vitest';
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
+import { applyBlockToLedger } from '../../srv/blockchain/ledger-state';
+import { setUtxoSetState, readCursor } from '../../srv/blockchain/crawler/sync-state';
 import { BARE_ASSET_STAMP } from '../../srv/utils/mappers';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
@@ -388,7 +403,7 @@ describe('CardanoIndexer.applyCollateralFees (via indexBlockFull)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Mint/burn history (FR "crawler coverage for analytics")
+// Mint/burn history (analytics coverage)
 // ---------------------------------------------------------------------------
 
 const POLICY = 'a1'.repeat(28);
@@ -613,5 +628,163 @@ describe('CardanoIndexer.indexBlockFull — asset catalogue', () => {
 
     expect(upsertsFor('AssetHistory')).toHaveLength(0);
     expect(assetWrites()).toHaveLength(1); // catalogue is independent of it
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Crawler-fed ledger state: outpoint on inputs, certificates, withdrawals
+// ---------------------------------------------------------------------------
+describe('CardanoIndexer.indexBlockFull — outpoint, certificates, withdrawals', () => {
+  const STAKE = 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn';
+  const POOL = 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r';
+  const withCerts = (hash: string): Transaction => tx(hash, {
+    certificates: [
+      { certIndex: 0, kind: 'stake_registration', stakeAddress: STAKE, deposit: '2000000' },
+      { certIndex: 1, kind: 'pool_delegation', stakeAddress: STAKE, poolId: POOL },
+      { certIndex: 1, kind: 'vote_delegation', stakeAddress: STAKE, drepId: 'drep_always_abstain' },
+    ],
+    withdrawals: [{ stakeAddress: STAKE, amount: '123456' }],
+  });
+
+  it('persists the consumed outpoint on every input row — no knob, no network', async () => {
+    const { indexer } = makeIndexer();
+    const t = tx('t9'.padEnd(64, '0'), {
+      inputs: [{ address: 'addrA', amount: [], txHash: 'prev'.padEnd(64, '0'), outputIndex: 3 }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(upsertsFor('TransactionInputs')[0].entries).toEqual([
+      expect.objectContaining({ tx_hash: 't9'.padEnd(64, '0'), inputIndex: 0, spentTxHash: 'prev'.padEnd(64, '0'), spentOutputIndex: 3 }),
+    ]);
+  });
+
+  it('writes nothing for certificates/withdrawals by default (opt-in knob)', async () => {
+    const { indexer } = makeIndexer();
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [withCerts('c1'.padEnd(64, '0'))]);
+
+    expect(upsertsFor('TransactionCertificates')).toHaveLength(0);
+    expect(upsertsFor('TransactionWithdrawals')).toHaveLength(0);
+  });
+
+  it('writes one row per (tx, certIndex, kind) and one per withdrawal when enabled', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', certificates: true });
+    const hash = 'c2'.padEnd(64, '0');
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [withCerts(hash)]);
+
+    expect(upsertsFor('TransactionCertificates')).toHaveLength(1);
+    expect(upsertsFor('TransactionCertificates')[0].entries).toEqual([
+      { tx_hash: hash, certIndex: 0, kind: 'stake_registration', stakeAddress: STAKE, poolId: null, drepId: null, deposit: '2000000', epoch: null },
+      { tx_hash: hash, certIndex: 1, kind: 'pool_delegation', stakeAddress: STAKE, poolId: POOL, drepId: null, deposit: null, epoch: null },
+      { tx_hash: hash, certIndex: 1, kind: 'vote_delegation', stakeAddress: STAKE, poolId: null, drepId: 'drep_always_abstain', deposit: null, epoch: null },
+    ]);
+    expect(upsertsFor('TransactionWithdrawals')[0].entries).toEqual([
+      { tx_hash: hash, stakeAddress: STAKE, lovelace: '123456' },
+    ]);
+  });
+
+  it('issues no statement for a block whose transactions carry none ([] = known empty)', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', certificates: true });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx('c3'.padEnd(64, '0'), { certificates: [], withdrawals: [] })]);
+
+    expect(upsertsFor('TransactionCertificates')).toHaveLength(0);
+    expect(upsertsFor('TransactionWithdrawals')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Crawler-fed UTxO set: the indexer applies a block only past the anchor
+// ---------------------------------------------------------------------------
+describe('CardanoIndexer.indexBlockFull — ledger state gating', () => {
+  const ledger = () => (applyBlockToLedger as unknown as Mock);
+  beforeEach(() => {
+    ledger().mockClear(); (setUtxoSetState as unknown as Mock).mockClear(); (readCursor as unknown as Mock).mockClear();
+    cursorRow = { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
+  });
+
+  it('does nothing when the mode is off, even with an anchor', async () => {
+    const { indexer } = makeIndexer();
+    indexer.setUtxoAnchor({ slot: 100, hash: 'h' });
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5000 }), [tx('l1'.padEnd(64, '0'))]);
+    expect(ledger()).not.toHaveBeenCalled();
+    expect(indexer.getUtxoAnchor()).toBeNull(); // no anchor reported while the mode is off
+  });
+
+  it('does nothing when the mode is on but no snapshot anchor exists', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', utxoSet: true });
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5000 }), [tx('l2'.padEnd(64, '0'))]);
+    expect(ledger()).not.toHaveBeenCalled();
+  });
+
+  it('applies blocks strictly after the anchor, in the same transaction', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', utxoSet: true });
+    indexer.setUtxoAnchor({ slot: 5000, hash: 'h' });
+    expect(indexer.getUtxoAnchor()).toEqual({ slot: 5000, hash: 'h' });
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5000 }), [tx('l3'.padEnd(64, '0'))]);
+    expect(ledger()).not.toHaveBeenCalled(); // the anchor block itself is already in the snapshot
+
+    const txs = [tx('l4'.padEnd(64, '0'))];
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5001 }), txs);
+    expect(ledger()).toHaveBeenCalledTimes(1);
+    expect(ledger().mock.calls[0][0]).toBe(mockTx);
+    expect(ledger().mock.calls[0][1]).toMatchObject({ slot: 5001 });
+    expect(ledger().mock.calls[0][2]).toBe(txs);
+    // the cursor was the anchor when the first block past it arrived — verified, no invalidation
+    expect(setUtxoSetState).not.toHaveBeenCalled();
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5002 }), txs);
+    expect(readCursor).toHaveBeenCalledTimes(1); // verified once per anchor
+  });
+
+  it('accepts the anchor at the configured start block (bootstrap: cursor set, no Blocks row yet)', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', utxoSet: true });
+    indexer.setUtxoAnchor({ slot: 5000, hash: 'H' }); // hash case must not matter
+    cursorRow = { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5001 }), [tx('l7'.padEnd(64, '0'))]);
+
+    expect(ledger()).toHaveBeenCalledTimes(1);
+    expect(setUtxoSetState).not.toHaveBeenCalled();
+  });
+
+  it('invalidates the set instead of applying when the cursor is not the anchor (snapshot on a dropped fork)', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', utxoSet: true });
+    indexer.setUtxoAnchor({ slot: 5000, hash: 'h' });
+    cursorRow = { lastSlot: 5000, lastBlockHash: 'other', utxoSet: { appliedSlot: null } };
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5001 }), [tx('l5'.padEnd(64, '0'))]);
+
+    expect(ledger()).not.toHaveBeenCalled();
+    expect(setUtxoSetState).toHaveBeenCalledWith(mockTx, expect.objectContaining({ status: 'invalid', error: expect.stringContaining('not the block the crawler followed') }));
+    // pending until the crawler confirms the commit: no anchor reported (no progress marker),
+    // a retry of the block re-writes the verdict instead of re-verifying or applying
+    expect(indexer.getUtxoAnchor()).toBeNull();
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5001 }), [tx('l5'.padEnd(64, '0'))]);
+    expect(ledger()).not.toHaveBeenCalled();
+    expect(setUtxoSetState).toHaveBeenCalledTimes(2);
+    expect(readCursor).toHaveBeenCalledTimes(1);
+    expect(indexer.takeLedgerInvalidation()).toMatch(/not the block the crawler followed/);
+    expect(indexer.takeLedgerInvalidation()).toBeNull(); // handed out once
+  });
+
+  it('skips the check after a restart once a block has been applied (utxoAppliedSlot set)', async () => {
+    const { indexer } = makeIndexer();
+    indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'off', utxoSet: true });
+    indexer.setUtxoAnchor({ slot: 5000, hash: 'h' });
+    cursorRow = { lastSlot: 7000, lastBlockHash: 'far-ahead', utxoSet: { appliedSlot: 7000 } };
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ slot: 7001 }), [tx('l6'.padEnd(64, '0'))]);
+
+    expect(ledger()).toHaveBeenCalledTimes(1);
+    expect(setUtxoSetState).not.toHaveBeenCalled();
   });
 });

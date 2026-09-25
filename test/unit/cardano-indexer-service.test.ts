@@ -44,6 +44,8 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 }));
 
 vi.mock('../../srv/server', () => serverMock);
+// the snapshot import pulls cds.ql + the DB models at load time; not under test here
+vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn() }));
 
 // the impl registers handlers via module.exports = (srv) => {...}; the dynamic
 // import goes through vitest's module graph so the mocks above apply, and the
@@ -88,6 +90,8 @@ describe('CardanoIndexerService.getStatus', () => {
       tipHeight: '200',
       syncProgress: '25.00', // 50/200
       consecutiveErrors: 2,
+      // crawler-fed UTxO set: not configured, nothing imported
+      utxoSet: { enabled: false, status: 'none', anchorSlot: null, anchorHash: null, importedAt: null, error: null },
     });
   });
 

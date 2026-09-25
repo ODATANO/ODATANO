@@ -12,7 +12,7 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
-import { KoiosBackend } from '../../srv/blockchain/backends/koios-backend';
+import { KoiosBackend, mapKoiosCertificates } from '../../srv/blockchain/backends/koios-backend';
 import { CARDANO_DEFAULTS } from '../../srv/utils/const';
 import { ProviderUnavailableError } from '../../srv/utils/errors';
 
@@ -587,6 +587,114 @@ describe('KoiosBackend', () => {
       expect(result.has(txHash2)).toBe(false);
     });
 
+    it('does not ask /tx_info for certificates unless the crawl configured it', async () => {
+      const txHash = 'a'.repeat(64);
+      let body: Record<string, unknown> = {};
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info', (b) => { body = b; return true; })
+        .reply(200, [{ tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1, inputs: [], outputs: [], metadata: null }]);
+
+      await backend.getTransactionsBatch([txHash]);
+
+      expect(body._certs).toBe(false);
+      expect(body._withdrawals).toBe(false);
+    });
+
+    it('maps valid_contract, collateral inputs/output and reference inputs (phase-2 information)', async () => {
+      const txHash = 'a'.repeat(64);
+      const io = (i: number, value: string) => ({ payment_addr: { bech32: TEST_ADDR }, tx_hash: 'd'.repeat(64), tx_index: i, value, datum_hash: null, inline_datum: null, reference_script: null, asset_list: [] });
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info')
+        .reply(200, [{
+          tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1,
+          valid_contract: false,
+          inputs: [io(0, '5000000')], collateral_inputs: [io(1, '7000000')], reference_inputs: [io(2, '1')],
+          outputs: [{ ...io(0, '4000000'), tx_hash: undefined }], collateral_output: [{ ...io(1, '6000000'), tx_hash: undefined }],
+          metadata: null,
+        }]);
+
+      const tx = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+
+      expect(tx.spendsCollaterals).toBe(true);
+      expect(tx.inputs.map(i => [i.outputIndex, Boolean(i.isCollateral), Boolean(i.isReference)])).toEqual([[0, false, false], [1, true, false], [2, false, true]]);
+      expect(tx.outputs.map(o => [o.outputIndex, o.isCollateral, o.txHash])).toEqual([[0, false, txHash], [1, true, txHash]]);
+    });
+
+    it('asks /tx_info for certificates + withdrawals on the batch (crawler) path and maps them', async () => {
+      backend.configureCrawl({ certificates: true });
+      const txHash = 'a'.repeat(64);
+      let body: Record<string, unknown> = {};
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info', (b) => { body = b; return true; })
+        .reply(200, [{
+          tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1700000000,
+          absolute_slot: 10, tx_block_index: 0, fee: '170000', deposit: '2000000', tx_size: 300,
+          inputs: [], outputs: [], metadata: null,
+          withdrawals: [{ amount: '9845162', stake_addr: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj' }],
+          certificates: [
+            { index: 0, type: 'stake_registration', info: { stake_address: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj', deposit: '2000000' } },
+            { index: 1, type: 'pool_delegation', info: { stake_address: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj', pool_id_bech32: 'pool1k53pf4wzn263c08e3wr3gttndfecm9f4uzekgctcx947vt7fh2p' } },
+          ],
+        }]);
+
+      const result = await backend.getTransactionsBatch([txHash]);
+
+      expect(body._certs).toBe(true);
+      expect(body._withdrawals).toBe(true);
+      const tx = result.get(txHash)!;
+      expect(tx.withdrawals).toEqual([{ stakeAddress: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj', amount: '9845162' }]);
+      expect(tx.certificates).toEqual([
+        { certIndex: 0, kind: 'stake_registration', stakeAddress: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj', poolId: null, drepId: null, deposit: '2000000', epoch: null },
+        { certIndex: 1, kind: 'pool_delegation', stakeAddress: 'stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj', poolId: 'pool1k53pf4wzn263c08e3wr3gttndfecm9f4uzekgctcx947vt7fh2p', drepId: null, deposit: null, epoch: null },
+      ]);
+    });
+
+    it('leaves certificates/withdrawals undefined (not []) when the response has no such fields (lazy path)', async () => {
+      const txHash = 'a'.repeat(64);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info')
+        .reply(200, [{
+          tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1700000000,
+          absolute_slot: 10, tx_block_index: 0, fee: '170000', deposit: '0', tx_size: 300,
+          inputs: [], outputs: [], metadata: null, certificates: null, withdrawals: null,
+        }]);
+
+      const tx = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+      expect(tx.certificates).toBeUndefined();
+      expect(tx.withdrawals).toBeUndefined();
+    });
+  });
+
+  describe('mapKoiosCertificates', () => {
+    it("normalizes Koios' type names onto the shared vocabulary and reads every info alias", () => {
+      expect(mapKoiosCertificates([
+        { index: 0, type: 'delegation', info: { stake_address: 'stake1a', pool: 'pool1old' } },
+        { index: 1, type: 'vote_delegation', info: { stake_address: 'stake1a', drep_id: 'drep_always_no_confidence' } },
+        { index: 2, type: 'pool_retire', info: { pool_id_bech32: 'pool1x', 'retiring epoch': 330 } },
+        { index: 3, type: 'pool_update', info: { pool_id_bech32: 'pool1x' } },
+        { index: 4, type: 'drep_registration', info: { drep_id: 'drep1x', deposit: '500000000' } },
+        { index: 5, type: 'drep_retire', info: { drep_id: 'drep1x' } },
+        { index: 6, type: 'treasury_MIR', info: { stake_address: 'stake1a', amount: '5' } },
+      ])).toEqual([
+        { certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake1a', poolId: 'pool1old', drepId: null, deposit: null, epoch: null },
+        { certIndex: 1, kind: 'vote_delegation', stakeAddress: 'stake1a', poolId: null, drepId: 'drep_always_no_confidence', deposit: null, epoch: null },
+        { certIndex: 2, kind: 'pool_retirement', stakeAddress: null, poolId: 'pool1x', drepId: null, deposit: null, epoch: 330 },
+        { certIndex: 3, kind: 'pool_registration', stakeAddress: null, poolId: 'pool1x', drepId: null, deposit: null, epoch: null },
+        { certIndex: 4, kind: 'drep_registration', stakeAddress: null, poolId: null, drepId: 'drep1x', deposit: '500000000', epoch: null },
+        { certIndex: 5, kind: 'drep_retirement', stakeAddress: null, poolId: null, drepId: 'drep1x', deposit: null, epoch: null },
+        { certIndex: 6, kind: 'treasury_mir', stakeAddress: 'stake1a', poolId: null, drepId: null, deposit: null, epoch: null },
+      ]);
+    });
+
+    it('falls back to the array position when Koios reports no index, and keeps unknown types raw', () => {
+      expect(mapKoiosCertificates([
+        { index: null, type: 'param_proposal', info: { min_fee_a: 44 } },
+        { type: 'brand_new_cert_type', info: null },
+      ])).toEqual([
+        { certIndex: 0, kind: 'param_proposal', stakeAddress: null, poolId: null, drepId: null, deposit: null, epoch: null },
+        { certIndex: 1, kind: 'brand_new_cert_type', stakeAddress: null, poolId: null, drepId: null, deposit: null, epoch: null },
+      ]);
+    });
   });
 
   describe('getAddressUtxos', () => {

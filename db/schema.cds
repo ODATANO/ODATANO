@@ -683,6 +683,16 @@ entity Transactions {
         outputs     : Composition of many TransactionOutputs
                           on outputs.tx = $self;
 
+        @title      : 'Transaction Certificates'
+        @description: 'Certificates carried by the transaction (stake/pool/DRep). Filled by the chain crawler only (crawler.certificates); the lazy path leaves it empty.'
+        certificates : Composition of many TransactionCertificates
+                          on certificates.tx = $self;
+
+        @title      : 'Transaction Withdrawals'
+        @description: 'Reward-account withdrawals of the transaction. Filled by the chain crawler only (crawler.certificates); the lazy path leaves it empty.'
+        withdrawals : Composition of many TransactionWithdrawals
+                          on withdrawals.tx = $self;
+
         @title      : 'Transaction Has Metadata'
         @description: 'Indicates if transaction has metadata'
         hasMetadata : Boolean;
@@ -716,6 +726,14 @@ entity TransactionInputs {
         @title      : 'Input UTxO Data'
         @description: 'The UTxO specific data of the input utxo'
         utxoData     : UTxODataSlice; // input utxo data
+
+        @title      : 'Spent Transaction Hash'
+        @description: 'Hash of the transaction that created the consumed UTxO (outpoint). Null on rows indexed before the column existed.'
+        spentTxHash  : Blake2b256;
+
+        @title      : 'Spent Output Index'
+        @description: 'Output index of the consumed UTxO within spentTxHash (outpoint). Null on rows indexed before the column existed.'
+        spentOutputIndex : Integer;
 
         @title      : 'Input Lovelace Amount'
         @description: 'The lovelace amount of the input utxo'
@@ -755,6 +773,241 @@ entity TransactionInputAssets {
         @title      : 'Asset Details'
         @description: 'Structural slice for asset details'
         asset : AssetSlice;
+}
+
+// -----------------------------------------------------
+// Crawler-fed ledger state (crawler.utxoSet) — non-temporal, separate from the lazy
+// provider-fed Addresses / AddressUTxOs so their TTL semantics stay untouched.
+// -----------------------------------------------------
+
+@title      : 'Ledger UTxOs'
+@description: 'UTxO set maintained by the chain crawler from an imported anchor snapshot (crawler.utxoSet). A row is unspent while spentTxHash is null. createdSlot is null for rows that came with the snapshot. Not written by the lazy path; a reorg reopens what a rolled-back block spent and drops what it created.'
+@readonly
+entity LedgerUTxOs {
+
+        @title      : 'Transaction Hash (Key)'
+        @description: 'Transaction that created the output'
+    key txHash       : Blake2b256;
+
+        @title      : 'Output Index (Key)'
+        @description: 'Output index within the creating transaction'
+    key outputIndex  : Integer;
+
+        @title      : 'Address'
+        @description: 'Bech32 address holding the output'
+        address      : Bech32;
+
+        @title      : 'Stake Address'
+        @description: 'Reward account of a base address (bech32); null for enterprise, pointer and Byron addresses'
+        stakeAddress : Bech32;
+
+        @title      : 'Address Type'
+        @description: 'base | enterprise | pointer | reward | byron | unknown'
+        addressType  : String(20);
+
+        @title      : 'Is Script Address'
+        @description: 'Payment credential is a script hash'
+        isScript     : Boolean;
+
+        @title      : 'Lovelace'
+        @description: 'Lovelace held by the output'
+        lovelace     : Lovelace;
+
+        @title      : 'Created Slot'
+        @description: 'Absolute slot of the creating block; null when the row came with the snapshot'
+        createdSlot  : Integer64;
+
+        @title      : 'Spent Transaction Hash'
+        @description: 'Transaction that consumed the output; null while unspent'
+        spentTxHash  : Blake2b256;
+
+        @title      : 'Spent Slot'
+        @description: 'Absolute slot of the consuming block; null while unspent'
+        spentSlot    : Integer64;
+
+        @title      : 'UTxO Data'
+        @description: 'Datum hash, inline datum and reference script hash'
+        utxo         : UTxODataSlice;
+
+        @title      : 'Has Assets'
+        @description: 'Output carries native assets (see assets)'
+        hasAssets    : Boolean;
+
+        @title      : 'Assets'
+        @description: 'Native assets of the output'
+        assets       : Composition of many LedgerUTxOAssets
+                           on assets.utxo = $self;
+}
+
+@title      : 'Ledger UTxO Assets'
+@description: 'Native assets of a LedgerUTxOs row'
+@readonly
+entity LedgerUTxOAssets {
+
+        @title      : 'UTxO (Key)'
+        @description: 'The owning UTxO'
+    key utxo   : Association to LedgerUTxOs;
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'policyId + assetNameHex'
+    key unit   : AssetUnit;
+
+        @title      : 'Asset'
+        @description: 'Quantity and decomposed unit'
+        asset  : AssetSlice;
+}
+
+@title      : 'Ledger Addresses'
+@description: 'Per-address running sums over the unspent LedgerUTxOs rows (crawler.utxoSet): balance and UTxO count as of the crawl tip. firstSeenSlot / lastActiveSlot are null for addresses that only appear in the snapshot. Recounted from the open rows on a reorg.'
+@readonly
+entity LedgerAddresses {
+
+        @title      : 'Address (Key)'
+        @description: 'Bech32 address'
+    key address        : Bech32;
+
+        @title      : 'Stake Address'
+        @description: 'Reward account of a base address (bech32); null otherwise'
+        stakeAddress   : Bech32;
+
+        @title      : 'Address Type'
+        @description: 'base | enterprise | pointer | reward | byron | unknown'
+        addressType    : String(20);
+
+        @title      : 'Is Script Address'
+        @description: 'Payment credential is a script hash'
+        isScript       : Boolean;
+
+        @title      : 'Total Lovelace'
+        @description: 'Sum of lovelace over the unspent UTxOs of the address'
+        totalLovelace  : Lovelace;
+
+        @title      : 'UTxO Count'
+        @description: 'Number of unspent UTxOs'
+        utxoCount      : Integer;
+
+        @title      : 'First Seen Slot'
+        @description: 'Slot of the first crawled block that produced an output for the address; null when the address came with the snapshot'
+        firstSeenSlot  : Integer64;
+
+        @title      : 'Last Active Slot'
+        @description: 'Slot of the last crawled block that touched the address'
+        lastActiveSlot : Integer64;
+
+        @title      : 'Assets'
+        @description: 'Native-asset balances of the address'
+        assets         : Composition of many LedgerAddressAssets
+                             on assets.address = $self;
+
+        @title      : 'UTxOs'
+        @description: 'UTxO rows of the address (spent and unspent; filter spentTxHash eq null for the current set)'
+        utxos          : Association to many LedgerUTxOs
+                             on utxos.address = $self.address;
+}
+
+@title      : 'Ledger Address Assets'
+@description: 'Native-asset balance of a LedgerAddresses row; rows at zero are removed'
+@readonly
+entity LedgerAddressAssets {
+
+        @title      : 'Address (Key)'
+        @description: 'The owning address'
+    key address : Association to LedgerAddresses;
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'policyId + assetNameHex'
+    key unit    : AssetUnit;
+
+        @title      : 'Asset'
+        @description: 'Quantity and decomposed unit'
+        asset   : AssetSlice;
+}
+
+@title      : 'Ledger Accounts'
+@description: 'Per-stake-key running sums over LedgerAddresses (crawler.utxoSet): controlled amount, address and UTxO counts as of the crawl tip. Delegation is a query over TransactionCertificates (newest pool_delegation / vote_delegation for the stake key); rewards are ledger state and stay provider-fed.'
+@readonly
+entity LedgerAccounts {
+
+        @title      : 'Stake Address (Key)'
+        @description: 'Reward account (bech32)'
+    key stakeAddress     : Bech32;
+
+        @title      : 'Controlled Amount'
+        @description: 'Sum of totalLovelace over the base addresses of the stake key'
+        controlledAmount : Lovelace;
+
+        @title      : 'Address Count'
+        @description: 'Number of LedgerAddresses rows under the stake key'
+        addressCount     : Integer;
+
+        @title      : 'UTxO Count'
+        @description: 'Number of unspent UTxOs across those addresses'
+        utxoCount        : Integer;
+
+        @title      : 'Last Active Slot'
+        @description: 'Slot of the last crawled block that touched one of the addresses'
+        lastActiveSlot   : Integer64;
+
+        @title      : 'Addresses'
+        @description: 'Addresses under the stake key'
+        addresses        : Association to many LedgerAddresses
+                               on addresses.stakeAddress = $self.stakeAddress;
+}
+
+@title      : 'Transaction Certificates'
+@description: 'Certificates of a transaction as the chain crawler saw them (crawler.certificates, off by default). One row per certificate and kind: a Conway stake+vote delegation yields a pool_delegation and a vote_delegation row with the same certIndex, so the Ogmios and Koios sources produce identical rows. Not written by the lazy path.'
+@readonly
+entity TransactionCertificates {
+
+        @title      : 'Transaction (key)'
+        @description: 'The transaction carrying the certificate'
+    key tx           : Association to Transactions;
+
+        @title      : 'Certificate Index (key)'
+        @description: 'Position of the certificate in the transaction, as reported by the source'
+    key certIndex    : Integer;
+
+        @title      : 'Certificate Kind (key)'
+        @description: 'stake_registration | stake_deregistration | pool_delegation | vote_delegation | pool_registration | pool_retirement | drep_registration | drep_update | drep_retirement | committee_hot_auth | committee_resign | genesis_delegation | treasury_mir | reserve_mir | pot_transfer | param_proposal — or the raw source type for anything else'
+    key kind         : String(40);
+
+        @title      : 'Stake Address'
+        @description: 'Reward account the certificate concerns (bech32), when it has one'
+        stakeAddress : Bech32;
+
+        @title      : 'Pool Id'
+        @description: 'Stake pool (bech32) for delegation, registration and retirement certificates'
+        poolId       : Bech32;
+
+        @title      : 'DRep Id'
+        @description: 'DRep (CIP-129 bech32) for vote delegation and DRep certificates; drep_always_abstain / drep_always_no_confidence for the predefined ones'
+        drepId       : Bech32;
+
+        @title      : 'Deposit'
+        @description: 'Deposit paid (registration) or refunded (deregistration) in lovelace, when the source reports it'
+        deposit      : Lovelace;
+
+        @title      : 'Epoch'
+        @description: 'Retirement epoch of a pool_retirement certificate'
+        epoch        : Integer;
+}
+
+@title      : 'Transaction Withdrawals'
+@description: 'Reward-account withdrawals of a transaction as the chain crawler saw them (crawler.certificates, off by default). Not written by the lazy path.'
+@readonly
+entity TransactionWithdrawals {
+
+        @title      : 'Transaction (key)'
+        @description: 'The withdrawing transaction'
+    key tx           : Association to Transactions;
+
+        @title      : 'Stake Address (key)'
+        @description: 'Reward account withdrawn from (bech32)'
+    key stakeAddress : Bech32;
+
+        @title      : 'Lovelace'
+        @description: 'Amount withdrawn in lovelace'
+        lovelace     : Lovelace;
 }
 
 @title      : 'Transaction Outputs'
@@ -1535,6 +1788,30 @@ entity CardanoSyncState {
         @title      : 'Crawler Lease Owner'
         @description: 'Opaque process identifier of the single crawler instance currently allowed to write'
         leaseOwner        : String(128);
+
+        @title      : 'UTxO Set Status'
+        @description: 'Crawler-fed ledger state (crawler.utxoSet): none | importing | active | invalid'
+        utxoSetStatus     : String(20) default 'none';
+
+        @title      : 'UTxO Set Anchor Slot'
+        @description: 'Absolute slot the imported UTxO set describes; blocks after it are applied to the ledger tables'
+        utxoAnchorSlot    : Integer64;
+
+        @title      : 'UTxO Set Anchor Hash'
+        @description: 'Block hash of the anchor point'
+        utxoAnchorHash    : Blake2b256;
+
+        @title      : 'UTxO Set Imported At'
+        @description: 'When the snapshot import completed'
+        utxoSetImportedAt : Timestamp;
+
+        @title      : 'UTxO Set Applied Slot'
+        @description: 'Slot of the last block applied to the ledger tables; a cursor ahead of it means blocks were crawled without the set (mode off, invalidated) and the set is stale'
+        utxoAppliedSlot   : Integer64;
+
+        @title      : 'UTxO Set Error'
+        @description: 'Why the set is invalid (reorg past the anchor, failed import)'
+        utxoSetError      : String(500);
 
         @title      : 'Crawler Lease Expiry'
         @description: 'Lease deadline renewed by the active crawler; another instance may take over only after this time'

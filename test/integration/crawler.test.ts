@@ -109,6 +109,8 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
         assetCatalogue: 'bare',
         assetEnrichRate: 2,
         epochSnapshots: false,
+        certificates: false,
+        utxoSet: false,
       },
     }, true);
   }
@@ -160,7 +162,7 @@ describe('chain crawler (integration: real Ogmios + real SQLite)', () => {
     expect(reached, 'crawler did not reach the target tip').to.be.at.least(target);
 
     // Every NATIVE-ASSET unit that appears on an output must have a catalogue row — that
-    // is the FR's acceptance criterion, checked with no API traffic against the instance.
+    // is the acceptance criterion of the bare catalogue, checked with no API traffic against the instance.
     // TransactionOutputAssets holds one row per amount line, so it carries `lovelace`
     // too; that is not a catalogue entry and never gets an Assets row.
     const outputUnits = await rows(

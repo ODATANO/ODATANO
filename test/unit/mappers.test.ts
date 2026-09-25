@@ -25,6 +25,11 @@ import {
   mapPoolSnapshot,
   mapDrepSnapshot,
   computeCip14Fingerprint,
+  mapTransactionCertificates,
+  mapTransactionWithdrawals,
+  credentialToStakeAddress,
+  credentialToDrepId,
+  decodeShelleyAddress,
 } from '../../srv/utils/mappers';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 
@@ -271,6 +276,119 @@ describe('mappers', () => {
       expect(result[1].isReference).toBe(true);
       expect(result[1].hasAssets).toBe(false);
       expect(result[1].utxoData_dataHash).toBe('abc');
+    });
+
+    it('keeps the consumed outpoint (spentTxHash / spentOutputIndex) on every row', () => {
+      const result = mapTransactionInputs('tx123', [
+        { txHash: 'a'.repeat(64), outputIndex: 2, address: 'addr_test1...', amount: [] },
+        // a malformed line without an outpoint must not crash the block — null, not NaN
+        { txHash: '', outputIndex: undefined as unknown as number, address: 'addr_test2...', amount: [] },
+      ]);
+
+      expect(result[0].spentTxHash).toBe('a'.repeat(64));
+      expect(result[0].spentOutputIndex).toBe(2);
+      expect(result[1].spentTxHash).toBeNull();
+      expect(result[1].spentOutputIndex).toBeNull();
+    });
+  });
+
+  // ==========================================================================
+  // mapTransactionCertificates / mapTransactionWithdrawals (crawler.certificates)
+  // ==========================================================================
+  describe('mapTransactionCertificates', () => {
+    it('maps every field and nulls the ones a kind does not carry', () => {
+      const rows = mapTransactionCertificates('tx1', [
+        { certIndex: 0, kind: 'stake_registration', stakeAddress: 'stake_test1abc', deposit: '2000000' },
+        { certIndex: 1, kind: 'pool_retirement', poolId: 'pool1abc', epoch: 320 },
+        { certIndex: 2, kind: 'someFutureType' },
+      ]);
+
+      expect(rows).toEqual([
+        { tx_hash: 'tx1', certIndex: 0, kind: 'stake_registration', stakeAddress: 'stake_test1abc', poolId: null, drepId: null, deposit: '2000000', epoch: null },
+        { tx_hash: 'tx1', certIndex: 1, kind: 'pool_retirement', stakeAddress: null, poolId: 'pool1abc', drepId: null, deposit: null, epoch: 320 },
+        { tx_hash: 'tx1', certIndex: 2, kind: 'someFutureType', stakeAddress: null, poolId: null, drepId: null, deposit: null, epoch: null },
+      ]);
+    });
+
+    it('stringifies a numeric deposit (Lovelace is Decimal(20,0) — never a JS number)', () => {
+      const [row] = mapTransactionCertificates('tx1', [{ certIndex: 0, kind: 'drep_registration', drepId: 'drep1x', deposit: 500000000 }]);
+      expect(row.deposit).toBe('500000000');
+    });
+  });
+
+  describe('mapTransactionWithdrawals', () => {
+    it('maps one row per reward account and drops entries without one', () => {
+      const rows = mapTransactionWithdrawals('tx1', [
+        { stakeAddress: 'stake_test1abc', amount: '99' },
+        { stakeAddress: '', amount: '1' },
+      ]);
+      expect(rows).toEqual([{ tx_hash: 'tx1', stakeAddress: 'stake_test1abc', lovelace: '99' }]);
+    });
+  });
+
+  // ==========================================================================
+  // credentialToStakeAddress / credentialToDrepId (Ogmios hands out bare hashes)
+  // ==========================================================================
+  describe('credentialToStakeAddress', () => {
+    // Koios API docs example reward account; payload e1 || hash (key credential, mainnet)
+    const HASH = '9084d6174b028be3b346f5eb11e0a8bf889a7e464447f7973605c886';
+
+    it('encodes a mainnet key credential as stake1…', () => {
+      expect(credentialToStakeAddress(HASH, false, 'mainnet')).toBe('stake1uxggf4shfvpghcangm67ky0q4zlc3xn7gezy0auhxczu3pslm9wrj');
+    });
+
+    it('uses the stake_test HRP and network nibble 0 on preview/preprod', () => {
+      const preview = credentialToStakeAddress(HASH, false, 'preview');
+      expect(preview.startsWith('stake_test1')).toBe(true);
+      expect(credentialToStakeAddress(HASH, false, 'preprod')).toBe(preview);
+    });
+
+    it('distinguishes a script credential by the type nibble', () => {
+      expect(credentialToStakeAddress(HASH, true, 'mainnet')).not.toBe(credentialToStakeAddress(HASH, false, 'mainnet'));
+      expect(credentialToStakeAddress(HASH, true, 'mainnet').startsWith('stake1')).toBe(true);
+    });
+  });
+
+  describe('decodeShelleyAddress', () => {
+    const BASE = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+
+    it('decodes a testnet base address to its reward account', () => {
+      expect(decodeShelleyAddress(BASE)).toEqual({
+        type: 'base', isScript: false, networkId: 0,
+        stakeAddress: 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh',
+      });
+    });
+
+    it('flags a script payment credential and keeps the mainnet network nibble', () => {
+      const d = decodeShelleyAddress('addr1zyetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qzrwnlv');
+      expect(d).toMatchObject({ type: 'base', isScript: true, networkId: 1 });
+      expect(d.stakeAddress).toMatch(/^stake1/);
+    });
+
+    it('returns no stake address for enterprise addresses and recognizes Byron / garbage', () => {
+      expect(decodeShelleyAddress('addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0')).toEqual({ type: 'enterprise', isScript: false, stakeAddress: null, networkId: 0 });
+      expect(decodeShelleyAddress('Ae2tdPwUPEZFRbyhz3cpfC2CumGzNkFBN2L42rcUc2yjQpEkxDbkPodpMAi').type).toBe('byron');
+      expect(decodeShelleyAddress('not-an-address')).toEqual({ type: 'unknown', isScript: false, stakeAddress: null, networkId: null });
+      expect(decodeShelleyAddress('')).toMatchObject({ type: 'unknown' });
+    });
+
+    it('treats a reward address as its own stake address', () => {
+      const stake = 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh';
+      expect(decodeShelleyAddress(stake)).toEqual({ type: 'reward', isScript: false, stakeAddress: stake, networkId: 0 });
+    });
+  });
+
+  describe('credentialToDrepId', () => {
+    // CIP-129 id used across the suite; header 0x22 = key-hash DRep
+    const HASH = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
+
+    it('encodes a key-hash credential as a CIP-129 drep1… id', () => {
+      expect(credentialToDrepId(HASH, false)).toBe('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0');
+    });
+
+    it('sets the script nibble (0x23) for a script credential', () => {
+      expect(credentialToDrepId(HASH, true)).not.toBe(credentialToDrepId(HASH, false));
+      expect(credentialToDrepId(HASH, true).startsWith('drep1')).toBe(true);
     });
   });
 

@@ -35,6 +35,19 @@ export interface CrawlPoint {
   height?: number;
 }
 
+export type UtxoSetStatusValue = 'none' | 'importing' | 'active' | 'invalid';
+
+/** Crawler-fed ledger state (crawler.utxoSet): the anchor the imported UTxO set describes. */
+export interface UtxoSetState {
+  status: UtxoSetStatusValue;
+  anchorSlot: number | null;
+  anchorHash: string | null;
+  importedAt: string | null;
+  /** Slot of the last block applied to the ledger tables (null = nothing applied since the import). */
+  appliedSlot: number | null;
+  error: string | null;
+}
+
 /** Normalized, number-typed view of the cursor row (numeric fields already coerced). */
 export interface SyncCursor {
   network: string | null;
@@ -50,6 +63,7 @@ export interface SyncCursor {
   desiredRunning: boolean;
   leaseOwner: string | null;
   leaseUntil: string | null;
+  utxoSet: UtxoSetState;
 }
 
 /**
@@ -71,6 +85,16 @@ function timestamp(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
   if (v instanceof Date) return v.toISOString();
   return String(v);
+}
+
+/**
+ * Import-lease read-back: ownership and deadline only. The crawler variant below also
+ * requires `desiredRunning`, which `pauseCrawler` clears — and an import runs exactly then.
+ */
+function importLeaseHeld(cursor: SyncCursor | null, owner: string, expectedMs: number): boolean {
+  if (!cursor || cursor.leaseOwner !== owner || !cursor.leaseUntil) return false;
+  const actualMs = Date.parse(cursor.leaseUntil);
+  return Number.isFinite(actualMs) && actualMs >= expectedMs - 1_000;
 }
 
 function leaseDeadlineReached(cursor: SyncCursor | null, owner: string, expectedMs: number): boolean {
@@ -97,6 +121,14 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
     desiredRunning: row.desiredRunning !== false,
     leaseOwner: (row.leaseOwner as string) ?? null,
     leaseUntil: timestamp(row.leaseUntil),
+    utxoSet: {
+      status: ((row.utxoSetStatus as UtxoSetStatusValue) ?? 'none'),
+      anchorSlot: optionalNum(row.utxoAnchorSlot),
+      anchorHash: (row.utxoAnchorHash as string) ?? null,
+      importedAt: timestamp(row.utxoSetImportedAt),
+      appliedSlot: optionalNum(row.utxoAppliedSlot),
+      error: (row.utxoSetError as string) ?? null,
+    },
   };
 }
 
@@ -137,6 +169,12 @@ export async function ensureSyncStateSingleton(
     desiredRunning: true,
     leaseOwner: null,
     leaseUntil: null,
+    utxoSetStatus: 'none' as UtxoSetStatusValue,
+    utxoAnchorSlot: null,
+    utxoAnchorHash: null,
+    utxoSetImportedAt: null,
+    utxoAppliedSlot: null,
+    utxoSetError: null,
   };
   await db.run(INSERT.into(CardanoSyncState).entries(row));
   logger.info(`Sync cursor initialized (network=${network}, start=${start ? `${start.slot}/${start.hash}` : 'none'})`);
@@ -279,6 +317,8 @@ export async function advanceCursor(
   block: CrawlPoint,
   tip?: { slot: number; height?: number },
   status: CrawlSyncStatusValue = 'syncing',
+  /** Extra cursor columns written in the same statement (e.g. the ledger's `utxoAppliedSlot`). */
+  extra?: Record<string, unknown>,
 ): Promise<void> {
   const set: Record<string, unknown> = {
     lastSlot: block.slot,
@@ -288,11 +328,68 @@ export async function advanceCursor(
     syncStatus: status,
     consecutiveErrors: 0,
     lastError: null,
+    ...(extra ?? {}),
   };
   if (tip) {
     set.tipSlot = tip.slot;
     if (tip.height !== undefined) set.tipHeight = tip.height;
   }
+  await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
+}
+
+/**
+ * Lease for the UTxO set import: the same `leaseOwner` / `leaseUntil` columns the crawler
+ * uses, so a crawler start on ANY instance is refused while the import holds it (its CAS
+ * sees a foreign owner with a live deadline) and a second import is refused the same way.
+ * Unlike the crawler lease it does not require `desiredRunning` — the cluster is paused
+ * during an import by design.
+ */
+export async function tryAcquireImportLease(
+  db: CapTransaction,
+  owner: string,
+  now = new Date(),
+  ttlMs = CRAWLER_LEASE_TTL_MS,
+): Promise<boolean> {
+  const raw = await db.run(SELECT.one.from(CardanoSyncState).where({ ID: SINGLETON_ID })) as Record<string, unknown> | undefined;
+  if (!raw) return false;
+  const current = toCursor(raw);
+  const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
+  if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
+  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  await db.run(UPDATE.entity(CardanoSyncState).set({ leaseOwner: owner, leaseUntil }).where({
+    ID: SINGLETON_ID,
+    leaseOwner: raw.leaseOwner ?? null,
+  }));
+  const verified = await readCursor(db);
+  return importLeaseHeld(verified, owner, now.getTime() + ttlMs);
+}
+
+export async function renewImportLease(
+  db: CapTransaction,
+  owner: string,
+  now = new Date(),
+  ttlMs = CRAWLER_LEASE_TTL_MS,
+): Promise<boolean> {
+  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  await db.run(UPDATE.entity(CardanoSyncState).set({ leaseUntil }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
+  const verified = await readCursor(db);
+  return importLeaseHeld(verified, owner, now.getTime() + ttlMs);
+}
+
+export async function releaseImportLease(db: CapTransaction, owner: string): Promise<void> {
+  await db.run(UPDATE.entity(CardanoSyncState).set({ leaseOwner: null, leaseUntil: null }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
+}
+
+/** Persist the crawler-fed ledger state's anchor / validity (crawler.utxoSet). */
+export async function setUtxoSetState(db: CapTransaction, state: Partial<UtxoSetState>): Promise<void> {
+  const set: Record<string, unknown> = {};
+  if (state.status !== undefined) set.utxoSetStatus = state.status;
+  if (state.anchorSlot !== undefined) set.utxoAnchorSlot = state.anchorSlot;
+  if (state.anchorHash !== undefined) set.utxoAnchorHash = state.anchorHash;
+  if (state.importedAt !== undefined) set.utxoSetImportedAt = state.importedAt;
+  if (state.appliedSlot !== undefined) set.utxoAppliedSlot = state.appliedSlot;
+  if (state.error !== undefined) set.utxoSetError = state.error;
+  if (!Object.keys(set).length) return;
   await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
 }
 

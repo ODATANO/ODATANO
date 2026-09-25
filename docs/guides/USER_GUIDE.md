@@ -671,13 +671,15 @@ so the crawler also fills the tables that analytics need:
 | `AssetHistory` | every mint and burn in the range, one row per (unit, transaction) | on |
 | `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint | on (`bare`) |
 | `PoolEpochSnapshots`, `DrepEpochSnapshots` | every pool and DRep once per epoch — only while the crawl is at the chain tip | off |
+| `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
 
 ```jsonc
 "crawler": {
   "assetHistory": true,        // mint/burn rows — derived from the block, no provider call
   "assetCatalogue": "bare",    // "off" | "bare" (free) | "enrich" (adds registry name/ticker/decimals)
   "assetEnrichRate": 2,        // units per second, "enrich" only
-  "epochSnapshots": false      // pool/DRep snapshots — requires a Koios backend
+  "epochSnapshots": false,     // pool/DRep snapshots — requires a Koios backend
+  "certificates": false        // certificates + withdrawals — Ogmios chain-sync or Koios, not Blockfrost
 }
 ```
 
@@ -690,6 +692,99 @@ reports the pool and DRep set as it is *now* — there is no historical variant 
 crawler merely passes through while backfilling is skipped rather than filled with today's numbers
 under yesterday's epoch number. If you want snapshots for a past range, there is nothing the crawl
 can reconstruct; run the crawler live from the point you care about.
+
+`certificates` (`CRAWLER_CERTIFICATES`) writes one `TransactionCertificates` row per certificate and
+kind — `stake_registration`, `stake_deregistration`, `pool_delegation`, `vote_delegation`,
+`pool_registration`, `pool_retirement`, `drep_registration`, `drep_update`, `drep_retirement`, … —
+with `stakeAddress`, `poolId`, `drepId`, `deposit` and the retirement `epoch` where the kind carries
+them, plus one `TransactionWithdrawals` row per reward account withdrawn from. A Conway stake+vote
+delegation becomes a `pool_delegation` and a `vote_delegation` row with the same `certIndex`, so the
+Ogmios and Koios sources produce identical rows. Both are block content: Ogmios chain-sync delivers
+them decoded and Koios returns them in the same `/tx_info` call the crawl already makes, so the knob
+costs no extra request. Blockfrost has no per-block variant; on a Blockfrost-only crawl the tables
+stay empty and the crawler logs a warning once. The current pool or DRep of a stake key is the newest
+`pool_delegation` / `vote_delegation` row for it:
+
+```
+GET /odata/v4/cardano-odata/TransactionCertificates?$filter=stakeAddress eq 'stake_test1…' and kind eq 'pool_delegation'&$orderby=tx/slot desc&$top=1
+```
+
+Independent of any knob, every `TransactionInputs` row written since this version carries the
+outpoint it consumed (`spentTxHash`, `spentOutputIndex`), so a UTxO can be traced from the output
+that created it to the input that spent it. Rows indexed earlier keep `null` there until the range is
+re-crawled.
+
+### Crawler-fed UTxO set: balances without a provider
+
+`utxoSet` (`CRAWLER_UTXO_SET`, off) makes the crawl maintain a UTxO set of its own, in separate,
+non-temporal tables so the provider-fed `Addresses` / `AddressUTxOs` keep their one-hour TTL
+semantics:
+
+| Table | What lands there |
+|---|---|
+| `LedgerUTxOs` (+ `LedgerUTxOAssets`) | every output since the anchor; unspent while `spentTxHash eq null`, `spentTxHash` / `spentSlot` name the consumer |
+| `LedgerAddresses` (+ `LedgerAddressAssets`) | running `totalLovelace`, `utxoCount` and asset balances per address, as of the crawl tip |
+| `LedgerAccounts` | `controlledAmount`, `addressCount`, `utxoCount` per stake key (sum over its base addresses) |
+
+Delegation stays a query over `TransactionCertificates` (turn `certificates` on as well); rewards are
+ledger state and remain provider-fed.
+
+The set needs an **anchor**: the node can only hand out its UTxO set for a recent point, never for
+the crawl's start slot, so the mode starts from a one-off import and applies only blocks after the
+anchor. Until that import has run the knob is inert and the crawler logs an error at start.
+
+```
+# 1. crawl to the tip, then pause
+POST /odata/v4/cardano-indexer/pauseCrawler
+
+# 2a. preview / preprod — acquire the set at the crawler cursor from the box's own node
+POST /odata/v4/cardano-indexer/importUtxoSet   { "source": "ogmios" }
+
+# 2b. mainnet — dump with cardano-cli (the whole-set Ogmios query is memory-heavy there)
+cardano-cli query tip --mainnet                        # note slot + hash
+cardano-cli query utxo --mainnet --whole-utxo --out-file utxo.json
+cardano-cli query tip --mainnet                        # same hash? then the anchor is valid
+jq -c 'to_entries[]' utxo.json > utxo.ndjson           # streamable, one entry per line
+POST /odata/v4/cardano-indexer/importUtxoSet
+     { "source": "file", "filePath": "/data/utxo.ndjson", "anchorSlot": "…", "anchorHash": "…" }
+
+# 3. poll until status is "active", then resume
+GET  /odata/v4/cardano-indexer/getStatus()             # → utxoSet.status
+POST /odata/v4/cardano-indexer/resumeCrawler
+```
+
+The import refuses to start while the crawler holds its lease or when the cursor is already past
+the anchor, and it holds the cursor lease itself for its whole duration, re-taking it inside every
+write transaction, so `resumeCrawler` (on any instance) and a second import wait until it has
+finished and a takeover stops it before the next batch commits. Before the first block after the
+anchor is applied, the crawler checks that the anchor is exactly the block it followed last (the
+cursor at that moment, which also covers an anchor at the configured start block); a snapshot taken
+on a fork that was dropped again invalidates the set instead of seeding it. A reorg that reaches
+behind the anchor invalidates the set too (`utxoSet.status = invalid`); re-run the import. A reorg
+after the anchor is undone in place: rows the rolled-back blocks created are dropped, rows they
+spent are reopened, every address either side touched is recounted from its open rows, and the
+progress marker follows the cursor back. Switching `utxoSet` off while the crawler keeps running
+leaves the set behind; on the next start with the knob on, a cursor ahead of the last applied slot
+marks the set `invalid` rather than resuming from a gap. Rows that came with the snapshot carry
+`createdSlot = null`.
+
+**SQLite precision.** The development database stores every `Decimal` of this project as a
+double (`@cap-js/sqlite`), so any amount above 2^53 (about 9.0 billion ADA — only supply-level aggregates get there — or a
+token quantity above 9.007e15 units, i.e. a fraction of one 18-decimal token) is rounded there, by far less than one lovelace or one token, in the ledger tables as in `Epochs` and `NetworkInformation`. The
+dump is parsed losslessly and the values are exact on PostgreSQL and HANA, where a deployment
+runs. An exact SQLite would need `Lovelace` to be `Integer64` instead of `Decimal(20,0)`, a
+schema-wide change that is not part of this feature.
+
+```
+GET /odata/v4/cardano-odata/LedgerAddresses('addr_test1…')?$expand=assets
+GET /odata/v4/cardano-odata/LedgerUTxOs?$filter=address eq 'addr_test1…' and spentTxHash eq null&$expand=assets
+GET /odata/v4/cardano-odata/LedgerAccounts('stake_test1…')?$expand=addresses
+```
+
+Freshness is the crawl's: `confirmationDepth` blocks behind the tip. A caller who needs the mempool
+view keeps using `GetUTxOsByAddress`. All three sources report phase-2 validity (Ogmios `spends`,
+Blockfrost and Koios `valid_contract` with their collateral inputs and output), so a failed-script
+transaction consumes its collateral and produces only the collateral return on every path.
 
 A catalogue row written by the crawl carries what the unit itself encodes, not supply or registry
 metadata — those arrive the first time someone reads that asset through the API (or continuously

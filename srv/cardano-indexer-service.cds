@@ -51,6 +51,27 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         tipHeight         : String;
         syncProgress      : String;
         consecutiveErrors : Integer;
+        // crawler-fed ledger state (crawler.utxoSet): snapshot anchor + validity
+        utxoSet           : UtxoSetStatus;
+    }
+
+    @title      : 'UTxO Set Status'
+    @description: 'State of the crawler-maintained UTxO set (crawler.utxoSet)'
+    type UtxoSetStatus {
+        enabled    : Boolean;   // crawler.utxoSet configured
+        status     : String;    // none | importing | active | invalid
+        anchorSlot : String;    // null until imported
+        anchorHash : String;
+        importedAt : Timestamp;
+        error      : String;    // why invalid
+    }
+
+    @title      : 'UTxO Set Import Result'
+    type UtxoSetImportResult {
+        accepted   : Boolean;
+        anchorSlot : String;
+        anchorHash : String;
+        message    : String;
     }
 
     @title      : 'Get Crawler Status'
@@ -107,4 +128,9 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @description: 'Start/restart the crawler from the persisted cursor using the configured source.'
     @requires   : 'Admin'
     action   resumeCrawler() returns Boolean;
+
+    @title      : 'Import UTxO Set'
+    @description: 'One-off import of the UTxO set that anchors crawler.utxoSet. Pause the crawler first. source=ogmios acquires the set at the crawler cursor (crawl must be at the tip); source=file loads a cardano-cli query utxo --whole-utxo dump (.json, or .ndjson from jq -c to_entries[]) taken at anchorSlot/anchorHash. Runs in the background; progress via getStatus().utxoSet.'
+    @requires   : 'Admin'
+    action   importUtxoSet(source: String, filePath: String, anchorSlot: Integer64, anchorHash: String) returns UtxoSetImportResult;
 }

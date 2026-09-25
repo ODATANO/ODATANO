@@ -102,7 +102,7 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 
 | Service | Path | Purpose |
 |---|---|---|
-| CardanoODataService | `/odata/v4/cardano-odata/` | Read blockchain data (20 entities, 19 actions) |
+| CardanoODataService | `/odata/v4/cardano-odata/` | Read blockchain data (29 entities, 19 actions) |
 | CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (13 actions) |
 | CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
 | CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (v2.0, off by default) |

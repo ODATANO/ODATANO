@@ -34,6 +34,9 @@ import {
   SINGLETON_ID,
   MAX_CONSECUTIVE_ERRORS,
   tryAcquireCrawlerLease,
+  tryAcquireImportLease,
+  renewImportLease,
+  releaseImportLease,
   renewCrawlerLease,
   releaseCrawlerLease,
   setCrawlerDesiredRunning,
@@ -113,6 +116,25 @@ describe('sync-state: cluster lease', () => {
     ID: SINGLETON_ID, network: 'preview', desiredRunning: true,
     leaseOwner: null, leaseUntil: null, syncStatus: 'stopped',
   };
+
+  it('import lease: taken while the cluster is paused, blocks a crawler start, released by its owner only', async () => {
+    const { db, state } = stateDb({ ...base, desiredRunning: false }); // pauseCrawler ran
+    const now = new Date('2026-01-01T00:00:00.500Z');
+
+    await expect(tryAcquireImportLease(db as never, 'import:1', now, 15_000)).resolves.toBe(true);
+    await expect(tryAcquireImportLease(db as never, 'import:2', now, 15_000)).resolves.toBe(false);
+    await expect(renewImportLease(db as never, 'import:1', now, 15_000)).resolves.toBe(true);
+    await expect(renewImportLease(db as never, 'import:2', now, 15_000)).resolves.toBe(false);
+
+    state.desiredRunning = true; // an operator calls resumeCrawler meanwhile
+    await expect(tryAcquireCrawlerLease(db as never, 'crawler-a', now, 15_000)).resolves.toBe(false);
+
+    await releaseImportLease(db as never, 'import:2');
+    expect(state.leaseOwner).toBe('import:1');
+    await releaseImportLease(db as never, 'import:1');
+    expect(state.leaseOwner).toBeNull();
+    await expect(tryAcquireCrawlerLease(db as never, 'crawler-a', now, 15_000)).resolves.toBe(true);
+  });
 
   it('elects one owner and rejects a second owner while the normalized lease is live', async () => {
     const { db } = stateDb(base);

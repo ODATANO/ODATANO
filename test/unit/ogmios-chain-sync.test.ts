@@ -474,3 +474,106 @@ describe('OgmiosBackend chain-sync — mint/burn field', () => {
     expect(rolled[0].txs[0].mint).toBeUndefined();
   });
 });
+
+describe('OgmiosBackend chain-sync — certificates and withdrawals (crawler.certificates)', () => {
+  beforeEach(() => {
+    captured.handlers = undefined;
+    captured.opts = undefined;
+  });
+
+  const CRED = '9084d6174b028be3b346f5eb11e0a8bf889a7e464447f7973605c886';
+  const DREP_HASH = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
+  const POOL = 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r';
+
+  async function roll(certificates?: unknown[], withdrawals?: Record<string, unknown>) {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    if (certificates) tx.certificates = certificates;
+    if (withdrawals) tx.withdrawals = withdrawals;
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+    return rolled[0].txs[0];
+  }
+
+  it('reports [] (known empty), never undefined, for a transaction without them', async () => {
+    const tx = await roll();
+    expect(tx.certificates).toEqual([]);
+    expect(tx.withdrawals).toEqual([]);
+  });
+
+  it('re-encodes stake credentials as bech32 (preview → stake_test1…) and keeps the deposit', async () => {
+    const tx = await roll([
+      { type: 'stakeCredentialRegistration', credential: CRED, from: 'verificationKey', deposit: { ada: { lovelace: 2_000_000n } } },
+      { type: 'stakeCredentialDeregistration', credential: CRED, from: 'verificationKey' },
+    ]);
+    expect(tx.certificates).toEqual([
+      { certIndex: 0, kind: 'stake_registration', stakeAddress: expect.stringMatching(/^stake_test1/), deposit: '2000000' },
+      { certIndex: 1, kind: 'stake_deregistration', stakeAddress: expect.stringMatching(/^stake_test1/), deposit: null },
+    ]);
+    // same credential → same reward account on both rows
+    expect(tx.certificates![0].stakeAddress).toBe(tx.certificates![1].stakeAddress);
+  });
+
+  it('splits a Conway stake+vote delegation into pool_delegation + vote_delegation with ONE certIndex', async () => {
+    const tx = await roll([
+      {
+        type: 'stakeDelegation', credential: CRED, from: 'verificationKey',
+        stakePool: { id: POOL },
+        delegateRepresentative: { type: 'registered', id: DREP_HASH, from: 'verificationKey' },
+      },
+    ]);
+    expect(tx.certificates).toEqual([
+      { certIndex: 0, kind: 'pool_delegation', stakeAddress: expect.stringMatching(/^stake_test1/), poolId: POOL },
+      { certIndex: 0, kind: 'vote_delegation', stakeAddress: expect.stringMatching(/^stake_test1/), drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0' },
+    ]);
+  });
+
+  it('names the predefined DReps the way Koios does', async () => {
+    const tx = await roll([
+      { type: 'stakeDelegation', credential: CRED, from: 'verificationKey', delegateRepresentative: { type: 'abstain' } },
+      { type: 'stakeDelegation', credential: CRED, from: 'script', delegateRepresentative: { type: 'noConfidence' } },
+    ]);
+    expect(tx.certificates!.map(c => c.drepId)).toEqual(['drep_always_abstain', 'drep_always_no_confidence']);
+    // a script credential encodes to a different reward account than the key one
+    expect(tx.certificates![0].stakeAddress).not.toBe(tx.certificates![1].stakeAddress);
+  });
+
+  it('maps pool and DRep lifecycle certificates, incl. the retirement epoch', async () => {
+    const tx = await roll([
+      { type: 'stakePoolRegistration', stakePool: { id: POOL, vrfVerificationKeyHash: 'x' } },
+      { type: 'stakePoolRetirement', stakePool: { id: POOL, retirementEpoch: 321 } },
+      { type: 'delegateRepresentativeRegistration', delegateRepresentative: { type: 'registered', id: DREP_HASH, from: 'script' }, deposit: { ada: { lovelace: 500_000_000n } } },
+      { type: 'delegateRepresentativeUpdate', delegateRepresentative: { type: 'registered', id: DREP_HASH, from: 'verificationKey' } },
+      { type: 'delegateRepresentativeRetirement', delegateRepresentative: { type: 'registered', id: DREP_HASH, from: 'verificationKey' }, deposit: { ada: { lovelace: 500_000_000n } } },
+    ]);
+    expect(tx.certificates).toEqual([
+      { certIndex: 0, kind: 'pool_registration', poolId: POOL },
+      { certIndex: 1, kind: 'pool_retirement', poolId: POOL, epoch: 321 },
+      { certIndex: 2, kind: 'drep_registration', drepId: expect.stringMatching(/^drep1/), deposit: '500000000' },
+      { certIndex: 3, kind: 'drep_update', drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0' },
+      { certIndex: 4, kind: 'drep_retirement', drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0', deposit: '500000000' },
+    ]);
+    // script DRep (0x23 header) ≠ key DRep (0x22) for the same hash
+    expect(tx.certificates![2].drepId).not.toBe(tx.certificates![3].drepId);
+  });
+
+  it('passes an unknown certificate type through as the raw kind instead of dropping it', async () => {
+    const tx = await roll([
+      { type: 'constitutionalCommitteeDelegation', member: {}, delegate: {} },
+      { type: 'somethingNewFromTheNextEra', foo: 1 },
+    ]);
+    expect(tx.certificates).toEqual([
+      { certIndex: 0, kind: 'committee_hot_auth' },
+      { certIndex: 1, kind: 'somethingNewFromTheNextEra' },
+    ]);
+  });
+
+  it('maps the withdrawals record (reward account → lovelace)', async () => {
+    const tx = await roll(undefined, {
+      stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn: { ada: { lovelace: 123_456n } },
+    });
+    expect(tx.withdrawals).toEqual([
+      { stakeAddress: 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn', amount: '123456' },
+    ]);
+  });
+});

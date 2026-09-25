@@ -286,11 +286,29 @@ export function isChainSyncBackend(backend: CardanoBackend): backend is ChainSyn
 }
 
 /**
+ * A backend that can hand out the whole UTxO set as of a recent chain point (a node via
+ * Ogmios `queryLedgerState/utxo` after `acquireLedgerState`). Used once, by the
+ * crawler.utxoSet snapshot import; the point must lie inside the node's volatile window.
+ */
+export interface LedgerStateBackend extends CardanoBackend {
+  queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]>;
+}
+
+export function isLedgerStateBackend(backend: CardanoBackend): backend is LedgerStateBackend {
+  return typeof (backend as LedgerStateBackend).queryUtxoSetAt === 'function';
+}
+
+/**
  * Backend that can walk the chain forward by pagination (no live node). The
  * crawler's fallback source when no Ogmios chain-sync is available. Reorgs are
  * detected by the crawler via parent-hash mismatch (not delivered natively).
  */
 export interface PaginatingBackend extends CardanoBackend {
+  /**
+   * Optional: what the crawl wants per block beyond inputs/outputs (crawler.certificates).
+   * A backend that pays per payload (Koios `_certs`/`_withdrawals`) only asks when told to.
+   */
+  configureCrawl?(options: { certificates: boolean }): void;
   /** Fetch a block by its height. */
   getBlockByHeight(height: number): Promise<BlockData>;
   /**

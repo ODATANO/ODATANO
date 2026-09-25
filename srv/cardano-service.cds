@@ -108,6 +108,41 @@ service CardanoODataService @(impl: './cardano-service') {
     entity TransactionOutputAssets  as projection on db.TransactionOutputAssets;
 
     @readonly
+    @title      : 'Transaction Certificates'
+    @description: 'Projection for Transaction Certificates (crawler-fed, crawler.certificates)'
+    entity TransactionCertificates  as projection on db.TransactionCertificates;
+
+    @readonly
+    @title      : 'Transaction Withdrawals'
+    @description: 'Projection for Transaction Withdrawals (crawler-fed, crawler.certificates)'
+    entity TransactionWithdrawals   as projection on db.TransactionWithdrawals;
+
+    @readonly
+    @title      : 'Ledger UTxOs'
+    @description: 'Crawler-maintained UTxO set (crawler.utxoSet); unspent while spentTxHash is null'
+    entity LedgerUTxOs              as projection on db.LedgerUTxOs;
+
+    @readonly
+    @title      : 'Ledger UTxO Assets'
+    @description: 'Native assets of a LedgerUTxOs row'
+    entity LedgerUTxOAssets         as projection on db.LedgerUTxOAssets;
+
+    @readonly
+    @title      : 'Ledger Addresses'
+    @description: 'Per-address balances from the crawler-maintained UTxO set (crawler.utxoSet)'
+    entity LedgerAddresses          as projection on db.LedgerAddresses;
+
+    @readonly
+    @title      : 'Ledger Address Assets'
+    @description: 'Native-asset balances per address (crawler.utxoSet)'
+    entity LedgerAddressAssets      as projection on db.LedgerAddressAssets;
+
+    @readonly
+    @title      : 'Ledger Accounts'
+    @description: 'Per-stake-key balances from the crawler-maintained UTxO set (crawler.utxoSet)'
+    entity LedgerAccounts           as projection on db.LedgerAccounts;
+
+    @readonly
     @title      : 'Accounts'
     @description: 'Projection for Accounts'
     entity Accounts                 as projection on db.Accounts;

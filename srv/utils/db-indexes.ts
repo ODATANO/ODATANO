@@ -68,6 +68,18 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_dreps_drepid', table: 'odatano_cardano_Dreps', columns: 'drepId' },
   // agent token lane: one lookup by token hash per request
   { name: 'odatano_cardano_cardanoagentgrants_token', table: 'odatano_cardano_CardanoAgentGrants', columns: 'tokenHash' },
+  // crawler-fed ledger state: "who spent this output" and delegation per stake key / pool / DRep
+  { name: 'odatano_cardano_transactioninputs_spent', table: 'odatano_cardano_TransactionInputs', columns: 'spentTxHash, spentOutputIndex' },
+  { name: 'odatano_cardano_transactioncertificates_stake', table: 'odatano_cardano_TransactionCertificates', columns: 'stakeAddress' },
+  { name: 'odatano_cardano_transactioncertificates_pool', table: 'odatano_cardano_TransactionCertificates', columns: 'poolId' },
+  { name: 'odatano_cardano_transactioncertificates_drep', table: 'odatano_cardano_TransactionCertificates', columns: 'drepId' },
+  { name: 'odatano_cardano_transactionwithdrawals_stake', table: 'odatano_cardano_TransactionWithdrawals', columns: 'stakeAddress' },
+  // crawler-fed UTxO set: open rows per address, "who spent", stake-key rollups, asset holders
+  { name: 'odatano_cardano_ledgerutxos_address', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, spentTxHash' },
+  { name: 'odatano_cardano_ledgerutxos_spent', table: 'odatano_cardano_LedgerUTxOs', columns: 'spentTxHash' },
+  { name: 'odatano_cardano_ledgeraddresses_stake', table: 'odatano_cardano_LedgerAddresses', columns: 'stakeAddress' },
+  { name: 'odatano_cardano_ledgerutxoassets_unit', table: 'odatano_cardano_LedgerUTxOAssets', columns: 'unit' },
+  { name: 'odatano_cardano_ledgeraddressassets_unit', table: 'odatano_cardano_LedgerAddressAssets', columns: 'unit' },
 ]);
 
 /** The statement for one entry; exported so tests pin the shape. */

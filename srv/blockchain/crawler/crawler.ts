@@ -7,6 +7,7 @@ import { ChainSyncFrameError, ProviderUnavailableError } from '../../utils/error
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { emitBlockIndexed, emitReorg } from './hooks';
+import { undoLedgerForTransactions } from '../ledger-state';
 import {
   Blocks,
   Transactions,
@@ -23,10 +24,13 @@ import {
   TransactionMetadata_ as TransactionMetadata,
   CardanoReorgLog,
   PoolEpochSnapshots,
+  TransactionCertificates,
+  TransactionWithdrawals,
 } from '#cds-models/odatano/cardano';
 import {
   ensureSyncStateSingleton,
   readCursor,
+  setUtxoSetState,
   advanceCursor,
   resetCursorTo,
   setSyncStatus,
@@ -73,7 +77,7 @@ export interface CrawlerConfig {
   /** Poll cadence when caught up / on transient errors (pagination path). */
   pollIntervalMs: number;
   /**
-   * Analytics coverage of the crawl (FR "crawler coverage for analytics"). All three are
+   * Analytics coverage of the crawl. All three are
    * by-products of blocks the crawler already holds, except `assetCatalogue: 'enrich'` and
    * `epochSnapshots`, which do talk to a provider.
    */
@@ -88,6 +92,16 @@ export interface CrawlerConfig {
   assetEnrichRate: number;
   /** Snapshot every pool and DRep at each epoch boundary. Requires an enumerating backend (Koios). */
   epochSnapshots: boolean;
+  /**
+   * Write TransactionCertificates + TransactionWithdrawals per block (ledger-state
+   * coverage). Free on Ogmios chain-sync and Koios; Blockfrost does not report them.
+   */
+  certificates: boolean;
+  /**
+   * Maintain the crawler-fed UTxO set (`LedgerUTxOs` / `LedgerAddresses` / `LedgerAccounts`).
+   * Needs a one-off snapshot import (`importUtxoSet`) to become active.
+   */
+  utxoSet: boolean;
 }
 
 /**
@@ -263,7 +277,35 @@ export class CardanoCrawler {
       assetHistory: this.config.assetHistory,
       assetCatalogue: this.config.assetCatalogue,
       assetEnrichRate: this.config.assetEnrichRate,
+      certificates: this.config.certificates,
+      utxoSet: this.config.utxoSet,
     });
+    // Ledger state is only ever applied from a known anchor — no snapshot, no writes.
+    if (this.config.utxoSet) {
+      const u = cursor.utxoSet;
+      // Blocks crawled while the mode was off (or after an invalidation that was then
+      // flipped back on) never reached the ledger tables: the cursor is ahead of the last
+      // applied slot. The set is stale and cannot be caught up — invalidate it explicitly.
+      const lastApplied = u.appliedSlot ?? u.anchorSlot;
+      if (u.status === 'active' && lastApplied != null && cursor.lastSlot > lastApplied) {
+        const error = `cursor at slot ${cursor.lastSlot} is past the last ledger-applied slot ${lastApplied} — blocks were crawled without the set; re-import`;
+        await cds.tx((tx) => setUtxoSetState(tx, { status: 'invalid', error }));
+        u.status = 'invalid';
+        u.error = error;
+      }
+      if (u.status === 'active' && u.anchorSlot != null && u.anchorHash) {
+        this.indexer.setUtxoAnchor({ slot: u.anchorSlot, hash: u.anchorHash });
+        logger.info(`UTxO set active from anchor ${u.anchorSlot}/${u.anchorHash} — ledger tables are maintained`);
+      } else {
+        this.indexer.setUtxoAnchor(null);
+        logger.error(
+          `crawler.utxoSet is enabled but the UTxO set is "${u.status}"${u.error ? ` (${u.error})` : ''} — ` +
+          'ledger tables are not maintained until importUtxoSet has run (pause the crawler first)'
+        );
+      }
+    } else {
+      this.indexer.setUtxoAnchor(null);
+    }
     this.startLeaseHeartbeat();
 
     // A pipeline crash (e.g. chain-sync intersection not found after downtime) must
@@ -656,6 +698,7 @@ export class CardanoCrawler {
       await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
+    backend.configureCrawl?.({ certificates: this.config.certificates });
     this.activeSource = 'pagination';
     logger.info('Crawler running (pagination)');
 
@@ -829,14 +872,25 @@ export class CardanoCrawler {
             if (!renewed) throw new CrawlerLeaseLostError();
           }
           await this.indexer.indexBlockFull(tx, block, txs);
+          // Ledger progress marker: written in the same statement as the cursor, so "the
+          // cursor is ahead of the marker" always means blocks went by without the set.
+          const anchor = this.indexer.getUtxoAnchor();
+          const ledgerApplied = anchor != null && (block.slot ?? 0) > anchor.slot;
           await advanceCursor(
             tx,
             { slot: block.slot ?? 0, hash: block.hash, height: block.height ?? 0 },
             tip ? { slot: tip.slot, height: tip.height } : undefined,
             isAtTip ? 'synced' : 'syncing',
+            ledgerApplied ? { utxoAppliedSlot: block.slot ?? 0 } : undefined,
           );
         });
         if (CardanoCrawler.poison?.hash === block.hash) CardanoCrawler.poison = null;
+        // A ledger invalidation decided inside the block transaction takes effect in memory
+        // only now, after the commit that carries it — a rolled-back attempt changes nothing.
+        const invalidation = this.indexer.takeLedgerInvalidation();
+        if (invalidation) {
+          logger.error(`UTxO set invalidated: ${invalidation} — ledger tables stop updating until importUtxoSet runs again`);
+        }
         // Notify observers (wallet-worker confirmation tracker) AFTER the commit —
         // listener failures are swallowed inside emitBlockIndexed.
         emitBlockIndexed({
@@ -984,6 +1038,8 @@ export class CardanoCrawler {
     let blocksRolledBack = 0;
     let txsRolledBack = 0;
     let emittedForkHeight: number | null = null;
+    const rolledBackTxHashes: string[] = [];
+    let ledgerInvalidated = false;
 
     try {
       await cds.tx(async (tx) => {
@@ -1015,6 +1071,7 @@ export class CardanoCrawler {
         ) as Array<{ hash: string }>;
         const txHashes = staleTxs.map((t) => t.hash);
         txsRolledBack += txHashes.length;
+        rolledBackTxHashes.push(...txHashes);
 
         for (const txChunk of chunk(txHashes, IN_CHUNK)) {
           // These denormalized/lazy indexes have no generated FK cascades. Remove
@@ -1028,11 +1085,32 @@ export class CardanoCrawler {
           await tx.run(DELETE.from(TransactionInputs).where({ tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(TransactionOutputs).where({ tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(TransactionMetadata).where({ tx_hash: { in: txChunk } }));
+          await tx.run(DELETE.from(TransactionCertificates).where({ tx_hash: { in: txChunk } }));
+          await tx.run(DELETE.from(TransactionWithdrawals).where({ tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(Transactions).where({ hash: { in: txChunk } }));
         }
         await tx.run(DELETE.from(Blocks).where({ hash: { in: blockChunk } }));
       }
 
+      // Crawler-fed ledger state, driven by the PERSISTED state so a process with the mode
+      // off still keeps the set consistent: a fork after the anchor is undone (drop created,
+      // reopen spent, recount touched addresses) and the progress marker follows the cursor
+      // back; a fork before the anchor invalidates the whole set.
+      const persisted = (await readCursor(tx))?.utxoSet;
+      if (persisted?.status === 'active' && persisted.anchorSlot != null) {
+        if (forkSlot < persisted.anchorSlot) {
+          await setUtxoSetState(tx, {
+            status: 'invalid',
+            error: `reorg to slot ${forkSlot} before the UTxO set anchor ${persisted.anchorSlot} — re-import the set`,
+          });
+          ledgerInvalidated = true;
+        } else {
+          await undoLedgerForTransactions(tx, rolledBackTxHashes);
+          if (persisted.appliedSlot != null && persisted.appliedSlot > forkSlot) {
+            await setUtxoSetState(tx, { appliedSlot: forkSlot });
+          }
+        }
+      }
       await resetCursorTo(tx, point === 'origin'
         ? { slot: forkSlot, hash: this.config.startBlockHash ?? '', height: 0 }
         : { slot: point.slot, hash: point.hash, height: forkHeight ?? 0 });
@@ -1056,6 +1134,10 @@ export class CardanoCrawler {
       throw err;
     }
 
+    if (ledgerInvalidated) {
+      this.indexer.setUtxoAnchor(null);
+      logger.error(`UTxO set invalidated: reorg to slot ${forkSlot} reaches behind the anchor — ledger tables stop updating until importUtxoSet runs again`);
+    }
     // Notify observers (wallet-worker confirmation tracker + CAP subscribers) AFTER
     // the rollback commit.
     emitReorg({ forkSlot, forkHeight: emittedForkHeight, blocksRolledBack });

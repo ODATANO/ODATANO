@@ -50,6 +50,11 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
   PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
+  TransactionCertificates: 'odatano.cardano.TransactionCertificates',
+  TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
+  LedgerUTxOs: 'odatano.cardano.LedgerUTxOs', LedgerUTxOAssets: 'odatano.cardano.LedgerUTxOAssets',
+  LedgerAddresses: 'odatano.cardano.LedgerAddresses', LedgerAddressAssets: 'odatano.cardano.LedgerAddressAssets',
+  LedgerAccounts: 'odatano.cardano.LedgerAccounts',
 }));
 
 import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler/crawler';
@@ -57,7 +62,7 @@ import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 0, startBlockHash: 'genesis', source: 'auto',
   batchSize: 20, confirmationDepth: 3, pollIntervalMs: 20000,
-  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: false,
+  assetHistory: true, assetCatalogue: 'bare', assetEnrichRate: 2, epochSnapshots: false, certificates: false, utxoSet: false,
 };
 
 // Only the methods the engine paths touch: teardown stops the asset-enrichment loop,
@@ -65,6 +70,7 @@ const CONFIG: CrawlerConfig = {
 const stubIndexer = () => ({
   indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(),
   configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), snapshotEpoch: vi.fn(),
+  setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null),
 });
 
 const makeCrawler = (config: CrawlerConfig = CONFIG, client: unknown = {}) =>
@@ -102,6 +108,7 @@ describe('CardanoCrawler.handleReorg', () => {
       'TransactionInputAssets', 'TransactionOutputAssets',
       'TransactionInputs', 'TransactionOutputs', 'TransactionMetadata',
       'AddressTransactions', 'AddressUTxOs', 'UTxOAssets', 'AssetHistory',
+      'TransactionCertificates', 'TransactionWithdrawals',
       'Transactions', 'Blocks',
     ]));
 

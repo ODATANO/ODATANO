@@ -539,10 +539,19 @@ export function loadCrawlerConfigFromEnv(): CrawlerConfig {
   const epochSnapshots = crawlerBoolean(
     c.epochSnapshots ?? env.CRAWLER_EPOCH_SNAPSHOTS, 'CRAWLER_EPOCH_SNAPSHOTS', false,
   );
+  // Certificates + withdrawals: block content on Ogmios chain-sync and Koios, no extra request;
+  // opt-in like the other coverage knobs so an existing deployment's write volume does not change.
+  const certificates = crawlerBoolean(
+    c.certificates ?? env.CRAWLER_CERTIFICATES, 'CRAWLER_CERTIFICATES', false,
+  );
+  // UTxO set: opt-in, and inert until a snapshot has been imported (importUtxoSet).
+  const utxoSet = crawlerBoolean(
+    c.utxoSet ?? env.CRAWLER_UTXO_SET, 'CRAWLER_UTXO_SET', false,
+  );
 
   return {
     enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs,
-    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots,
+    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots, certificates, utxoSet,
   };
 }
 

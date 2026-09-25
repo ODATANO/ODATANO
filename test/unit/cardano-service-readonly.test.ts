@@ -19,7 +19,7 @@ describe('CardanoODataService — @readonly entities', () => {
     );
 
     // 20 + PoolEpochSnapshots + DrepEpochSnapshots (v2.0.0-rc.12 analytics coverage)
-    expect(entities.length).toBe(22);
+    expect(entities.length).toBe(29);
     for (const [name, def] of entities) {
       // include the name in the assertion so a failure pinpoints the entity
       expect({ name, readonly: def['@readonly'] }).toEqual({ name, readonly: true });
