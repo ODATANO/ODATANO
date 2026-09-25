@@ -74,7 +74,8 @@ interface KoiosTxInfo {
   /** False when the script phase failed (collateral consumed, regular ins/outs not applied). Absent on older Koios. */
   valid_contract?: boolean | null;
   collateral_inputs?: KoiosTxIO[] | null;
-  collateral_output?: KoiosTxIO[] | null;
+  /** Live Koios returns ONE object here (the spec says array); both shapes are accepted. */
+  collateral_output?: KoiosTxIO | KoiosTxIO[] | null;
   reference_inputs?: KoiosTxIO[] | null;
   /**
    * Net mint/burn of the transaction (`_assets: true`), quantity signed — negative is a burn.
@@ -1435,14 +1436,14 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       // indexer keeps treating such a source as "no phase-2 information".
       spendsCollaterals: typeof tx.valid_contract === 'boolean' ? tx.valid_contract === false : undefined,
       inputs: [
-        ...(tx.inputs ?? []).map((input) => mapKoiosInput(input)),
-        ...(tx.collateral_inputs ?? []).map((input) => mapKoiosInput(input, { isCollateral: true })),
-        ...(tx.reference_inputs ?? []).map((input) => mapKoiosInput(input, { isReference: true })),
+        ...asKoiosList(tx.inputs).map((input) => mapKoiosInput(input)),
+        ...asKoiosList(tx.collateral_inputs).map((input) => mapKoiosInput(input, { isCollateral: true })),
+        ...asKoiosList(tx.reference_inputs).map((input) => mapKoiosInput(input, { isReference: true })),
       ],
       outputs: [
-        ...(tx.outputs ?? []).map((output) => mapKoiosOutput(tx.tx_hash, output, false)),
+        ...asKoiosList(tx.outputs).map((output) => mapKoiosOutput(tx.tx_hash, output, false)),
         // CIP-40 collateral return: produced only when the script phase failed
-        ...(tx.collateral_output ?? []).map((output) => mapKoiosOutput(tx.tx_hash, output, true)),
+        ...asKoiosList(tx.collateral_output).map((output) => mapKoiosOutput(tx.tx_hash, output, true)),
       ],
       metadata: labels,
       // undefined (not []) when the call did not ask for them (`_certs: false` on the lazy
@@ -1457,9 +1458,21 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 }
 
+/**
+ * Koios is loose about shapes: `collateral_output` arrives as one object (the spec says
+ * array) and `asset_list` on it as the JSON STRING "[]". Normalize both before mapping.
+ */
+function asKoiosList<T>(v: T | T[] | string | null | undefined): T[] {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    try { const parsed: unknown = JSON.parse(v); return Array.isArray(parsed) ? parsed as T[] : []; } catch { return []; }
+  }
+  return v && typeof v === 'object' ? [v] : [];
+}
+
 function koiosAmount(io: KoiosTxIO): Amount[] {
   const amount: Amount[] = [{ unit: 'lovelace', quantity: io.value }];
-  for (const asset of Array.isArray(io.asset_list) ? io.asset_list : []) {
+  for (const asset of asKoiosList(io.asset_list as KoiosTxIO['asset_list'] | string)) {
     amount.push({ unit: `${asset.policy_id}${asset.asset_name}`, quantity: asset.quantity });
   }
   return amount;

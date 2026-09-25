@@ -609,7 +609,9 @@ describe('KoiosBackend', () => {
           tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1,
           valid_contract: false,
           inputs: [io(0, '5000000')], collateral_inputs: [io(1, '7000000')], reference_inputs: [io(2, '1')],
-          outputs: [{ ...io(0, '4000000'), tx_hash: undefined }], collateral_output: [{ ...io(1, '6000000'), tx_hash: undefined }],
+          outputs: [{ ...io(0, '4000000'), tx_hash: undefined }],
+          // live Koios: ONE object, asset_list as the JSON string "[]" (the spec says array)
+          collateral_output: { ...io(1, '6000000'), tx_hash: undefined, asset_list: '[{"policy_id":"' + 'p'.repeat(56) + '","asset_name":"746f6b656e","quantity":"3"}]' },
           metadata: null,
         }]);
 
@@ -618,6 +620,26 @@ describe('KoiosBackend', () => {
       expect(tx.spendsCollaterals).toBe(true);
       expect(tx.inputs.map(i => [i.outputIndex, Boolean(i.isCollateral), Boolean(i.isReference)])).toEqual([[0, false, false], [1, true, false], [2, false, true]]);
       expect(tx.outputs.map(o => [o.outputIndex, o.isCollateral, o.txHash])).toEqual([[0, false, txHash], [1, true, txHash]]);
+      expect(tx.outputs[1].amount).toEqual([{ unit: 'lovelace', quantity: '6000000' }, { unit: `${'p'.repeat(56)}746f6b656e`, quantity: '3' }]);
+    });
+
+    it('tolerates null collateral/reference fields and a collateral_output array (spec shape)', async () => {
+      const txHash = 'a'.repeat(64);
+      const io = (i: number, value: string) => ({ payment_addr: { bech32: TEST_ADDR }, tx_hash: 'd'.repeat(64), tx_index: i, value, asset_list: '[]' });
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info')
+        .reply(200, [{
+          tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1,
+          valid_contract: true, inputs: [io(0, '1')], outputs: [io(0, '1')],
+          collateral_inputs: null, collateral_output: [], reference_inputs: null, metadata: null,
+        }]);
+
+      const tx = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+
+      expect(tx.spendsCollaterals).toBe(false);
+      expect(tx.inputs).toHaveLength(1);
+      expect(tx.outputs).toHaveLength(1);
+      expect(tx.outputs[0].amount).toEqual([{ unit: 'lovelace', quantity: '1' }]);
     });
 
     it('asks /tx_info for certificates + withdrawals on the batch (crawler) path and maps them', async () => {
