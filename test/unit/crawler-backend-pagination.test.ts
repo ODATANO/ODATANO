@@ -116,7 +116,7 @@ const KOIOS_BASE = 'https://api.koios.rest';
 
 const koiosBlockInfo = (over: Partial<Record<string, unknown>> = {}) => ({
   block_time: 1700000000, block_height: 100, hash: 'k'.repeat(64), abs_slot: 5000,
-  epoch_no: 3, epoch_slot: 200, vrf_key: 'vrf', block_size: 1234, tx_count: 1,
+  epoch_no: 3, epoch_slot: 200, vrf_key: 'vrf_vk1x', pool: 'pool1leader', block_size: 1234, tx_count: 1,
   total_fees: '170000', ...over,
 });
 
@@ -142,7 +142,7 @@ describe('KoiosBackend pagination (forward iteration)', () => {
 
     expect(block).toMatchObject({
       hash: 'k'.repeat(64), height: 100, slot: 5000, epoch: 3, epochSlot: 200,
-      slotLeader: 'vrf', size: 1234, txCount: 1, fees: '170000',
+      slotLeader: 'pool1leader', size: 1234, txCount: 1, fees: '170000',
     });
   });
 

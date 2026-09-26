@@ -116,6 +116,8 @@ describe('CardanoTransactionBuilder', () => {
       ),
       hasOgmiosBackend: vi.fn().mockReturnValue(false),
       evaluateTransaction: vi.fn(),
+      // no ledger-state backend: output refs resolve via getTransaction
+      getUnspentOutputs: vi.fn().mockResolvedValue(null),
       getTransaction: vi.fn().mockResolvedValue({
         hash: 'a'.repeat(64),
         outputs: [
@@ -461,6 +463,97 @@ describe('CardanoTransactionBuilder', () => {
 
       await expect(builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters))
         .rejects.toThrow(`scriptUtxo ${'a'.repeat(64)}#0 is already spent`);
+    });
+  });
+
+  // ============================================================================
+  // Output references resolved from the node's ledger
+  // ============================================================================
+  describe('output references via the node ledger', () => {
+    const scriptTxHash = 'e'.repeat(64);
+    const ledgerUtxo = (txHash: string, outputIndex: number) => ({
+      txHash, outputIndex, address: 'addr_test1script',
+      amount: [{ unit: 'lovelace', quantity: '3000000' }],
+      datumHash: 'd'.repeat(64), inlineDatum: null, scriptRef: 'c'.repeat(56),
+    });
+    const spendRequest = (extra: Partial<TxBuildRequest> = {}): TxBuildRequest => ({
+      ...mockTxRequest,
+      plutusScriptExecution: {
+        validatorScript: 'abcdef',
+        redeemer: { int: 0 },
+        scriptUtxo: { txHash: scriptTxHash, outputIndex: 1 },
+      },
+      ...extra,
+    });
+    function captureSpendCtx(): () => TxBuildContext | undefined {
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedPlutusSpendTransaction as any) = vi.fn().mockImplementation(
+        async (_req: TxBuildRequest, ctx: TxBuildContext) => {
+          captured = ctx;
+          return { unsignedTxCbor: 'mock', txBodyHash: 'mock', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+        }
+      );
+      return () => captured;
+    }
+
+    it('takes the script UTxO from the ledger without fetching its transaction', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockResolvedValue([ledgerUtxo(scriptTxHash, 1)]);
+      const getCtx = captureSpendCtx();
+
+      await builder.buildPlutusSpendTransaction(spendRequest(), mockProtocolParameters);
+
+      expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([{ txHash: scriptTxHash, outputIndex: 1 }]);
+      expect(mockCardanoClient.getTransaction).not.toHaveBeenCalled();
+      expect(getCtx()!.utxos.find(u => u.txHash === scriptTxHash)).toEqual(ledgerUtxo(scriptTxHash, 1));
+    });
+
+    it('rejects a script UTxO the ledger does not hold (spent or unknown) with a 400', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockResolvedValue([]);
+
+      await expect(builder.buildPlutusSpendTransaction(spendRequest(), mockProtocolParameters))
+        .rejects.toThrow(`scriptUtxo ${scriptTxHash}#1 not found on-chain or already spent`);
+      expect(mockCardanoClient.getTransaction).not.toHaveBeenCalled();
+    });
+
+    it('resolves unknown force and reference inputs in one ledger lookup each, skipping known UTxOs', async () => {
+      const forced = { txHash: '1'.repeat(64), outputIndex: 0 };
+      const refIn = { txHash: '2'.repeat(64), outputIndex: 3 };
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockImplementation(async (refs: Array<{ txHash: string; outputIndex: number }>) =>
+        refs.map(r => ledgerUtxo(r.txHash, r.outputIndex)));
+      const getCtx = captureSpendCtx();
+
+      await builder.buildPlutusSpendTransaction(spendRequest({
+        forceInputs: [forced, { txHash: 'abc123', outputIndex: 0 }], // second one is a sender UTxO
+        referenceInputs: [refIn],
+      }), mockProtocolParameters);
+
+      expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([forced]);
+      expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refIn]);
+      expect(mockCardanoClient.getTransaction).not.toHaveBeenCalled();
+      const ctx = getCtx()!;
+      expect(ctx.utxos.map(u => `${u.txHash}#${u.outputIndex}`)).toContain(`${forced.txHash}#0`);
+      expect(ctx.referenceInputUtxos).toEqual([ledgerUtxo(refIn.txHash, 3)]);
+    });
+
+    it('rejects a spent reference input found missing in the ledger', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockImplementation(async (refs: Array<{ txHash: string; outputIndex: number }>) =>
+        refs[0].txHash === scriptTxHash ? [ledgerUtxo(scriptTxHash, 1)] : []);
+
+      await expect(builder.buildPlutusSpendTransaction(
+        spendRequest({ referenceInputs: [{ txHash: '2'.repeat(64), outputIndex: 3 }] }), mockProtocolParameters))
+        .rejects.toThrow(`referenceInput ${'2'.repeat(64)}#3 not found on-chain or already spent`);
+    });
+
+    it('falls back to the producing transaction when the ledger lookup fails', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockRejectedValue(new Error('socket closed'));
+      const plutusRequest = spendRequest({
+        plutusScriptExecution: { validatorScript: 'abcdef', redeemer: { int: 0 }, scriptUtxo: { txHash: 'a'.repeat(64), outputIndex: 0 } },
+      });
+
+      const result = await builder.buildPlutusSpendTransaction(plutusRequest, mockProtocolParameters);
+
+      expect(result.unsignedTxCbor).toBe('mock-plutus-spend-tx-cbor');
+      expect(mockCardanoClient.getTransaction).toHaveBeenCalledWith('a'.repeat(64));
     });
   });
 

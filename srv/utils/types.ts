@@ -160,6 +160,8 @@ export interface BlockData {
   size: number;
   txCount: number;
   fees?: string | null;
+  /** Header fields only (ledger tip): size, txCount, fees and slotLeader are placeholders, not block data. */
+  headerOnly?: boolean;
 }
 
 /** Network supply */

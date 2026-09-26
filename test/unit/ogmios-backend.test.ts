@@ -18,7 +18,8 @@ vi.mock('@cardano-ogmios/client', () => ({
 }));
 
 import { Method } from '@cardano-ogmios/client';
-import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId } from '../../srv/blockchain/backends/ogmios-backend';
+import { blake2b_224 } from '@harmoniclabs/crypto';
+import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId } from '../../srv/blockchain/backends/ogmios-backend';
 import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
@@ -194,11 +195,10 @@ describe('OgmiosBackend', () => {
     it('should return account data for valid stake address', async () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue([{
-          controlledAmount: 50000000000,
           rewards: 1500000,
-          withdrawals: 500000,
-          delegation: { poolId: 'pool1abc123' },
-          drep: { id: 'drep1xyz456' }
+          deposit: 2000000,
+          stakePool: { id: 'pool1abc123' },
+          delegateRepresentative: { type: 'registered', id: 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b', from: 'verificationKey' }
         }])
       };
 
@@ -216,14 +216,14 @@ describe('OgmiosBackend', () => {
         stakeaddress: 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr',
         active: true,
         activeEpoch: 0,
-        controlledAmount: '50000000000',
+        controlledAmount: '0',
         rewardsSum: '1500000',
-        withdrawalsSum: '500000',
+        withdrawalsSum: '0',
         reservesSum: '0',
         treasurySum: '0',
         withdrawableAmount: '1500000',
         poolId: 'pool1abc123',
-        drepId: 'drep1xyz456',
+        drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',
         addresses: []
       });
     });
@@ -253,9 +253,8 @@ describe('OgmiosBackend', () => {
     it('should handle account with no delegation or drep', async () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue([{
-          controlledAmount: 2000000,
           rewards: 0,
-          withdrawals: 0
+          deposit: 2000000
         }])
       };
 
@@ -266,18 +265,28 @@ describe('OgmiosBackend', () => {
 
       expect(result.poolId).toBe(null);
       expect(result.drepId).toBe(null);
-      expect(result.controlledAmount).toBe('2000000');
       expect(result.rewardsSum).toBe('0');
+    });
+
+    it('maps the predefined DReps (abstain / no confidence)', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {
+        rewardAccountSummaries: vi.fn()
+          .mockResolvedValueOnce([{ rewards: 0, delegateRepresentative: { type: 'abstain' } }])
+          .mockResolvedValueOnce([{ rewards: 0, delegateRepresentative: { type: 'noConfidence' } }]),
+      };
+
+      expect((await backend.getAccount('stake1u8a')).drepId).toBe('drep_always_abstain');
+      expect((await backend.getAccount('stake1u8a')).drepId).toBe('drep_always_no_confidence');
     });
 
     it('should extract lovelace from Ogmios v6 {ada:{lovelace}} value objects (no "[object Object]")', async () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue([{
           // real Ogmios v6 shape: value objects, not numbers
-          controlledAmount: { ada: { lovelace: 50_000_000_000n } },
           rewards: { ada: { lovelace: 1_500_000n } },
-          withdrawals: { ada: { lovelace: 500_000n } },
-          delegate: { id: 'pool1abc123' },
+          deposit: { ada: { lovelace: 2_000_000n } },
+          stakePool: { id: 'pool1abc123' },
         }])
       };
 
@@ -286,9 +295,7 @@ describe('OgmiosBackend', () => {
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
 
-      expect(result.controlledAmount).toBe('50000000000');
       expect(result.rewardsSum).toBe('1500000');
-      expect(result.withdrawalsSum).toBe('500000');
       expect(result.withdrawableAmount).toBe('1500000');
       expect(result.poolId).toBe('pool1abc123');
     });
@@ -636,6 +643,34 @@ describe('OgmiosBackend', () => {
     });
   });
 
+  describe('ogmiosScriptHash', () => {
+    // native script of preview UTxO d51ecfd4…#0; db-sync reports bfa7584b…
+    const NATIVE_CBOR = '830301818200581cc1baff904af9856e688bd19fc0cdb723c34a3cef8e1caf42f8ef265d';
+
+    it('hashes a native script with tag 0 (matches the ledger hash)', () => {
+      expect(ogmiosScriptHash({ language: 'native', json: {}, cbor: NATIVE_CBOR }))
+        .toBe('bfa7584bb6fca4ba58a9b7a5acb7ed046b0bfeab1c737651c447dc5c');
+    });
+
+    it.each([['plutus:v1', 1], ['plutus:v2', 2], ['plutus:v3', 3]])('prefixes %s with tag %i', (language, tag) => {
+      const expected = Buffer.from(blake2b_224(Uint8Array.from([tag, ...Buffer.from(NATIVE_CBOR, 'hex')]))).toString('hex');
+      expect(ogmiosScriptHash({ language, cbor: NATIVE_CBOR })).toBe(expected);
+    });
+
+    it('returns null without a script, an unknown language or missing cbor', () => {
+      expect(ogmiosScriptHash(undefined)).toBeNull();
+      expect(ogmiosScriptHash({ language: 'plutus:v9', cbor: NATIVE_CBOR })).toBeNull();
+      expect(ogmiosScriptHash({ language: 'native', json: {} })).toBeNull();
+    });
+  });
+
+  describe('issuerKeyToPoolId', () => {
+    it('derives the bech32 pool id from the issuer cold key (preview block cea2ec57…)', () => {
+      expect(issuerKeyToPoolId('bf55661898d4b7c66caf7106c4e45caacd8f51265cf0dc61dabf6dd12fb5d952'))
+        .toBe('pool1p0mrcmu9qn0x6nk4eunj0p8qy3tryv370a96u9su2l6jwkytnru');
+    });
+  });
+
   describe('getDrep — queryLedgerState/delegateRepresentatives via Method()', () => {
     const HASH = 'ab'.repeat(28);
     const KEY_DREP = 'drep1y246h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2caa85du';
@@ -749,7 +784,7 @@ describe('OgmiosBackend', () => {
       const mockStateQueryClient = {
         stakePools: vi.fn().mockResolvedValue({
           'pool1abc': {
-            vrf: 'vrf123',
+            vrfVerificationKeyHash: 'vrf123',
             stake: { ada: { lovelace: 50000000000n } },
             pledge: 1000000000n,
             margin: 0.05,
@@ -777,7 +812,7 @@ describe('OgmiosBackend', () => {
       const mockStateQueryClient = {
         stakePools: vi.fn().mockResolvedValue({
           'pool1v6': {
-            vrf: 'vrf456',
+            vrfVerificationKeyHash: 'vrf456',
             stake: { ada: { lovelace: 7000000000n } },
             pledge: { ada: { lovelace: 1000000000n } }, // ValueAdaOnly object, not a bigint
             margin: '1/20',
@@ -831,19 +866,13 @@ describe('OgmiosBackend', () => {
       expect(result.rewardAccount).toBe('');
     });
 
-    it('should use vrfKeyHash fallback when vrf is missing', async () => {
-      const mockStateQueryClient = {
-        stakePools: vi.fn().mockResolvedValue({
-          'pool1abc': { vrfKeyHash: 'vrfhash456' }
-        })
-      };
-
+    it('reports blocksEpoch as null (not in the ledger state)', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).stateQueryClient = { stakePools: vi.fn().mockResolvedValue({ 'pool1abc': {} }) };
       (backend as any).isShutdown = false;
 
       const result = await backend.getPool('pool1abc');
-      expect(result.vrfKeyHash).toBe('vrfhash456');
+      expect(result.blocksEpoch).toBeNull();
     });
   });
 
@@ -853,11 +882,9 @@ describe('OgmiosBackend', () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue({
           'stake1u8test': {
-            controlledAmount: 25000000,
             rewards: 500000,
-            withdrawals: 100000,
-            delegate: { id: 'pool1delegated' },
-            vote: { id: 'drep1voted' }
+            stakePool: { id: 'pool1delegated' },
+            delegateRepresentative: { type: 'registered', id: 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b', from: 'verificationKey' }
           }
         })
       };
@@ -867,11 +894,9 @@ describe('OgmiosBackend', () => {
       (backend as any).isShutdown = false;
 
       const result = await backend.getAccount('stake1u8test');
-      expect(result.controlledAmount).toBe('25000000');
       expect(result.rewardsSum).toBe('500000');
-      expect(result.withdrawalsSum).toBe('100000');
       expect(result.poolId).toBe('pool1delegated');
-      expect(result.drepId).toBe('drep1voted');
+      expect(result.drepId).toBe('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0');
     });
   });
 
@@ -927,7 +952,7 @@ describe('OgmiosBackend', () => {
     });
   });
 
-  describe('getAddress / getNetworkInformation — declared unsupported (capability routing)', () => {
+  describe('getAddress — declared unsupported (capability routing)', () => {
     it('getAddress throws instead of fabricating type/stakeAddress/isScript', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = {};
@@ -937,13 +962,32 @@ describe('OgmiosBackend', () => {
       expect(backend.unsupportedMethods.has('getAddress')).toBe(true);
     });
 
-    it('getNetworkInformation throws instead of fabricating supply figures', async () => {
+    it('getNetworkInformation reports treasury, reserves and total from treasuryAndReserves', async () => {
+      // preview epoch 1432 values; db-sync ada_pots reports the same two numbers
+      vi.mocked(Method).mockReset();
+      vi.mocked(Method).mockImplementation((req: any, res: any) => new Promise((resolve, reject) => {
+        res.handler({
+          method: req.method,
+          result: { treasury: { ada: { lovelace: 7144014116012711n } }, reserves: { ada: { lovelace: 7553280172123790n } } },
+        }, resolve, reject);
+      }) as any);
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).stateQueryClient = {};
+      (backend as any).context = { socket: { readyState: 1, OPEN: 1 } };
       (backend as any).isShutdown = false;
 
-      await expect(backend.getNetworkInformation()).rejects.toThrow(/not supported/i);
-      expect(backend.unsupportedMethods.has('getNetworkInformation')).toBe(true);
+      const info = await backend.getNetworkInformation();
+
+      expect(vi.mocked(Method).mock.calls[0][0]).toEqual({ method: 'queryLedgerState/treasuryAndReserves' });
+      expect(info.supply).toEqual({
+        max: '45000000000000000',
+        total: '37446719827876210',
+        circulating: '0',
+        locked: '0',
+        treasury: '7144014116012711',
+        reserves: '7553280172123790',
+      });
+      expect(backend.unsupportedMethods.has('getNetworkInformation')).toBe(false);
     });
 
     // Historic / out-of-protocol queries: Ogmios bridges live node state only, so these
@@ -1006,13 +1050,29 @@ describe('OgmiosBackend', () => {
         value: { ada: { lovelace: 2000000 } },
         datumHash: 'datum_hash_abc',
         datum: 'd87980', // inline datum CBOR hex
-        script: { hash: 'script_hash_def' }
+        // preview UTxO d51ecfd4…#0; db-sync reports script hash bfa7584b…
+        script: { language: 'native', cbor: '830301818200581cc1baff904af9856e688bd19fc0cdb723c34a3cef8e1caf42f8ef265d' }
       }]);
 
       const result = await backend.getAddressUtxos('addr_test1qscript');
       expect(result[0].datumHash).toBe('datum_hash_abc');
       expect(result[0].inlineDatum).toBe('d87980');
-      expect(result[0].scriptRef).toBe('script_hash_def');
+      expect(result[0].scriptRef).toBe('bfa7584bb6fca4ba58a9b7a5acb7ed046b0bfeab1c737651c447dc5c');
+    });
+
+    it('getUnspentOutputs queries the ledger by output reference and maps the result', async () => {
+      const backend = mkBackend([{
+        transaction: { id: 'txhash_out' }, index: 2, address: 'addr_test1qref',
+        value: { ada: { lovelace: 3000000 } },
+      }]);
+
+      const result = await backend.getUnspentOutputs([{ txHash: 'txhash_out', outputIndex: 2 }]);
+
+      expect((backend as any).stateQueryClient.utxo).toHaveBeenCalledWith({
+        outputReferences: [{ transaction: { id: 'txhash_out' }, index: 2 }],
+      });
+      expect(result).toEqual([expect.objectContaining({ txHash: 'txhash_out', outputIndex: 2, address: 'addr_test1qref' })]);
+      expect(await backend.getUnspentOutputs([])).toEqual([]);
     });
 
     it('should map inlineDatum as null when absent', async () => {

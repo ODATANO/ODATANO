@@ -469,13 +469,12 @@ describe('CardanoClient Configuration', () => {
       };
       (client as any).liveBackend = failingLiveBackend;
 
-      // Koios init succeeds
+      // Koios init succeeds; getCurrentSlot is live-preferred, so ogmios is tried first
       setupKoiosTipMock();
-      setupNetworkInfoMocks();
+      setupKoiosTipMock();
 
-      const result = await client.getNetworkInformation();
-      expect(result).toBeDefined();
-      expect(result.supply).toBeDefined();
+      const result = await client.getCurrentSlot();
+      expect(result).toBe(50000000);
       // The live backend is kept for lazy retry: the request retried its init once
       // before falling through to koios
       expect((client as any).liveBackend).toBe(failingLiveBackend);

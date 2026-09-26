@@ -1,3 +1,7 @@
 # Cardano node config files must keep LF line endings
 # (blake2b-256 genesis hashes depend on exact byte content)
 config/preview/cardano-node/*.json eol=lf
+
+# Shell scripts and node entry scripts run inside Linux images (shebang breaks on CRLF)
+*.sh text eol=lf
+scripts/*.mjs text eol=lf

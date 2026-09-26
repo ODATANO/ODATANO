@@ -46,7 +46,7 @@ describe('decodeAssetName', () => {
 
 describe('mapTransactionOutputAssets with a NUL asset name', () => {
   it('produces rows without U+0000 (hex fallback) while keeping assetNameHex exact', () => {
-    const rows = mapTransactionOutputAssets('tx'.padEnd(64, '0'), [
+    const rows = mapTransactionOutputAssets(1, [
       { outputIndex: 0, address: 'addr_test1x', amount: [{ unit: `${POLICY}${NUL_NAME_HEX}`, quantity: '1' }] } as never,
     ]);
     expect(rows).toHaveLength(1);

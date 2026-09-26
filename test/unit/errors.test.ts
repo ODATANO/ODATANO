@@ -174,6 +174,13 @@ describe('Error Classes', () => {
       // not 502 (which would imply an upstream backend returned a bad response).
       expect(error.statusCode).toBe(503);
     });
+
+    it('names why no backend was called when every one was skipped', () => {
+      const error = new AllBackendsFailedError([], undefined, ['ogmios: does not support getNetworkInformation', 'koios: circuit open']);
+
+      expect(error.message).toBe('All backends failed: no backend available (ogmios: does not support getNetworkInformation; koios: circuit open)');
+      expect(error.statusCode).toBe(503);
+    });
   });
 
   describe('ConfigError', () => {
@@ -191,10 +198,17 @@ describe('Error Classes', () => {
       const originalError = new Error('Connection failed');
       const error = new BackendInitError('koios', originalError);
 
-      expect(error.message).toBe('Failed to initialize backend: koios');
+      expect(error.message).toBe('Failed to initialize backend: koios (Connection failed)');
       expect(error.backendName).toBe('koios');
       expect(error.originalError).toBe(originalError);
       expect(error.name).toBe('BackendInitError');
+    });
+
+    it('carries the HTTP cause of a rate-limited init', () => {
+      const axiosLike = { message: 'Request failed with status code 429', response: { status: 429, data: 'Exceeded Tier Limit' } };
+      const error = new BackendInitError('koios', axiosLike);
+
+      expect(error.message).toBe('Failed to initialize backend: koios (Request failed with status code 429)');
     });
   });
 

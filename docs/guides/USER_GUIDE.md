@@ -808,6 +808,41 @@ metadata — those arrive the first time someone reads that asset through the AP
 with `"enrich"`). Setting `assetCatalogue` to `"off"` and `assetHistory` to `false` restores the
 pre-2.0.0-rc.12 behaviour exactly.
 
+### Crawled data before the backend
+
+Some values the lazy path used to take from a backend come from the crawled tables instead, but
+only while the crawled data is complete for them. For the values that depend on the current chain
+state this means a live crawler at the tip: `SyncState.syncStatus` is `synced` and its lease is held.
+Otherwise the backend's value stays.
+
+| Value | From | Condition |
+|---|---|---|
+| `Pools.blocksEpoch` | crawled `Blocks` of the current epoch with `slotLeader` = the pool | crawler at the tip, crawl started before the epoch |
+| `Pools.blocksMinted` | all crawled `Blocks` of the pool | crawler at the tip, crawl started at or before the first Shelley slot |
+| `Accounts.controlledAmount` | `LedgerAccounts.controlledAmount` + the reward balance | crawler at the tip, UTxO set `active` |
+| `NetworkInformation.circulatingSupply` | total of `LedgerAddresses.totalLovelace` | crawler at the tip, UTxO set `active` |
+| `Epochs.blockCount`, `txCount`, `fees`, `firstBlockTime`, `lastBlockTime` (crawled epochs) | crawled `Blocks` of the epoch | crawl started before the epoch |
+
+The epoch totals are what makes an Ogmios-only crawl describe its epochs: Ogmios serves no past
+epoch, so the crawler writes the row from its own blocks, with start and end time derived from the
+slots and `output` / `activeStake` left empty. With a provider, the provider's row is kept and only
+the totals are replaced.
+
+`Blocks.slotLeader` is the bech32 id of the pool that produced the block on every backend. Crawls
+before this version stored the Ogmios issuer key (64 hex characters) or the Koios VRF key
+(`vrf_vk1…`) instead, which the pool counts above do not match. `scripts/migrate-slot-leader.mjs`
+(repository checkout) turns the old values into one SQL update; it derives the pool id from an
+issuer key and matches a VRF key against the registered pools of an Ogmios `stakePools` response:
+
+```bash
+psql -Atc "SELECT DISTINCT slotLeader FROM odatano_cardano_Blocks WHERE slotLeader NOT LIKE 'pool1%'" \
+  | node scripts/migrate-slot-leader.mjs --stake-pools stake-pools.json > slot-leader.sql
+psql -f slot-leader.sql
+```
+
+A VRF key of a pool that is no longer registered is listed as unmapped and left as it is;
+`--extra-map` takes such values as `<old value> <pool id>` lines.
+
 **Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10).
 
 ---

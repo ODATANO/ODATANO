@@ -8,24 +8,18 @@ import { chunk, IN_CHUNK } from '../../utils/collections';
 import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { emitBlockIndexed, emitReorg } from './hooks';
 import { undoLedgerForTransactions } from '../ledger-state';
+import { deleteTransactionRows, type TxKey } from '../transaction-rows';
 import {
   Blocks,
   Transactions,
-  TransactionInputs,
-  TransactionInputAssets,
-  TransactionOutputs,
-  TransactionOutputAssets,
   AddressTransactions,
   AddressUTxOs,
   UTxOAssets,
-  AssetHistory_ as AssetHistory,
   // the entity name is already plural-ish, so the typer's plural (array) class
   // carries a trailing underscore — that's the CQL-target class, like Blocks/Transactions
-  TransactionMetadata_ as TransactionMetadata,
+  AssetHistory_ as AssetHistory,
   CardanoReorgLog,
   PoolEpochSnapshots,
-  TransactionCertificates,
-  TransactionWithdrawals,
 } from '#cds-models/odatano/cardano';
 import {
   ensureSyncStateSingleton,
@@ -949,8 +943,8 @@ export class CardanoCrawler {
         // Only transactions of the rolled-back blocks — resolved via blockHash, so
         // lazily-indexed txs of unrelated blocks are not collateral damage.
         const staleTxs = await tx.run(
-          SELECT.from(Transactions).columns('hash').where({ blockHash: { in: blockChunk } })
-        ) as Array<{ hash: string }>;
+          SELECT.from(Transactions).columns('hash', 'txSeq').where({ blockHash: { in: blockChunk } })
+        ) as TxKey[];
         const txHashes = staleTxs.map((t) => t.hash);
         txsRolledBack += txHashes.length;
         rolledBackTxHashes.push(...txHashes);
@@ -962,15 +956,8 @@ export class CardanoCrawler {
           await tx.run(DELETE.from(AddressUTxOs).where({ hash: { in: txChunk } }));
           await tx.run(DELETE.from(AddressTransactions).where({ tx_hash: { in: txChunk } }));
           await tx.run(DELETE.from(AssetHistory).where({ txHash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionInputAssets).where({ input_tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionOutputAssets).where({ output_tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionInputs).where({ tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionOutputs).where({ tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionMetadata).where({ tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionCertificates).where({ tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(TransactionWithdrawals).where({ tx_hash: { in: txChunk } }));
-          await tx.run(DELETE.from(Transactions).where({ hash: { in: txChunk } }));
         }
+        await deleteTransactionRows(tx, staleTxs);
         await tx.run(DELETE.from(Blocks).where({ hash: { in: blockChunk } }));
       }
 

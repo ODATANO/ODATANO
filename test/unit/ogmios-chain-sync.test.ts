@@ -75,7 +75,7 @@ function praosBlock(over: Record<string, unknown> = {}) {
     height: 100,
     slot: 5000,
     size: { bytes: 1234 },
-    issuer: { verificationKey: 'vkeyhex' },
+    issuer: { verificationKey: 'bf55661898d4b7c66caf7106c4e45caacd8f51265cf0dc61dabf6dd12fb5d952' },
     transactions: [
       {
         id: 'c'.repeat(64),
@@ -174,7 +174,7 @@ describe('OgmiosBackend.openChainSync', () => {
       hash: 'a'.repeat(64),
       height: 100,
       slot: 5000,
-      slotLeader: 'vkeyhex',
+      slotLeader: 'pool1p0mrcmu9qn0x6nk4eunj0p8qy3tryv370a96u9su2l6jwkytnru', // blake2b-224 of the issuer key
       size: 1234,
       txCount: 1,
       fees: '170000', // sum of per-tx fees
@@ -205,8 +205,19 @@ describe('OgmiosBackend.openChainSync', () => {
       { unit: `${'p'.repeat(56)}746f6b656e`, quantity: '5' },
     ]));
     expect(tx.outputs[0].inlineDatum).toBe('d87980');
+    expect(tx.outputs[0].referenceScriptHash).toBeNull();
     // metadata labels mapped
     expect(tx.metadata).toEqual([{ txHash: 'c'.repeat(64), label: '721', json: { name: 'nft' } }]);
+  });
+
+  it('hashes an output reference script', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    (block.transactions as Array<{ outputs: Array<Record<string, unknown>> }>)[0].outputs[0].script =
+      { language: 'native', json: {}, cbor: '830301818200581cc1baff904af9856e688bd19fc0cdb723c34a3cef8e1caf42f8ef265d' };
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+
+    expect(rolled[0].txs[0].outputs[0].referenceScriptHash).toBe('bfa7584bb6fca4ba58a9b7a5acb7ed046b0bfeab1c737651c447dc5c');
   });
 
   it('returns undefined metadata (not []) for metadata-less transactions', async () => {

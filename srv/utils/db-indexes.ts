@@ -27,9 +27,13 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_blocks_height_desc', table: 'odatano_cardano_Blocks', columns: 'height DESC', postgres: 'height DESC NULLS LAST' },
   { name: 'odatano_cardano_blocks_slot', table: 'odatano_cardano_Blocks', columns: 'slot' },
   { name: 'odatano_cardano_blocks_epoch', table: 'odatano_cardano_Blocks', columns: 'epochNumber' },
+  // block counts per pool (Pools.blocksEpoch / blocksMinted from crawled blocks)
+  { name: 'odatano_cardano_blocks_slotleader', table: 'odatano_cardano_Blocks', columns: 'slotLeader, slot' },
   // Transactions of a block (rollback `blockHash in`, OData filters by block / height)
   { name: 'odatano_cardano_transactions_block', table: 'odatano_cardano_Transactions', columns: 'blockHash' },
   { name: 'odatano_cardano_transactions_height', table: 'odatano_cardano_Transactions', columns: 'blockHeight' },
+  // Input/output rows back to their transaction (`tx` association, stale-seq check of the crawler)
+  { name: 'odatano_cardano_transactions_txseq', table: 'odatano_cardano_Transactions', columns: 'txSeq' },
   // GetMetadataByTxHash, rollback
   { name: 'odatano_cardano_transactionmetadata_tx', table: 'odatano_cardano_TransactionMetadata', columns: 'tx_hash' },
   // rollback `txHash in` (key is unit, txHash)

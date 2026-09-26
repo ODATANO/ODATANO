@@ -143,6 +143,7 @@ function makeDeps() {
     indexMultiAssetBuildResult: vi.fn(),
     indexPlutusSpendBuildResult: vi.fn(),
     persistTransactionSubmission: vi.fn().mockResolvedValue({}),
+    findIndexedTransaction: vi.fn().mockResolvedValue(null),
   };
   const signer = {
     type: 'software' as const,
@@ -590,6 +591,19 @@ describe('engine: reconciling an interrupted submit', () => {
 
     expect((await getJobById(db, job.ID))!.status).toBe('submitted');
     expect(worker.getStatusSummary().awaitingConfirmation).toBe(1);
+  });
+
+  it('adopts the job from the local index without asking the backends', async () => {
+    const deps = makeDeps();
+    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('BadInputsUTxO', undefined));
+    deps.indexer.findIndexedTransaction.mockResolvedValue({ slot: 100, blockHeight: 42 });
+    const worker = makeWorker(deps);
+    const job = await seedInterruptedSubmit();
+
+    await reconcile(worker, job);
+
+    expect(deps.client.getTransaction).not.toHaveBeenCalled();
+    expect((await getJobById(db, job.ID))!.status).toBe('submitted');
   });
 
   it('keeps the job submitting while the failure is transient and the tx is absent', async () => {

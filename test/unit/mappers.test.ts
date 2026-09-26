@@ -4,6 +4,7 @@
 
 import {
   mapTransaction,
+  txSeqOf,
   mapTransactionMetadata,
   mapTransactionInputs,
   mapTransactionInputAssets,
@@ -51,24 +52,38 @@ vi.mock('@sap/cds', () => {
 
 describe('mappers', () => {
 
+  describe('txSeqOf / mapTransaction.txSeq', () => {
+    it('orders by slot, then by position in the block', () => {
+      expect(txSeqOf(0, 0)).toBe(0);
+      expect(txSeqOf(1, 0)).toBeGreaterThan(txSeqOf(0, 65535));
+      expect(txSeqOf(170_000_000, 300)).toBe(170_000_000 * 65536 + 300);
+      expect(Number.isSafeInteger(txSeqOf(2 ** 36, 65535))).toBe(true);
+    });
+
+    it('sets txSeq on the transaction row', () => {
+      const row = mapTransaction({ hash: 'h', blockHash: 'b', blockHeight: 1, slot: 10, index: 2, fee: '0', deposit: '0', size: 0, blockTime: 0 } as never);
+      expect(row.txSeq).toBe(10 * 65536 + 2);
+    });
+  });
+
   // mapTransactionInputAssets — amount guard
   describe('mapTransactionInputAssets', () => {
     it('should return empty array when input.amount is undefined', () => {
-      const result = mapTransactionInputAssets('abc123', [
+      const result = mapTransactionInputAssets(42, [
         { txHash: 'def456', outputIndex: 0, address: 'addr_test1...', amount: undefined as any },
       ]);
       expect(result).toEqual([]);
     });
 
     it('should return empty array when input.amount is null', () => {
-      const result = mapTransactionInputAssets('abc123', [
+      const result = mapTransactionInputAssets(42, [
         { txHash: 'def456', outputIndex: 0, address: 'addr_test1...', amount: null as any },
       ]);
       expect(result).toEqual([]);
     });
 
     it('should map assets correctly when amount is valid array', () => {
-      const result = mapTransactionInputAssets('abc123', [
+      const result = mapTransactionInputAssets(42, [
         {
           txHash: 'def456',
           outputIndex: 0,
@@ -77,21 +92,21 @@ describe('mappers', () => {
         },
       ]);
       expect(result.length).toBeGreaterThan(0);
-      expect(result[0].input_tx_hash).toBe('abc123');
+      expect(result[0].input_txSeq).toBe(42);
     });
   });
 
   // mapTransactionOutputAssets — amount guard
   describe('mapTransactionOutputAssets', () => {
     it('should return empty array when output.amount is undefined', () => {
-      const result = mapTransactionOutputAssets('abc123', [
+      const result = mapTransactionOutputAssets(42, [
         { address: 'addr_test1...', outputIndex: 0, txHash: 'def456', dataHash: null, inlineDatum: null, isCollateral: false, amount: undefined as any },
       ]);
       expect(result).toEqual([]);
     });
 
     it('should return empty array when output.amount is null', () => {
-      const result = mapTransactionOutputAssets('abc123', [
+      const result = mapTransactionOutputAssets(42, [
         { address: 'addr_test1...', outputIndex: 0, txHash: 'def456', dataHash: null, inlineDatum: null, isCollateral: false, amount: null as any },
       ]);
       expect(result).toEqual([]);
@@ -236,7 +251,7 @@ describe('mappers', () => {
 
   describe('mapTransactionInputs', () => {
     it('should map inputs with collateral and reference flags', () => {
-      const result = mapTransactionInputs('tx123', [
+      const result = mapTransactionInputs(7, [
         {
           txHash: 'utxo1', outputIndex: 0, address: 'addr_test1...',
           amount: [{ unit: 'lovelace', quantity: '5000000' }],
@@ -250,7 +265,7 @@ describe('mappers', () => {
       ]);
 
       expect(result).toHaveLength(2);
-      expect(result[0].tx_hash).toBe('tx123');
+      expect(result[0].txSeq).toBe(7);
       expect(result[0].inputIndex).toBe(0);
       expect(result[0].isCollateral).toBe(true);
       expect(result[0].isReference).toBe(false);
@@ -263,7 +278,7 @@ describe('mappers', () => {
     });
 
     it('keeps the consumed outpoint (spentTxHash / spentOutputIndex) on every row', () => {
-      const result = mapTransactionInputs('tx123', [
+      const result = mapTransactionInputs(7, [
         { txHash: 'a'.repeat(64), outputIndex: 2, address: 'addr_test1...', amount: [] },
         // a malformed line without an outpoint must not crash the block — null, not NaN
         { txHash: '', outputIndex: undefined as unknown as number, address: 'addr_test2...', amount: [] },

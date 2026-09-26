@@ -62,7 +62,7 @@ entity Blocks {
         height      : Integer;
 
         @title      : 'Block SlotLeader'
-        @description: 'Slot leader id as hex string'
+        @description: 'Bech32 id of the pool that produced the block'
         slotLeader  : String;
 
         @title      : 'Block Epoch Number'
@@ -636,6 +636,10 @@ entity Transactions {
         @description: 'The unique transaction identifier as hex string'
     key hash        : Blake2b256;
 
+        @title      : 'Transaction Sequence Number'
+        @description: 'Chain position slot * 65536 + txIndex; key of the input and output rows, ascending along the chain'
+        txSeq       : Integer64;
+
         @title      : 'Transaction  Block Hash'
         @description: 'The block hash containing the transaction'
         blockHash   : Blake2b256;
@@ -676,12 +680,12 @@ entity Transactions {
         @title      : 'Transaction Inputs'
         @description: 'The transaction inputs composition'
         inputs      : Composition of many TransactionInputs
-                          on inputs.tx = $self;
+                          on inputs.txSeq = txSeq;
 
         @title      : 'Transaction Outputs'
         @description: 'The transaction outputs composition'
         outputs     : Composition of many TransactionOutputs
-                          on outputs.tx = $self;
+                          on outputs.txSeq = txSeq;
 
         @title      : 'Transaction Certificates'
         @description: 'Certificates carried by the transaction (stake/pool/DRep). Filled by the chain crawler only (crawler.certificates); the lazy path leaves it empty.'
@@ -711,9 +715,13 @@ entity Transactions {
 @readonly
 entity TransactionInputs {
 
-        @title      : 'Transaction (key)'
+        @title      : 'Transaction Sequence Number (key)'
+        @description: 'Transactions.txSeq of the spending transaction'
+    key txSeq        : Integer64;
+
+        @title      : 'Transaction'
         @description: 'The associated transaction'
-    key tx           : Association to Transactions;
+        tx           : Association to one Transactions on tx.txSeq = txSeq;
 
         @title      : 'Input Index (key)'
         @description: 'The input index of the input utxo'
@@ -1015,9 +1023,13 @@ entity TransactionWithdrawals {
 @readonly
 entity TransactionOutputs {
 
-        @title      : 'Transaction (key)'
+        @title      : 'Transaction Sequence Number (key)'
+        @description: 'Transactions.txSeq of the creating transaction'
+    key txSeq        : Integer64;
+
+        @title      : 'Transaction'
         @description: 'The associated transaction'
-    key tx           : Association to Transactions;
+        tx           : Association to one Transactions on tx.txSeq = txSeq;
 
         @title      : 'Output Index (key)'
         @description: 'The output index of the output utxo'

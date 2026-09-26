@@ -1,5 +1,73 @@
 # Changelog
 
+## [v2.0.0-rc.21] - txSeq keys, ledger lookups and crawled data before the backend
+
+Input/output tables are keyed by chain position; existing databases need `migrate-txseq` once before the first start.
+
+### Breaking
+
+- `TransactionInputs`, `TransactionOutputs`, `TransactionInputAssets` and
+  `TransactionOutputAssets` are keyed by `Transactions.txSeq` (`slot * 65536 + txIndex`, new
+  column) instead of the transaction hash. Inserts land at the end of the key index instead of at
+  random positions, which keeps the crawl rate constant as the tables grow and shrinks their
+  indexes by about half.
+  - The rows no longer carry `tx_hash` (`input_tx_hash` / `output_tx_hash` on the asset rows).
+    The transaction is reached through the `tx` navigation (`tx/hash`, `$expand=tx`), and a
+    transaction's rows through `Transactions('<hash>')/inputs` and `/outputs`. Keyed reads use
+    `TransactionInputs(txSeq=…,inputIndex=…)`.
+  - An existing database needs `migrate-txseq` (image mode) or `scripts/migrate-txseq.mjs` once
+    before the first start of this version; the additive schema deployment cannot change the
+    keys of tables that hold rows.
+
+### Changed
+
+- `Blocks.slotLeader` is the bech32 pool id of the block producer on every backend. Koios
+  (`/block_info` `pool`) and Ogmios chain-sync (blake2b-224 of the issuer key) delivered the
+  VRF key and the issuer key before. `scripts/migrate-slot-leader.mjs` turns the old values of
+  existing rows into an SQL update (issuer keys derived, VRF keys matched against an Ogmios
+  `stakePools` response).
+- Plutus spends, `forceInputs` and `referenceInputs` resolve output references outside the
+  sender's UTxOs through the node ledger (Ogmios `queryLedgerState/utxo`) when Ogmios is
+  configured: one lookup proves existence and spendability. Without Ogmios, or when the
+  lookup fails, the producing transaction is fetched as before.
+- `CheckSubmissionStatus` and the wallet worker's recovery of an interrupted submit look up the
+  transaction in the local index (crawled transactions) before asking a backend.
+- While the crawler runs at the tip, `Pools`, `Accounts` and `NetworkInformation` take values
+  from crawled data over the backend's:
+  - `Pools.blocksEpoch` counts crawled blocks of the current epoch (crawl covering the whole
+    epoch); `Pools.blocksMinted` all crawled blocks (crawl starting at or before Shelley).
+    New index on `Blocks(slotLeader, slot)`.
+  - `Accounts.controlledAmount` = UTxOs under the stake key (`LedgerAccounts`) + reward
+    balance, with the crawled UTxO set active.
+  - `NetworkInformation.circulatingSupply` = total of `LedgerAddresses`, with the crawled UTxO
+    set active.
+- Crawled epoch rows carry `blockCount`, `txCount`, `fees`, `firstBlockTime` and
+  `lastBlockTime` summed over the crawled blocks when the crawl started before the epoch. An
+  Ogmios-only crawl no longer writes zero totals for the current epoch and now writes rows for
+  past epochs too (bounds from the slots, `output` / `activeStake` empty).
+- `getNetworkInformation` asks the providers first and falls back to Ogmios.
+
+### Added
+
+- Ogmios `getNetworkInformation` from `queryLedgerState/treasuryAndReserves`: treasury,
+  reserves, total supply (max − reserves); circulating, locked and stake totals stay `'0'`.
+- `Accounts.poolId` / `Accounts.drepId` associations are filled from the backend's delegation.
+
+### Fixed
+
+- `GetLatestBlock` no longer stores the header-only ledger tip Ogmios answers with (size, fees
+  and slot leader unknown); it returns the stored row of that hash when there is one instead of
+  overwriting it. The crawl removes other rows at a crawled height that no transaction references,
+  which also clears a rolled-back tip stored from Blockfrost or Koios.
+- `BackendInitError` names the cause (`Failed to initialize backend: ogmios (<reason>)`), and
+  `AllBackendsFailedError` lists why backends were skipped when none was called.
+- Ogmios `getPool`: `vrfKeyHash` is filled (was always empty); `blocksEpoch` is null instead of 0.
+- Ogmios `getAccount`: `poolId` and `drepId` are filled from the reward-account summary
+  (were always null); predefined DReps map to `drep_always_abstain` /
+  `drep_always_no_confidence`.
+- Ogmios UTxOs (`GetUTxOsByAddress`, UTxO-set import) carry the reference-script hash in
+  `scriptRef` (was always empty); chain-sync outputs carry `referenceScriptHash`.
+
 ## [v2.0.0-rc.20] - certificate backfill over crawled blocks
 
 Certificates and withdrawals can be filled in for blocks crawled before `crawler.certificates` was on.

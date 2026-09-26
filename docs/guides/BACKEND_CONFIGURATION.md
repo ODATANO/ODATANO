@@ -76,27 +76,39 @@ reject as 404.
 
 The CardanoClient routes each operation to the appropriate backend type:
 
-### Live Backend (Ogmios)
-Used for **current state** and **transaction submission**:
-- `getProtocolParameters()` - Current protocol parameters (M2)
-- `getAddressUtxos(address)` - Current UTxO set (M2 transaction building)
-- `submitTransaction(cbor)` - Transaction submission (M2)
-- `getAddress(address)` - Address with current UTxOs
-- `getAccount(stakeAddress)` - Current rewards/delegation
-- `getPool(poolId)` - Live pool state
-- `getNetworkInformation()` - Network constants
+### Live Backend first (Ogmios)
+Used for **current state** and **transaction submission**; Blockfrost/Koios are the fallback:
+- `getProtocolParameters()` - Current protocol parameters
+- `submitTransaction(cbor)` - Transaction submission
+- `getLatestBlock()`, `getLatestEpoch()`, `getCurrentSlot()`, `isUtxoUnspent()` - Tip state
+- `getAccount(stakeAddress)` - Reward balance, pool and DRep delegation. Ogmios reports no
+  controlled amount and no withdrawal totals (`'0'`); see "Crawled data before the backend"
+  in the User Guide for the crawled replacement.
+- `getPool(poolId)` - Pool parameters and live stake. Ogmios reports no block counts
+  (`blocksEpoch` null) and no active stake.
 
-### Historical Backends (Blockfrost/Koios)
-Used for **indexed/historical data**:
-- `getBlock(hash)` - Block data
-- `getTransaction(hash)` - Transaction details
-- `getTransactionMetadata(hash)` - Transaction metadata
+### Historical Backends first (Blockfrost/Koios)
+Used for **indexed/historical data**; Ogmios answers only where noted:
+- `getBlock(hash)`, `getTransaction(hash)`, `getTransactionMetadata(hash)`,
+  `getAddressTransactions(address)`, `getAddress(address)`, `getAssetInfo(unit)` - not on Ogmios
+- `getAddressUtxos(address)` - Ogmios answers from the ledger as a fallback
+- `getEpoch(epoch)` - Ogmios answers the current epoch only
+- `getNetworkInformation()` - Ogmios answers from `queryLedgerState/treasuryAndReserves`:
+  treasury, reserves and total supply (max − reserves); circulating, locked and stake totals
+  stay `'0'`. The providers come first because they report circulation.
 - `getDrep(drepId)` - DRep information. Ogmios (≥ 6.4) serves this too via the live
   ledger state as a fallback: only *registered* DReps are found (a retired DRep is a
   404, never `retired: true`), `expired` is derived from the mandate epoch and
   `lastActiveEpoch` is 0.
 
 If multiple historical backends are configured, they are tried in order with automatic failover.
+
+### Output references from the node ledger
+When Ogmios is configured, the transaction builder resolves output references that are not
+among the sender's UTxOs (the Plutus script UTxO, `forceInputs`, `referenceInputs`) with one
+`queryLedgerState/utxo` lookup by reference: an absent output is unknown or already spent and
+is rejected with a 400. Without Ogmios, or when the lookup fails, it fetches the producing
+transaction and checks the address's live UTxOs, as before.
 
 ### Capabilities Only One Backend Has
 

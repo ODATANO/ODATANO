@@ -1083,7 +1083,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   /** Map a Koios /block_info row to BlockData. */
   private mapKoiosBlockInfo(data: {
     block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
-    epoch_no: number | null; epoch_slot: number | null; vrf_key: string; block_size: number;
+    epoch_no: number | null; epoch_slot: number | null; pool?: string | null; block_size: number;
     tx_count: number; total_fees?: string | null;
   }): BlockData {
     return {
@@ -1093,7 +1093,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       slot: data.abs_slot,
       epoch: data.epoch_no,
       epochSlot: data.epoch_slot,
-      slotLeader: data.vrf_key,
+      slotLeader: data.pool ?? '',
       size: data.block_size,
       txCount: data.tx_count,
       fees: data.total_fees,

@@ -24,6 +24,8 @@ const SVC = '/odata/v4/cardano-odata';
 
 /** Seeded (cache-hit) transaction — never touches the backend. */
 const SEEDED_TX_HASH = '1111222233334444555566667777888899990000111122223333444455556666';
+// slot 49000000, txIndex 0 — apart from the mocked script tx (slot 50000000, index 0)
+const SEEDED_TX_SEQ = 49000000 * 65536;
 
 describe('Keyed reads honour $expand / $select', () => {
   const test = cds.test(__dirname + '/../../');
@@ -45,10 +47,11 @@ describe('Keyed reads honour $expand / $select', () => {
     await cds.run(
       INSERT.into('odatano.cardano.Transactions').entries({
         hash: SEEDED_TX_HASH,
+        txSeq: SEEDED_TX_SEQ,
         blockHash: TEST_FIXTURES.validBlockHash,
         blockHeight: 4242,
         blockTime: 1704067200,
-        slot: 50000000,
+        slot: 49000000,
         txIndex: 0,
         fee: 200000,
         deposit: 0,
@@ -60,14 +63,14 @@ describe('Keyed reads honour $expand / $select', () => {
     );
     await cds.run(
       INSERT.into('odatano.cardano.TransactionInputs').entries([
-        { tx_hash: SEEDED_TX_HASH, inputIndex: 0, address_address: TEST_FIXTURES.addressWithFunds, isCollateral: false, isReference: false, hasAddresses: true, hasAssets: false },
-        { tx_hash: SEEDED_TX_HASH, inputIndex: 1, address_address: TEST_FIXTURES.addressWithFunds, isCollateral: false, isReference: false, hasAddresses: true, hasAssets: false },
+        { txSeq: SEEDED_TX_SEQ, inputIndex: 0, address_address: TEST_FIXTURES.addressWithFunds, isCollateral: false, isReference: false, hasAddresses: true, hasAssets: false },
+        { txSeq: SEEDED_TX_SEQ, inputIndex: 1, address_address: TEST_FIXTURES.addressWithFunds, isCollateral: false, isReference: false, hasAddresses: true, hasAssets: false },
       ])
     );
     await cds.run(
       INSERT.into('odatano.cardano.TransactionOutputs').entries([
-        { tx_hash: SEEDED_TX_HASH, outputIndex: 0, address_address: TEST_FIXTURES.emptyAddress, hasAddresses: true, hasAssets: false },
-        { tx_hash: SEEDED_TX_HASH, outputIndex: 1, address_address: TEST_FIXTURES.addressWithFunds, hasAddresses: true, hasAssets: false },
+        { txSeq: SEEDED_TX_SEQ, outputIndex: 0, address_address: TEST_FIXTURES.emptyAddress, hasAddresses: true, hasAssets: false },
+        { txSeq: SEEDED_TX_SEQ, outputIndex: 1, address_address: TEST_FIXTURES.addressWithFunds, hasAddresses: true, hasAssets: false },
       ])
     );
   });

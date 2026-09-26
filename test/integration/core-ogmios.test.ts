@@ -26,12 +26,13 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
   describe('Ogmios Backend Action Tests', () => {
 
-    it('POST /GetNetworkInformation - unsupported on Ogmios (delegate to Blockfrost/Koios)', async () => {
-      // Ogmios can't serve network aggregates (max/circulating supply); it's declared in
-      // unsupportedMethods so the orchestrator skips it. Ogmios-only → no provider → 503.
-      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
-      expect(response.status).to.equal(503);
-      expect(response.data).to.have.property('error');
+    it('POST /GetNetworkInformation - treasury and reserves from the ledger state', async () => {
+      // Ogmios answers queryLedgerState/treasuryAndReserves; total = max supply - reserves
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+      expect(status).to.equal(200);
+      expect(BigInt(data.treasurySupply) > 0n).to.be.true;
+      expect(BigInt(data.reservesSupply) > 0n).to.be.true;
+      expect(BigInt(data.totalSupply)).to.equal(BigInt(data.maxSupply) - BigInt(data.reservesSupply));
     });
 
     // First cold UTxO query: a full Ogmios ledger-state scan plus WS warm-up can take
@@ -159,11 +160,13 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(costModels).to.be.an('object');
     });
 
-    // Network information is unsupported on Ogmios (delegated to Blockfrost/Koios)
-    it('POST /GetNetworkInformation - unsupported on Ogmios', async () => {
-      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
-      expect(response.status).to.equal(503);
-      expect(response.data).to.have.property('error');
+    // Circulation and stake totals are not in the ledger state
+    it('POST /GetNetworkInformation - circulating and stake totals stay 0 on Ogmios', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+      expect(status).to.equal(200);
+      expect(String(data.circulatingSupply)).to.equal('0');
+      expect(String(data.liveStake)).to.equal('0');
+      expect(String(data.activeStake)).to.equal('0');
     });
 
     it('POST /GetEpochByNumber - current epoch should succeed', async () => {
@@ -221,11 +224,10 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(status).to.equal(200);
     });
 
-    // Network information is unsupported on Ogmios (delegated to Blockfrost/Koios)
-    it('POST /GetNetworkInformation - unsupported on Ogmios (network details)', async () => {
-      const response = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {}).catch(err => err.response);
-      expect(response.status).to.equal(503);
-      expect(response.data).to.have.property('error');
+    it('POST /GetNetworkInformation - max supply is the protocol constant', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+      expect(status).to.equal(200);
+      expect(String(data.maxSupply)).to.equal('45000000000000000');
     });
   });
 

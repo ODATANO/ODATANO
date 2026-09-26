@@ -19,6 +19,7 @@ import {
   NetworkInformation,
   UTxOAssets,
   Block,
+  Blocks,
   Epoch,
   Accounts,
   Pools,
@@ -34,6 +35,8 @@ import {
   Address,
   LedgerProtocolParameter,
   AddressTransactions,
+  LedgerAddresses,
+  LedgerAccounts,
 } from '#cds-models/CardanoODataService';
 
 import {
@@ -62,6 +65,7 @@ import {
   mapTransactionInputAssets,
   mapTransactionOutputs,
   mapTransactionOutputAssets,
+  txSeqOf,
   mapTransactionCertificates,
   mapTransactionWithdrawals,
   mapAddress,
@@ -92,13 +96,22 @@ import {
 
 import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
+import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
 import { applyBlockToLedger, type LedgerAnchor } from './ledger-state';
-import { readCursor, setUtxoSetState } from './crawler/sync-state';
+import { readCursor, setUtxoSetState, isCrawlerLeaseActive } from './crawler/sync-state';
+import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../utils/epoch-slots';
+import { EPOCH_CONFIG_BY_NETWORK } from '../utils/const';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
 
 const logger = cds.log('CardanoIndexer');
+
+/** Lovelace aggregate from the DB (string, number or null) as an integer string. */
+function lovelaceSum(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '0';
+  return typeof value === 'number' ? BigInt(Math.trunc(value)).toString() : String(value).split('.')[0];
+}
 
 /**
  * Indexes Cardano data into the OData entities: fetches via CardanoClient, maps provider data
@@ -173,6 +186,37 @@ export class CardanoIndexer {
     this.crawlUtxoSet = coverage.utxoSet ?? false;
     this.enrichRate = coverage.assetEnrichRate ?? this.enrichRate;
     if (coverage.assetCatalogue !== 'enrich') this.stopAssetEnrichment();
+  }
+
+  /**
+   * What the crawled data answers authoritatively: only while a live crawler is at the tip.
+   * Every block after `fromSlot` is held; `ledger` = the crawled UTxO set is active.
+   */
+  private async localCoverage(tx: CapTransaction): Promise<{ fromSlot: number; lastSlot: number; ledger: boolean } | null> {
+    const cursor = await readCursor(tx);
+    if (!cursor || cursor.syncStatus !== 'synced' || cursor.startSlot == null || !isCrawlerLeaseActive(cursor)) return null;
+    return { fromSlot: cursor.startSlot, lastSlot: cursor.lastSlot, ledger: cursor.utxoSet.status === 'active' };
+  }
+
+  /**
+   * Block counts of a pool from crawled blocks (`slotLeader` = pool id): the current epoch when the
+   * crawl covers it from its first slot, the lifetime total when it covers the chain since Shelley.
+   */
+  private async localPoolBlocks(tx: CapTransaction, poolId: string): Promise<{ blocksEpoch?: number; blocksMinted?: number }> {
+    const coverage = await this.localCoverage(tx);
+    if (!coverage) return {};
+    const network = this.client.network;
+    const countSince = async (fromSlot: number): Promise<number> => {
+      const row = await tx.run(
+        SELECT.one.from(Blocks).columns('count(*) as n').where({ slotLeader: poolId, slot: { '>=': fromSlot } })
+      ) as { n?: number | string } | undefined;
+      return Number(row?.n ?? 0);
+    };
+    const counts: { blocksEpoch?: number; blocksMinted?: number } = {};
+    const epochStart = epochStartSlot(network, epochOfSlot(network, coverage.lastSlot));
+    if (coverage.fromSlot < epochStart) counts.blocksEpoch = await countSince(epochStart);
+    if (coverage.fromSlot <= EPOCH_CONFIG_BY_NETWORK[network].shelleyStartSlot) counts.blocksMinted = await countSince(0);
+    return counts;
   }
 
   /** The anchor the imported UTxO set describes (null = ledger mode inactive). */
@@ -287,22 +331,64 @@ export class CardanoIndexer {
     if (existing?.finalized && finalized) return;
     if (!force && existing && now < existing.nextRefreshAt) return;
 
+    const crawled = await this.crawledEpochTotals(epochNumber);
     try {
-      const row = mapEpoch(await this.client.getEpoch(epochNumber));
+      const provided = mapEpoch(await this.client.getEpoch(epochNumber));
       this.crawlEpochCache.set(epochNumber, {
-        row,
+        row: crawled ? { ...provided, ...crawled } : provided,
         nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_REFRESH_MS,
         finalized,
       });
     } catch {
-      // Keep the last good snapshot, but retry transient/negative results soon rather
-      // than suppressing enrichment for the rest of the five-day epoch.
+      // Keep the last good snapshot (or the crawled totals alone), but retry transient/negative
+      // results soon rather than suppressing enrichment for the rest of the five-day epoch.
+      const base = existing?.row ?? (crawled ? this.bareEpochRow(epochNumber) : undefined);
       this.crawlEpochCache.set(epochNumber, {
-        row: existing?.row,
+        row: base && crawled ? { ...base, ...crawled } : base,
         nextRefreshAt: now + CardanoIndexer.CRAWL_EPOCH_RETRY_MS,
         finalized: false,
       });
     }
+  }
+
+  /**
+   * Block, transaction and fee totals of an epoch summed over the crawled blocks, when the crawl
+   * covers the epoch from its first slot; null otherwise. Output and active stake stay with the backend.
+   */
+  private async crawledEpochTotals(epochNumber: number): Promise<Partial<Epoch> | null> {
+    try {
+      const cursor = await readCursor(cds.db as unknown as CapTransaction);
+      if (cursor?.startSlot == null || cursor.startSlot >= epochStartSlot(this.client.network, epochNumber)) return null;
+      const row = await cds.db.run(
+        SELECT.one.from(Blocks)
+          .columns('count(*) as blockCount', 'sum(txCount) as txCount', 'sum(fees) as fees', 'min(time) as firstBlockTime', 'max(time) as lastBlockTime')
+          .where({ epochNumber })
+      ) as { blockCount?: number | string; txCount?: number | string | null; fees?: unknown; firstBlockTime?: string | null; lastBlockTime?: string | null } | undefined;
+      if (!row || Number(row.blockCount ?? 0) === 0) return null;
+      return {
+        blockCount: Number(row.blockCount),
+        txCount: Number(row.txCount ?? 0),
+        fees: lovelaceSum(row.fees),
+        firstBlockTime: row.firstBlockTime != null ? Number(row.firstBlockTime) : null,
+        lastBlockTime: row.lastBlockTime != null ? Number(row.lastBlockTime) : null,
+      };
+    } catch (err) {
+      logger.debug(`Crawled totals for epoch ${epochNumber} unavailable:`, err);
+      return null;
+    }
+  }
+
+  /** Epoch row with only the slot-derived bounds, for an epoch the backend cannot describe. */
+  private bareEpochRow(epochNumber: number): Epoch {
+    const network = this.client.network;
+    const start = epochStartSlot(network, epochNumber);
+    return {
+      epoch: epochNumber,
+      startTime: slotToPosixSeconds(network, start),
+      endTime: slotToPosixSeconds(network, epochStartSlot(network, epochNumber + 1)),
+      output: null,
+      activeStake: null,
+    };
   }
 
   constructor(client: CardanoClient, txBuilder: CardanoTransactionBuilder) {
@@ -323,43 +409,27 @@ export class CardanoIndexer {
 
     logger.debug(`indexTransaction: upserted transaction ${txHash}`);
 
+    await this.writeTransactionChildren(tx, providerTx, txRow.txSeq as number);
+    return txRow;
+  }
+
+  /** Lazy path: inputs, outputs, their assets and metadata of one transaction. */
+  private async writeTransactionChildren(tx: CapTransaction, providerTx: ProviderTransaction, txSeq: number): Promise<void> {
     if (providerTx.inputs) {
-      // Inputs + InputAssets
-      const inputRows = mapTransactionInputs(txHash, providerTx.inputs);
-      const inputAssetRows = mapTransactionInputAssets(txHash, providerTx.inputs);
-
-      if (inputRows.length) {
-
-        await tx.run(UPSERT.into(TransactionInputs).entries(inputRows))
-        logger.debug(`indexTransaction: upserted ${inputRows.length} transaction inputs for ${txHash}`);
-      }
-
-      if (inputAssetRows.length) {
-
-        await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows))
-        logger.debug(`indexTransaction: upserted ${inputAssetRows.length} transaction input assets for ${txHash}`);
-      }
+      const inputRows = mapTransactionInputs(txSeq, providerTx.inputs);
+      const inputAssetRows = mapTransactionInputAssets(txSeq, providerTx.inputs);
+      if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
+      if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
     }
-
-    // Outputs + OutputAssets — must not depend on the inputs branch
+    // outputs must not depend on the inputs branch
     if (providerTx.outputs) {
-      const outputRows = mapTransactionOutputs(txHash, providerTx.outputs);
-      const outputAssetRows = mapTransactionOutputAssets(txHash, providerTx.outputs);
-
-      if (outputRows.length) {
-        await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows))
-      }
-
-      if (outputAssetRows.length) {
-        await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows))
-      }
+      const outputRows = mapTransactionOutputs(txSeq, providerTx.outputs);
+      const outputAssetRows = mapTransactionOutputAssets(txSeq, providerTx.outputs);
+      if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
+      if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
     }
     const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
-
-    if (metadataRows.length) {
-      await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows))
-    }
-    return txRow;
+    if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
   }
 
   /**
@@ -627,10 +697,17 @@ export class CardanoIndexer {
     return rows;
   }
 
-  /** Index the network information. */
+  /** Index the network information; circulating supply comes from the crawled UTxO set when it is current. */
   async indexNetworkInformation(tx: CapTransaction): Promise<NetworkInformation> {
     const netInfo = await this.client.getNetworkInformation();
-    const netEntity = mapNetworkInfo(netInfo,this.client.max_age_ms,this.client.network);
+    const circulating = (await this.localCoverage(tx))?.ledger
+      ? lovelaceSum((await tx.run(SELECT.one.from(LedgerAddresses).columns('sum(totalLovelace) as total')) as { total?: unknown } | undefined)?.total)
+      : null;
+    const netEntity = mapNetworkInfo(
+      circulating === null ? netInfo : { ...netInfo, supply: { ...netInfo.supply, circulating } },
+      this.client.max_age_ms,
+      this.client.network,
+    );
 
     await tx.run(UPSERT.into(NetworkInformation).entries(netEntity));
     return netEntity;
@@ -675,14 +752,16 @@ export class CardanoIndexer {
     this.applyCollateralFees(blockData, txs);
 
     await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
+    await this.removeSupersededBlocks(tx, blockData);
+    await this.removeStaleTxSeqs(tx, txs);
 
     // One bulk UPSERT per table. NUL safety for PostgreSQL is enforced by the db-level hook in
     // srv/utils/db-sanitize.ts, not per call site.
     const txRows = txs.map(t => mapTransaction(t));
-    const inputRows = txs.flatMap(t => mapTransactionInputs(t.hash, t.inputs ?? []));
-    const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(t.hash, t.inputs ?? []));
-    const outputRows = txs.flatMap(t => mapTransactionOutputs(t.hash, t.outputs ?? []));
-    const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(t.hash, t.outputs ?? []));
+    const inputRows = txs.flatMap(t => mapTransactionInputs(txSeqOf(t.slot, t.index), t.inputs ?? []));
+    const inputAssetRows = txs.flatMap(t => mapTransactionInputAssets(txSeqOf(t.slot, t.index), t.inputs ?? []));
+    const outputRows = txs.flatMap(t => mapTransactionOutputs(txSeqOf(t.slot, t.index), t.outputs ?? []));
+    const outputAssetRows = txs.flatMap(t => mapTransactionOutputAssets(txSeqOf(t.slot, t.index), t.outputs ?? []));
     const metadataRows = txs.flatMap(t => mapTransactionMetadata(t.metadata ?? []));
     // Certificates + withdrawals are keyed (tx, certIndex, kind) / (tx, stakeAddress), so a
     // re-crawl is idempotent and a reorg removes them with their tx.
@@ -736,6 +815,45 @@ export class CardanoIndexer {
   }
 
   /**
+   * Drop other Block rows at the crawled block's height that no transaction references: lazily
+   * indexed tips that were rolled back, which no crawler reorg covers.
+   */
+  private async removeSupersededBlocks(tx: CapTransaction, blockData: BlockData): Promise<void> {
+    if (blockData.height == null) return;
+    const others = await tx.run(
+      SELECT.from(Blocks).columns('hash').where({ height: blockData.height, hash: { '!=': blockData.hash } })
+    ) as Array<{ hash: string }>;
+    if (!others?.length) return;
+    const hashes = others.map(r => r.hash);
+    const referenced = await tx.run(
+      SELECT.distinct.from(Transactions).columns('blockHash').where({ blockHash: { in: hashes } })
+    ) as Array<{ blockHash: string }>;
+    const keep = new Set((referenced ?? []).map(r => r.blockHash));
+    const stale = hashes.filter(h => !keep.has(h));
+    if (!stale.length) return;
+    await tx.run(DELETE.from(Blocks).where({ hash: { in: stale } }));
+    logger.info(`indexBlockFull: removed ${stale.length} superseded block row(s) at height ${blockData.height}`);
+  }
+
+  /**
+   * Drop transactions of another fork that hold one of this block's txSeq keys (a lazily indexed
+   * tx from a rolled-back block at the same slot); their input/output rows would mix with ours.
+   */
+  private async removeStaleTxSeqs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
+    if (!txs.length) return;
+    const seqs = txs.map(t => txSeqOf(t.slot, t.index));
+    const rows = await tx.run(
+      SELECT.from(Transactions).columns('hash', 'txSeq')
+        .where({ txSeq: { between: Math.min(...seqs), and: Math.max(...seqs) } })
+    ) as TxKey[];
+    const ours = new Set(txs.map(t => t.hash));
+    const stale = (rows ?? []).filter(r => !ours.has(r.hash));
+    if (!stale.length) return;
+    await deleteTransactionRows(tx, stale);
+    logger.info(`indexBlockFull: removed ${stale.length} transaction(s) of another fork at slot ${txs[0].slot}`);
+  }
+
+  /**
    * Warn once when `crawler.certificates` is on but the source reports none (`certificates`
    * undefined, as with Blockfrost). `[]` means "none" and is not a warning.
    */
@@ -783,18 +901,22 @@ export class CardanoIndexer {
     // 3. Batch-read prior-block outputs from the DB, chunked so a dense block's input set
     //    never exceeds a driver's bind-variable cap
     const sourceHashes = [...new Set(unresolved.map(u => u.input.txHash))];
+    const hashBySeq = new Map<string, string>();
+    for (const k of await readTxKeys(tx, sourceHashes)) {
+      if (k.txSeq != null) hashBySeq.set(seqKey(k.txSeq), k.hash);
+    }
     const addrByKey = new Map<string, string>();
     const amtByKey = new Map<string, Amount[]>();
-    for (const hashChunk of chunk(sourceHashes, IN_CHUNK)) {
+    for (const seqChunk of chunk([...hashBySeq.keys()].map(Number), IN_CHUNK)) {
       const [outRows, assetRows] = await Promise.all([
-        tx.run(SELECT.from(TransactionOutputs).where({ tx_hash: { in: hashChunk } })),
-        tx.run(SELECT.from(TransactionOutputAssets).where({ output_tx_hash: { in: hashChunk } })),
+        tx.run(SELECT.from(TransactionOutputs).where({ txSeq: { in: seqChunk } })),
+        tx.run(SELECT.from(TransactionOutputAssets).where({ output_txSeq: { in: seqChunk } })),
       ]);
-      for (const r of outRows as Array<{ tx_hash: string; outputIndex: number; address_address: string }>) {
-        addrByKey.set(`${r.tx_hash}#${r.outputIndex}`, r.address_address);
+      for (const r of outRows as Array<{ txSeq: number | string; outputIndex: number; address_address: string }>) {
+        addrByKey.set(`${hashBySeq.get(seqKey(r.txSeq))}#${r.outputIndex}`, r.address_address);
       }
-      for (const r of assetRows as Array<{ output_tx_hash: string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
-        const k = `${r.output_tx_hash}#${r.output_outputIndex}`;
+      for (const r of assetRows as Array<{ output_txSeq: number | string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
+        const k = `${hashBySeq.get(seqKey(r.output_txSeq))}#${r.output_outputIndex}`;
         const list = amtByKey.get(k) ?? [];
         list.push({ unit: r.unit, quantity: String(r.asset_quantity) });
         amtByKey.set(k, list);
@@ -1037,7 +1159,14 @@ export class CardanoIndexer {
 
   /** Index an account by stake address, plus its addresses when it has any. */
   async indexAccount(tx: CapTransaction, stakeAddress: string): Promise<Account> {
-    const accountInfo = await this.client.getAccount(stakeAddress);
+    const accountInfo = { ...(await this.client.getAccount(stakeAddress)) };
+    // controlled amount = UTxOs under the stake key (crawled set, when current) + reward balance
+    if ((await this.localCoverage(tx))?.ledger) {
+      const ledger = await tx.run(
+        SELECT.one.from(LedgerAccounts).columns('controlledAmount').where({ stakeAddress })
+      ) as { controlledAmount?: unknown } | undefined;
+      accountInfo.controlledAmount = (BigInt(lovelaceSum(ledger?.controlledAmount)) + BigInt(accountInfo.withdrawableAmount || '0')).toString();
+    }
     const accountEntity = mapAccount(accountInfo, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Accounts).entries(accountEntity))
@@ -1062,7 +1191,7 @@ export class CardanoIndexer {
   /** Index a pool by id. */
   async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
     const poolInfo = await this.client.getPool(poolId);
-    const poolEntity = mapPool(poolInfo, this.client.max_age_ms);
+    const poolEntity = mapPool({ ...poolInfo, ...(await this.localPoolBlocks(tx, poolId)) }, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Pools).entries(poolEntity))
 
@@ -1409,6 +1538,13 @@ export class CardanoIndexer {
     }
     const blockEntity = mapBlock(blockInfo, epoch);
 
+    // A header-only tip is never persisted: its zeros would read as an empty block, overwrite a
+    // crawled row of the same hash, or outlive the block when the tip is rolled back.
+    if (blockInfo.headerOnly) {
+      const stored = await tx.run(SELECT.one.from(Block).where({ hash: blockInfo.hash })) as Block | undefined;
+      return stored ?? blockEntity;
+    }
+
     await tx.run(UPSERT.into(Block).entries(blockEntity));
     return blockEntity;
   }
@@ -1419,6 +1555,17 @@ export class CardanoIndexer {
 
   /** Max addresses to index concurrently (avoid overloading backends) */
   private static readonly ADDR_CONCURRENCY = 5;
+
+  /** Block position of a transaction already in the local index (crawled or cached), or null. */
+  async findIndexedTransaction(
+    tx: CapTransaction,
+    txHash: string
+  ): Promise<{ slot: number | null; blockHeight: number | null } | null> {
+    const row = await tx.run(
+      SELECT.one.from(Transactions).columns('slot', 'blockHeight').where({ hash: txHash })
+    ) as { slot: number | null; blockHeight: number | null } | undefined;
+    return row ?? null;
+  }
 
   /**
    * Ensure a set of transactions is indexed: DB check, batch fetch of the missing ones, UPSERT.
@@ -1446,24 +1593,7 @@ export class CardanoIndexer {
       for (const [, providerTx] of fetched) {
         const txRow = mapTransaction(providerTx);
         await tx.run(UPSERT.into(Transactions).entries(txRow));
-
-        if (providerTx.inputs) {
-          const inputRows = mapTransactionInputs(providerTx.hash, providerTx.inputs);
-          const inputAssetRows = mapTransactionInputAssets(providerTx.hash, providerTx.inputs);
-          if (inputRows.length) await tx.run(UPSERT.into(TransactionInputs).entries(inputRows));
-          if (inputAssetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(inputAssetRows));
-        }
-
-        // outputs independent of inputs (see indexTransaction)
-        if (providerTx.outputs) {
-          const outputRows = mapTransactionOutputs(providerTx.hash, providerTx.outputs);
-          const outputAssetRows = mapTransactionOutputAssets(providerTx.hash, providerTx.outputs);
-          if (outputRows.length) await tx.run(UPSERT.into(TransactionOutputs).entries(outputRows));
-          if (outputAssetRows.length) await tx.run(UPSERT.into(TransactionOutputAssets).entries(outputAssetRows));
-        }
-
-        const metadataRows = mapTransactionMetadata(providerTx.metadata || []);
-        if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
+        await this.writeTransactionChildren(tx, providerTx, txRow.txSeq as number);
       }
     }
 

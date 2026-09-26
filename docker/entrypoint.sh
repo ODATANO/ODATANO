@@ -13,6 +13,11 @@
 # it, then exit. Run it as a one-off container BEFORE the first PostgreSQL start
 # of the service, with every writer stopped:
 #   ODATANO_DB_URL=postgres://... docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite
+#
+# `migrate-txseq` mode: move a database written before the txSeq key layout onto it
+# (scripts/migrate-txseq.mjs), then exit. Run it once with the service stopped, BEFORE the
+# first start of the new image; `--dry-run` only reports:
+#   docker compose run --rm --no-deps odatano migrate-txseq [--dry-run]
 set -eu
 
 DB_URL="${ODATANO_DB_URL:-}"
@@ -34,6 +39,14 @@ wait_for_postgres() {
         })();
     '
 }
+
+if [ "$MODE" = "migrate-txseq" ]; then
+    shift
+    CDS_CONFIG="$(node /app/docker/cds-config.mjs --db-only)" || exit 1
+    export CDS_CONFIG
+    [ -n "$DB_URL" ] && wait_for_postgres
+    exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-txseq.mjs "$@"
+fi
 
 if [ "$MODE" = "migrate" ]; then
     shift

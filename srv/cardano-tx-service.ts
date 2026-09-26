@@ -886,7 +886,9 @@ module.exports = (srv: cds.Service) => {
       if (!submission) throw new NotFoundError(`Submission '${submissionId}'`);
 
       try {
-        const txDetails = await getCardanoClient().getTransaction(submission.txHash);
+        // the local index first (filled by the crawler), then the backends
+        const txDetails = await getCardanoIndexer().findIndexedTransaction(db, submission.txHash)
+          ?? await getCardanoClient().getTransaction(submission.txHash);
         if (txDetails) {
           await db.run(
             UPDATE.entity(TransactionSubmissions)

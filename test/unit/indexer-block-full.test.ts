@@ -7,19 +7,34 @@ type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
 const runs: Q[] = [];
 /** Units the `Assets` table already holds, as the catalogue's existence check sees them. */
 let knownAssets: string[] = [];
+/** Other Block rows at the crawled height, and which of them a transaction references. */
+let blocksAtHeight: string[] = [];
+let referencedBlocks: string[] = [];
+/** Transactions the stale-seq range check finds at this block's txSeq keys. */
+let seqRangeRows: Array<{ hash: string; txSeq: string }> = [];
 /** The crawler cursor the ledger anchor verification reads (readCursor is mocked below). */
 let cursorRow: { lastSlot: number; lastBlockHash: string | null; utxoSet: { appliedSlot: number | null } } | null =
   { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
+/** txSeq of the prior-block transaction prev… (string, as Postgres returns Int64). */
+const PREV_SEQ = '262144000';
 const mockTx = {
   run: vi.fn(async (q: Q) => {
     runs.push(q);
+    if (q._op === 'SELECT.many' && q.entity === 'Transactions') {
+      // hash -> txSeq lookup of input resolution; the stale-seq range check finds nothing
+      if ((q.where as { txSeq?: unknown }).txSeq) return seqRangeRows;
+      const hashes = (q.where as { hash?: { in: string[] } }).hash?.in ?? [];
+      return hashes.includes('prev'.padEnd(64, '0')) ? [{ hash: 'prev'.padEnd(64, '0'), txSeq: PREV_SEQ }] : [];
+    }
     if (q._op === 'SELECT.many' && q.entity === 'TransactionOutputs') {
       // prior-block output for input resolution: prevTx#0 belongs to addrPrev
-      return [{ tx_hash: 'prev'.padEnd(64, '0'), outputIndex: 0, address_address: 'addrPrev' }];
+      return [{ txSeq: PREV_SEQ, outputIndex: 0, address_address: 'addrPrev' }];
     }
     if (q._op === 'SELECT.many' && q.entity === 'TransactionOutputAssets') {
-      return [{ output_tx_hash: 'prev'.padEnd(64, '0'), output_outputIndex: 0, unit: 'lovelace', asset_quantity: '7000000' }];
+      return [{ output_txSeq: PREV_SEQ, output_outputIndex: 0, unit: 'lovelace', asset_quantity: '7000000' }];
     }
+    if (q._op === 'SELECT.many' && q.entity === 'Blocks') return blocksAtHeight.map(hash => ({ hash }));
+    if (q._op === 'SELECT.distinct' && q.entity === 'Transactions') return referencedBlocks.map(blockHash => ({ blockHash }));
     // asset catalogue: nothing known yet unless a test says otherwise (see knownAssets)
     if (q._op === 'SELECT.many' && q.entity === 'AssetsTable') {
       return knownAssets.map(unit => ({ unit }));
@@ -35,9 +50,10 @@ vi.mock('@sap/cds', () => {
     UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
     UPDATE: { entity: (entity: string) => ({ set: () => ({ where: () => ({ _op: 'UPDATE', entity }) }) }) },
-    DELETE: { from: (entity: string) => ({ where: () => ({ _op: 'DELETE', entity }) }) },
+    DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
     SELECT: {
       one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
+      distinct: { from: (entity: string) => ({ columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.distinct', entity, where }) }) }) },
       from: (entity: string) => ({
         where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
         columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }) }),
@@ -54,7 +70,7 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   TransactionInputs: 'TransactionInputs', TransactionInputAssets: 'TransactionInputAssets',
   TransactionOutputs: 'TransactionOutputs', TransactionOutputAssets: 'TransactionOutputAssets',
   TransactionMetadata: 'TransactionMetadata', NetworkInformation: 'NetworkInformation',
-  UTxOAssets: 'UTxOAssets', Block: 'Block', Epoch: 'Epoch', Accounts: 'Accounts',
+  UTxOAssets: 'UTxOAssets', Block: 'Block', Blocks: 'Blocks', Epoch: 'Epoch', Accounts: 'Accounts',
   Pools: 'Pools', Dreps: 'Dreps', Assets: 'Assets', AssetHistory: 'AssetHistory',
   PoolEpochSnapshots: 'PoolEpochSnapshots', DrepEpochSnapshots: 'DrepEpochSnapshots',
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
@@ -74,6 +90,11 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
 vi.mock('#cds-models/odatano/cardano', () => ({
   Assets: 'AssetsTable',
+  // transaction-rows (hash -> txSeq lookup, stale-seq delete)
+  Transactions: 'Transactions', TransactionInputs: 'TransactionInputs', TransactionInputAssets: 'TransactionInputAssets',
+  TransactionOutputs: 'TransactionOutputs', TransactionOutputAssets: 'TransactionOutputAssets',
+  TransactionMetadata_: 'TransactionMetadata', TransactionCertificates: 'TransactionCertificates',
+  TransactionWithdrawals: 'TransactionWithdrawals',
 }));
 
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -116,6 +137,9 @@ function makeIndexer(getEpoch: Mock = vi.fn().mockRejectedValue(new Error('no ep
 beforeEach(() => {
   runs.length = 0;
   knownAssets = [];
+  blocksAtHeight = [];
+  referencedBlocks = [];
+  seqRangeRows = [];
   mockTx.run.mockClear();
 });
 
@@ -154,6 +178,75 @@ describe('CardanoIndexer.indexBlockFull — bulk persistence', () => {
     expect(upsertsFor('Transactions')).toHaveLength(0);
     expect(upsertsFor('TransactionInputs')).toHaveLength(0);
     expect(upsertsFor('Block')).toHaveLength(1); // block row is always written
+  });
+});
+
+describe('CardanoIndexer.indexBlockFull — superseded rows at the same height', () => {
+  const deletes = () => runs.filter(q => q._op === 'DELETE' && q.entity === 'Blocks');
+
+  it('deletes other rows at the height that no transaction references', async () => {
+    const { indexer } = makeIndexer();
+    blocksAtHeight = ['stub'.padEnd(64, '0'), 'lazy'.padEnd(64, '0')];
+    referencedBlocks = ['lazy'.padEnd(64, '0')];
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), []);
+
+    const select = runs.find(q => q._op === 'SELECT.many' && q.entity === 'Blocks');
+    expect(select?.where).toEqual({ height: 50, hash: { '!=': 'blk'.padEnd(64, '9') } });
+    expect(deletes()).toHaveLength(1);
+    expect(deletes()[0].where).toEqual({ hash: { in: ['stub'.padEnd(64, '0')] } });
+  });
+
+  it('deletes nothing when the height holds no other row or every other row is referenced', async () => {
+    const { indexer } = makeIndexer();
+    await indexer.indexBlockFull(mockTx as never, blockData(), []);
+    expect(runs.some(q => q._op === 'SELECT.distinct')).toBe(false);
+
+    blocksAtHeight = ['lazy'.padEnd(64, '0')];
+    referencedBlocks = ['lazy'.padEnd(64, '0')];
+    await indexer.indexBlockFull(mockTx as never, blockData(), []);
+    expect(deletes()).toHaveLength(0);
+  });
+});
+describe('CardanoIndexer.indexBlockFull — txSeq keys', () => {
+  const deletesOf = (entity: string) => runs.filter(q => q._op === 'DELETE' && q.entity === entity);
+
+  it('keys input/output rows by slot * 65536 + txIndex', async () => {
+    const { indexer } = makeIndexer();
+    const t = tx('k1'.padEnd(64, '0'), {
+      index: 3,
+      outputs: [{ address: 'addrA', amount: [{ unit: 'lovelace', quantity: '1' }], txHash: 'k1'.padEnd(64, '0'), outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const seq = 5000 * 65536 + 3;
+    expect(upsertsFor('Transactions')[0].entries).toEqual([expect.objectContaining({ hash: 'k1'.padEnd(64, '0'), txSeq: seq })]);
+    expect(upsertsFor('TransactionOutputs')[0].entries).toEqual([expect.objectContaining({ txSeq: seq, outputIndex: 0 })]);
+    expect(upsertsFor('TransactionOutputAssets')[0].entries).toEqual([expect.objectContaining({ output_txSeq: seq, output_outputIndex: 0 })]);
+  });
+
+  it('deletes a transaction of another fork that holds one of the keys of the block', async () => {
+    const { indexer } = makeIndexer();
+    const ours = 'k2'.padEnd(64, '0');
+    seqRangeRows = [{ hash: ours, txSeq: String(5000 * 65536) }, { hash: 'fork'.padEnd(64, '0'), txSeq: String(5000 * 65536) }];
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx(ours)]);
+
+    const range = runs.find(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { txSeq?: unknown }).txSeq);
+    expect(range?.where).toEqual({ txSeq: { between: 5000 * 65536, and: 5000 * 65536 } });
+    expect(deletesOf('TransactionOutputs')[0].where).toEqual({ txSeq: { in: [String(5000 * 65536)] } });
+    expect(deletesOf('Transactions')[0].where).toEqual({ hash: { in: ['fork'.padEnd(64, '0')] } });
+  });
+
+  it('deletes nothing when the keys belong to the transactions of the block', async () => {
+    const { indexer } = makeIndexer();
+    const ours = 'k3'.padEnd(64, '0');
+    seqRangeRows = [{ hash: ours, txSeq: String(5000 * 65536) }];
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx(ours)]);
+
+    expect(deletesOf('Transactions')).toHaveLength(0);
   });
 });
 
@@ -258,13 +351,14 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
       outputs: [{ address: 'addrSame', amount: [{ unit: 'lovelace', quantity: '5000000' }], txHash: 't1'.padEnd(64, '0'), outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false }],
     });
     const spender = tx('t2'.padEnd(64, '0'), {
+      index: 1,
       inputs: [{ address: '', amount: [], txHash: 't1'.padEnd(64, '0'), outputIndex: 0 }], // ogmios bare ref
     });
 
     await indexer.indexBlockFull(mockTx as never, blockData(), [producer, spender]);
 
     const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
-    const resolved = inputRows.find(r => r.tx_hash === 't2'.padEnd(64, '0'));
+    const resolved = inputRows.find(r => r.txSeq === 5000 * 65536 + 1);
     expect(resolved!.address_address).toBe('addrSame');
     expect(resolved!.hasAddresses).toBe(true);
     // same-block resolution → no DB read for outputs
@@ -281,7 +375,7 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
 
     const outputsRead = runs.filter(q => q._op === 'SELECT.many' && q.entity === 'TransactionOutputs');
     expect(outputsRead).toHaveLength(1);
-    expect(outputsRead[0].where).toEqual({ tx_hash: { in: ['prev'.padEnd(64, '0')] } });
+    expect(outputsRead[0].where).toEqual({ txSeq: { in: [Number(PREV_SEQ)] } });
 
     const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
     expect(inputRows[0].address_address).toBe('addrPrev');
@@ -310,7 +404,9 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
 
     await indexer.indexBlockFull(mockTx as never, blockData(), [resolved]);
 
-    expect(runs.filter(q => q._op === 'SELECT.many')).toHaveLength(0); // no resolution reads at all
+    // no resolution reads at all (the Blocks and txSeq range checks run for every block)
+    expect(runs.filter(q => q._op === 'SELECT.many' && ['TransactionOutputs', 'TransactionOutputAssets'].includes(q.entity))).toHaveLength(0);
+    expect(runs.some(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { hash?: unknown }).hash)).toBe(false);
     const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
     expect(inputRows[0].address_address).toBe('addrKnown');
   });
@@ -647,7 +743,7 @@ describe('CardanoIndexer.indexBlockFull — outpoint, certificates, withdrawals'
     await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
 
     expect(upsertsFor('TransactionInputs')[0].entries).toEqual([
-      expect.objectContaining({ tx_hash: 't9'.padEnd(64, '0'), inputIndex: 0, spentTxHash: 'prev'.padEnd(64, '0'), spentOutputIndex: 3 }),
+      expect.objectContaining({ txSeq: 5000 * 65536, inputIndex: 0, spentTxHash: 'prev'.padEnd(64, '0'), spentOutputIndex: 3 }),
     ]);
   });
 
@@ -730,7 +826,8 @@ describe('CardanoIndexer.indexBlockFull — ledger state gating', () => {
     // the cursor was the anchor when the first block past it arrived — verified, no invalidation
     expect(setUtxoSetState).not.toHaveBeenCalled();
     await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5002 }), txs);
-    expect(readCursor).toHaveBeenCalledTimes(1); // verified once per anchor
+    // verified once per anchor (the crawl epoch totals read the cursor outside the block transaction)
+    expect((readCursor as unknown as Mock).mock.calls.filter(c => c[0] === mockTx)).toHaveLength(1);
   });
 
   it('accepts the anchor at the configured start block (bootstrap: cursor set, no Blocks row yet)', async () => {
@@ -761,7 +858,7 @@ describe('CardanoIndexer.indexBlockFull — ledger state gating', () => {
     await indexer.indexBlockFull(mockTx as never, blockData({ slot: 5001 }), [tx('l5'.padEnd(64, '0'))]);
     expect(ledger()).not.toHaveBeenCalled();
     expect(setUtxoSetState).toHaveBeenCalledTimes(2);
-    expect(readCursor).toHaveBeenCalledTimes(1);
+    expect((readCursor as unknown as Mock).mock.calls.filter(c => c[0] === mockTx)).toHaveLength(1);
     expect(indexer.takeLedgerInvalidation()).toMatch(/not the block the crawler followed/);
     expect(indexer.takeLedgerInvalidation()).toBeNull(); // handed out once
   });

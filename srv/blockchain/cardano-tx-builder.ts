@@ -171,24 +171,7 @@ export class CardanoTransactionBuilder {
         );
 
         if (!alreadyIncluded) {
-            logger.debug(`Script UTxO ${scriptRef.txHash}#${scriptRef.outputIndex} not in sender UTxOs - fetching from backend`);
-            const tx = await cardanoClient.getTransaction(scriptRef.txHash);
-            const scriptOutput = tx.outputs?.find(o => o.outputIndex === scriptRef.outputIndex);
-            if (!scriptOutput) {
-                throw new TransactionValidationError(`Script UTxO output ${scriptRef.txHash}#${scriptRef.outputIndex} not found in transaction`);
-            }
-            // spending an already-consumed script UTxO is the most common replay mistake —
-            // catch it here with a clear 400 instead of a node-side rejection at submit
-            await this._assertUnspent(scriptRef, scriptOutput.address, 'scriptUtxo', new Map());
-            allUtxos.push({
-                txHash: scriptRef.txHash,
-                outputIndex: scriptRef.outputIndex,
-                address: scriptOutput.address,
-                amount: scriptOutput.amount,
-                inlineDatum: scriptOutput.inlineDatum,
-                datumHash: scriptOutput.dataHash ?? undefined,
-                scriptRef: scriptOutput.referenceScriptHash ?? undefined,
-            });
+            allUtxos.push(await this._resolveScriptUtxo(scriptRef));
         }
 
         // Resolve forced inputs (may overlap with sender UTxOs or the script UTxO — dedup below).
@@ -219,6 +202,55 @@ export class CardanoTransactionBuilder {
 
         logger.debug(`Built Plutus spending transaction successfully.`);
         return txBuildResult;
+    }
+
+    /**
+     * Resolve the script UTxO of a Plutus spend from the node's ledger, otherwise from its producing
+     * transaction. Spending an already-consumed script UTxO is the most common replay mistake —
+     * both paths reject it with a clear 400 instead of a node-side rejection at submit.
+     */
+    private async _resolveScriptUtxo(scriptRef: { txHash: string; outputIndex: number }): Promise<UTxO> {
+        const ledger = await this._lookupUnspent([scriptRef]);
+        if (ledger) {
+            const live = ledger.get(outRefKey(scriptRef));
+            if (!live) {
+                throw new TransactionValidationError(`scriptUtxo ${outRefKey(scriptRef)} not found on-chain or already spent`);
+            }
+            return live;
+        }
+        logger.debug(`Script UTxO ${outRefKey(scriptRef)} not in sender UTxOs - fetching its transaction`);
+        const tx = await this.client.getTransaction(scriptRef.txHash);
+        const scriptOutput = tx.outputs?.find(o => o.outputIndex === scriptRef.outputIndex);
+        if (!scriptOutput) {
+            throw new TransactionValidationError(`Script UTxO output ${outRefKey(scriptRef)} not found in transaction`);
+        }
+        await this._assertUnspent(scriptRef, scriptOutput.address, 'scriptUtxo', new Map());
+        return {
+            txHash: scriptRef.txHash,
+            outputIndex: scriptRef.outputIndex,
+            address: scriptOutput.address,
+            amount: scriptOutput.amount,
+            inlineDatum: scriptOutput.inlineDatum,
+            datumHash: scriptOutput.dataHash ?? undefined,
+            scriptRef: scriptOutput.referenceScriptHash ?? undefined,
+        };
+    }
+
+    /**
+     * Unspent outputs for `refs` from the node's ledger, keyed "txHash#index"; null when no
+     * ledger-state backend is usable or the query fails (callers fall back to getTransaction).
+     */
+    private async _lookupUnspent(
+        refs: Array<{ txHash: string; outputIndex: number }>
+    ): Promise<Map<string, UTxO> | null> {
+        if (refs.length === 0) return new Map();
+        try {
+            const utxos = await this.client.getUnspentOutputs(refs);
+            return utxos ? new Map(utxos.map(u => [outRefKey(u), u])) : null;
+        } catch (err: unknown) {
+            logger.warn(`Ledger lookup of ${refs.length} output reference(s) failed, falling back to the producing transactions: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+        }
     }
 
     /**
@@ -269,9 +301,10 @@ export class CardanoTransactionBuilder {
     }
 
     /**
-     * Resolve {txHash, outputIndex} refs to full UTxO records: known UTxOs first, otherwise the
-     * producing transaction plus an unspent check. Throws TransactionValidationError (labelled
-     * by `kind`) for a missing or spent ref. Refs are deduplicated; order is preserved.
+     * Resolve {txHash, outputIndex} refs to full UTxO records: known UTxOs first, then the node's
+     * ledger, otherwise the producing transaction plus an unspent check. Throws
+     * TransactionValidationError (labelled by `kind`) for a missing or spent ref. Refs are
+     * deduplicated; order is preserved.
      */
     private async _resolveInputRefs(
         refs: Array<{ txHash: string; outputIndex: number }>,
@@ -287,6 +320,9 @@ export class CardanoTransactionBuilder {
             seen.add(key);
             return true;
         });
+        const isKnown = (r: { txHash: string; outputIndex: number }) =>
+            knownUtxos.some(u => u.txHash === r.txHash && u.outputIndex === r.outputIndex);
+        const ledger = await this._lookupUnspent(dedupedRefs.filter(r => !isKnown(r)));
         const liveUtxoCache = new Map<string, UTxO[]>();
         const resolved: UTxO[] = [];
         for (const ref of dedupedRefs) {
@@ -296,7 +332,16 @@ export class CardanoTransactionBuilder {
                 resolved.push(local);
                 continue;
             }
-            // 2) Fallback: fetch the producing transaction and look up the output.
+            // 2) The node's ledger answers existence and spendability in one lookup
+            if (ledger) {
+                const live = ledger.get(outRefKey(ref));
+                if (!live) {
+                    throw new TransactionValidationError(`${kind} ${outRefKey(ref)} not found on-chain or already spent`);
+                }
+                resolved.push(live);
+                continue;
+            }
+            // 3) Fallback: fetch the producing transaction and look up the output.
             let tx;
             try {
                 tx = await this.client.getTransaction(ref.txHash);
@@ -345,13 +390,18 @@ export class CardanoTransactionBuilder {
     }
 }
 
+/** "txHash#outputIndex" key of an output reference. */
+function outRefKey(ref: { txHash: string; outputIndex: number }): string {
+    return `${ref.txHash}#${ref.outputIndex}`;
+}
+
 /** Merge two UTxO lists, skipping refs already present in the first. */
 function mergeUtxosUnique(base: UTxO[], extra: UTxO[]): UTxO[] {
     if (extra.length === 0) return base;
-    const seen = new Set(base.map(u => `${u.txHash}#${u.outputIndex}`));
+    const seen = new Set(base.map(outRefKey));
     const result = [...base];
     for (const u of extra) {
-        const key = `${u.txHash}#${u.outputIndex}`;
+        const key = outRefKey(u);
         if (!seen.has(key)) {
             seen.add(key);
             result.push(u);

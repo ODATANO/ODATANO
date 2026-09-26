@@ -159,12 +159,14 @@ export class RateLimitError extends BackendError {
 
 /** Every backend failed; carries the last error's status, or 503 when all were skipped. */
 export class AllBackendsFailedError extends BackendError {
-  constructor(public readonly errors: BackendError[], originalError?: unknown) {
+  /** @param skipped why backends were not called at all, e.g. `koios: circuit open` */
+  constructor(public readonly errors: BackendError[], originalError?: unknown, skipped: string[] = []) {
     const lastError = errors[errors.length - 1];
+    const noneCalled = skipped.length ? `no backend available (${skipped.join('; ')})` : 'unknown error';
 
     super(
       // Empty errors: every backend was skipped (method unsupported), nothing failed upstream, so 503
-      `All backends failed: ${lastError?.message ?? 'unknown error'}`,
+      `All backends failed: ${lastError?.message ?? noneCalled}`,
       lastError?.statusCode ?? 503,
       lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
       undefined,
@@ -449,7 +451,9 @@ export class BackendInitError extends BackendError {
     originalError: unknown
   ) {
     super(
-      `Failed to initialize backend: ${backendName}`,
+      originalError != null
+        ? `Failed to initialize backend: ${backendName} (${getErrorMessage(originalError)})`
+        : `Failed to initialize backend: ${backendName}`,
       500,
       ERROR_CODES.INTERNAL_ERROR,
       backendName,

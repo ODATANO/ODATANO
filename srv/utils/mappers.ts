@@ -73,6 +73,12 @@ import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
 import { ASSET_UNIT_REGEX } from './const';
 
+/** Key of a transaction's input/output rows: chain position, ascending, below 2^53 for any real slot. */
+export const TX_SEQ_SLOT_FACTOR = 65536;
+export function txSeqOf(slot: number, txIndex: number): number {
+  return slot * TX_SEQ_SLOT_FACTOR + txIndex;
+}
+
 /** Provider transaction to TransactionRow. */
 export function mapTransaction(providerTx: TransactionProviderData): TransactionRow {
   // length check: chain-sync delivers `[]` for metadata-less txs
@@ -82,6 +88,7 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
 
   return {
     hash: providerTx.hash,
+    txSeq: txSeqOf(providerTx.slot, providerTx.index),
     blockHash: providerTx.blockHash,
     blockHeight: providerTx.blockHeight ?? null,
     blockTime: providerTx.blockTime ?? null,
@@ -97,7 +104,7 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
 }
 
 /** Provider transaction inputs to TransactionInputRows, keyed by position in the tx. */
-export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderData[]): TransactionInputRow[] {
+export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderData[]): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
     // Position in this tx's inputs; input.outputIndex is the spent UTxO's index, not a key here
     const inputIndex = idx;
@@ -105,7 +112,7 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
     const hasAssets = Array.isArray(input.amount) && input.amount.length > 0;
 
     return {
-      tx_hash: txHash,
+      txSeq,
       inputIndex: inputIndex,
       // unresolved chain-sync inputs carry '': persist a null FK, not an empty-string association
       address_address: input.address || null,
@@ -125,7 +132,7 @@ export function mapTransactionInputs(txHash: string, txInputs: TxInputProviderDa
 
 /** Provider transaction input assets to TransactionInputAssetRows. */
 export function mapTransactionInputAssets(
-  txHash: string,
+  txSeq: number,
   inputs: TxInputProviderData[]
 ): TransactionInputAssetRow[] {
   return inputs.flatMap((input, idx) => {
@@ -138,7 +145,7 @@ export function mapTransactionInputAssets(
       const { policyId, assetName } = parseAssetUnit(a.unit);
 
       return {
-        input_tx_hash: txHash,
+        input_txSeq: txSeq,
         input_inputIndex: inputIndex,
         unit: a.unit,
         asset_quantity: a.quantity,
@@ -181,7 +188,7 @@ export function mapTransactionWithdrawals(
 }
 
 /** Provider transaction outputs to TransactionOutputRows. */
-export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
+export function mapTransactionOutputs(txSeq: number, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
   return txOutputs.map((output) => {
 
     const outputIndex = output.outputIndex;
@@ -189,7 +196,7 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
     const hasAssets = Array.isArray(output.amount) && output.amount.length > 0;
 
     return {
-      tx_hash: txHash,
+      txSeq,
       outputIndex: outputIndex,
       address_address: output.address,
       utxo_dataHash: output.dataHash || null,
@@ -203,7 +210,7 @@ export function mapTransactionOutputs(txHash: string, txOutputs: TxOutputProvide
 
 /** Provider transaction output assets to TransactionOutputAssetRows. */
 export function mapTransactionOutputAssets(
-  txHash: string,
+  txSeq: number,
   outputs: TxOutputProviderData[]
 ): TransactionOutputAssetRow[] {
   return outputs.flatMap((output) => {
@@ -214,7 +221,7 @@ export function mapTransactionOutputAssets(
     return output.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
       return {
-        output_tx_hash: txHash,
+        output_txSeq: txSeq,
         output_outputIndex: outputIndex,
         unit: a.unit,
         asset_quantity: a.quantity,
@@ -702,6 +709,8 @@ export function mapAccount(providerAccountData: AccountProviderData, max_age: nu
     reservesSum: providerAccountData.reservesSum,
     treasurySum: providerAccountData.treasurySum,
     withdrawableAmount: providerAccountData.withdrawableAmount,
+    poolId_poolId: providerAccountData.poolId ?? null,
+    drepId_drepId: providerAccountData.drepId ?? null,
     hasAddresses: providerAccountData.addresses.length > 0,
   };
 }

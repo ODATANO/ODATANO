@@ -8,10 +8,12 @@ import {
   Method
 } from '@cardano-ogmios/client';
 import { bech32 } from 'bech32';
+import { blake2b_224 } from '@harmoniclabs/crypto';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
+import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../../utils/epoch-slots';
 import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId } from '../../utils/mappers';
 import {
   Transaction,
@@ -35,15 +37,14 @@ import {
 
 import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend } from './cardano-backend';
 
-import { BECH32_MAX_LENGTH, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK } from '../../utils/const';
+import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
 
 /** Ogmios response shapes not fully typed in @cardano-ogmios/client. */
 interface OgmiosStakePool {
-  vrf?: string;
-  vrfKeyHash?: string;
+  vrfVerificationKeyHash?: string;
   stake?: { ada?: { lovelace?: number | bigint } };
   // Ogmios v6 delivers pledge/cost as ValueAdaOnly ({ada:{lovelace}})
   pledge?: { ada?: { lovelace?: number | bigint } } | number | bigint;
@@ -52,32 +53,17 @@ interface OgmiosStakePool {
   rewardAccount?: string;
 }
 
+/** Ogmios v6 `DelegateRepresentative`: a registered DRep credential or one of the two predefined DReps. */
+interface OgmiosDelegateRepresentative {
+  type: 'registered' | 'noConfidence' | 'abstain';
+  id?: string;
+  from?: 'verificationKey' | 'script';
+}
+
 interface OgmiosRewardAccountSummary {
-  controlledAmount?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   rewards?: { ada?: { lovelace?: number | bigint } } | number | bigint;
-  withdrawals?: { ada?: { lovelace?: number | bigint } } | number | bigint;
-  delegate?: { id?: string };
-  delegation?: { poolId?: string };
-  vote?: { id?: string };
-  drep?: { id?: string };
-}
-
-/**
- * First absolute slot of an epoch, from the network's Shelley anchor
- * (86 400 slots per epoch on preview; Byron offset on mainnet/preprod).
- */
-function epochStartSlot(network: Network, epoch: number): number {
-  const cfg = EPOCH_CONFIG_BY_NETWORK[network];
-  return cfg.shelleyStartSlot + (epoch - cfg.shelleyStartEpoch) * cfg.slotsPerEpoch;
-}
-
-/**
- * Absolute POSIX seconds for a slot via the Shelley-anchored genesis infos. Ogmios'
- * `eraStart.time` is RelativeTime since system start, not a Unix timestamp.
- */
-function slotToPosixSeconds(network: Network, slot: number): number {
-  const genesis = GENESIS_INFOS_BY_NETWORK[network];
-  return Math.floor((genesis.systemStartPosixMs + (slot - genesis.startSlotNo) * genesis.slotLengthMs) / 1000);
+  stakePool?: { id?: string };
+  delegateRepresentative?: OgmiosDelegateRepresentative;
 }
 
 /** Parse an Ogmios `Ratio` ("num/den", e.g. "3/1000") into a number; `Number("3/1000")` is NaN. */
@@ -91,6 +77,31 @@ function parseOgmiosRatio(ratio: string | number | undefined | null): number {
   }
   const n = Number(ratio);
   return Number.isFinite(n) ? n : 0;
+}
+
+const SCRIPT_LANGUAGE_TAG: Record<string, number> = { native: 0, 'plutus:v1': 1, 'plutus:v2': 2, 'plutus:v3': 3 };
+
+/** Hash of an Ogmios `Script`: blake2b-224 over the language tag byte followed by the script CBOR. */
+export function ogmiosScriptHash(script: unknown): string | null {
+  const s = script as { language?: string; cbor?: string } | null | undefined;
+  const tag = s?.language === undefined ? undefined : SCRIPT_LANGUAGE_TAG[s.language];
+  if (tag === undefined || typeof s?.cbor !== 'string' || s.cbor.length === 0) return null;
+  const bytes = Uint8Array.from(Buffer.concat([Buffer.from([tag]), Buffer.from(s.cbor, 'hex')]));
+  return Buffer.from(blake2b_224(bytes)).toString('hex');
+}
+
+/** Bech32 pool id of a block issuer: blake2b-224 of its cold verification key. */
+export function issuerKeyToPoolId(verificationKeyHex: string): string {
+  const keyHash = blake2b_224(Uint8Array.from(Buffer.from(verificationKeyHex, 'hex')));
+  return bech32.encode('pool', bech32.toWords(keyHash));
+}
+
+/** CIP-129 DRep id for a registered DRep, the predefined id for abstain / no confidence. */
+function ogmiosDrepToId(d?: OgmiosDelegateRepresentative): string | null {
+  if (!d) return null;
+  if (d.type === 'abstain') return 'drep_always_abstain';
+  if (d.type === 'noConfidence') return 'drep_always_no_confidence';
+  return d.id ? credentialToDrepId(d.id, d.from === 'script') : null;
 }
 
 /** Lovelace amount from Ogmios' value shapes; v6 returns `{ ada: { lovelace } }` objects. */
@@ -158,8 +169,8 @@ interface OgmiosChainSyncTx {
   inputs: { transaction: { id: string }; index: number }[];
   references?: { transaction: { id: string }; index: number }[];
   collaterals?: { transaction: { id: string }; index: number }[];
-  outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string }[];
-  collateralReturn?: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string };
+  outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string; script?: unknown }[];
+  collateralReturn?: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string; script?: unknown };
   fee?: { ada: { lovelace: number | bigint } };
   /** `total_collateral` from the body — optional there, so absent on many phase-2 failures. */
   totalCollateral?: { ada: { lovelace: number | bigint } };
@@ -181,7 +192,7 @@ interface OgmiosCertificate {
   from?: 'verificationKey' | 'script';
   deposit?: { ada?: { lovelace?: number | bigint } };
   stakePool?: { id?: string; retirementEpoch?: number };
-  delegateRepresentative?: { type: 'registered' | 'noConfidence' | 'abstain'; id?: string; from?: 'verificationKey' | 'script' };
+  delegateRepresentative?: OgmiosDelegateRepresentative;
 }
 interface OgmiosPraosBlock {
   type: string; // 'praos' | 'ebb' | 'bft' — only 'praos' carries indexable txs
@@ -200,8 +211,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   public readonly name = 'ogmios';
   /**
    * Capability declaration — the orchestrator skips Ogmios for these without counting
-   * circuit failures. Historic queries are out of protocol scope, and address/network
-   * aggregates cannot be derived from state queries.
+   * circuit failures. Historic queries are out of protocol scope, and address aggregates
+   * cannot be derived from state queries.
    */
   public readonly unsupportedMethods: ReadonlySet<string> = new Set([
     // getEpoch is NOT listed: Ogmios can serve the CURRENT epoch and only
@@ -214,7 +225,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     // queryLedgerState/delegateRepresentatives (Ogmios ≥ 6.4).
     'getAssetInfo',
     'getAddress',
-    'getNetworkInformation',
   ]);
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
@@ -485,10 +495,47 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** Not supported — Ogmios state queries expose no supply/stake aggregates. */
+  /**
+   * Supply figures from `queryLedgerState/treasuryAndReserves`: total = max − reserves.
+   * Circulating, locked and stake totals are not in the ledger state and stay '0'.
+   */
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(async () => {
-      throw new ProviderUnavailableError('Network information not supported by Ogmios backend — use Blockfrost/Koios', this.name);
+      await this.ensureConnected();
+      if (!this.context) {
+        throw new ProviderUnavailableError('Ogmios interaction context not available', this.name);
+      }
+      type Pots = { treasury?: { ada?: { lovelace?: number | bigint } }; reserves?: { ada?: { lovelace?: number | bigint } } };
+      const pots = await Method<
+        { method: 'queryLedgerState/treasuryAndReserves' },
+        OgmiosRpcEnvelope<Pots> & { method: string },
+        Pots
+      >(
+        { method: 'queryLedgerState/treasuryAndReserves' },
+        {
+          handler: (response, resolve, reject) => {
+            if (response.error) {
+              reject(new Error(response.error.message ?? `Ogmios error ${response.error.code ?? ''}`.trim()));
+            } else {
+              resolve(response.result ?? {});
+            }
+          },
+        },
+        this.context
+      );
+      const max = CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
+      const reserves = ogmiosValueToLovelaceString(pots.reserves);
+      return {
+        supply: {
+          max,
+          total: (BigInt(max) - BigInt(reserves)).toString(),
+          circulating: '0',
+          locked: '0',
+          treasury: ogmiosValueToLovelaceString(pots.treasury),
+          reserves,
+        },
+        stake: { live: '0', active: '0' },
+      };
     }, this.name);
   }
 
@@ -529,7 +576,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       datumHash: u.datumHash,
       // Ogmios delivers the inline datum as CBOR hex in `datum`
       inlineDatum: typeof u.datum === 'string' ? u.datum : null,
-      scriptRef: (u.script as { hash?: string } | undefined)?.hash,
+      scriptRef: ogmiosScriptHash(u.script) ?? undefined,
     };
   }
 
@@ -586,9 +633,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
 
       return {
         poolId,
-        vrfKeyHash: pool.vrf || pool.vrfKeyHash || '',
+        vrfKeyHash: pool.vrfVerificationKeyHash || '',
         blocksMinted: 0,
-        blocksEpoch: 0,
+        // not in the ledger state; null = unavailable, as on Koios
+        blocksEpoch: null,
         liveStake: pool.stake?.ada?.lovelace ? String(pool.stake.ada.lovelace) : '0',
         liveSize: 0,
         liveDelegators: 0,
@@ -633,14 +681,15 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         // reaching this point (summary found) therefore implies the account is active.
         active: true,
         activeEpoch: 0,
-        controlledAmount: ogmiosValueToLovelaceString(account.controlledAmount),
+        // reward-account summaries carry no controlled amount and no withdrawal totals
+        controlledAmount: '0',
         rewardsSum: ogmiosValueToLovelaceString(account.rewards),
-        withdrawalsSum: ogmiosValueToLovelaceString(account.withdrawals),
+        withdrawalsSum: '0',
         reservesSum: '0',
         treasurySum: '0',
         withdrawableAmount: ogmiosValueToLovelaceString(account.rewards),
-        poolId: account.delegate?.id || account.delegation?.poolId || null,
-        drepId: account.vote?.id || account.drep?.id || null,
+        poolId: account.stakePool?.id || null,
+        drepId: ogmiosDrepToId(account.delegateRepresentative),
         addresses: []
       };
     }, this.name);
@@ -794,6 +843,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         size: 0, // Not available via ledgerTip - would need full block data
         txCount: 0, // Not available via ledgerTip - would need full block data
         fees: '0', // Not available via ledgerTip - would need full block data
+        headerOnly: true,
       };
     }, this.name);
   }
@@ -826,6 +876,18 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         outputReferences: [{ transaction: { id: txHash }, index: outputIndex }],
       });
       return Array.isArray(result) && result.length > 0;
+    }, this.name);
+  }
+
+  /** Outputs among `refs` that are unspent in the live ledger; spent or unknown references are absent. */
+  async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> {
+    if (refs.length === 0) return [];
+    return handleBackendRequest(async () => {
+      await this.ensureConnected();
+      const result = await this.stateQueryClient!.utxo({
+        outputReferences: refs.map(r => ({ transaction: { id: r.txHash }, index: r.outputIndex })),
+      });
+      return result.map((u: typeof result[number]) => this.mapOgmiosUtxo(u));
     }, this.name);
   }
 
@@ -1066,9 +1128,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     const txs = (block.transactions ?? []).map((t, i) => this.mapOgmiosTx(t, block, i));
     const totalFees = txs.reduce((sum, t) => sum + BigInt(t.fee || 0), 0n);
 
-    const cfg = EPOCH_CONFIG_BY_NETWORK[this.network];
-    const epoch = cfg.shelleyStartEpoch + Math.floor((block.slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
-    // Shelley-anchored helper (handles preview/preprod geometry and the Byron offset)
+    const epoch = epochOfSlot(this.network, block.slot);
+    // Shelley-anchored helpers (handle preview/preprod geometry and the Byron offset)
     const epochSlot = block.slot - epochStartSlot(this.network, epoch);
 
     const blockData: BlockData = {
@@ -1076,7 +1137,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       height: block.height,
       hash: block.id,
       slot: block.slot,
-      slotLeader: block.issuer?.verificationKey ?? '',
+      slotLeader: block.issuer?.verificationKey ? issuerKeyToPoolId(block.issuer.verificationKey) : '',
       epoch,
       epochSlot,
       size: block.size?.bytes ?? 0,
@@ -1122,7 +1183,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       dataHash: output.datumHash ?? null,
       inlineDatum: output.datum ?? null,
       isCollateral,
-      referenceScriptHash: null,
+      referenceScriptHash: ogmiosScriptHash(output.script),
     });
 
     const outputs: TxOutputLine[] = spendsCollaterals
@@ -1187,12 +1248,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       v?.ada?.lovelace != null ? v.ada.lovelace.toString() : null;
     const stakeAddr = (c: OgmiosCertificate): string | null =>
       c.credential ? credentialToStakeAddress(c.credential, c.from === 'script', this.network) : null;
-    const drepId = (d?: OgmiosCertificate['delegateRepresentative']): string | null => {
-      if (!d) return null;
-      if (d.type === 'abstain') return 'drep_always_abstain';
-      if (d.type === 'noConfidence') return 'drep_always_no_confidence';
-      return d.id ? credentialToDrepId(d.id, d.from === 'script') : null;
-    };
     certs.forEach((c, certIndex) => {
       switch (c.type) {
         case 'stakeCredentialRegistration':
@@ -1204,7 +1259,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         case 'stakeDelegation': {
           const stakeAddress = stakeAddr(c);
           if (c.stakePool?.id) out.push({ certIndex, kind: 'pool_delegation', stakeAddress, poolId: c.stakePool.id });
-          if (c.delegateRepresentative) out.push({ certIndex, kind: 'vote_delegation', stakeAddress, drepId: drepId(c.delegateRepresentative) });
+          if (c.delegateRepresentative) out.push({ certIndex, kind: 'vote_delegation', stakeAddress, drepId: ogmiosDrepToId(c.delegateRepresentative) });
           break;
         }
         case 'stakePoolRegistration':
@@ -1214,13 +1269,13 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
           out.push({ certIndex, kind: 'pool_retirement', poolId: c.stakePool?.id ?? null, epoch: c.stakePool?.retirementEpoch ?? null });
           break;
         case 'delegateRepresentativeRegistration':
-          out.push({ certIndex, kind: 'drep_registration', drepId: drepId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
+          out.push({ certIndex, kind: 'drep_registration', drepId: ogmiosDrepToId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
           break;
         case 'delegateRepresentativeUpdate':
-          out.push({ certIndex, kind: 'drep_update', drepId: drepId(c.delegateRepresentative) });
+          out.push({ certIndex, kind: 'drep_update', drepId: ogmiosDrepToId(c.delegateRepresentative) });
           break;
         case 'delegateRepresentativeRetirement':
-          out.push({ certIndex, kind: 'drep_retirement', drepId: drepId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
+          out.push({ certIndex, kind: 'drep_retirement', drepId: ogmiosDrepToId(c.delegateRepresentative), deposit: lovelace(c.deposit) });
           break;
         case 'constitutionalCommitteeDelegation':
           out.push({ certIndex, kind: 'committee_hot_auth' });

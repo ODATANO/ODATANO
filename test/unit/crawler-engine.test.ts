@@ -86,7 +86,7 @@ describe('CardanoCrawler.handleReorg', () => {
       // blocks after the fork (slot axis)
       if (q._op === 'SELECT.many' && q.entity.endsWith('Blocks')) return [{ hash: 'b1' }, { hash: 'b2' }];
       // txs belonging to those blocks only
-      if (q._op === 'SELECT.many' && q.entity.endsWith('Transactions')) return [{ hash: 't1' }, { hash: 't2' }];
+      if (q._op === 'SELECT.many' && q.entity.endsWith('Transactions')) return [{ hash: 't1', txSeq: '11' }, { hash: 't2', txSeq: '12' }];
       return undefined;
     });
 
@@ -111,9 +111,13 @@ describe('CardanoCrawler.handleReorg', () => {
       'Transactions', 'Blocks',
     ]));
 
-    // children deleted by the resolved tx-hash set; txs and blocks by explicit hash sets
+    // input/output rows deleted by the resolved txSeq set, the rest by tx hash; blocks by hash
     const childDelete = opsFor('DELETE').find(q => q.entity.endsWith('TransactionInputs'));
-    expect(childDelete!.where).toEqual({ tx_hash: { in: ['t1', 't2'] } });
+    expect(childDelete!.where).toEqual({ txSeq: { in: ['11', '12'] } });
+    const assetDelete = opsFor('DELETE').find(q => q.entity.endsWith('TransactionOutputAssets'));
+    expect(assetDelete!.where).toEqual({ output_txSeq: { in: ['11', '12'] } });
+    const metaDelete = opsFor('DELETE').find(q => q.entity.endsWith('TransactionMetadata'));
+    expect(metaDelete!.where).toEqual({ tx_hash: { in: ['t1', 't2'] } });
     const txDelete = opsFor('DELETE').find(q => q.entity.endsWith('.Transactions'));
     expect(txDelete!.where).toEqual({ hash: { in: ['t1', 't2'] } });
     const blockDelete = opsFor('DELETE').find(q => q.entity.endsWith('Blocks'));

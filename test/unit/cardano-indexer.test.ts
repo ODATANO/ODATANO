@@ -22,6 +22,9 @@ vi.mock('@sap/cds', () => {
   });
   const mockOne = {
     from: vi.fn().mockReturnValue({
+      columns: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({})
+      }),
       where: vi.fn().mockReturnValue({
         orderBy: vi.fn().mockReturnValue({})
       })
@@ -323,6 +326,19 @@ describe('CardanoIndexer', () => {
     });
   });
 
+  describe('findIndexedTransaction', () => {
+    it('returns the block position of an indexed transaction without a backend call', async () => {
+      mockRun.mockResolvedValue({ slot: 100, blockHeight: 42 });
+      expect(await indexer.findIndexedTransaction(mockTx as any, 'tx1')).toEqual({ slot: 100, blockHeight: 42 });
+      expect(mockClient.getTransaction).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the transaction is not in the local index', async () => {
+      mockRun.mockResolvedValue(undefined);
+      expect(await indexer.findIndexedTransaction(mockTx as any, 'tx1')).toBeNull();
+    });
+  });
+
   describe('ensureTransactionsIndexed', () => {
     it('should return empty Map for empty hash list', async () => {
       const result = await indexer.ensureTransactionsIndexed(mockTx as any, []);
@@ -456,6 +472,36 @@ describe('CardanoIndexer', () => {
 
       expect(result.hash).toBe('latest-block');
       expect(mapBlock).toHaveBeenCalledWith(expect.anything(), undefined);
+    });
+
+    it('does not persist a header-only tip and returns the stored row of that hash', async () => {
+      mockClient.getLatestBlock.mockResolvedValue({ hash: 'tip', epoch: 1000, height: 200, slot: 60000, headerOnly: true });
+      mockClient.getEpoch.mockRejectedValue(new Error('Epoch not available'));
+      const mapBlock = vi.mocked((await import('../../srv/utils/mappers')).mapBlock);
+      mapBlock.mockReturnValue({ hash: 'tip', size: 0 });
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
+      upsertInto.mockClear();
+      mockRun.mockResolvedValueOnce({ hash: 'tip', size: 1234 }); // crawled row
+
+      const result = await indexer.indexLatestBlock(mockTx as any);
+
+      expect(result).toEqual({ hash: 'tip', size: 1234 });
+      expect(upsertInto.mock.calls.map((c: any[]) => c[0])).not.toContain('Block');
+    });
+
+    it('returns the header-only tip unpersisted when no row of that hash exists', async () => {
+      mockClient.getLatestBlock.mockResolvedValue({ hash: 'tip', epoch: 1000, height: 200, slot: 60000, headerOnly: true });
+      mockClient.getEpoch.mockRejectedValue(new Error('Epoch not available'));
+      const mapBlock = vi.mocked((await import('../../srv/utils/mappers')).mapBlock);
+      mapBlock.mockReturnValue({ hash: 'tip', size: 0 });
+      const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
+      upsertInto.mockClear();
+      mockRun.mockResolvedValueOnce(undefined);
+
+      const result = await indexer.indexLatestBlock(mockTx as any);
+
+      expect(result).toEqual({ hash: 'tip', size: 0 });
+      expect(upsertInto.mock.calls.map((c: any[]) => c[0])).not.toContain('Block');
     });
   });
 

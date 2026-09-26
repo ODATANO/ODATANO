@@ -32,7 +32,8 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getAddress: { preferLive: true },
   getAddressUtxos: { preferLive: false },
   getAddressTransactions: { preferLive: false },
-  getNetworkInformation: { preferLive: true },
+  // providers first: they report circulation; Ogmios only has treasury and reserves
+  getNetworkInformation: { preferLive: false },
   getTransactionMetadata: { preferLive: false },
   getBlock: { preferLive: false },
   getEpoch: { preferLive: false },
@@ -301,6 +302,7 @@ export class CardanoClient {
   ): Promise<T> {
     await this.ensureInitialized();
     const errors: BackendError[] = [];
+    const skipped: string[] = [];
 
     // Determine backend order based on preference
     const primaryBackends = preferLive
@@ -318,10 +320,12 @@ export class CardanoClient {
       // capability routing: declared non-support is a skip, not a failure
       if (methodName && backend.unsupportedMethods?.has(methodName)) {
         logger.debug(`${backend.name} does not support ${methodName}, skipping`);
+        skipped.push(`${backend.name}: does not support ${methodName}`);
         continue;
       }
       if (!this.circuitBreaker.shouldAttempt(backend.name)) {
         logger.debug(`Circuit open for ${backend.name}, skipping`);
+        skipped.push(`${backend.name}: circuit open`);
         continue;
       }
       // fast-path sync check — only await the init retry in the rare failure case
@@ -358,7 +362,7 @@ export class CardanoClient {
       }
     }
 
-    throw new AllBackendsFailedError(errors);
+    throw new AllBackendsFailedError(errors, undefined, skipped);
   }
 
   /** Route a call by METHOD_ROUTING (default: historical first). */
@@ -541,6 +545,15 @@ export class CardanoClient {
       if (b && !this.uninitializedBackends.has(b) && isLedgerStateBackend(b)) return b;
     }
     return null;
+  }
+
+  /**
+   * Outputs among `refs` that are unspent at the tip, read from the node's ledger; null when no
+   * ledger-state backend is usable (the caller then resolves via the producing transaction).
+   */
+  async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
+    const backend = this.getLedgerStateBackend();
+    return backend ? backend.getUnspentOutputs(refs) : null;
   }
 
   /**

@@ -102,6 +102,31 @@ It deploys the schema, copies every table through CAP and verifies the row count
 `CardanoAgentGrants`, `CardanoAgentGrantUsage` and a `dedupKey` column): migrating to PostgreSQL
 as above is the simplest way to get it, since the deploy there is additive.
 
+**Upgrading a database written before the txSeq key layout.** `TransactionInputs`,
+`TransactionOutputs` and their asset tables are keyed by `Transactions.txSeq`
+(`slot * 65536 + txIndex`) instead of the transaction hash. The additive schema deployment cannot
+change a primary key of a table that holds rows, so the first boot of the new image on an existing
+database fails until the data is moved. Stop the service and run the image's `migrate-txseq` mode
+once, then start the new image:
+
+```bash
+docker compose stop odatano
+docker compose run --rm --no-deps odatano migrate-txseq --dry-run   # row counts, nothing changed
+docker compose run --rm --no-deps odatano migrate-txseq
+docker compose up -d odatano
+```
+
+It works on PostgreSQL and SQLite, in one transaction: it fills `Transactions.txSeq`, rebuilds the
+four tables in the new layout (rows copied in key order, row counts compared), recreates the service
+views, refreshes the planner statistics (`ANALYZE`) and stores the new model in `cds_model`. It
+refuses while a crawler holds its lease, and a database already on the new layout is left alone.
+The server recreates the table indexes on its next start, which takes a while on a large database.
+Plan disk space for a second copy of the four tables during the run; on PostgreSQL run
+`VACUUM odatano_cardano_transactions` afterwards (the txSeq update leaves dead rows there).
+Measured: 68 million rows (preview, 540 000 blocks) in 15 minutes on a 1 GB PostgreSQL. A plugin deployment runs
+`node node_modules/@odatano/core/scripts/migrate-txseq.mjs` with its own `db` configuration. A
+SQLite file headed for PostgreSQL is migrated first, then copied with `migrate`.
+
 ### Health probes
 
 ```bash

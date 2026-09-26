@@ -457,7 +457,12 @@ export class CardanoWalletWorker {
       // A rejection may mean the tx is already on-chain (inputs spent), so the chain decides.
       let onChain: boolean;
       try {
-        await this.deps.client.getTransaction(job.txHash);
+        // the local index first (filled by the crawler), then the backends
+        const txHash = job.txHash;
+        const indexed = await runWithoutAmbientTx(() => cds.tx((t) => this.deps.indexer.findIndexedTransaction(t, txHash)));
+        if (!indexed) {
+          await this.deps.client.getTransaction(txHash);
+        }
         onChain = true;
       } catch (lookupErr) {
         if (!isNotFoundOnAllBackends(lookupErr)) {

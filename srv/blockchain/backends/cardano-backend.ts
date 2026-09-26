@@ -177,11 +177,13 @@ export function isChainSyncBackend(backend: CardanoBackend): backend is ChainSyn
 }
 
 /**
- * Backend that returns the whole UTxO set as of a chain point (Ogmios `queryLedgerState/utxo`
- * after `acquireLedgerState`); the point must lie inside the node's volatile window.
+ * Backend that reads UTxOs straight from the node's ledger (Ogmios `queryLedgerState/utxo`):
+ * the whole set as of a chain point inside the volatile window, or selected outputs at the tip.
  */
 export interface LedgerStateBackend extends CardanoBackend {
   queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]>;
+  /** Outputs among `refs` that are unspent at the tip; spent or unknown references are absent. */
+  getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]>;
 }
 
 export function isLedgerStateBackend(backend: CardanoBackend): backend is LedgerStateBackend {
