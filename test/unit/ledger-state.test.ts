@@ -39,7 +39,10 @@ const fakeTx = {
         }
         return entries.length;
       }
-      case 'SELECT.many': return table(e).filter(r => matches(r, q.where as Where)).map(r => ({ ...r }));
+      case 'SELECT.many': {
+        const found = table(e).filter(r => matches(r, q.where as Where)).map(r => ({ ...r }));
+        return typeof q.limit === 'number' ? found.slice(0, q.limit) : found;
+      }
       case 'SELECT.one': { const r = table(e).find(r => matches(r, q.where as Where)); return r ? { ...r } : undefined; }
       case 'DELETE': { const t = table(e); const keep = t.filter(r => !matches(r, q.where as Where)); const n = t.length - keep.length; tables.set(e, keep); return n; }
       case 'UPDATE': { let n = 0; for (const r of table(e)) if (matches(r, q.where as Where)) { Object.assign(r, q.set); n++; } return n; }
@@ -51,6 +54,7 @@ const fakeTx = {
 vi.mock('@sap/cds', () => {
   const cdsMock = {
     log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
+    tx: async (fn: (tx: typeof fakeTx) => unknown) => fn(fakeTx),
     ql: {
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
       DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }), _op: 'DELETE', entity }) },
@@ -59,7 +63,12 @@ vi.mock('@sap/cds', () => {
         one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
         from: (entity: string) => ({
           where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
-          columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }) }),
+          columns: () => ({
+            where: (where: unknown) => {
+              const q = { _op: 'SELECT.many', entity, where };
+              return { ...q, limit: (limit: number) => ({ ...q, limit }) };
+            },
+          }),
         }),
       },
     },
@@ -72,7 +81,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   LedgerAddresses: 'LedgerAddresses', LedgerAddressAssets: 'LedgerAddressAssets', LedgerAccounts: 'LedgerAccounts',
 }));
 
-import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows } from '../../srv/blockchain/ledger-state';
+import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials } from '../../srv/blockchain/ledger-state';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
 // base address (preview) + its reward account; a second base address on the SAME stake key
@@ -80,6 +89,8 @@ const ADDR_A = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg9
 const STAKE_A = 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh';
 const ADDR_E = 'addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0'; // enterprise, no stake
 const UNIT = `${'p'.repeat(56)}746f6b656e`;
+// payment key hash of ADDR_A and ADDR_E
+const PAYMENT = '32b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319';
 
 const block = (slot: number): BlockData => ({
   time: 1700000000 + slot, height: slot / 10, hash: `b${slot}`.padEnd(64, '0'), slot, slotLeader: 'sl',
@@ -119,8 +130,8 @@ describe('applyBlockToLedger', () => {
       tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }]), out(T1, 1, ADDR_E, '2000000')] }),
     ]);
     expect(r).toEqual({ created: 2, spent: 0, missing: 0, addresses: 2 });
-    expect(addr(ADDR_A)).toMatchObject({ totalLovelace: '5000000', utxoCount: 1, stakeAddress: STAKE_A, firstSeenSlot: 100, lastActiveSlot: 100 });
-    expect(addr(ADDR_E)).toMatchObject({ totalLovelace: '2000000', utxoCount: 1, stakeAddress: null });
+    expect(addr(ADDR_A)).toMatchObject({ totalLovelace: '5000000', utxoCount: 1, stakeAddress: STAKE_A, paymentCredential: PAYMENT, firstSeenSlot: 100, lastActiveSlot: 100 });
+    expect(addr(ADDR_E)).toMatchObject({ totalLovelace: '2000000', utxoCount: 1, stakeAddress: null, paymentCredential: PAYMENT });
     expect(rows('LedgerAddressAssets')).toEqual([expect.objectContaining({ address_address: ADDR_A, unit: UNIT, asset_quantity: '3' })]);
     expect(account(STAKE_A)).toMatchObject({ controlledAmount: '5000000', addressCount: 1, utxoCount: 1 });
     expect(rows('LedgerAccounts')).toHaveLength(1); // the enterprise address has no stake key
@@ -219,5 +230,24 @@ describe('recountLedgerAddresses (repair path)', () => {
 
     expect(addr(ADDR_A)).toMatchObject({ totalLovelace: '5000001', utxoCount: 2, firstSeenSlot: 100 });
     expect(account(STAKE_A)).toMatchObject({ controlledAmount: '5000001', addressCount: 1, utxoCount: 2 });
+  });
+});
+
+describe('backfillPaymentCredentials', () => {
+  it('fills the credential of Shelley payment addresses in chunks and leaves the rest alone', async () => {
+    table('LedgerAddresses').push(
+      { address: ADDR_A, addressType: 'base', paymentCredential: null },
+      { address: ADDR_E, addressType: 'enterprise', paymentCredential: null },
+      { address: 'Ae2tdPwUPEZFRbyhz3cpfC2CumGzNkFBN2L42rcUc2yjQpEkxDbkPodpMAi', addressType: 'byron', paymentCredential: null },
+      { address: STAKE_A, addressType: 'reward', paymentCredential: null },
+    );
+
+    expect(await backfillPaymentCredentials(1)).toBe(2);
+
+    expect(addr(ADDR_A)?.paymentCredential).toBe(PAYMENT);
+    expect(addr(ADDR_E)?.paymentCredential).toBe(PAYMENT);
+    expect(rows('LedgerAddresses').filter(r => r.paymentCredential == null)).toHaveLength(2);
+    // idempotent: nothing left to fill
+    expect(await backfillPaymentCredentials(1)).toBe(0);
   });
 });

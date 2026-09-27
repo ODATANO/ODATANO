@@ -25,8 +25,12 @@ const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock } = vi.hoi
 }));
 
 vi.mock('@sap/cds', () => {
+  // getStatus reads the newest EpochLedgerSnapshots row: a chainable query stub, fakeDb.run answers it
+  const query: Record<string, unknown> = {};
+  for (const k of ['from', 'columns', 'orderBy', 'where']) query[k] = () => query;
   const cdsMock = {
   log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
+  ql: { SELECT: { one: query } },
 };
   return { default: cdsMock, ...cdsMock };
 });
@@ -96,6 +100,22 @@ describe('CardanoIndexerService.getStatus', () => {
         status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, certificates: 0, withdrawals: 0,
         startedAt: null, finishedAt: null, error: null,
       },
+      epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
+    });
+  });
+
+  it('reports the newest epoch snapshot and the source the next one would use', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
+    // once per read: utxoSet flag, epochSnapshots flag, snapshot source
+    serverMock.loadCrawlerConfigFromEnv.mockReturnValueOnce({ epochSnapshots: true }).mockReturnValueOnce({ epochSnapshots: true });
+    serverMock.getCardanoClient.mockReturnValueOnce({
+      network: 'preview', getEpochStateBackend: () => ({}), getEnumeratingBackend: () => ({}),
+    } as never);
+    fakeDb.run.mockResolvedValueOnce({ epoch: 1201, source: 'ogmios', snapshotSlot: 103_766_400 });
+    const handlers = boot();
+
+    expect(await handlers.getStatus({})).toMatchObject({
+      epochSnapshots: { enabled: true, source: 'ogmios', lastEpoch: 1201, lastSource: 'ogmios', lastSlot: '103766400' },
     });
   });
 

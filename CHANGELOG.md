@@ -1,5 +1,59 @@
 # Changelog
 
+## [v2.0.0-rc.22] - Ogmios 7, epoch snapshots from the node, addresses from the crawled UTxO set
+
+Ogmios 7 support, and epoch snapshots plus address reads without Koios or Blockfrost; additive schema change, no migration.
+
+### Changed
+
+- Crawler epoch snapshots (`crawler.epochSnapshots`) read the node's ledger state through Ogmios
+  at the first crawled block of each epoch (`stakePools`, `stakePoolsPerformances`,
+  `delegateRepresentatives`, `treasuryAndReserves`) while that block is within the node's last k
+  blocks, so an epoch is recorded during a catch-up close to the tip too. Koios remains the
+  fallback without Ogmios, still only in the tip's epoch. Ogmios snapshots leave the live `Pools` /
+  `Dreps` rows untouched; `liveDelegators` and `blocksEpoch` stay empty, `blocksMinted` is counted
+  from crawled blocks when the crawl started at or before Shelley. Active stake of epoch E is the
+  live stake the snapshot of E-1 recorded; empty without that snapshot.
+- `GetUTxOsByCredential` is served from the crawled UTxO set while it is active and the crawler is
+  at the tip: the credential's addresses come from `LedgerAddresses`, their outputs from Ogmios at
+  the tip (or the unspent `LedgerUTxOs` without Ogmios). Koios stays the fallback.
+- A reorg removes the epoch snapshots taken at rolled-back blocks; the epoch is taken again.
+- `PoolData.liveDelegators` may be null; Ogmios `getPool` reports null instead of 0.
+- Addresses from the crawled UTxO set while it is active and the crawler is at the tip:
+  `Addresses`, `GetAddressByBech32`, `GetAssetsByAddress` and `GetUTxOsByAddress` take the
+  outputs from Ogmios at the tip (or the unspent `LedgerUTxOs`), type and stake address decoded
+  from the address; an address the set has never seen is an empty address.
+- `GetLatestTransactionsByAddress` / `AddressTransactions` from the crawled UTxO set: received
+  (`LedgerUTxOs.txHash`) and spent (`spentTxHash`) outputs since the anchor, net amounts per
+  transaction. Complete for addresses first seen after the anchor; older addresses ask a
+  provider when the crawled history is shorter than `limit`, and keep the crawled rows when no
+  provider has address history.
+- `Pools.activeStake` / `activeSize` from the Ogmios snapshot of the running epoch when the
+  backend reports none; `Accounts.withdrawalsSum` from crawled withdrawals when certificates
+  are crawled since Shelley and the backend reports none.
+- Chain-sync socket closed by the server: after delivered blocks the crawler reopens chain-sync
+  at the cursor; without a delivered block it fetches the next block through the pagination
+  backend and hands back to chain-sync (`lastError` names the block). The crawler no longer
+  stops at a block the Ogmios server cannot decode.
+- `getAddress`, `getAddressUtxos` and `getDrep` ask Ogmios first when it is configured (UTxOs at
+  the tip). Ogmios reports the address `type` as `base` / `enterprise` / `pointer` / `reward` /
+  `byron`, an address without UTxOs as an empty address instead of 404, and no DRep last
+  activity; a DRep the ledger no longer lists is looked up at the providers.
+- `@cardano-ogmios/client` 7.0.0; the Docker setup and CI use `cardanosolutions/ogmios:v7.0.0`.
+  Ogmios 6.x cannot decode block headers announcing protocol version 12.
+
+### Added
+
+- `EpochLedgerSnapshots`: one row per snapshotted epoch with treasury, reserves, total supply,
+  live and active stake, pool and DRep counts, always-abstain / always-no-confidence stake.
+- `PoolEpochSnapshots` / `DrepEpochSnapshots`: `source` (`ogmios` | `koios`) and
+  `snapshotHash`; DRep rows also `deposit`, `expiresEpoch`, `delegatorCount`.
+- `LedgerAddresses.paymentCredential` (+ index), filled on write and, for existing rows and after
+  an import, in the background.
+- `getStatus().epochSnapshots`: enabled, next source, newest epoch with its source and slot.
+- Ogmios `getAddress`: type, script flag and stake address decoded from the address, UTxOs and
+  balance from the ledger at the tip.
+
 ## [v2.0.0-rc.21] - txSeq keys, ledger lookups and crawled data before the backend
 
 Input/output tables are keyed by chain position; existing databases need `migrate-txseq` once before the first start.

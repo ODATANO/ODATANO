@@ -49,6 +49,8 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
   PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
+  DrepEpochSnapshots: 'odatano.cardano.DrepEpochSnapshots',
+  EpochLedgerSnapshots: 'odatano.cardano.EpochLedgerSnapshots',
   TransactionCertificates: 'odatano.cardano.TransactionCertificates',
   TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
   LedgerUTxOs: 'odatano.cardano.LedgerUTxOs', LedgerUTxOAssets: 'odatano.cardano.LedgerUTxOAssets',
@@ -122,6 +124,11 @@ describe('CardanoCrawler.handleReorg', () => {
     expect(txDelete!.where).toEqual({ hash: { in: ['t1', 't2'] } });
     const blockDelete = opsFor('DELETE').find(q => q.entity.endsWith('Blocks'));
     expect(blockDelete!.where).toEqual({ hash: { in: ['b1', 'b2'] } });
+    // snapshots taken at a rolled-back block go with it
+    for (const name of ['PoolEpochSnapshots', 'DrepEpochSnapshots', 'EpochLedgerSnapshots']) {
+      const snapDelete = opsFor('DELETE').find(q => q.entity.endsWith(name));
+      expect(snapDelete!.where).toEqual({ snapshotSlot: { '>': 500 } });
+    }
 
     // cursor rewound to the fork
     const update = opsFor('UPDATE')[0];

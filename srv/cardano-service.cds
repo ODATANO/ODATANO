@@ -73,6 +73,11 @@ service CardanoODataService @(impl: './cardano-service') {
     entity DrepEpochSnapshots       as projection on db.DrepEpochSnapshots;
 
     @readonly
+    @title      : 'Epoch Ledger Snapshots'
+    @description: 'Projection for per-epoch network ledger figures written by the chain crawler'
+    entity EpochLedgerSnapshots     as projection on db.EpochLedgerSnapshots;
+
+    @readonly
     @title      : 'Assets'
     @description: 'Projection for Native-Asset Information'
     entity Assets                   as projection on db.Assets;
@@ -270,7 +275,7 @@ service CardanoODataService @(impl: './cardano-service') {
                              address: Bech32)             returns many AddressUTxOs;
 
     @title      : 'Get UTxOs by Payment Credential'
-    @description: 'Retrieve UTxOs across all bech32 addresses sharing the given 28-byte payment credential (key hash or script hash). Useful for protocols that write to multiple bech32 forms of the same script (e.g. Indigo CDPs, Liqwid positions). Koios-only — throws ProviderUnavailableError on deployments without Koios. Always fresh, no cache check.'
+    @description: 'Retrieve UTxOs across all bech32 addresses sharing the given 28-byte payment credential (key hash or script hash). Useful for protocols that write to multiple bech32 forms of the same script (e.g. Indigo CDPs, Liqwid positions). Served from the crawled UTxO set (crawler.utxoSet active and synced) with outputs read from the node at the tip, else from Koios; throws ProviderUnavailableError when neither is available. Always fresh, no cache check.'
     action GetUTxOsByCredential(
                                 @title: 'Payment Credential'
                                 @description: '28-byte payment credential hash as 56-char lowercase hex string'

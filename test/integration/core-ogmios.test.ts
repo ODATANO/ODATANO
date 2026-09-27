@@ -43,12 +43,13 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
       expect(status).to.be.equal(200);
     }, 90000);
 
-    it('POST /GetAddressByBech32 - unsupported on Ogmios (delegate to Blockfrost/Koios)', async () => {
-      // Address detail (type/script/stake) is not derivable from Ogmios state queries →
-      // getAddress is in unsupportedMethods → 503 when Ogmios is the only backend.
-      const response = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds }).catch(err => err.response);
-      expect(response.status).to.equal(503);
-      expect(response.data).to.have.property('error');
+    it('POST /GetAddressByBech32 - served by Ogmios (type/stake decoded, UTxOs from the ledger)', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+      expect(status).to.equal(200);
+      expect(data.address).to.equal(TEST_FIXTURES.addressWithFunds);
+      expect(['base', 'enterprise', 'pointer']).to.include(data.type);
+      expect(data).to.have.property('totalLovelace');
+      expect(data).to.have.property('utxoCount');
     });
 
     it('POST /GetLatestBlock - get latest block information', async () => {
@@ -120,10 +121,12 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
     });
 
     // Address detail is not derivable from Ogmios state queries (delegated to Blockfrost/Koios)
-    it('POST /GetAddressByBech32 - unsupported on Ogmios (address detail not derivable)', async () => {
-      const response = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithAssets }).catch(err => err.response);
-      expect(response.status).to.equal(503);
-      expect(response.data).to.have.property('error');
+    it('POST /GetAddressByBech32 - balance summed over the ledger UTxOs', async () => {
+      const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithAssets });
+      expect(status).to.equal(200);
+      expect(data.hasUTxOs).to.equal(Number(data.utxoCount) > 0);
+      if (Number(data.utxoCount) > 0) expect(BigInt(data.totalLovelace) > 0n).to.be.true;
+      if (data.type === 'base') expect(data.stakeAddress).to.match(/^stake_test1/);
     });
 
     it('POST /GetLatestBlock - verify epoch calculation from slot (432000 slots per epoch)', async () => {

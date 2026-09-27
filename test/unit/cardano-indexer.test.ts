@@ -89,6 +89,8 @@ vi.mock('#cds-models/CardanoODataService', () => ({
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
 vi.mock('#cds-models/odatano/cardano', () => ({
   Assets: 'AssetsTable',
+  LedgerUTxOs: 'LedgerUTxOs',
+  LedgerUTxOAssets: 'LedgerUTxOAssets',
 }));
 
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -200,6 +202,11 @@ describe('CardanoIndexer', () => {
   });
 
   describe('indexAddress', () => {
+    // provider path: no crawled UTxO set in these cases
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue(null);
+    });
+
     it('should skip asset UPSERT when address has no assets (lovelace only)', async () => {
       mockClient.getAddress.mockResolvedValue({
         address: 'addr_test1qlovelace',
@@ -287,6 +294,11 @@ describe('CardanoIndexer', () => {
   });
 
   describe('indexAddressTransactions', () => {
+    // provider path: no crawled UTxO set in these cases
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue(null);
+    });
+
     it('should return empty array when no tx hashes found', async () => {
       mockClient.getAddressTransactionHashes.mockResolvedValue([]);
 
@@ -556,10 +568,71 @@ describe('CardanoIndexer', () => {
     });
   });
 
+  describe('indexCredentialUtxos from the crawled UTxO set', () => {
+    const CRED = 'b'.repeat(56);
+    const A1 = 'addr1v' + 'a'.repeat(56);
+    const A2 = 'addr1z' + 'a'.repeat(98);
+
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue({ fromSlot: 0, lastSlot: 10, ledger: true });
+      vi.spyOn(indexer, 'paymentCredentialsReady').mockResolvedValue(true);
+      mockClient.getUtxosByAddresses = vi.fn();
+    });
+
+    it('resolves the addresses locally and reads their outputs from the node, not from Koios', async () => {
+      mockRun.mockResolvedValueOnce([{ address: A1 }, { address: A2 }]);
+      mockClient.getUtxosByAddresses.mockResolvedValue([
+        { txHash: 'c'.repeat(64), outputIndex: 0, address: A1, amount: [{ unit: 'lovelace', quantity: '5' }] },
+      ]);
+
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      expect(mockClient.getUtxosByAddresses).toHaveBeenCalledWith([A1, A2]);
+      expect(mockClient.getCredentialUtxos).not.toHaveBeenCalled();
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
+      expect(mapAddressUtxos).toHaveBeenCalledWith(A1, expect.any(String), expect.any(String), [expect.objectContaining({ txHash: 'c'.repeat(64) })]);
+    });
+
+    it('answers from the unspent LedgerUTxOs (with assets) when no node query is possible', async () => {
+      mockClient.getUtxosByAddresses.mockResolvedValue(null);
+      mockRun
+        .mockResolvedValueOnce([{ address: A1 }])
+        .mockResolvedValueOnce([{ txHash: 'd'.repeat(64), outputIndex: 1, address: A1, lovelace: '7', hasAssets: true, utxo_inlineDatum: 'd8799f', utxo_dataHash: null, utxo_referenceScriptHash: null }])
+        .mockResolvedValueOnce([{ utxo_txHash: 'd'.repeat(64), utxo_outputIndex: 1, unit: 'e'.repeat(60), asset_quantity: '3' }]);
+
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      expect(mockClient.getCredentialUtxos).not.toHaveBeenCalled();
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
+      expect(mapAddressUtxos).toHaveBeenCalledWith(A1, expect.any(String), expect.any(String), [expect.objectContaining({
+        txHash: 'd'.repeat(64), outputIndex: 1, inlineDatum: 'd8799f',
+        amount: [{ unit: 'lovelace', quantity: '7' }, { unit: 'e'.repeat(60), quantity: '3' }],
+      })]);
+    });
+
+    it('returns nothing without asking Koios when no ledger address carries the credential', async () => {
+      mockRun.mockResolvedValueOnce([]);
+      expect(await indexer.indexCredentialUtxos(mockTx as any, CRED)).toEqual([]);
+      expect(mockClient.getCredentialUtxos).not.toHaveBeenCalled();
+    });
+
+    it('falls back to Koios while the credential column is still being filled', async () => {
+      vi.mocked(indexer.paymentCredentialsReady).mockResolvedValue(false);
+      mockClient.getCredentialUtxos.mockResolvedValue([]);
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+      expect(mockClient.getCredentialUtxos).toHaveBeenCalledWith(CRED);
+    });
+  });
+
   describe('indexCredentialUtxos', () => {
     const CRED = 'a'.repeat(56);
     const ADDR_WITH_STAKE = 'addr1z' + 'q'.repeat(98);
     const ADDR_NO_STAKE = 'addr1w' + 'q'.repeat(56);
+
+    // provider path: no crawled UTxO set in these cases
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue(null);
+    });
 
     it('returns empty array and skips UPSERTs when client returns no UTxOs', async () => {
       mockClient.getCredentialUtxos.mockResolvedValue([]);

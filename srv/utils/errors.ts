@@ -429,6 +429,16 @@ export class ConfigError extends Error {
  * Ogmios chain-sync frame that could not be parsed. Names the block (when readable from the raw
  * text) so the crawler can fetch that one block through the paginating backend instead.
  */
+/** The Ogmios chain-sync socket closed without being asked to (server-side failure or restart). */
+export class ChainSyncClosedError extends ProviderUnavailableError {}
+
+/** Chain-sync closed before delivering block `height`; the crawler fetches it over pagination. */
+export class ChainSyncStalledError extends BackendError {
+  constructor(public readonly height: number, reason: string) {
+    super(`Ogmios chain-sync closed before delivering block ${height}: ${reason}`, 503, ERROR_CODES.PROVIDER_UNAVAILABLE, 'ogmios');
+  }
+}
+
 export class ChainSyncFrameError extends BackendError {
   constructor(
     public readonly height: number | null,

@@ -346,30 +346,33 @@ describe('mappers', () => {
 
   describe('decodeShelleyAddress', () => {
     const BASE = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+    // payment key hash shared by BASE, the enterprise and the script-base variant below
+    const PAYMENT = '32b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319';
 
     it('decodes a testnet base address to its reward account', () => {
       expect(decodeShelleyAddress(BASE)).toEqual({
-        type: 'base', isScript: false, networkId: 0,
+        type: 'base', isScript: false, networkId: 0, paymentCredential: PAYMENT,
         stakeAddress: 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh',
       });
     });
 
     it('flags a script payment credential and keeps the mainnet network nibble', () => {
       const d = decodeShelleyAddress('addr1zyetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qzrwnlv');
-      expect(d).toMatchObject({ type: 'base', isScript: true, networkId: 1 });
+      expect(d).toMatchObject({ type: 'base', isScript: true, networkId: 1, paymentCredential: PAYMENT });
       expect(d.stakeAddress).toMatch(/^stake1/);
     });
 
     it('returns no stake address for enterprise addresses and recognizes Byron / garbage', () => {
-      expect(decodeShelleyAddress('addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0')).toEqual({ type: 'enterprise', isScript: false, stakeAddress: null, networkId: 0 });
+      expect(decodeShelleyAddress('addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0')).toEqual({ type: 'enterprise', isScript: false, stakeAddress: null, paymentCredential: PAYMENT, networkId: 0 });
       expect(decodeShelleyAddress('Ae2tdPwUPEZFRbyhz3cpfC2CumGzNkFBN2L42rcUc2yjQpEkxDbkPodpMAi').type).toBe('byron');
-      expect(decodeShelleyAddress('not-an-address')).toEqual({ type: 'unknown', isScript: false, stakeAddress: null, networkId: null });
+      expect(decodeShelleyAddress('Ae2tdPwUPEZFRbyhz3cpfC2CumGzNkFBN2L42rcUc2yjQpEkxDbkPodpMAi').paymentCredential).toBeNull();
+      expect(decodeShelleyAddress('not-an-address')).toEqual({ type: 'unknown', isScript: false, stakeAddress: null, paymentCredential: null, networkId: null });
       expect(decodeShelleyAddress('')).toMatchObject({ type: 'unknown' });
     });
 
     it('treats a reward address as its own stake address', () => {
       const stake = 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh';
-      expect(decodeShelleyAddress(stake)).toEqual({ type: 'reward', isScript: false, stakeAddress: stake, networkId: 0 });
+      expect(decodeShelleyAddress(stake)).toEqual({ type: 'reward', isScript: false, stakeAddress: stake, paymentCredential: null, networkId: 0 });
     });
   });
 

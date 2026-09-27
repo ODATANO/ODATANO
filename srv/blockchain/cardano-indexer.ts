@@ -26,6 +26,7 @@ import {
   Dreps,
   PoolEpochSnapshots,
   DrepEpochSnapshots,
+  EpochLedgerSnapshots,
   Assets,
   AssetHistory,
   Account,
@@ -57,7 +58,7 @@ import {
 
 // DB-level entity: the catalogue's existence check must bypass the temporal filter that the
 // service projection carries (see ensureAssetRows).
-import { Assets as AssetsTable } from '#cds-models/odatano/cardano';
+import { Assets as AssetsTable, LedgerUTxOs, LedgerUTxOAssets } from '#cds-models/odatano/cardano';
 
 import {
   mapTransaction,
@@ -68,6 +69,8 @@ import {
   txSeqOf,
   mapTransactionCertificates,
   mapTransactionWithdrawals,
+  sumUtxoAmounts,
+  decodeShelleyAddress,
   mapAddress,
   mapAddressAssets,
   mapAddressUtxos,
@@ -94,13 +97,15 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { TxBuildRequest, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
+import { ProviderUnavailableError, AllBackendsFailedError } from '../utils/errors';
+import { TxBuildRequest, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
 import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
-import { applyBlockToLedger, type LedgerAnchor } from './ledger-state';
+import { applyBlockToLedger, backfillPaymentCredentials, type LedgerAnchor } from './ledger-state';
 import { readCursor, setUtxoSetState, isCrawlerLeaseActive } from './crawler/sync-state';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../utils/epoch-slots';
-import { EPOCH_CONFIG_BY_NETWORK } from '../utils/const';
+import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../utils/const';
+import type { EpochStateBackend } from './backends/cardano-backend';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -151,6 +156,10 @@ export class CardanoIndexer {
    */
   private crawlUtxoSet = false;
   private utxoAnchor: LedgerAnchor | null = null;
+  /** `LedgerAddresses.paymentCredential` is complete; the running fill and its table generation. */
+  private credentialsReady = false;
+  private credentialFill: Promise<void> | null = null;
+  private credentialGeneration = 0;
   /** The anchor block was found in the crawled chain (checked once, before the first apply). */
   private utxoAnchorVerified = false;
   /**
@@ -217,6 +226,131 @@ export class CardanoIndexer {
     if (coverage.fromSlot < epochStart) counts.blocksEpoch = await countSince(epochStart);
     if (coverage.fromSlot <= EPOCH_CONFIG_BY_NETWORK[network].shelleyStartSlot) counts.blocksMinted = await countSince(0);
     return counts;
+  }
+
+  /** True while the crawled UTxO set answers address queries (live crawler at the tip, set active). */
+  async ledgerCoverageActive(tx: CapTransaction): Promise<boolean> {
+    return Boolean((await this.localCoverage(tx))?.ledger);
+  }
+
+  /**
+   * Address from the crawled UTxO set: outputs from the node at the tip (Ogmios) or the unspent
+   * `LedgerUTxOs`, type and stake address decoded from the address. An address the set has never
+   * seen is an empty address, not an error. null = the set cannot answer.
+   */
+  private async localAddress(tx: CapTransaction, addr: string): Promise<ProviderAddress | null> {
+    if (!(await this.localCoverage(tx))?.ledger) return null;
+    let utxos: OdatanoUtxo[] | null = null;
+    try {
+      utxos = await this.client.getUtxosByAddresses([addr]);
+    } catch (err) {
+      logger.warn(`address ${addr}: node UTxO query failed, answering from the crawled set: ${(err as Error)?.message ?? err}`);
+    }
+    utxos ??= await this.ledgerUtxosOf(tx, [addr]);
+    const decoded = decodeShelleyAddress(addr);
+    return {
+      address: addr,
+      stakeAddress: decoded.stakeAddress,
+      type: decoded.type,
+      isScript: decoded.isScript,
+      amount: sumUtxoAmounts(utxos),
+      utxos,
+    };
+  }
+
+  /**
+   * Latest transactions of an address from the crawled UTxO set: the outputs it received
+   * (`LedgerUTxOs.txHash`) and spent (`spentTxHash`) since the anchor. `complete` = the address was
+   * first seen after the anchor, so nothing older exists. null = the set cannot answer.
+   */
+  private async localAddressTransactions(
+    tx: CapTransaction,
+    addr: string,
+    limit: number,
+  ): Promise<{ rows: AddressTransactions[]; complete: boolean } | null> {
+    if (!(await this.localCoverage(tx))?.ledger) return null;
+    const known = await tx.run(
+      SELECT.one.from(LedgerAddresses).columns('firstSeenSlot').where({ address: addr })
+    ) as { firstSeenSlot?: number | string | null } | undefined;
+    if (!known) return { rows: [], complete: false };
+    const complete = known.firstSeenSlot != null;
+
+    // Candidate transactions by slot; a transaction can touch the address with several outputs.
+    const scan = Math.min(limit * 20, 2000);
+    const [created, spent] = await Promise.all([
+      tx.run(SELECT.from(LedgerUTxOs).columns('txHash', 'createdSlot')
+        .where({ address: addr, createdSlot: { '>=': 0 } }).orderBy('createdSlot desc').limit(scan)),
+      tx.run(SELECT.from(LedgerUTxOs).columns('spentTxHash', 'spentSlot')
+        .where({ address: addr, spentSlot: { '>=': 0 } }).orderBy('spentSlot desc').limit(scan)),
+    ]) as [Array<{ txHash: string; createdSlot: number | string }>, Array<{ spentTxHash: string; spentSlot: number | string }>];
+    const slotOf = new Map<string, number>();
+    for (const r of created ?? []) slotOf.set(r.txHash, Number(r.createdSlot));
+    for (const r of spent ?? []) slotOf.set(r.spentTxHash, Number(r.spentSlot));
+    const selected = [...slotOf].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([hash]) => hash);
+    if (selected.length === 0) return { rows: [], complete };
+
+    const [outRows, inRows] = await Promise.all([
+      tx.run(SELECT.from(LedgerUTxOs).where({ address: addr, txHash: { in: selected } })),
+      tx.run(SELECT.from(LedgerUTxOs).where({ address: addr, spentTxHash: { in: selected } })),
+    ]) as [Array<Record<string, unknown>>, Array<Record<string, unknown>>];
+    const amounts = await this.ledgerAmounts(tx, [...(outRows ?? []), ...(inRows ?? [])]);
+    const amountOf = (r: Record<string, unknown>) => amounts.get(`${r.txHash}#${Number(r.outputIndex)}`) ?? [];
+
+    const txs = selected.map((hash) => ({
+      hash,
+      blockTime: slotToPosixSeconds(this.client.network, slotOf.get(hash)!),
+      inputs: (inRows ?? []).filter(r => r.spentTxHash === hash).map(r => ({ address: addr, amount: amountOf(r) })),
+      outputs: (outRows ?? []).filter(r => r.txHash === hash).map(r => ({ address: addr, amount: amountOf(r) })),
+    }));
+    const rows = mapAddressTransactions(addr, txs as unknown as ProviderTransaction[]);
+    rows.sort((a, b) => Number(b.blockTime ?? 0) - Number(a.blockTime ?? 0));
+    return { rows: rows as unknown as AddressTransactions[], complete };
+  }
+
+  /** Amount lists (lovelace + assets) of `LedgerUTxOs` rows, keyed `txHash#outputIndex`. */
+  private async ledgerAmounts(tx: CapTransaction, rows: Array<Record<string, unknown>>): Promise<Map<string, Amount[]>> {
+    const out = new Map<string, Amount[]>();
+    for (const r of rows) out.set(`${r.txHash}#${Number(r.outputIndex)}`, [{ unit: 'lovelace', quantity: String(r.lovelace ?? '0') }]);
+    const withAssets = [...new Set(rows.filter(r => r.hasAssets).map(r => String(r.txHash)))];
+    for (const hashChunk of chunk(withAssets, IN_CHUNK)) {
+      const assetRows = await tx.run(
+        SELECT.from(LedgerUTxOAssets).columns('utxo_txHash', 'utxo_outputIndex', 'unit', 'asset_quantity')
+          .where({ utxo_txHash: { in: hashChunk } })
+      ) as Array<{ utxo_txHash: string; utxo_outputIndex: number | string; unit: string; asset_quantity: unknown }>;
+      for (const a of assetRows ?? []) {
+        out.get(`${a.utxo_txHash}#${Number(a.utxo_outputIndex)}`)?.push({ unit: a.unit, quantity: String(a.asset_quantity) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Active stake of a pool from the Ogmios epoch snapshot of the running epoch (constant within
+   * an epoch). Empty when the crawler is not at the tip or the epoch has no such snapshot.
+   */
+  private async snapshotActiveStake(tx: CapTransaction, poolId: string): Promise<{ activeStake?: string; activeSize?: number }> {
+    const coverage = await this.localCoverage(tx);
+    if (!coverage) return {};
+    const epoch = epochOfSlot(this.client.network, coverage.lastSlot);
+    const row = await tx.run(
+      SELECT.one.from(PoolEpochSnapshots).columns('activeStake', 'activeSize').where({ poolId, epoch, source: 'ogmios' })
+    ) as { activeStake?: unknown; activeSize?: unknown } | undefined;
+    if (!row || row.activeStake == null) return {};
+    return { activeStake: lovelaceSum(row.activeStake), activeSize: Number(row.activeSize ?? 0) };
+  }
+
+  /**
+   * Lifetime withdrawals of a stake key from crawled withdrawals — only when certificates are
+   * crawled and the crawl covers the chain since Shelley; null otherwise.
+   */
+  private async localWithdrawalsSum(tx: CapTransaction, stakeAddress: string): Promise<string | null> {
+    const coverage = await this.localCoverage(tx);
+    if (!coverage || !this.crawlCertificates) return null;
+    if (coverage.fromSlot > EPOCH_CONFIG_BY_NETWORK[this.client.network].shelleyStartSlot) return null;
+    const row = await tx.run(
+      SELECT.one.from(TransactionWithdrawals).columns('sum(lovelace) as total').where({ stakeAddress })
+    ) as { total?: unknown } | undefined;
+    return lovelaceSum(row?.total);
   }
 
   /** The anchor the imported UTxO set describes (null = ledger mode inactive). */
@@ -437,7 +571,7 @@ export class CardanoIndexer {
    * indexAddressTransactions().
    */
   async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
-    const addrData = await this.client.getAddress(addr);
+    const addrData = (await this.localAddress(tx, addr)) ?? await this.client.getAddress(addr);
 
     logger.debug(`indexAddress: provider response for ${addr}: ${addrData.amount?.length ?? 0} amounts, ${addrData.utxos?.length ?? 0} utxos`);
 
@@ -513,9 +647,10 @@ export class CardanoIndexer {
    * rows are UPSERTed without a parent Addresses row (same pattern as TransactionInputs).
    */
   async indexCredentialUtxos(tx: CapTransaction, credHash: string): Promise<AddressUTxOs[]> {
-    const utxos = await this.client.getCredentialUtxos(credHash);
+    const local = await this.localCredentialUtxos(tx, credHash);
+    const utxos = local ?? await this.client.getCredentialUtxos(credHash);
 
-    logger.debug(`indexCredentialUtxos: provider returned ${utxos.length} utxos for credential ${credHash}`);
+    logger.debug(`indexCredentialUtxos: ${local ? 'crawled UTxO set' : 'provider'} returned ${utxos.length} utxos for credential ${credHash}`);
 
     if (utxos.length === 0) return [];
 
@@ -555,6 +690,80 @@ export class CardanoIndexer {
 
     logger.debug(`indexCredentialUtxos: indexed ${allRows.length} utxos across ${byAddress.size} addresses`);
     return allRows;
+  }
+
+  /**
+   * UTxOs of a payment credential without a provider: addresses from the crawled UTxO set, outputs
+   * from the node at the tip (Ogmios) or, without one, the unspent `LedgerUTxOs` as of the cursor.
+   * null = the crawled set cannot answer (not synced, no set, credential column still filling).
+   * An address first used in the last `confirmationDepth` blocks is not in the set yet.
+   */
+  private async localCredentialUtxos(tx: CapTransaction, credHash: string): Promise<OdatanoUtxo[] | null> {
+    if (!(await this.localCoverage(tx))?.ledger || !(await this.paymentCredentialsReady())) return null;
+    const rows = await tx.run(
+      SELECT.from(LedgerAddresses).columns('address').where({ paymentCredential: credHash })
+    ) as Array<{ address: string }>;
+    const addresses = (rows ?? []).map(r => r.address);
+    if (addresses.length === 0) return [];
+    try {
+      const live = await this.client.getUtxosByAddresses(addresses);
+      if (live) return live;
+    } catch (err) {
+      logger.warn(`credential ${credHash}: node UTxO query failed, answering from the crawled set: ${(err as Error)?.message ?? err}`);
+    }
+    return this.ledgerUtxosOf(tx, addresses);
+  }
+
+  /** Unspent `LedgerUTxOs` (+ assets) of the given addresses in the provider UTxO shape. */
+  private async ledgerUtxosOf(tx: CapTransaction, addresses: string[]): Promise<OdatanoUtxo[]> {
+    const out: OdatanoUtxo[] = [];
+    for (const addrChunk of chunk(addresses, IN_CHUNK)) {
+      const utxos = await tx.run(
+        SELECT.from(LedgerUTxOs).where({ address: { in: addrChunk }, spentTxHash: null })
+      ) as Array<Record<string, unknown>>;
+      const amounts = await this.ledgerAmounts(tx, utxos ?? []);
+      for (const u of utxos ?? []) {
+        const txHash = String(u.txHash);
+        const outputIndex = Number(u.outputIndex);
+        out.push({
+          txHash,
+          outputIndex,
+          address: String(u.address),
+          amount: amounts.get(`${txHash}#${outputIndex}`) ?? [],
+          blockHash: '',
+          datumHash: (u.utxo_dataHash as string | null) ?? undefined,
+          inlineDatum: (u.utxo_inlineDatum as string | null) ?? null,
+          scriptRef: (u.utxo_referenceScriptHash as string | null) ?? undefined,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * True once every Shelley-type `LedgerAddresses` row carries its payment credential. Until then
+   * the fill runs in the background (started once per process) and callers use the provider.
+   */
+  async paymentCredentialsReady(): Promise<boolean> {
+    if (this.credentialsReady) return true;
+    if (!this.credentialFill) {
+      const generation = this.credentialGeneration;
+      this.credentialFill = backfillPaymentCredentials()
+        .then((n) => {
+          if (generation !== this.credentialGeneration) return;
+          this.credentialsReady = true;
+          if (n > 0) logger.info(`payment credentials filled for ${n} ledger addresses`);
+        })
+        .catch((err: unknown) => logger.error('payment credential fill failed (retried on the next lookup):', err))
+        .finally(() => { this.credentialFill = null; });
+    }
+    return false;
+  }
+
+  /** The ledger tables were replaced (re-import): the credential column has to be filled again. */
+  resetPaymentCredentials(): void {
+    this.credentialGeneration++;
+    this.credentialsReady = false;
   }
 
   /**
@@ -618,8 +827,22 @@ export class CardanoIndexer {
   async indexAddressTransactions(tx: CapTransaction, addr: string, limit: number): Promise<AddressTransactions[]> {
     logger.debug(`indexAddressTransactions: fetching transactions for ${addr}`);
 
+    const local = await this.localAddressTransactions(tx, addr, limit);
+    const keepLocal = async (): Promise<AddressTransactions[]> => {
+      if (local!.rows.length) await tx.run(UPSERT.into(AddressTransactions).entries(local!.rows as never));
+      return local!.rows;
+    };
+    if (local && (local.complete || local.rows.length >= limit)) return keepLocal();
+
     // Hash-only listing (one API call)
-    const txHashes = await this.client.getAddressTransactionHashes(addr, limit);
+    let txHashes: string[];
+    try {
+      txHashes = await this.client.getAddressTransactionHashes(addr, limit);
+    } catch (err) {
+      // No backend with address history: what the crawled set holds is the best answer there is.
+      if (local && (err instanceof ProviderUnavailableError || err instanceof AllBackendsFailedError)) return keepLocal();
+      throw err;
+    }
 
     logger.debug(`indexAddressTransactions: found ${txHashes.length} tx hashes for ${addr}`);
 
@@ -1099,15 +1322,23 @@ export class CardanoIndexer {
   }
 
   /**
-   * Snapshot every pool and DRep for an epoch in its OWN transaction (after the block commit):
-   * dated snapshot rows plus a refresh of the live `Pools` / `Dreps` rows. Needs Koios, else a no-op.
-   * @returns counts written
+   * Snapshot every pool and DRep for an epoch in its OWN transaction (after the block commit), plus
+   * one EpochLedgerSnapshots row that marks the epoch as observed. With a block hash and an Ogmios
+   * backend the node's ledger state AT that block is read; otherwise Koios reports current state
+   * (and the live `Pools` / `Dreps` rows are refreshed). Neither available: no-op.
+   * @returns counts written and the source used (null = skipped)
    */
-  async snapshotEpoch(epoch: number, at: { slot: number; time: number }): Promise<{ pools: number; dreps: number }> {
+  async snapshotEpoch(
+    epoch: number,
+    at: { slot: number; time: number; hash?: string | null },
+  ): Promise<{ pools: number; dreps: number; source: 'ogmios' | 'koios' | null }> {
+    const epochState = at.hash ? this.client.getEpochStateBackend() : null;
+    if (epochState && at.hash) return this.snapshotEpochFromLedger(epochState, epoch, { ...at, hash: at.hash });
+
     const backend = this.client.getEnumeratingBackend();
     if (!backend) {
-      logger.warn(`epoch ${epoch} snapshot skipped: no backend can enumerate pools/DReps (Koios required)`);
-      return { pools: 0, dreps: 0 };
+      logger.warn(`epoch ${epoch} snapshot skipped: no backend can read pools/DReps (Ogmios or Koios required)`);
+      return { pools: 0, dreps: 0, source: null };
     }
 
     // Network first, DB second — the provider round-trips must not run with a write lock held.
@@ -1120,6 +1351,11 @@ export class CardanoIndexer {
     const drepSnapshots = drepData.map(d => mapDrepSnapshot(d, epoch, at));
     const poolRows = poolData.map(p => mapPool(p, this.client.max_age_ms));
     const drepRows = drepData.map(d => mapDrep(d, this.client.max_age_ms));
+    const ledgerRow = {
+      epoch, snapshotSlot: at.slot, snapshotTime: at.time, snapshotHash: null, source: 'koios',
+      liveStake: poolData.reduce((sum, p) => sum + BigInt(p.liveStake || '0'), 0n).toString(),
+      poolCount: poolData.length, drepCount: drepData.length,
+    };
 
     await cds.tx(async (tx) => {
       // Chunked so a mainnet-sized set cannot exceed a driver's bind-variable cap.
@@ -1127,10 +1363,89 @@ export class CardanoIndexer {
       for (const rows of chunk(drepSnapshots, IN_CHUNK)) await tx.run(UPSERT.into(DrepEpochSnapshots).entries(rows));
       for (const rows of chunk(poolRows, IN_CHUNK)) await tx.run(UPSERT.into(Pools).entries(rows));
       for (const rows of chunk(drepRows, IN_CHUNK)) await tx.run(UPSERT.into(Dreps).entries(rows));
+      await tx.run(UPSERT.into(EpochLedgerSnapshots).entries(ledgerRow));
     });
 
-    logger.info(`epoch ${epoch} snapshot: ${poolSnapshots.length} pools, ${drepSnapshots.length} DReps`);
-    return { pools: poolSnapshots.length, dreps: drepSnapshots.length };
+    logger.info(`epoch ${epoch} snapshot (koios): ${poolSnapshots.length} pools, ${drepSnapshots.length} DReps`);
+    return { pools: poolSnapshots.length, dreps: drepSnapshots.length, source: 'koios' };
+  }
+
+  /**
+   * Epoch snapshot from the node's ledger state at block `at`. The live `Pools` / `Dreps` rows are
+   * NOT refreshed: the acquired state may be hours old. `blocksMinted` counts crawled blocks up to
+   * `at`, only when the crawl covers the chain since Shelley.
+   */
+  private async snapshotEpochFromLedger(
+    backend: EpochStateBackend,
+    epoch: number,
+    at: { slot: number; time: number; hash: string },
+  ): Promise<{ pools: number; dreps: number; source: 'ogmios' }> {
+    const state = await backend.epochStateAt({ slot: at.slot, hash: at.hash });
+    if (state.epoch !== epoch) {
+      logger.warn(`epoch snapshot: ledger at slot ${at.slot} reports epoch ${state.epoch}, crawler dated it ${epoch} — stored as ${epoch}`);
+    }
+    const minted = await this.crawledBlocksByPool(at.slot);
+    const previous = await this.previousLiveStake(epoch);
+    const activeTotal = previous ? [...previous.values()].reduce((a, b) => a + b, 0n) : 0n;
+    const origin = { source: 'ogmios' as const, hash: at.hash };
+    const poolSnapshots = state.pools.map(p => {
+      const active = previous?.get(p.poolId);
+      return {
+        ...mapPoolSnapshot(p, epoch, at, origin),
+        blocksMinted: minted ? (minted.get(p.poolId) ?? 0) : null,
+        activeStake: active == null ? null : active.toString(),
+        activeSize: active == null || activeTotal === 0n ? null : Number((active * 1_000_000n) / activeTotal) / 1_000_000,
+      };
+    });
+    const drepSnapshots = state.dreps.map(d => mapDrepSnapshot(d, epoch, at, origin));
+    const reserves = state.reserves == null ? null : BigInt(state.reserves);
+    const ledgerRow = {
+      epoch, snapshotSlot: at.slot, snapshotTime: at.time, snapshotHash: at.hash, source: 'ogmios',
+      treasury: state.treasury,
+      reserves: state.reserves,
+      totalSupply: reserves == null ? null : (BigInt(CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY) - reserves).toString(),
+      liveStake: state.pools.reduce((sum, p) => sum + BigInt(p.liveStake || '0'), 0n).toString(),
+      activeStake: previous ? activeTotal.toString() : null,
+      poolCount: state.pools.length,
+      drepCount: state.dreps.length,
+      drepAbstainStake: state.drepAbstainStake,
+      drepNoConfidenceStake: state.drepNoConfidenceStake,
+    };
+
+    await cds.tx(async (tx) => {
+      for (const rows of chunk(poolSnapshots, IN_CHUNK)) await tx.run(UPSERT.into(PoolEpochSnapshots).entries(rows));
+      for (const rows of chunk(drepSnapshots, IN_CHUNK)) await tx.run(UPSERT.into(DrepEpochSnapshots).entries(rows));
+      await tx.run(UPSERT.into(EpochLedgerSnapshots).entries(ledgerRow));
+    });
+
+    logger.info(`epoch ${epoch} snapshot (ogmios @ slot ${at.slot}): ${poolSnapshots.length} pools, ${drepSnapshots.length} DReps`);
+    return { pools: poolSnapshots.length, dreps: drepSnapshots.length, source: 'ogmios' };
+  }
+
+  /**
+   * Active stake of epoch E = the stake distribution taken at the E-1 boundary, which is the live
+   * stake the Ogmios snapshot of E-1 recorded at its first block. null without that snapshot.
+   */
+  private async previousLiveStake(epoch: number): Promise<Map<string, bigint> | null> {
+    const rows = await (cds.db as unknown as CapTransaction).run(
+      SELECT.from(PoolEpochSnapshots).columns('poolId', 'liveStake').where({ epoch: epoch - 1, source: 'ogmios' })
+    ) as Array<{ poolId: string; liveStake: unknown }>;
+    if (!rows?.length) return null;
+    return new Map(rows.map(r => [r.poolId, BigInt(lovelaceSum(r.liveStake))]));
+  }
+
+  /** Crawled blocks per pool up to `slot`; null unless the crawl started at or before Shelley. */
+  private async crawledBlocksByPool(slot: number): Promise<Map<string, number> | null> {
+    const db = cds.db as unknown as CapTransaction;
+    const cursor = await readCursor(db);
+    const shelley = EPOCH_CONFIG_BY_NETWORK[this.client.network].shelleyStartSlot;
+    if (cursor?.startSlot == null || cursor.startSlot > shelley) return null;
+    const rows = await db.run(
+      SELECT.from(Blocks).columns('slotLeader', 'count(*) as n').where({ slot: { '<=': slot } }).groupBy('slotLeader')
+    ) as Array<{ slotLeader: string | null; n: number | string }>;
+    const out = new Map<string, number>();
+    for (const r of rows ?? []) if (r.slotLeader) out.set(r.slotLeader, Number(r.n));
+    return out;
   }
 
   /** Every native-asset unit a block touches: outputs, consumed inputs and mint/burn rows. */
@@ -1167,6 +1482,10 @@ export class CardanoIndexer {
       ) as { controlledAmount?: unknown } | undefined;
       accountInfo.controlledAmount = (BigInt(lovelaceSum(ledger?.controlledAmount)) + BigInt(accountInfo.withdrawableAmount || '0')).toString();
     }
+    if (accountInfo.withdrawalsSum === '0') {
+      const local = await this.localWithdrawalsSum(tx, stakeAddress);
+      if (local != null) accountInfo.withdrawalsSum = local;
+    }
     const accountEntity = mapAccount(accountInfo, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Accounts).entries(accountEntity))
@@ -1190,8 +1509,10 @@ export class CardanoIndexer {
 
   /** Index a pool by id. */
   async indexPool(tx: CapTransaction, poolId: string): Promise<Pool> {
-    const poolInfo = await this.client.getPool(poolId);
-    const poolEntity = mapPool({ ...poolInfo, ...(await this.localPoolBlocks(tx, poolId)) }, this.client.max_age_ms);
+    const poolInfo = { ...(await this.client.getPool(poolId)), ...(await this.localPoolBlocks(tx, poolId)) };
+    // The node's live pool view has no active stake; the epoch snapshot of the current epoch does.
+    if (poolInfo.activeStake === '0') Object.assign(poolInfo, await this.snapshotActiveStake(tx, poolId));
+    const poolEntity = mapPool(poolInfo, this.client.max_age_ms);
 
     await tx.run(UPSERT.into(Pools).entries(poolEntity))
 

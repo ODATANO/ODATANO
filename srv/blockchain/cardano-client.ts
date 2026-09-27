@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -29,8 +29,9 @@ const logger = cds.log('CardanoClient');
 /** Which backend type to prefer per method. */
 const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getTransaction: { preferLive: false },
+  // node first: UTxOs at the tip; Ogmios decodes the type itself (base/enterprise/…, not shelley/byron)
   getAddress: { preferLive: true },
-  getAddressUtxos: { preferLive: false },
+  getAddressUtxos: { preferLive: true },
   getAddressTransactions: { preferLive: false },
   // providers first: they report circulation; Ogmios only has treasury and reserves
   getNetworkInformation: { preferLive: false },
@@ -42,7 +43,8 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getCurrentSlot: { preferLive: true },
   isUtxoUnspent: { preferLive: true },
   getPool: { preferLive: true },
-  getDrep: { preferLive: false },
+  // node first; a DRep the ledger no longer lists (retired) falls through to the providers
+  getDrep: { preferLive: true },
   getAccount: { preferLive: true },
   getAssetInfo: { preferLive: false },
   getProtocolParameters: { preferLive: true },
@@ -554,6 +556,21 @@ export class CardanoClient {
   async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
     const backend = this.getLedgerStateBackend();
     return backend ? backend.getUnspentOutputs(refs) : null;
+  }
+
+  /** Unspent outputs of several addresses from the node's ledger; null when no ledger-state backend can do it. */
+  async getUtxosByAddresses(addresses: string[]): Promise<UTxO[] | null> {
+    const backend = this.getLedgerStateBackend();
+    return backend?.getUtxosByAddresses ? backend.getUtxosByAddresses(addresses) : null;
+  }
+
+  /** A backend that reads pool/DRep/pot state at a block (Ogmios) — preferred source of epoch snapshots. */
+  getEpochStateBackend(): EpochStateBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isEpochStateBackend(b)) return b;
+    }
+    return null;
   }
 
   /**

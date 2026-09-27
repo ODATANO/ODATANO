@@ -54,6 +54,18 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         utxoSet           : UtxoSetStatus;
         // one-off certificate/withdrawal backfill over already crawled blocks (this process)
         certificateBackfill : CertificateBackfillStatus;
+        // per-epoch pool/DRep/pot snapshots (crawler.epochSnapshots)
+        epochSnapshots    : EpochSnapshotStatus;
+    }
+
+    @title      : 'Epoch Snapshot Status'
+    @description: 'Latest epoch snapshot and the source this process would use for the next one'
+    type EpochSnapshotStatus {
+        enabled   : Boolean;   // crawler.epochSnapshots configured
+        source    : String;    // ogmios | koios | null (no usable backend)
+        lastEpoch : Integer;   // newest snapshotted epoch; null before the first
+        lastSource: String;    // source of that snapshot
+        lastSlot  : String;    // block it was taken at
     }
 
     @title      : 'Certificate Backfill Status'

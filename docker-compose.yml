@@ -12,7 +12,6 @@
 # - Genesis hashes depend on exact bytes: config files must be LF (enforced by
 #   .gitattributes). CRLF -> "GenesisHashMismatch".
 # - First boot syncs Preview from genesis (hours); node-db persists so restarts resume.
-# - `ghcr.io/odatano/ogmios` must be public, or run `docker login ghcr.io` first.
 
 services:
   # ---------------------------------------------------------------------------
@@ -42,7 +41,7 @@ services:
   # Ogmios bridge — connects to the node socket, serves ws/http on :1337
   # ---------------------------------------------------------------------------
   ogmios:
-    image: ghcr.io/odatano/ogmios:v6.14.0.2
+    image: cardanosolutions/ogmios:v7.0.0
     container_name: ogmios
     command:
       - --host=0.0.0.0

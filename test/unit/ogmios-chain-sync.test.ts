@@ -61,6 +61,7 @@ import { createChainSynchronizationClient } from '@cardano-ogmios/client';
 import { OgmiosBackend } from '../../srv/blockchain/backends/ogmios-backend';
 import type { ChainSyncCallbacks, ChainPoint } from '../../srv/blockchain/backends/cardano-backend';
 import type { BlockData, Transaction } from '../../srv/utils/types';
+import { ProviderUnavailableError } from '../../srv/utils/errors';
 
 const NETWORK = 'preview' as const;
 const OGMIOS_URL = 'ws://localhost:1337';
@@ -393,10 +394,12 @@ describe('OgmiosBackend.openChainSync', () => {
 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({
-      name: 'ProviderUnavailableError',
+      name: 'ChainSyncClosedError',
       statusCode: 503,
       message: expect.stringContaining('node restart'),
     });
+    // still a ProviderUnavailableError for every caller that does not tell closes apart
+    expect(errors[0]).toBeInstanceOf(ProviderUnavailableError);
   });
 
   it('cleans up the context when chain-sync client creation fails', async () => {

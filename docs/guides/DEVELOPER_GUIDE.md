@@ -152,7 +152,7 @@ srv/
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds                   # 36 entities with temporal support
+db/schema.cds                   # 47 entities with temporal support
 config/config.ts                # Timeouts, network, TTL, builders
 test/                           # 69 test files (52 unit / 1479 tests + 17 integration, vitest)
 ```
@@ -198,7 +198,7 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
 │   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds               # 36 entities (namespace: odatano.cardano)
+│   └── schema.cds               # 47 entities (namespace: odatano.cardano)
 └── config/                      # Network genesis configurations
 ```
 

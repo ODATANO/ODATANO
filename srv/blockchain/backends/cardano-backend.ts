@@ -184,6 +184,8 @@ export interface LedgerStateBackend extends CardanoBackend {
   queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]>;
   /** Outputs among `refs` that are unspent at the tip; spent or unknown references are absent. */
   getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]>;
+  /** Unspent outputs of several addresses at the tip. */
+  getUtxosByAddresses?(addresses: string[]): Promise<UTxO[]>;
 }
 
 export function isLedgerStateBackend(backend: CardanoBackend): backend is LedgerStateBackend {
@@ -233,6 +235,32 @@ export interface EnumeratingBackend extends CardanoBackend {
   getDrepIds(): Promise<string[]>;
   /** Resolve a batch of DRep ids. Ids the backend does not know are omitted. */
   getDreps(drepIds: string[]): Promise<DrepData[]>;
+}
+
+/** Network-wide ledger state read at one block for an epoch snapshot; unreported figures are null. */
+export interface EpochLedgerState {
+  /** Epoch the ledger was in at the acquired block. */
+  epoch: number;
+  pools: PoolData[];
+  /** Registered DReps only; the two predefined DReps are summed into the stake fields below. */
+  dreps: DrepData[];
+  treasury: string | null;
+  reserves: string | null;
+  drepAbstainStake: string | null;
+  drepNoConfidenceStake: string | null;
+}
+
+/**
+ * Backend that reads the whole pool/DRep set from the node's ledger at a given block (Ogmios).
+ * The block must still be inside the node's volatile window (k blocks), else acquisition fails.
+ */
+export interface EpochStateBackend extends CardanoBackend {
+  epochStateAt(point: ChainPoint): Promise<EpochLedgerState>;
+}
+
+/** Type guard: can this backend read epoch state at a block? */
+export function isEpochStateBackend(backend: CardanoBackend): backend is EpochStateBackend {
+  return typeof (backend as EpochStateBackend).epochStateAt === 'function';
 }
 
 /** Type guard: can this backend enumerate pools and DReps? */

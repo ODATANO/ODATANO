@@ -8,7 +8,10 @@ import { backfillCertificates, type CertificateBackfillProgress } from './blockc
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
+import { EpochLedgerSnapshots } from '#cds-models/odatano/cardano';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
+
+const { SELECT } = cds.ql;
 
 const logger = cds.log('CardanoIndexerService');
 
@@ -39,6 +42,25 @@ function utxoSetConfigured(): boolean {
   }
 }
 
+function epochSnapshotsConfigured(): boolean {
+  try {
+    return Boolean(loadCrawlerConfigFromEnv()?.epochSnapshots);
+  } catch {
+    return false;
+  }
+}
+
+/** Source the next epoch snapshot would use: the node's ledger first, Koios second. */
+function epochSnapshotSource(): 'ogmios' | 'koios' | null {
+  try {
+    const client = getCardanoClient();
+    if (client.getEpochStateBackend()) return 'ogmios';
+    return client.getEnumeratingBackend() ? 'koios' : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * CardanoIndexerService handlers: control/observability surface over the crawler
  * singleton (srv/blockchain/crawler). Reads the cursor and starts/stops the crawler.
@@ -52,6 +74,9 @@ module.exports = (srv: cds.Service) => {
   srv.on('getStatus', async (req: Request) => {
     return handleRequest(req, async (db) => {
       const cursor = await readCursor(db);
+      const lastSnapshot = await db.run(
+        SELECT.one.from(EpochLedgerSnapshots).columns('epoch', 'source', 'snapshotSlot').orderBy('epoch desc')
+      ) as { epoch?: number; source?: string | null; snapshotSlot?: number | string | null } | undefined;
       const lastHeight = cursor?.lastHeight ?? 0;
       const tipHeight = cursor?.tipHeight ?? 0;
       const progress = tipHeight > 0 ? Math.min(100, (lastHeight / tipHeight) * 100) : 0;
@@ -85,6 +110,13 @@ module.exports = (srv: cds.Service) => {
           startedAt: certificateBackfill.startedAt,
           finishedAt: certificateBackfill.finishedAt,
           error: certificateBackfill.error,
+        },
+        epochSnapshots: {
+          enabled: epochSnapshotsConfigured(),
+          source: epochSnapshotSource(),
+          lastEpoch: lastSnapshot?.epoch ?? null,
+          lastSource: lastSnapshot?.source ?? null,
+          lastSlot: lastSnapshot?.snapshotSlot == null ? null : String(lastSnapshot.snapshotSlot),
         },
       };
     });

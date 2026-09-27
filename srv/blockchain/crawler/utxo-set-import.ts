@@ -287,6 +287,9 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
       await setUtxoSetState(tx, { status: 'active', anchorSlot: anchor.slot, anchorHash: anchor.hash, importedAt, error: null });
     });
     opts.indexer.setUtxoAnchor(anchor);
+    // The aggregation leaves paymentCredential empty; filled in the background.
+    opts.indexer.resetPaymentCredentials();
+    void opts.indexer.paymentCredentialsReady();
     logger.info(`UTxO set imported: ${imported} entries at anchor ${anchor.slot}/${anchor.hash} (source=${source})`);
     return { utxos: imported, anchor };
   } catch (err) {

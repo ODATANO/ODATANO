@@ -48,6 +48,8 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
   PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
+  DrepEpochSnapshots: 'odatano.cardano.DrepEpochSnapshots',
+  EpochLedgerSnapshots: 'odatano.cardano.EpochLedgerSnapshots',
   TransactionCertificates: 'odatano.cardano.TransactionCertificates',
   TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
 }));
@@ -57,7 +59,7 @@ import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler
 import { startCrawler, stopCrawler, isCrawlerRunning, getCrawler, standbyDelayMs } from '../../srv/blockchain/crawler';
 import type { ChainSyncCallbacks, ChainSyncHandle } from '../../srv/blockchain/backends/cardano-backend';
 import type { BlockData } from '../../srv/utils/types';
-import { ChainSyncFrameError } from '../../srv/utils/errors';
+import { ChainSyncClosedError, ChainSyncFrameError } from '../../srv/utils/errors';
 
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 1000, startBlockHash: 'start'.padEnd(64, '0'), startHeight: 10,
@@ -584,6 +586,64 @@ describe('CardanoCrawler chain-sync frame failure', () => {
 
     expect(crawler.isRunning()).toBe(false);
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
+  });
+
+  const socketClosed = () => new ChainSyncClosedError('Ogmios chain-sync socket closed unexpectedly (code 1006: no reason supplied)', 'ogmios');
+
+  it('fetches the next block over pagination when the server closes the stream before delivering it', async () => {
+    statefulCursor();
+    const indexBlockFull = vi.fn();
+    const getNextBlocks = vi.fn()
+      .mockResolvedValueOnce([block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100 }),
+                              block({ height: 42, hash: 'b42'.padEnd(64, '0'), slot: 4200 })])
+      .mockResolvedValue([]);
+    const { client, openChainSync, close, cbs } = hybridClient({ getNextBlocks });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null) });
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(socketClosed()); // no block delivered on this stream
+    await settle(() => openChainSync.mock.calls.length > 1, 2000);
+
+    expect(close).toHaveBeenCalled();
+    expect(indexBlockFull).toHaveBeenCalledTimes(2);   // 41 (and the one after) came over HTTP
+    expect(openChainSync).toHaveBeenCalledTimes(2);    // then chain-sync again
+    expect(crawler.isRunning()).toBe(true);
+    // lastError names the block the stream could not deliver
+    expect(updatesWith(s => typeof s.lastError === 'string' && s.lastError.includes('block 41')).length).toBeGreaterThan(0);
+    await crawler.stop();
+  });
+
+  it('reopens chain-sync without pagination when the stream closes after delivering blocks', async () => {
+    statefulCursor();
+    const getNextBlocks = vi.fn().mockResolvedValue([]);
+    const { client, openChainSync, cbs } = hybridClient({ getNextBlocks });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null) });
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().rollForward(block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100 }), [], { slot: 9000, hash: 't'.padEnd(64, '9'), height: 90 });
+    await cbs().onError!(socketClosed());
+    await settle(() => openChainSync.mock.calls.length > 1, 2000);
+
+    expect(openChainSync).toHaveBeenCalledTimes(2);
+    expect(getNextBlocks).not.toHaveBeenCalled();
+    expect(crawler.isRunning()).toBe(true);
+    await crawler.stop();
+  });
+
+  it("still halts on a closed stream without progress when the source is pinned to 'ogmios'", async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = hybridClient();
+    const crawler = makeCrawler(client, { ...CONFIG, source: 'ogmios' });
+
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().onError!(socketClosed());
+    await settle(() => !crawler.isRunning());
+
+    expect(crawler.isRunning()).toBe(false);
+    expect(openChainSync).toHaveBeenCalledTimes(1);
   });
 
   it('halts when the frame was too broken to even name a block', async () => {

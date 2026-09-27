@@ -670,7 +670,7 @@ so the crawler also fills the tables that analytics need:
 |---|---|---|
 | `AssetHistory` | every mint and burn in the range, one row per (unit, transaction) | on |
 | `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint | on (`bare`) |
-| `PoolEpochSnapshots`, `DrepEpochSnapshots` | every pool and DRep once per epoch — only while the crawl is at the chain tip | off |
+| `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | every pool and DRep once per epoch, plus treasury, reserves and stake totals | off |
 | `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
 
 ```jsonc
@@ -678,20 +678,35 @@ so the crawler also fills the tables that analytics need:
   "assetHistory": true,        // mint/burn rows — derived from the block, no provider call
   "assetCatalogue": "bare",    // "off" | "bare" (free) | "enrich" (adds registry name/ticker/decimals)
   "assetEnrichRate": 2,        // units per second, "enrich" only
-  "epochSnapshots": false,     // pool/DRep snapshots — requires a Koios backend
+  "epochSnapshots": false,     // pool/DRep snapshots — Ogmios (node ledger) or Koios
   "certificates": false        // certificates + withdrawals — Ogmios chain-sync or Koios, not Blockfrost
 }
 ```
 
 The two defaults cost nothing: both are derived from data the crawler already holds. `"enrich"` and
-`epochSnapshots` talk to a provider and are therefore opt-in; `epochSnapshots` needs Koios, because
-it is the only backend that can enumerate the full pool and DRep set in batches.
+`epochSnapshots` query a backend and are therefore opt-in; `epochSnapshots` needs Ogmios or Koios,
+the backends that can enumerate the full pool and DRep set.
 
-`epochSnapshots` only records an epoch while the crawl has caught up to the chain tip. Koios
-reports the pool and DRep set as it is *now* — there is no historical variant — so an epoch the
-crawler merely passes through while backfilling is skipped rather than filled with today's numbers
-under yesterday's epoch number. If you want snapshots for a past range, there is nothing the crawl
-can reconstruct; run the crawler live from the point you care about.
+With Ogmios the snapshot of an epoch is read from the node's ledger state **at the first crawled
+block of that epoch**: pool parameters, live and active stake, saturation, DReps with deposit,
+mandate and delegator count, and one `EpochLedgerSnapshots` row with treasury, reserves, total
+supply, live/active stake and the always-abstain / always-no-confidence stake. The node keeps
+ledger state only for its last k blocks (2160 on mainnet/preprod, 432 on preview), so a block
+further behind the tip is skipped; a later block of the same epoch that is close enough still
+records it. Rows carry `source` (`ogmios`) and `snapshotHash`; the live `Pools` / `Dreps` rows
+are not touched. `liveDelegators` and `blocksEpoch` are not in the ledger state and stay empty;
+`blocksMinted` is counted from crawled blocks when the crawl started at or before Shelley.
+The node's live view has no active stake: `activeStake` of epoch E is the live stake the snapshot
+of epoch E-1 recorded at its first block (the stake distribution taken at that boundary), so the
+first Ogmios snapshot leaves it empty.
+
+Without Ogmios, Koios reports the pool and DRep set as it is *now* — there is no historical
+variant — so an epoch is only recorded while the crawl has caught up to the chain tip, and an
+epoch the crawler merely passes through while backfilling is skipped rather than filled with
+today's numbers under yesterday's epoch number. Either way, snapshots of a past range cannot be
+reconstructed; run the crawler live from the point you care about. A reorg removes the snapshots
+taken at rolled-back blocks, and the epoch is taken again. `getStatus().epochSnapshots` shows the
+source the next snapshot would use and the newest snapshotted epoch.
 
 `certificates` (`CRAWLER_CERTIFICATES`) writes one `TransactionCertificates` row per certificate and
 kind — `stake_registration`, `stake_deregistration`, `pool_delegation`, `vote_delegation`,
@@ -821,7 +836,17 @@ Otherwise the backend's value stays.
 | `Pools.blocksMinted` | all crawled `Blocks` of the pool | crawler at the tip, crawl started at or before the first Shelley slot |
 | `Accounts.controlledAmount` | `LedgerAccounts.controlledAmount` + the reward balance | crawler at the tip, UTxO set `active` |
 | `NetworkInformation.circulatingSupply` | total of `LedgerAddresses.totalLovelace` | crawler at the tip, UTxO set `active` |
+| `GetUTxOsByCredential` | addresses from `LedgerAddresses.paymentCredential`, their outputs from Ogmios at the tip (without Ogmios: the unspent `LedgerUTxOs`) | crawler at the tip, UTxO set `active`, credential column filled |
+| `Addresses`, `GetAddressByBech32`, `GetAssetsByAddress`, `GetUTxOsByAddress` | outputs from Ogmios at the tip (without Ogmios: the unspent `LedgerUTxOs`), balance summed over them, type and stake address decoded from the address | crawler at the tip, UTxO set `active` |
+| `GetLatestTransactionsByAddress`, `AddressTransactions` | outputs the address received and spent since the anchor, net amounts per transaction | crawler at the tip, UTxO set `active`; addresses older than the anchor ask a provider when fewer than `limit` crawled transactions exist |
+| `Pools.activeStake`, `activeSize` | `PoolEpochSnapshots` of the running epoch (source `ogmios`) | crawler at the tip, backend reports no active stake |
+| `Accounts.withdrawalsSum` | sum of `TransactionWithdrawals` | crawler at the tip, certificates crawled since Shelley, backend reports none |
 | `Epochs.blockCount`, `txCount`, `fees`, `firstBlockTime`, `lastBlockTime` (crawled epochs) | crawled `Blocks` of the epoch | crawl started before the epoch |
+
+`GetUTxOsByCredential` needs no Koios this way. `LedgerAddresses.paymentCredential` is filled in the
+background after an import and, once, for sets imported by an older version; until it is complete
+the action keeps using Koios. An address first used in the last `confirmationDepth` blocks is not in
+the crawled set yet and is therefore missing from the answer.
 
 The epoch totals are what makes an Ogmios-only crawl describe its epochs: Ogmios serves no past
 epoch, so the crawler writes the row from its own blocks, with start and end time derived from the

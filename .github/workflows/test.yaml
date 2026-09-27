@@ -103,7 +103,7 @@ jobs:
             -p 1337:1337 \
             -v ${{ runner.temp }}/ipc:/ipc \
             -v $CONFDIR:/config \
-            ghcr.io/odatano/ogmios:v6.14.0.2 \
+            cardanosolutions/ogmios:v7.0.0 \
               --host 0.0.0.0 \
               --node-socket /ipc/node.socket \
               --node-config /config/cardano-node/config.json

@@ -1,6 +1,7 @@
 /**
- * Chain crawler — pool/DRep snapshots at epoch boundaries: once per epoch, only at the tip,
- * outside the block transaction, never failing the crawl, honouring snapshots another run recorded.
+ * Chain crawler — pool/DRep snapshots at epoch boundaries: once per epoch, outside the block
+ * transaction, never failing the crawl, honouring snapshots another run recorded. Koios: only in
+ * the tip's epoch. Ogmios: at the block itself while it is inside the node's volatile window.
  * Preview geometry: 86 400 slots/epoch from slot 0, so epoch 3 = slots 259 200..345 599 and
  * epoch 4 starts at 345 600; the tip guard derives the tip's epoch from its slot.
  */
@@ -53,6 +54,8 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoReorgLog: 'odatano.cardano.CardanoReorgLog',
   CardanoSyncState: 'odatano.cardano.CardanoSyncState',
   PoolEpochSnapshots: 'odatano.cardano.PoolEpochSnapshots',
+  DrepEpochSnapshots: 'odatano.cardano.DrepEpochSnapshots',
+  EpochLedgerSnapshots: 'odatano.cardano.EpochLedgerSnapshots',
   TransactionCertificates: 'odatano.cardano.TransactionCertificates',
   TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
 }));
@@ -116,8 +119,8 @@ function makeIndexer(snapshotEpoch = vi.fn().mockResolvedValue({ pools: 2, dreps
   };
 }
 
-/** Chain-sync client whose callbacks the test drives by hand. */
-function chainSyncClient() {
+/** Chain-sync client whose callbacks the test drives by hand; `ledger` = an Ogmios epoch-state backend exists. */
+function chainSyncClient(ledger = false) {
   let callbacks: ChainSyncCallbacks | undefined;
   const handle: ChainSyncHandle = { close: vi.fn().mockResolvedValue(undefined) };
   const openChainSync = vi.fn(async (_from: unknown, cbs: ChainSyncCallbacks) => {
@@ -125,7 +128,10 @@ function chainSyncClient() {
     return handle;
   });
   return {
-    client: { getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: () => null },
+    client: {
+      getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: () => null,
+      getEpochStateBackend: () => (ledger ? { epochStateAt: vi.fn() } : null),
+    },
     openChainSync,
     cbs: () => callbacks!,
   };
@@ -163,7 +169,7 @@ describe('CardanoCrawler — epoch snapshots', () => {
     await settle(() => true);
 
     expect(snapshotEpoch).toHaveBeenCalledTimes(1);
-    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000 });
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: null });
     await crawler.stop();
   });
 
@@ -309,6 +315,65 @@ describe('CardanoCrawler — epoch snapshots', () => {
     // it opens its own, so a few thousand rows never inflate the atomic block write
     expect(indexer.indexBlockFull.mock.calls[0][0]).toBeDefined();
     expect(snapshotEpoch.mock.calls[0]).toHaveLength(2);
+    await crawler.stop();
+  });
+
+  it('with Ogmios, snapshots a past epoch at the block while it is inside the volatile window', async () => {
+    defaultDb();
+    const { indexer, snapshotEpoch } = makeIndexer();
+    const { client, openChainSync, cbs } = chainSyncClient(true);
+    const crawler = makeCrawler(client, indexer);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    // block in epoch 3, tip in epoch 4 but only 100 blocks ahead (preview k = 432)
+    const tip: ChainPoint = { slot: 345_700, hash: 'tip4'.padEnd(64, '2'), height: 141 };
+    await cbs().rollForward(block(), [], tip);
+    await settle(() => snapshotEpoch.mock.calls.length > 0);
+
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: 'blk'.padEnd(64, '1') });
+    await crawler.stop();
+  });
+
+  it('with Ogmios, skips a block that is too far behind the tip to acquire', async () => {
+    defaultDb();
+    const { indexer, snapshotEpoch } = makeIndexer();
+    const { client, openChainSync, cbs } = chainSyncClient(true);
+    const crawler = makeCrawler(client, indexer);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    // 425 blocks behind: inside k = 432, but not by the safety margin
+    await cbs().rollForward(block(), [], { slot: 345_700, hash: 'tip'.padEnd(64, '2'), height: 466 });
+    await settle(() => true);
+    expect(snapshotEpoch).not.toHaveBeenCalled();
+
+    // a later block of the same epoch closer to the tip still gets the snapshot
+    await cbs().rollForward(
+      block({ hash: 'blk2'.padEnd(64, '1'), height: 400, slot: 300_000 }), [], { slot: 345_700, hash: 'tip'.padEnd(64, '2'), height: 466 },
+    );
+    await settle(() => snapshotEpoch.mock.calls.length > 0);
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 300_000, time: 1700000000, hash: 'blk2'.padEnd(64, '1') });
+    await crawler.stop();
+  });
+
+  it('skips an epoch that already has its marker row', async () => {
+    defaultDb();
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW };
+      if (q._op === 'SELECT.one' && q.entity.endsWith('EpochLedgerSnapshots')) return { epoch: 3 };
+      return undefined;
+    });
+    const { indexer, snapshotEpoch } = makeIndexer();
+    const { client, openChainSync, cbs } = chainSyncClient(true);
+    const crawler = makeCrawler(client, indexer);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    await cbs().rollForward(block(), [], TIP_EPOCH_3);
+    await settle(() => true);
+
+    expect(snapshotEpoch).not.toHaveBeenCalled();
     await crawler.stop();
   });
 });

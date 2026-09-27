@@ -3,7 +3,7 @@ import type { CardanoClient } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { ChainSyncBackend, ChainSyncHandle, ChainPoint, PaginatingBackend } from '../backends/cardano-backend';
 import type { BlockData, Transaction } from '../../utils/types';
-import { ChainSyncFrameError, ProviderUnavailableError } from '../../utils/errors';
+import { ChainSyncClosedError, ChainSyncFrameError, ChainSyncStalledError, ProviderUnavailableError } from '../../utils/errors';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { emitBlockIndexed, emitReorg } from './hooks';
@@ -20,6 +20,8 @@ import {
   AssetHistory_ as AssetHistory,
   CardanoReorgLog,
   PoolEpochSnapshots,
+  DrepEpochSnapshots,
+  EpochLedgerSnapshots,
 } from '#cds-models/odatano/cardano';
 import {
   ensureSyncStateSingleton,
@@ -147,13 +149,19 @@ export class CardanoCrawler {
   /** Chain-sync callback promises outlive openChainSync(); stop() explicitly drains them. */
   private readonly inFlightCallbacks = new Set<Promise<unknown>>();
   private haltPromise: Promise<void> | null = null;
-  /** An unparseable chain-sync frame; the ingest loop fetches that block via pagination, then reopens chain-sync. */
-  private frameFailure: ChainSyncFrameError | null = null;
+  /** A block chain-sync cannot deliver; the ingest loop fetches it via pagination, then reopens chain-sync. */
+  private frameFailure: ChainSyncFrameError | ChainSyncStalledError | null = null;
+  /** The stream closed after making progress; the ingest loop reopens chain-sync at the cursor. */
+  private reopenStream = false;
+  /** Blocks persisted by the current chain-sync stream. */
+  private blocksThisStream = 0;
   /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
   private streamEnded: (() => void) | null = null;
   private finalStatus: CrawlSyncStatusValue = 'stopped';
   /** Set only by an unrecoverable halt — clears desiredRunning so restarts stay down. */
   private latchOnHalt = false;
+  /** Distance to k at which a block no longer counts as acquirable (the tip moves on while we query). */
+  private static readonly SNAPSHOT_WINDOW_MARGIN = 10;
   /** Epoch whose pool/DRep snapshot this process has settled, and the in-flight attempt. */
   private snapshotedEpoch: number | null = null;
   private snapshotInFlight: Promise<void> | null = null;
@@ -241,6 +249,7 @@ export class CardanoCrawler {
       }
       if (u.status === 'active' && u.anchorSlot != null && u.anchorHash) {
         this.indexer.setUtxoAnchor({ slot: u.anchorSlot, hash: u.anchorHash });
+        void this.indexer.paymentCredentialsReady();
         logger.info(`UTxO set active from anchor ${u.anchorSlot}/${u.anchorHash} — ledger tables are maintained`);
       } else {
         this.indexer.setUtxoAnchor(null);
@@ -343,7 +352,9 @@ export class CardanoCrawler {
           await streamEnd;
 
           const failure = this.takeFrameFailure();
-          if (!this.running || failure?.height == null) return;
+          if (!this.running) return;
+          if (this.reopenStream) { this.reopenStream = false; continue; }
+          if (failure?.height == null) return;
           logger.warn(
             `chain-sync cannot deliver block ${failure.height} — switching to pagination until it is behind the cursor`
           );
@@ -449,10 +460,11 @@ export class CardanoCrawler {
       return;
     }
 
+    this.blocksThisStream = 0;
     const handle = await backend.openChainSync(points, {
       rollForward: (block, txs, tip) => this.trackCallback(async () => {
         if (!this.running) return;
-        await this.persistBlock(block, txs, tip);
+        if (await this.persistBlock(block, txs, tip)) this.blocksThisStream++;
       }),
       rollBackward: (point) => this.trackCallback(async () => {
         if (!this.running) return;
@@ -474,6 +486,21 @@ export class CardanoCrawler {
           await this.degradeToPagination(err);
           return;
         }
+        // The server dropped the socket. After progress: reopen at the cursor. Without progress
+        // the server fails on the next block itself (e.g. a header it cannot decode): fetch that
+        // block over pagination, then chain-sync takes over again.
+        if (err instanceof ChainSyncClosedError) {
+          if (this.blocksThisStream > 0) {
+            logger.warn(`${err.message} after ${this.blocksThisStream} block(s) — reopening chain-sync at the cursor`);
+            await this.endStream(() => { this.reopenStream = true; });
+            return;
+          }
+          const cursor = await cds.tx((tx) => readCursor(tx));
+          if (cursor && this.config.source !== 'ogmios' && this.client.getPaginatingBackend()) {
+            await this.degradeToPagination(new ChainSyncStalledError(cursor.lastHeight + 1, err.message));
+            return;
+          }
+        }
         // The stream is stalled (mapping/callback failure) — record and halt cleanly
         // so the cursor status shows 'error' instead of a healthy-looking hang.
         const streak = await this.recordCrawlerError(err);
@@ -493,7 +520,7 @@ export class CardanoCrawler {
   }
 
   /** Read and clear the pending frame failure, so each stream starts from a clean slate. */
-  private takeFrameFailure(): ChainSyncFrameError | null {
+  private takeFrameFailure(): ChainSyncFrameError | ChainSyncStalledError | null {
     const failure = this.frameFailure;
     this.frameFailure = null;
     return failure;
@@ -513,12 +540,16 @@ export class CardanoCrawler {
    * End the chain-sync stream and hand back to the ingest loop, which continues on pagination
    * past the offending block. The error is recorded first so `lastError` names the block.
    */
-  private async degradeToPagination(err: ChainSyncFrameError): Promise<void> {
+  private async degradeToPagination(err: ChainSyncFrameError | ChainSyncStalledError): Promise<void> {
     const streak = await this.recordCrawlerError(err);
     if (streak < 0) { await this.halt('stopped'); return; }
-    logger.error('Chain-sync frame unusable — continuing on pagination:', err.message);
+    logger.error('Chain-sync cannot deliver a block — continuing on pagination:', err.message);
+    await this.endStream(() => { this.frameFailure = err; });
+  }
 
-    this.frameFailure = err;
+  /** Close the current chain-sync stream and hand the decision in `mark` to the ingest loop. */
+  private async endStream(mark: () => void): Promise<void> {
+    mark();
     const handle = this.chainSyncHandle;
     this.chainSyncHandle = null;
     if (handle) {
@@ -849,9 +880,11 @@ export class CardanoCrawler {
   }
 
   /**
-   * Pool/DRep snapshot once per epoch, detached from the triggering block and ONLY at the tip:
-   * the enumerating providers report current state (no epoch parameter), so epochs passed
-   * during a backfill are skipped permanently. Authority is the `PoolEpochSnapshots` row.
+   * Pool/DRep snapshot once per epoch, detached from the triggering block. With Ogmios the ledger
+   * state is read AT the block, which works while the block is inside the node's volatile window
+   * (k blocks behind the tip). Koios reports current state only, so there the crawl must be in the
+   * tip's epoch. Epochs passed outside those bounds are skipped. Authority is the marker row in
+   * `EpochLedgerSnapshots` (or a pool row written before the marker existed).
    */
   private maybeSnapshotEpoch(block: BlockData, tip?: ChainPoint): void {
     if (!this.config.epochSnapshots || block.epoch == null) return;
@@ -862,22 +895,34 @@ export class CardanoCrawler {
       logger.debug(`epoch ${block.epoch} snapshot skipped: no chain tip reported for this block`);
       return;
     }
-    const tipEpoch = this.epochOfSlot(tip.slot);
-    if (block.epoch !== tipEpoch) {
-      logger.debug(
-        `epoch ${block.epoch} snapshot skipped: still backfilling (tip is in epoch ${tipEpoch}) — ` +
-        `the pool/DRep set can only be observed as it is now, never as it was`
-      );
-      return;
+    const fromLedger = this.client.getEpochStateBackend() != null && !!block.hash;
+    if (fromLedger) {
+      const k = EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK]?.securityParam
+        ?? EPOCH_CONFIG_BY_NETWORK.mainnet.securityParam;
+      const behind = tip.height != null && block.height != null ? tip.height - block.height : null;
+      if (behind == null || behind >= k - CardanoCrawler.SNAPSHOT_WINDOW_MARGIN) {
+        logger.debug(`epoch ${block.epoch} snapshot skipped at height ${block.height}: ${behind ?? '?'} blocks behind the tip, outside the node's volatile window (k=${k})`);
+        return;
+      }
+    } else {
+      const tipEpoch = this.epochOfSlot(tip.slot);
+      if (block.epoch !== tipEpoch) {
+        logger.debug(
+          `epoch ${block.epoch} snapshot skipped: still backfilling (tip is in epoch ${tipEpoch}) — ` +
+          `the provider reports the pool/DRep set as it is now, never as it was`
+        );
+        return;
+      }
     }
 
     if (Date.now() < this.snapshotRetryAfter) return;
 
     const epoch = block.epoch;
-    const at = { slot: block.slot ?? 0, time: block.time ?? 0 };
+    const at = { slot: block.slot ?? 0, time: block.time ?? 0, hash: fromLedger ? block.hash : null };
     this.snapshotInFlight = this.trackCallback(async () => {
-      const existing = await cds.tx((tx) =>
-        tx.run(SELECT.one.from(PoolEpochSnapshots).columns('epoch').where({ epoch }))
+      const existing = await cds.tx(async (tx) =>
+        (await tx.run(SELECT.one.from(EpochLedgerSnapshots).columns('epoch').where({ epoch })))
+          ?? (await tx.run(SELECT.one.from(PoolEpochSnapshots).columns('epoch').where({ epoch })))
       );
       if (!existing) {
         await this.withTimeout(
@@ -885,6 +930,13 @@ export class CardanoCrawler {
           `snapshotEpoch(${epoch})`,
           CardanoCrawler.SNAPSHOT_TIMEOUT_MS,
         );
+        const previous = await cds.tx((tx) =>
+          tx.run(SELECT.one.from(EpochLedgerSnapshots).columns('max(epoch) as e').where({ epoch: { '<': epoch } }))
+        ) as { e?: number | string | null } | undefined;
+        const last = previous?.e == null ? null : Number(previous.e);
+        if (last != null && epoch > last + 1) {
+          logger.warn(`epoch snapshots missing for epochs ${last + 1}..${epoch - 1} — passed outside the snapshot window`);
+        }
       }
       this.snapshotedEpoch = epoch;
       this.snapshotFailures = 0;
@@ -961,6 +1013,13 @@ export class CardanoCrawler {
         await tx.run(DELETE.from(Blocks).where({ hash: { in: blockChunk } }));
       }
 
+      // Epoch snapshots read at a rolled-back block describe a chain that no longer exists.
+      if (blocksRolledBack > 0) {
+        for (const entity of [PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots]) {
+          await tx.run(DELETE.from(entity).where({ snapshotSlot: { '>': forkSlot } }));
+        }
+      }
+
       // Ledger state, driven by the PERSISTED status: a fork after the anchor is undone and the
       // progress marker follows the cursor back; a fork before the anchor invalidates the set.
       const persisted = (await readCursor(tx))?.utxoSet;
@@ -1007,6 +1066,8 @@ export class CardanoCrawler {
     }
     // Notify observers (wallet-worker confirmation tracker + CAP subscribers) AFTER
     // the rollback commit.
+    // The rollback may have removed this epoch's snapshot; the next block re-checks it.
+    this.snapshotedEpoch = null;
     emitReorg({ forkSlot, forkHeight: emittedForkHeight, blocksRolledBack });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }

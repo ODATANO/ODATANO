@@ -291,6 +291,7 @@ export async function applyBlockToLedger(
       addressRows.push({
         address,
         stakeAddress: (prev?.stakeAddress as string | null) ?? d.stakeAddress,
+        paymentCredential: decodeShelleyAddress(address).paymentCredential,
         addressType: (prev?.addressType as string | null) ?? d.addressType,
         isScript: prev ? Boolean(prev.isScript) : d.isScript,
         totalLovelace: total.toString(),
@@ -407,6 +408,7 @@ export async function recountLedgerAddresses(tx: CapTransaction, addresses: stri
     await tx.run(UPSERT.into(LedgerAddresses).entries({
       address,
       stakeAddress,
+      paymentCredential: decoded.paymentCredential,
       addressType: (prev?.addressType as string | null) ?? decoded.type,
       isScript: prev ? Boolean(prev.isScript) : decoded.isScript,
       totalLovelace: total.toString(),
@@ -459,5 +461,34 @@ export async function recountLedgerAccounts(tx: CapTransaction, stakeAddresses: 
       };
     });
     await tx.run(UPSERT.into(LedgerAccounts).entries(rows));
+  }
+}
+
+/** Address types that carry a payment credential. */
+const CREDENTIAL_ADDRESS_TYPES = ['base', 'pointer', 'enterprise'];
+
+/**
+ * Fill `LedgerAddresses.paymentCredential` where it is missing (rows from the import's SQL
+ * aggregation, or written before the column existed). One transaction per chunk, idempotent.
+ * @returns rows updated
+ */
+export async function backfillPaymentCredentials(chunkSize = 1000): Promise<number> {
+  let updated = 0;
+  for (;;) {
+    const n = await cds.tx(async (tx: CapTransaction) => {
+      const rows = await tx.run(
+        SELECT.from(LedgerAddresses).columns('address')
+          .where({ paymentCredential: null, addressType: { in: CREDENTIAL_ADDRESS_TYPES } })
+          .limit(chunkSize)
+      ) as Array<{ address: string }>;
+      for (const { address } of rows ?? []) {
+        // '' marks an address that decodes without a credential, so it is not picked again
+        const credential = decodeShelleyAddress(address).paymentCredential ?? '';
+        await tx.run(UPDATE.entity(LedgerAddresses).set({ paymentCredential: credential }).where({ address }));
+      }
+      return (rows ?? []).length;
+    }) as number;
+    updated += n;
+    if (n < chunkSize) return updated;
   }
 }

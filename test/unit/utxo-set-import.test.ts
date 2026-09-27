@@ -131,7 +131,7 @@ describe('aggregateStatements', () => {
 describe('importUtxoSet preconditions', () => {
   const deps = () => ({
     client: { getLedgerStateBackend: () => null } as never,
-    indexer: { setUtxoAnchor: vi.fn() } as never,
+    indexer: { setUtxoAnchor: vi.fn(), resetPaymentCredentials: vi.fn(), paymentCredentialsReady: vi.fn(async () => false) } as never,
   });
   beforeEach(() => { txRuns.length = 0; rawSql.length = 0; utxoSetStates.length = 0; lease.acquire = true; lease.renewFailAfter = null; lease.renewCalls = 0; lease.acquired.length = 0; lease.released.length = 0; });
 
@@ -208,6 +208,10 @@ describe('importUtxoSet preconditions', () => {
     expect(utxoSetStates.map(s => s.status)).toEqual(['importing', 'active']);
     expect(utxoSetStates[1]).toMatchObject({ anchorSlot: 10, anchorHash: 'h' });
     expect((d.indexer as { setUtxoAnchor: ReturnType<typeof vi.fn> }).setUtxoAnchor).toHaveBeenLastCalledWith({ slot: 10, hash: 'h' });
+    // the SQL aggregation leaves the credential column empty; the fill starts after activation
+    const idx = d.indexer as unknown as { resetPaymentCredentials: ReturnType<typeof vi.fn>; paymentCredentialsReady: ReturnType<typeof vi.fn> };
+    expect(idx.resetPaymentCredentials).toHaveBeenCalledTimes(1);
+    expect(idx.paymentCredentialsReady).toHaveBeenCalledTimes(1);
     expect(lease.acquired).toHaveLength(1);
     expect(lease.acquired[0]).toMatch(/^import:/);
     expect(lease.released).toEqual(lease.acquired);

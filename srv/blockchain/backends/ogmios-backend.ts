@@ -11,10 +11,10 @@ import { bech32 } from 'bech32';
 import { blake2b_224 } from '@harmoniclabs/crypto';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../../utils/epoch-slots';
-import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId } from '../../utils/mappers';
+import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId, decodeShelleyAddress, sumUtxoAmounts } from '../../utils/mappers';
 import {
   Transaction,
   BlockData,
@@ -35,7 +35,7 @@ import {
   TxCertificate
 } from '../../utils/types';
 
-import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend } from './cardano-backend';
+import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend, EpochStateBackend, EpochLedgerState } from './cardano-backend';
 
 import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
@@ -123,6 +123,95 @@ interface OgmiosDrepSummary {
   mandate?: { epoch?: number };
   stake?: { ada?: { lovelace?: number | bigint } };
   deposit?: { ada?: { lovelace?: number | bigint } };
+  delegators?: unknown[];
+}
+
+/** Ogmios `stakePoolsPerformances`: only nOpt is used — its stake figures are live, not active. */
+interface OgmiosStakePoolsPerformances {
+  desiredNumberOfStakePools?: number;
+}
+
+/** Raw Ogmios answers for one epoch snapshot, all read at the same acquired block. */
+export interface OgmiosEpochStateRaw {
+  epoch: number;
+  stakePools: Record<string, OgmiosStakePool>;
+  performances: OgmiosStakePoolsPerformances | null;
+  dreps: OgmiosDrepSummary[];
+  pots: { treasury?: { ada?: { lovelace?: number | bigint } }; reserves?: { ada?: { lovelace?: number | bigint } } } | null;
+}
+
+/** Fraction a/b of two lovelace amounts; 0 when b is 0. */
+function ratio(a: bigint, b: bigint): number {
+  return b === 0n ? 0 : Number((a * 1_000_000n) / b) / 1_000_000;
+}
+
+/**
+ * Ogmios ledger answers -> EpochLedgerState. Saturation follows the ledger: live stake over
+ * (max supply - reserves) / nOpt. Figures the ledger view does not carry stay 0 / null: active
+ * stake (the indexer derives it from the previous snapshot), block counts, delegator counts,
+ * DRep last activity.
+ */
+export function mapOgmiosEpochState(raw: OgmiosEpochStateRaw): EpochLedgerState {
+  const lovelace = (v: OgmiosRewardAccountSummary['rewards']) => BigInt(ogmiosValueToLovelaceString(v));
+  const reserves = raw.pots?.reserves ? lovelace(raw.pots.reserves) : null;
+  const nOpt = raw.performances?.desiredNumberOfStakePools ?? 0;
+  const saturationPoint = reserves != null && nOpt > 0
+    ? (BigInt(CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY) - reserves) / BigInt(nOpt)
+    : 0n;
+
+  const entries = Object.entries(raw.stakePools);
+  const liveTotal = entries.reduce((sum, [, p]) => sum + lovelace(p.stake), 0n);
+  const pools: PoolData[] = entries.map(([poolId, p]) => {
+    const live = lovelace(p.stake);
+    return {
+      poolId,
+      vrfKeyHash: p.vrfVerificationKeyHash || '',
+      blocksMinted: 0,
+      blocksEpoch: null,
+      liveStake: live.toString(),
+      liveSize: ratio(live, liveTotal),
+      liveSaturation: ratio(live, saturationPoint),
+      liveDelegators: null,
+      activeStake: '0',
+      activeSize: 0,
+      pledge: ogmiosValueToLovelaceString(p.pledge),
+      margin: parseOgmiosRatio(p.margin),
+      fixedCost: ogmiosValueToLovelaceString(p.cost),
+      rewardAccount: p.rewardAccount || '',
+    };
+  });
+
+  let abstain: bigint | null = null;
+  let noConfidence: bigint | null = null;
+  const dreps: DrepData[] = [];
+  for (const d of raw.dreps) {
+    if (d.type === 'abstain') { abstain = (abstain ?? 0n) + lovelace(d.stake); continue; }
+    if (d.type === 'noConfidence') { noConfidence = (noConfidence ?? 0n) + lovelace(d.stake); continue; }
+    if (d.type !== 'registered' || !d.id) continue;
+    const mandate = d.mandate?.epoch;
+    dreps.push({
+      drepId: credentialToDrepId(d.id, d.from === 'script'),
+      hex: d.id,
+      amount: ogmiosValueToLovelaceString(d.stake),
+      hasScript: d.from === 'script',
+      lastActiveEpoch: 0,
+      expired: typeof mandate === 'number' && mandate < raw.epoch,
+      retired: false,
+      deposit: d.deposit ? ogmiosValueToLovelaceString(d.deposit) : null,
+      expiresEpoch: typeof mandate === 'number' ? mandate : null,
+      delegatorCount: Array.isArray(d.delegators) ? d.delegators.length : null,
+    });
+  }
+
+  return {
+    epoch: raw.epoch,
+    pools,
+    dreps,
+    treasury: raw.pots?.treasury ? ogmiosValueToLovelaceString(raw.pots.treasury) : null,
+    reserves: reserves == null ? null : reserves.toString(),
+    drepAbstainStake: abstain == null ? null : abstain.toString(),
+    drepNoConfidenceStake: noConfidence == null ? null : noConfidence.toString(),
+  };
 }
 
 /** Minimal JSON-RPC envelope seen by the raw `Method()` handler. */
@@ -207,12 +296,11 @@ interface OgmiosPraosBlock {
 }
 
 /** CardanoBackend implementation over an Ogmios WebSocket (local node). */
-export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend {
+export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend, EpochStateBackend {
   public readonly name = 'ogmios';
   /**
    * Capability declaration — the orchestrator skips Ogmios for these without counting
-   * circuit failures. Historic queries are out of protocol scope, and address aggregates
-   * cannot be derived from state queries.
+   * circuit failures. Historic queries are out of protocol scope.
    */
   public readonly unsupportedMethods: ReadonlySet<string> = new Set([
     // getEpoch is NOT listed: Ogmios can serve the CURRENT epoch and only
@@ -224,7 +312,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     // getDrep is NOT listed: served from the live ledger state via
     // queryLedgerState/delegateRepresentatives (Ogmios ≥ 6.4).
     'getAssetInfo',
-    'getAddress',
   ]);
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
@@ -540,12 +627,23 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Not supported — address type, script flag and stake address are not derivable from
-   * state queries. UTxOs remain available via getAddressUtxos.
+   * Address at the tip: type, script flag and stake address decoded from the address itself,
+   * UTxOs from the ledger, balance summed over them. No transaction history (getAddressTransactions).
    */
-  async getAddress(_address: string): Promise<Address> {
+  async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(async () => {
-      throw new ProviderUnavailableError('Address detail queries not supported by Ogmios backend — use Blockfrost/Koios', this.name);
+      await this.ensureConnected();
+      const decoded = decodeShelleyAddress(address);
+      const raw = await this.stateQueryClient!.utxo({ addresses: [address] });
+      const utxos = raw.map((u: typeof raw[number]) => this.mapOgmiosUtxo(u, address));
+      return {
+        address,
+        stakeAddress: decoded.stakeAddress,
+        type: decoded.type,
+        isScript: decoded.isScript,
+        amount: sumUtxoAmounts(utxos),
+        utxos,
+      };
     }, this.name);
   }
 
@@ -581,30 +679,76 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   /**
-   * Whole UTxO set as of `point` (crawler snapshot import) on a SEPARATE WebSocket: local-state-query
+   * Run `fn` against the ledger state acquired at `point` on a SEPARATE WebSocket: local-state-query
    * holds one acquired point per connection, so the shared socket would pin live queries to the past.
-   * The point must be inside the node's volatile window (last 2160 blocks) or acquisition is refused.
+   * The point must be inside the node's volatile window (k blocks) or acquisition is refused.
    */
+  private async withLedgerStateAt<T>(
+    point: ChainPoint,
+    label: string,
+    fn: (client: Awaited<ReturnType<typeof createLedgerStateQueryClient>>) => Promise<T>,
+  ): Promise<T> {
+    const url = new URL(this.ogmiosUrl);
+    const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
+    const context = await createInteractionContext(
+      (err) => logger.error(`[OgmiosBackend] ${label} context error: ${err.message}`),
+      () => { /* closed by shutdown() below */ },
+      { connection }
+    );
+    let client: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
+    try {
+      client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
+      return await fn(client);
+    } finally {
+      // shutdown() closes THIS connection only; the backend's own socket is untouched
+      if (client) { try { await client.shutdown(); } catch { /* best effort */ } }
+      else this.forceCloseContext(context);
+    }
+  }
+
+  /** Whole UTxO set as of `point` (crawler snapshot import). */
   async queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]> {
-    return handleBackendRequest(async () => {
-      const url = new URL(this.ogmiosUrl);
-      const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
-      const context = await createInteractionContext(
-        (err) => logger.error(`[OgmiosBackend] snapshot context error: ${err.message}`),
-        () => { /* closed by shutdown() below */ },
-        { connection }
-      );
-      let client: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
-      try {
-        client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
+    return handleBackendRequest(
+      () => this.withLedgerStateAt(point, 'snapshot', async (client) => {
         const utxos = await client.utxo();
         return utxos.map((u: typeof utxos[number]) => this.mapOgmiosUtxo(u));
-      } finally {
-        // shutdown() closes THIS connection only; the backend's own socket is untouched
-        if (client) { try { await client.shutdown(); } catch { /* best effort */ } }
-        else this.forceCloseContext(context);
-      }
-    }, this.name);
+      }),
+      this.name,
+    );
+  }
+
+  /**
+   * Pools, DReps and pots as of `point` (crawler epoch snapshot), all read from one acquired
+   * ledger state. Performances are optional: without them (no nOpt) saturation stays 0.
+   */
+  async epochStateAt(point: ChainPoint): Promise<EpochLedgerState> {
+    return handleBackendRequest(
+      () => this.withLedgerStateAt(point, 'epoch snapshot', async (client) => {
+        const ctx = client.context;
+        const [epoch, stakePools, performances, dreps, pots] = await Promise.all([
+          client.epoch(),
+          client.stakePools(undefined, true) as Promise<unknown>,
+          (client.stakePoolsPerformances() as Promise<unknown>).catch((err: unknown) => {
+            logger.warn(`stakePoolsPerformances unavailable, saturation stays 0: ${(err as Error)?.message ?? err}`);
+            return null;
+          }),
+          Method<{ method: 'queryLedgerState/delegateRepresentatives' }, OgmiosRpcEnvelope<OgmiosDrepSummary[]> & { method: string }, OgmiosDrepSummary[]>(
+            { method: 'queryLedgerState/delegateRepresentatives' }, {}, ctx
+          ),
+          Method<{ method: 'queryLedgerState/treasuryAndReserves' }, OgmiosRpcEnvelope<OgmiosEpochStateRaw['pots']> & { method: string }, OgmiosEpochStateRaw['pots']>(
+            { method: 'queryLedgerState/treasuryAndReserves' }, {}, ctx
+          ),
+        ]);
+        return mapOgmiosEpochState({
+          epoch: Number(epoch),
+          stakePools: (stakePools ?? {}) as Record<string, OgmiosStakePool>,
+          performances: performances as OgmiosStakePoolsPerformances | null,
+          dreps: Array.isArray(dreps) ? dreps : [],
+          pots: pots ?? null,
+        });
+      }),
+      this.name,
+    );
   }
 
   /** Not supported — Ogmios is a live state-query backend; use Blockfrost/Koios. */
@@ -639,7 +783,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         blocksEpoch: null,
         liveStake: pool.stake?.ada?.lovelace ? String(pool.stake.ada.lovelace) : '0',
         liveSize: 0,
-        liveDelegators: 0,
+        // not in the ledger state; null = unavailable
+        liveDelegators: null,
         liveSaturation: 0,
         // activeStake is not available from Ogmios pool params — report 0 instead
         // of fabricating it from the pledge
@@ -879,6 +1024,20 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
+  /** Unspent outputs of several addresses in the live ledger (one query per 100 addresses). */
+  async getUtxosByAddresses(addresses: string[]): Promise<UTxO[]> {
+    if (addresses.length === 0) return [];
+    return handleBackendRequest(async () => {
+      await this.ensureConnected();
+      const out: UTxO[] = [];
+      for (let i = 0; i < addresses.length; i += 100) {
+        const utxos = await this.stateQueryClient!.utxo({ addresses: addresses.slice(i, i + 100) });
+        for (const u of utxos) out.push(this.mapOgmiosUtxo(u));
+      }
+      return out;
+    }, this.name);
+  }
+
   /** Outputs among `refs` that are unspent in the live ledger; spent or unknown references are absent. */
   async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> {
     if (refs.length === 0) return [];
@@ -1016,7 +1175,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       (code, reason) => {
         if (intentionalClose || this.isShutdown) return;
         const detail = reason?.toString() || 'no reason supplied';
-        const err = new ProviderUnavailableError(
+        const err = new ChainSyncClosedError(
           `Ogmios chain-sync socket closed unexpectedly (code ${code}: ${detail})`,
           this.name
         );

@@ -222,6 +222,14 @@ entity PoolEpochSnapshots {
         @description: 'Unix timestamp of the block that triggered the snapshot'
         snapshotTime   : Integer64;
 
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash   : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'Where the observation came from: ogmios (node ledger state at the snapshot block) or koios (provider, current state)'
+        source         : String(10);
+
         @title      : 'Blocks Minted'
         @description: 'Total number of blocks minted by the pool'
         blocksMinted   : Integer;
@@ -287,6 +295,26 @@ entity DrepEpochSnapshots {
         @description: 'Unix timestamp of the block that triggered the snapshot'
         snapshotTime    : Integer64;
 
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash    : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'ogmios | koios, as on PoolEpochSnapshots'
+        source          : String(10);
+
+        @title      : 'Deposit'
+        @description: 'DRep registration deposit in lovelace; null when the source does not report it'
+        deposit         : Lovelace;
+
+        @title      : 'Expires Epoch'
+        @description: 'Epoch the DRep mandate runs out (inactivity expiry); null when the source does not report it'
+        expiresEpoch    : Integer;
+
+        @title      : 'Delegator Count'
+        @description: 'Number of stake credentials delegated to the DRep; null when the source does not report it'
+        delegatorCount  : Integer;
+
         @title      : 'Vote Power'
         @description: 'Amount of vote power in lovelace'
         amount          : Lovelace;
@@ -306,6 +334,67 @@ entity DrepEpochSnapshots {
         @title      : 'Expired'
         @description: 'Indicates if drep is expired'
         expired         : Boolean;
+}
+
+@title      : 'Epoch Ledger Snapshot Entity'
+@description: 'Network-wide ledger figures per epoch, written with the pool/DRep snapshot. One row per snapshotted epoch; a missing epoch was not observed. Totals above 2^53 lovelace lose precision on SQLite.'
+entity EpochLedgerSnapshots {
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to'
+    key epoch                 : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block the snapshot was taken at'
+        snapshotSlot          : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the snapshot block'
+        snapshotTime          : Integer64;
+
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash          : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'ogmios | koios'
+        source                : String(10);
+
+        @title      : 'Treasury'
+        @description: 'Treasury pot in lovelace; null when the source does not report it'
+        treasury              : Lovelace;
+
+        @title      : 'Reserves'
+        @description: 'Reserves pot in lovelace; null when the source does not report it'
+        reserves              : Lovelace;
+
+        @title      : 'Total Supply'
+        @description: 'Maximum supply minus reserves, in lovelace'
+        totalSupply           : Lovelace;
+
+        @title      : 'Live Stake'
+        @description: 'Sum of the live stake of all pools'
+        liveStake             : Lovelace;
+
+        @title      : 'Active Stake'
+        @description: 'Active stake of the epoch (stake snapshot used for leader election and rewards)'
+        activeStake           : Lovelace;
+
+        @title      : 'Pool Count'
+        @description: 'Registered stake pools observed'
+        poolCount             : Integer;
+
+        @title      : 'DRep Count'
+        @description: 'Registered DReps observed'
+        drepCount             : Integer;
+
+        @title      : 'Always-Abstain Stake'
+        @description: 'Stake delegated to the predefined always-abstain DRep; null when not reported'
+        drepAbstainStake      : Lovelace;
+
+        @title      : 'Always-No-Confidence Stake'
+        @description: 'Stake delegated to the predefined always-no-confidence DRep; null when not reported'
+        drepNoConfidenceStake : Lovelace;
 }
 
 @title      : 'Asset Entity'
@@ -877,6 +966,10 @@ entity LedgerAddresses {
         @title      : 'Stake Address'
         @description: 'Reward account of a base address (bech32); null otherwise'
         stakeAddress   : Bech32;
+
+        @title      : 'Payment Credential'
+        @description: 'Payment key or script hash (hex, 28 bytes) of a base, pointer or enterprise address; null for Byron and reward addresses'
+        paymentCredential : String(56);
 
         @title      : 'Address Type'
         @description: 'base | enterprise | pointer | reward | byron | unknown'

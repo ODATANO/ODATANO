@@ -38,7 +38,7 @@ Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by
 
 - **Transactions / Blocks / Epochs**: Confirmed, immutable chain data
 - **AssetHistory**: Mint/burn events, keyed (unit, txHash)
-- **PoolEpochSnapshots / DrepEpochSnapshots** (v2.0): One dated observation per pool/DRep per epoch
+- **PoolEpochSnapshots / DrepEpochSnapshots / EpochLedgerSnapshots** (v2.0): One dated observation per pool/DRep per epoch, plus the network figures (pots, stake totals) of that epoch
 - **Pools / Dreps**: Registration data
 - **TransactionBuildInputs/Outputs/Assets** (M2): Build details
 - **TransactionSubmissionErrors**: Failed submission records
@@ -77,7 +77,7 @@ the lazy path would otherwise only populate by accident — whatever somebody ha
 |---|---|---|
 | `AssetHistory` | the ledger's mint field (Ogmios `mint`, Koios `assets_minted`) or, for Blockfrost, Σ outputs − Σ inputs per unit | none — data the block already carries |
 | `Assets` | a bare row per unseen unit: policyId, assetNameHex, decoded name, CIP-14 fingerprint | none (`CRAWLER_ASSET_CATALOGUE=bare`, the default) |
-| `PoolEpochSnapshots` / `DrepEpochSnapshots` | full pool/DRep set, once per epoch, **only while at the chain tip** | ~100 batched Koios requests per epoch, opt-in |
+| `PoolEpochSnapshots` / `DrepEpochSnapshots` / `EpochLedgerSnapshots` | full pool/DRep set and the ada pots, once per epoch: read from the node's ledger at the crawled block (Ogmios, while the block is within the node's last k blocks), else from Koios **only while at the chain tip** | a handful of Ogmios queries, or ~100 batched Koios requests per epoch; opt-in |
 
 A bare `Assets` row is stamped `validFrom === validTo`, i.e. born expired. CAP's temporal filter
 therefore hides it from OData reads, so the first keyed read is still a miss and the lazy path

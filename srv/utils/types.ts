@@ -234,7 +234,8 @@ export interface PoolData {
   liveSize: number;
   /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. */
   liveSaturation: number;
-  liveDelegators: number;
+  /** Null when the source cannot count delegators (Ogmios ledger state). */
+  liveDelegators: number | null;
   activeStake: string;
   activeSize: number;
   pledge: string;
@@ -252,6 +253,12 @@ export interface DrepData {
   lastActiveEpoch: number;
   retired: boolean;
   expired: boolean;
+  /** Registration deposit (lovelace); only set by sources that report it. */
+  deposit?: string | null;
+  /** Epoch the mandate runs out; only set by sources that report it. */
+  expiresEpoch?: number | null;
+  /** Stake credentials delegated to the DRep; only set by sources that report it. */
+  delegatorCount?: number | null;
 }
 
 /** Normalized native-asset metadata and supply; fields a backend does not expose are null. */

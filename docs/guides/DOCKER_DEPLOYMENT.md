@@ -9,7 +9,7 @@
 | Service | Image | Role |
 |---|---|---|
 | `cardano-node` | `ghcr.io/intersectmbo/cardano-node:11.0.1` | Full node. Syncs the chain into the `node-db` volume and exposes a socket via `node-ipc`. |
-| `ogmios` | `ghcr.io/odatano/ogmios:v6.14.0.2` | WebSocket bridge to the node on port `1337`. Healthy once it is *connected* to the node. |
+| `ogmios` | `cardanosolutions/ogmios:v7.0.0` | WebSocket bridge to the node on port `1337`. Healthy once it is *connected* to the node. |
 | `odatano` | `odatano:${VERSION:-0.1.0}` (built locally) | The API on port `4004`, wired to `BACKENDS=ogmios,blockfrost,koios` and `OGMIOS_URL=ws://ogmios:1337`. |
 
 `odatano` waits for the Ogmios healthcheck (`condition: service_healthy`), which reports healthy as

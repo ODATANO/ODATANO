@@ -86,12 +86,19 @@ Used for **current state** and **transaction submission**; Blockfrost/Koios are 
   in the User Guide for the crawled replacement.
 - `getPool(poolId)` - Pool parameters and live stake. Ogmios reports no block counts
   (`blocksEpoch` null) and no active stake.
+- `getAddress(address)` - UTxOs and balance from the ledger at the tip; type, script flag and
+  stake address decoded from the address (`type` is `base` / `enterprise` / `pointer` /
+  `reward` / `byron`, where Blockfrost reports `shelley` / `byron`). An address without UTxOs
+  is an empty address, not a 404.
+- `getAddressUtxos(address)` - UTxOs from the ledger at the tip
+- `getDrep(drepId)` - Stake, deposit and mandate from `delegateRepresentatives`. Ogmios has no
+  last activity (`lastActiveEpoch` 0); a DRep the ledger no longer lists (retired) is looked up
+  at the providers.
 
 ### Historical Backends first (Blockfrost/Koios)
 Used for **indexed/historical data**; Ogmios answers only where noted:
 - `getBlock(hash)`, `getTransaction(hash)`, `getTransactionMetadata(hash)`,
-  `getAddressTransactions(address)`, `getAddress(address)`, `getAssetInfo(unit)` - not on Ogmios
-- `getAddressUtxos(address)` - Ogmios answers from the ledger as a fallback
+  `getAddressTransactions(address)`, `getAssetInfo(unit)` - not on Ogmios
 - `getEpoch(epoch)` - Ogmios answers the current epoch only
 - `getNetworkInformation()` - Ogmios answers from `queryLedgerState/treasuryAndReserves`:
   treasury, reserves and total supply (max − reserves); circulating, locked and stake totals
@@ -117,9 +124,9 @@ correctly. They fail with `ProviderUnavailableError` when that backend is not co
 
 | Operation | Backend | Why |
 |---|---|---|
-| `GetUTxOsByCredential` | Koios | Native `POST /credential_utxos`. Blockfrost has no credential-keyed endpoint; a fallback would silently miss bech32 variants of the same payment credential. |
+| `GetUTxOsByCredential` | Koios, or the crawled UTxO set | Native `POST /credential_utxos`. Blockfrost has no credential-keyed endpoint; a fallback would silently miss bech32 variants of the same payment credential. With an active, synced crawler UTxO set (`CRAWLER_UTXO_SET`) the addresses of the credential come from `LedgerAddresses` and their outputs from Ogmios at the tip (or the crawled set without Ogmios), and Koios is not needed. |
 | Transaction-builder script evaluation | Ogmios | Only `evaluateTransaction` gives script execution units for Plutus builds. |
-| Crawler epoch snapshots (`CRAWLER_EPOCH_SNAPSHOTS`) | Koios | Needs the full pool/DRep set: `/pool_list` + batched `POST /pool_info` (and the DRep equivalents) turn a mainnet snapshot into ~100 requests. Blockfrost lists pool ids but has no batch info endpoint, so the same snapshot would be thousands of single requests — the snapshots log a warning and stay off instead. Koios answers with the set as it is *now*, so snapshots are only taken while the crawl is at the chain tip. |
+| Crawler epoch snapshots (`CRAWLER_EPOCH_SNAPSHOTS`) | Ogmios or Koios | Needs the full pool/DRep set. Ogmios (preferred) reads it from the node's ledger at the crawled block (`stakePools`, `stakePoolsPerformances`, `delegateRepresentatives`, `treasuryAndReserves`), which works while the block is within the node's last k blocks. Koios: `/pool_list` + batched `POST /pool_info` (and the DRep equivalents), ~100 requests on mainnet, and only while the crawl is at the chain tip, because Koios answers with the set as it is *now*. Blockfrost lists pool ids but has no batch info endpoint, so without Ogmios or Koios the snapshots log a warning and stay off. |
 | Crawler UTxO set import, `importUtxoSet` with `source: ogmios` | Ogmios | Acquires the node's ledger state at the crawler cursor (`acquireLedgerState` + whole-set `queryLedgerState/utxo`); the point must be within the node's volatile window, i.e. the crawl at the tip. No provider offers a whole-set dump. Mainnet: use `source: file` with a `cardano-cli query utxo --whole-utxo` dump instead. The per-block maintenance itself works on every source. |
 | Certificate backfill, `backfillCertificates` | Ogmios | Replays the crawled range over a second chain-sync stream and writes only `TransactionCertificates` / `TransactionWithdrawals`. The pagination backends would need a request per block for the same range. |
 | Crawler certificates (`CRAWLER_CERTIFICATES`) | Ogmios chain-sync or Koios | Certificates and withdrawals are block content on both: chain-sync delivers them decoded, Koios returns them in the same `/tx_info` call the crawl already makes. Blockfrost has no per-block variant (six extra requests per transaction), so on a Blockfrost-only crawl `TransactionCertificates` / `TransactionWithdrawals` stay empty and a warning is logged once. |

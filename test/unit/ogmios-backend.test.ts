@@ -19,7 +19,7 @@ vi.mock('@cardano-ogmios/client', () => ({
 
 import { Method } from '@cardano-ogmios/client';
 import { blake2b_224 } from '@harmoniclabs/crypto';
-import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId } from '../../srv/blockchain/backends/ogmios-backend';
+import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId, mapOgmiosEpochState } from '../../srv/blockchain/backends/ogmios-backend';
 import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
@@ -952,14 +952,27 @@ describe('OgmiosBackend', () => {
     });
   });
 
-  describe('getAddress — declared unsupported (capability routing)', () => {
-    it('getAddress throws instead of fabricating type/stakeAddress/isScript', async () => {
+  describe('getAddress and network information', () => {
+    it('getAddress decodes type and stake address and sums the UTxOs at the tip', async () => {
+      const ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = {};
+      const utxo = vi.fn().mockResolvedValue([
+        { transaction: { id: 'a'.repeat(64) }, index: 0, address: ADDR, value: { ada: { lovelace: 2_000_000n } } },
+        { transaction: { id: 'b'.repeat(64) }, index: 1, address: ADDR, value: { ada: { lovelace: 3_000_000n }, ['p'.repeat(56)]: { '746f6b': 5n } } },
+      ]);
+      (backend as any).stateQueryClient = { utxo };
       (backend as any).isShutdown = false;
 
-      await expect(backend.getAddress('addr_test1qtest')).rejects.toThrow(/not supported/i);
-      expect(backend.unsupportedMethods.has('getAddress')).toBe(true);
+      const address = await backend.getAddress(ADDR);
+
+      expect(utxo).toHaveBeenCalledWith({ addresses: [ADDR] });
+      expect(address).toMatchObject({
+        address: ADDR, type: 'base', isScript: false,
+        stakeAddress: 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh',
+        amount: [{ unit: 'lovelace', quantity: '5000000' }, { unit: `${'p'.repeat(56)}746f6b`, quantity: '5' }],
+      });
+      expect(address.utxos).toHaveLength(2);
+      expect(backend.unsupportedMethods.has('getAddress')).toBe(false);
     });
 
     it('getNetworkInformation reports treasury, reserves and total from treasuryAndReserves', async () => {
@@ -1398,5 +1411,58 @@ describe('OgmiosBackend', () => {
     it('should return 0 for origin (genesis block)', () => {
       expect(resolveOgmiosHeight('origin')).toBe(0);
     });
+  });
+});
+
+describe('mapOgmiosEpochState', () => {
+  const ada = (lovelace: number) => ({ ada: { lovelace } });
+  const POOL_A = 'pool1aaaa';
+  const POOL_B = 'pool1bbbb';
+  const DREP_HASH = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
+  // max supply 45e15 - reserves 5e15 = 40e15, nOpt 500 -> saturation point 8e13
+  const raw = {
+    epoch: 1201,
+    stakePools: {
+      [POOL_A]: { vrfVerificationKeyHash: 'vrf', stake: ada(20_000_000_000_000), pledge: ada(10), cost: ada(340), margin: '1/20', rewardAccount: 'stake_test1a' },
+      [POOL_B]: { stake: ada(60_000_000_000_000), pledge: ada(0), cost: ada(170), margin: '0/1' },
+    },
+    performances: { desiredNumberOfStakePools: 500 },
+    dreps: [
+      { type: 'registered' as const, id: DREP_HASH, from: 'verificationKey' as const, mandate: { epoch: 1200 }, stake: ada(40), deposit: ada(500), delegators: [{}, {}] },
+      { type: 'abstain' as const, stake: ada(9) },
+      { type: 'noConfidence' as const, stake: ada(3) },
+    ],
+    pots: { treasury: ada(1_700_000_000_000_000), reserves: ada(5_000_000_000_000_000) },
+  };
+
+  it('maps pools with live share and saturation against (max - reserves) / nOpt', () => {
+    const state = mapOgmiosEpochState(raw);
+    const a = state.pools.find(p => p.poolId === POOL_A)!;
+    expect(a).toMatchObject({
+      vrfKeyHash: 'vrf', liveStake: '20000000000000', liveSize: 0.25, liveSaturation: 0.25,
+      pledge: '10', fixedCost: '340', margin: 0.05,
+      liveDelegators: null, blocksEpoch: null, rewardAccount: 'stake_test1a',
+    });
+    // the ledger's live view has no active stake; the indexer derives it from the previous snapshot
+    expect(a).toMatchObject({ activeStake: '0', activeSize: 0 });
+    expect(state.pools.find(p => p.poolId === POOL_B)).toMatchObject({ liveSize: 0.75, liveSaturation: 0.75 });
+  });
+
+  it('keeps registered DReps with deposit, mandate and delegator count and sums the predefined ones', () => {
+    const state = mapOgmiosEpochState(raw);
+    expect(state.dreps).toEqual([{
+      drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0', hex: DREP_HASH, amount: '40',
+      hasScript: false, lastActiveEpoch: 0, retired: false, expired: true,
+      deposit: '500', expiresEpoch: 1200, delegatorCount: 2,
+    }]);
+    expect(state).toMatchObject({
+      epoch: 1201, treasury: '1700000000000000', reserves: '5000000000000000',
+      drepAbstainStake: '9', drepNoConfidenceStake: '3',
+    });
+  });
+
+  it('reports zero saturation without performances (no nOpt)', () => {
+    const state = mapOgmiosEpochState({ ...raw, performances: null });
+    expect(state.pools[0]).toMatchObject({ liveSaturation: 0, liveSize: 0.25 });
   });
 });

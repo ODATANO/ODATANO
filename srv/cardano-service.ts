@@ -301,8 +301,8 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // GetUTxOsByCredential — Koios-only, always-fresh credential-keyed UTxO query
-  // (dApp state reads need current data). ProviderUnavailableError without Koios.
+  // GetUTxOsByCredential — always-fresh credential-keyed UTxO query (dApp state reads need current
+  // data). Crawled UTxO set + node first, else Koios; ProviderUnavailableError without either.
   srv.on('GetUTxOsByCredential', async (req: Request) => {
     const { credential } = req.data as { credential?: string };
     if (!credential) return rejectMissing(req, 'GetUTxOsByCredential', 'credential');
@@ -383,6 +383,8 @@ module.exports = (srv: cds.Service) => {
     const txLimit = Math.min(Math.max(limit || 10, 1), 100);
 
     return handleRequest(req, async (db) => {
+      // The crawled UTxO set is current; the cached rows may miss the newest transactions.
+      if (await indexer().ledgerCoverageActive(db)) return indexer().indexAddressTransactions(db, address, txLimit);
       const existing = await db.run(
         SELECT.from(AddressTransactions)
           .where({ address_address: address })

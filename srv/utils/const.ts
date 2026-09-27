@@ -10,11 +10,12 @@ export const CARDANO_DEFAULTS = {
  * Per-network epoch geometry anchored at the Shelley transition:
  * `epochStartSlot(epoch) = shelleyStartSlot + (epoch - shelleyStartEpoch) * slotsPerEpoch`.
  * Preview epochs are 1 day; mainnet/preprod are offset by their Byron era.
+ * `securityParam` (k): blocks the node keeps volatile, i.e. how far back ledger state can be acquired.
  */
 export const EPOCH_CONFIG_BY_NETWORK = {
-  mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000 },
-  preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000 },
-  preview: { shelleyStartEpoch: 0, shelleyStartSlot: 0, slotsPerEpoch: 86_400 },
+  mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000, securityParam: 2160 },
+  preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000, securityParam: 2160 },
+  preview: { shelleyStartEpoch: 0, shelleyStartSlot: 0, slotsPerEpoch: 86_400, securityParam: 432 },
 } as const;
 
 /** Default Plutus execution units when dynamic evaluation is not available */

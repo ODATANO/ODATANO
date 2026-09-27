@@ -1,7 +1,7 @@
 /**
  * CardanoIndexer: values answered from crawled data while a live crawler is at the tip —
  * pool block counts from Blocks, controlled amount from LedgerAccounts, circulating supply
- * from LedgerAddresses. String entity proxies, real mappers.
+ * from LedgerAddresses — and the epoch snapshot writes. String entity proxies, real mappers.
  */
 
 type Q = { _op: string; entity: string; columns?: string; where?: Record<string, unknown>; entries?: unknown };
@@ -12,10 +12,19 @@ let ledgerTotal: unknown = undefined;
 /** What the epoch aggregate over crawled Blocks returns (cds.db.run). */
 let epochTotals: Record<string, unknown> | undefined;
 const dbRuns: Q[] = [];
+/** Crawled blocks per pool for the snapshot's grouped count (cds.db.run with groupBy). */
+let blocksByPool: Array<{ slotLeader: string; n: number | string }> = [];
+/** Pool rows of the previous epoch's Ogmios snapshot (cds.db.run on PoolEpochSnapshots). */
+let previousLive: Array<{ poolId: string; liveStake: string }> = [];
+
+/** Per-test answers for queries the default dispatch does not cover (undefined = fall through). */
+let answer: ((q: Q) => unknown) | null = null;
 
 const mockTx = {
   run: vi.fn(async (q: Q) => {
     runs.push(q);
+    const custom = answer?.(q);
+    if (custom !== undefined) return custom;
     if (q._op === 'SELECT.one' && q.entity === 'Blocks') {
       const slot = (q.where?.slot as { '>=': number })['>='];
       return { n: slot === 0 ? blockCounts.total : blockCounts.sinceEpochStart };
@@ -30,19 +39,43 @@ vi.mock('@sap/cds', () => {
   const one = (entity: string) => ({
     columns: (columns: string) => {
       const q: Q = { _op: 'SELECT.one', entity, columns };
-      return Object.assign(q, { where: (where: Record<string, unknown>) => ({ ...q, where }) });
+      return Object.assign(q, {
+        where: (where: Record<string, unknown>) => ({ ...q, where, groupBy: (by: string) => ({ ...q, where, groupBy: by }) }),
+      });
     },
     where: (where: Record<string, unknown>) => ({ _op: 'SELECT.one', entity, where }),
   });
+  // SELECT.many: tagged so the dispatch can tell it from SELECT.one; orderBy/limit are recorded
+  const many = (entity: string) => {
+    const finish = (q: Record<string, unknown>) => ({
+      ...q,
+      orderBy: (orderBy: string) => ({ ...q, orderBy, limit: (limit: number) => ({ ...q, orderBy, limit }) }),
+      groupBy: (groupBy: string) => ({ ...q, groupBy }),
+    });
+    return {
+      columns: (...columns: string[]) => ({
+        where: (where: Record<string, unknown>) => finish({ _op: 'SELECT.many', entity, columns: columns.join(','), where }),
+      }),
+      where: (where: Record<string, unknown>) => finish({ _op: 'SELECT.many', entity, where }),
+    };
+  };
   const cdsMock = {
-    db: { run: vi.fn(async (q: Q) => { dbRuns.push(q); return q.entity === 'Blocks' ? epochTotals : undefined; }) },
+    db: {
+      run: vi.fn(async (q: Q & { groupBy?: string }) => {
+        dbRuns.push(q);
+        if (typeof q.groupBy === 'string') return blocksByPool;
+        if (q.entity === 'PoolEpochSnapshots') return previousLive;
+        return q.entity === 'Blocks' ? epochTotals : undefined;
+      }),
+    },
+    tx: async (fn: (tx: typeof mockTx) => unknown) => fn(mockTx),
     log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
     ql: {
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
       INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
       UPDATE: { entity: (entity: string) => ({ set: () => ({ where: () => ({ _op: 'UPDATE', entity }) }) }) },
       DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
-      SELECT: { one: { from: one }, from: one },
+      SELECT: { one: { from: one }, from: many },
     },
   };
   return { default: cdsMock, ...cdsMock };
@@ -57,12 +90,15 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   UTxOAssets: 'UTxOAssets', Block: 'Block', Blocks: 'Blocks', Epoch: 'Epoch', Accounts: 'Accounts',
   Pools: 'Pools', Dreps: 'Dreps', Assets: 'Assets', AssetHistory: 'AssetHistory',
   PoolEpochSnapshots: 'PoolEpochSnapshots', DrepEpochSnapshots: 'DrepEpochSnapshots',
+  EpochLedgerSnapshots: 'EpochLedgerSnapshots',
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
   TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
   LedgerAddresses: 'LedgerAddresses', LedgerAccounts: 'LedgerAccounts',
 }));
-vi.mock('#cds-models/odatano/cardano', () => ({ Assets: 'AssetsTable', Transactions: 'Transactions' }));
+vi.mock('#cds-models/odatano/cardano', () => ({
+  Assets: 'AssetsTable', Transactions: 'Transactions', LedgerUTxOs: 'LedgerUTxOs', LedgerUTxOAssets: 'LedgerUTxOAssets',
+}));
 vi.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionBuild: 'TransactionBuild', TransactionBuilds: 'TransactionBuilds',
   TransactionBuildInputs: 'TransactionBuildInputs', TransactionBuildOutputs: 'TransactionBuildOutputs',
@@ -127,6 +163,9 @@ beforeEach(() => {
   blockCounts = { sinceEpochStart: 3, total: 812 };
   ledgerControlled = '5000000';
   ledgerTotal = '29984126226016860';
+  blocksByPool = [];
+  previousLive = [];
+  answer = null;
 });
 
 describe('pool block counts from crawled blocks', () => {
@@ -249,5 +288,190 @@ describe('crawl epoch rows from crawled blocks', () => {
 
     expect(dbRuns).toHaveLength(0);
     expect(epochRow(indexer)).toMatchObject({ blockCount: 0, txCount: 0, fees: '0' });
+  });
+});
+
+describe('epoch snapshots', () => {
+  const AT = { slot: 103_766_400, time: 1_770_000_000, hash: 'ab'.repeat(32) };
+  const ledgerState = {
+    epoch: 1201,
+    pools: [{
+      poolId: POOL, vrfKeyHash: 'v', blocksMinted: 0, blocksEpoch: null, liveStake: '300', liveSize: 0.75,
+      liveSaturation: 0.1, liveDelegators: null, activeStake: '250', activeSize: 0.5, pledge: '10', margin: 0.02,
+      fixedCost: '340000000', rewardAccount: 'stake_test1x',
+    }],
+    dreps: [{
+      drepId: 'drep1x', hex: 'aa', amount: '40', hasScript: false, lastActiveEpoch: 0, retired: false, expired: false,
+      deposit: '500000000', expiresEpoch: 1220, delegatorCount: 3,
+    }],
+    treasury: '1700000000000000', reserves: '7000000000000000',
+    drepAbstainStake: '9', drepNoConfidenceStake: null,
+  };
+  const withLedger = () => {
+    const { client, indexer } = makeIndexer();
+    const epochStateAt = vi.fn(async () => ledgerState);
+    Object.assign(client, { getEpochStateBackend: () => ({ epochStateAt }), getEnumeratingBackend: () => null });
+    return { indexer, epochStateAt };
+  };
+
+  it('reads the node ledger at the block and writes dated rows plus the epoch marker', async () => {
+    blocksByPool = [{ slotLeader: POOL, n: '812' }];
+    // the previous epoch's Ogmios snapshot recorded the stake that is active now
+    previousLive = [{ poolId: POOL, liveStake: '250' }, { poolId: 'pool1other', liveStake: '250' }];
+    const { indexer, epochStateAt } = withLedger();
+
+    expect(await indexer.snapshotEpoch(1201, AT)).toEqual({ pools: 1, dreps: 1, source: 'ogmios' });
+
+    expect(epochStateAt).toHaveBeenCalledWith({ slot: AT.slot, hash: AT.hash });
+    expect((upserted('PoolEpochSnapshots') as unknown as Record<string, unknown>[])[0]).toMatchObject({
+      poolId: POOL, epoch: 1201, snapshotSlot: AT.slot, snapshotHash: AT.hash, source: 'ogmios',
+      liveStake: '300', activeStake: '250', activeSize: 0.5, liveDelegators: null, blocksMinted: 812,
+    });
+    expect(dbRuns.find(q => q.entity === 'PoolEpochSnapshots')?.where).toEqual({ epoch: 1200, source: 'ogmios' });
+    expect((upserted('DrepEpochSnapshots') as unknown as Record<string, unknown>[])[0]).toMatchObject({
+      drepId: 'drep1x', source: 'ogmios', deposit: '500000000', expiresEpoch: 1220, delegatorCount: 3,
+    });
+    expect(upserted('EpochLedgerSnapshots')).toMatchObject({
+      epoch: 1201, source: 'ogmios', snapshotHash: AT.hash, treasury: '1700000000000000',
+      reserves: '7000000000000000', totalSupply: '38000000000000000', liveStake: '300', activeStake: '500',
+      poolCount: 1, drepCount: 1, drepAbstainStake: '9', drepNoConfidenceStake: null,
+    });
+    // the acquired state may be hours old: the live rows are not touched
+    expect(upserted('Pools')).toBeUndefined();
+    expect(upserted('Dreps')).toBeUndefined();
+  });
+
+  it('leaves active stake empty without a snapshot of the previous epoch', async () => {
+    const { indexer } = withLedger();
+    await indexer.snapshotEpoch(1201, AT);
+    expect((upserted('PoolEpochSnapshots') as unknown as Record<string, unknown>[])[0]).toMatchObject({ activeStake: null, activeSize: null });
+    expect(upserted('EpochLedgerSnapshots')).toMatchObject({ activeStake: null });
+  });
+
+  it('leaves blocksMinted empty when the crawl started after Shelley', async () => {
+    cursor = synced({ startSlot: 50_000_000 });
+    const { indexer } = withLedger();
+    await indexer.snapshotEpoch(1201, AT);
+    expect((upserted('PoolEpochSnapshots') as unknown as Record<string, unknown>[])[0].blocksMinted).toBeNull();
+    expect(dbRuns.some(q => typeof (q as { groupBy?: unknown }).groupBy === 'string')).toBe(false);
+  });
+
+  it('uses Koios (current state) without a block hash and marks the epoch as a koios snapshot', async () => {
+    const { client, indexer } = makeIndexer();
+    const koios = {
+      getPoolIds: vi.fn(async () => [POOL]), getPools: vi.fn(async () => [{ ...ledgerState.pools[0], liveDelegators: 7 }]),
+      getDrepIds: vi.fn(async () => []), getDreps: vi.fn(async () => []),
+    };
+    Object.assign(client, { getEpochStateBackend: () => ({ epochStateAt: vi.fn() }), getEnumeratingBackend: () => koios });
+
+    expect(await indexer.snapshotEpoch(1201, { slot: AT.slot, time: AT.time, hash: null })).toEqual({ pools: 1, dreps: 0, source: 'koios' });
+    expect((upserted('PoolEpochSnapshots') as unknown as Record<string, unknown>[])[0]).toMatchObject({ source: 'koios', snapshotHash: null, liveDelegators: 7 });
+    expect(upserted('EpochLedgerSnapshots')).toMatchObject({ epoch: 1201, source: 'koios', poolCount: 1, drepCount: 0 });
+    expect(upserted('Pools')).toBeDefined();
+  });
+
+  it('skips without any backend that can read pools', async () => {
+    const { client, indexer } = makeIndexer();
+    Object.assign(client, { getEpochStateBackend: () => null, getEnumeratingBackend: () => null });
+    expect(await indexer.snapshotEpoch(1201, AT)).toEqual({ pools: 0, dreps: 0, source: null });
+    expect(runs.filter(q => q._op === 'UPSERT')).toHaveLength(0);
+  });
+});
+
+describe('addresses from the crawled UTxO set', () => {
+  const ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+  const T1 = '1'.repeat(64);
+  const T2 = '2'.repeat(64);
+  const UNIT = `${'p'.repeat(56)}746f6b`;
+  const w = (q: Q) => q.where ?? {};
+
+  it('lists received and spent transactions with net amounts, newest first', async () => {
+    answer = (q) => {
+      if (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one') return { firstSeenSlot: 100 };
+      if (q.entity !== 'LedgerUTxOs') return undefined;
+      if ('createdSlot' in w(q)) return [{ txHash: T1, createdSlot: 200 }];
+      if ('spentSlot' in w(q)) return [{ spentTxHash: T2, spentSlot: 300 }];
+      if ('txHash' in w(q)) return [{ txHash: T1, outputIndex: 0, lovelace: '5000000', hasAssets: false }];
+      if ('spentTxHash' in w(q)) return [{ txHash: T1, outputIndex: 0, lovelace: '5000000', hasAssets: false, spentTxHash: T2 }];
+      return undefined;
+    };
+    const { indexer } = makeIndexer();
+    const rows = await indexer.indexAddressTransactions(mockTx as never, ADDR, 10) as unknown as Array<Record<string, unknown>>;
+
+    expect(rows.map(r => [r.tx_hash, String(r.netAmount)])).toEqual([[T2, '-5000000'], [T1, '5000000']]);
+    expect(Number(rows[0].blockTime)).toBeGreaterThan(Number(rows[1].blockTime));
+    expect(upserted('AddressTransactions')).toBeDefined();
+  });
+
+  it('asks the provider when the address predates the anchor and the crawled history is short', async () => {
+    answer = (q) => {
+      if (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one') return { firstSeenSlot: null };
+      if (q.entity === 'LedgerUTxOs') return [];
+      return undefined;
+    };
+    const { client, indexer } = makeIndexer();
+    const getAddressTransactionHashes = vi.fn(async () => []);
+    Object.assign(client, { getAddressTransactionHashes });
+    await indexer.indexAddressTransactions(mockTx as never, ADDR, 10);
+    expect(getAddressTransactionHashes).toHaveBeenCalledWith(ADDR, 10);
+  });
+
+  it('keeps the crawled history when no backend has address history', async () => {
+    answer = (q) => {
+      if (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one') return { firstSeenSlot: null };
+      if (q.entity !== 'LedgerUTxOs') return undefined;
+      if ('createdSlot' in w(q)) return [{ txHash: T1, createdSlot: 200 }];
+      if ('spentSlot' in w(q)) return [];
+      if ('txHash' in w(q)) return [{ txHash: T1, outputIndex: 0, lovelace: '5000000', hasAssets: false }];
+      return [];
+    };
+    const { client, indexer } = makeIndexer();
+    const { ProviderUnavailableError } = await import('../../srv/utils/errors');
+    Object.assign(client, { getAddressTransactionHashes: vi.fn(async () => { throw new ProviderUnavailableError('no history backend', 'ogmios'); }) });
+    const rows = await indexer.indexAddressTransactions(mockTx as never, ADDR, 10) as unknown as Array<Record<string, unknown>>;
+    expect(rows.map(r => r.tx_hash)).toEqual([T1]);
+  });
+
+  it('builds the address from its UTxOs at the node tip, balance summed, type decoded', async () => {
+    const { client, indexer } = makeIndexer();
+    const getAddress = vi.fn();
+    Object.assign(client, {
+      getAddress,
+      getAddressTransactionHashes: vi.fn(async () => []),
+      getUtxosByAddresses: vi.fn(async () => [
+        { txHash: T1, outputIndex: 0, address: ADDR, amount: [{ unit: 'lovelace', quantity: '2000000' }] },
+        { txHash: T2, outputIndex: 1, address: ADDR, amount: [{ unit: 'lovelace', quantity: '3000000' }, { unit: UNIT, quantity: '4' }] },
+      ]),
+    });
+    answer = (q) => (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one' ? { firstSeenSlot: 1 } : q.entity === 'LedgerUTxOs' ? [] : undefined);
+
+    const address = await indexer.indexAddress(mockTx as never, ADDR) as unknown as Record<string, unknown>;
+
+    expect(getAddress).not.toHaveBeenCalled();
+    expect(address).toMatchObject({ address: ADDR, type: 'base', totalLovelace: '5000000', utxoCount: 2, hasAssets: true,
+      stakeAddress: 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh' });
+  });
+
+  it('fills a zero active stake from the Ogmios snapshot of the running epoch', async () => {
+    answer = (q) => (q.entity === 'PoolEpochSnapshots' ? { activeStake: '777', activeSize: 0.01 } : undefined);
+    const { client, indexer } = makeIndexer();
+    const base = await client.getPool();
+    client.getPool.mockResolvedValueOnce({ ...base, activeStake: '0' });
+    await indexer.indexPool(mockTx as never, POOL);
+    const snap = runs.find(q => q.entity === 'PoolEpochSnapshots')!;
+    expect(snap.where).toEqual({ poolId: POOL, epoch: 1432, source: 'ogmios' });
+    expect(upserted('Pools')).toMatchObject({ activeStake: '777' });
+  });
+
+  it('sums crawled withdrawals only when certificates are crawled since Shelley', async () => {
+    answer = (q) => (q.entity === 'TransactionWithdrawals' ? { total: '1200' } : undefined);
+    const { indexer } = makeIndexer();
+    await indexer.indexAccount(mockTx as never, 'stake_test1x');
+    expect(upserted('Accounts')).toMatchObject({ withdrawalsSum: '0' }); // certificates off
+
+    indexer.configureCrawlCoverage({ certificates: true } as never);
+    await indexer.indexAccount(mockTx as never, 'stake_test1x');
+    const last = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Accounts').pop()!;
+    expect((last.entries as Record<string, unknown>).withdrawalsSum).toBe('1200');
   });
 });

@@ -516,17 +516,26 @@ export function metadataIdFor(label: string | number): number | string | null {
   return safe ? Number(wrapped) : wrapped.toString();
 }
 
+/** Where an epoch snapshot came from; `hash` is the block the ledger state was read at (Ogmios only). */
+export interface SnapshotOrigin {
+  source: 'ogmios' | 'koios';
+  hash?: string | null;
+}
+
 /** Pool observation at an epoch boundary to a non-temporal PoolEpochSnapshotRow dated by (epoch, snapshotSlot). */
 export function mapPoolSnapshot(
   providerPoolData: PoolProviderData,
   epoch: number,
   at: { slot: number; time: number },
+  origin: SnapshotOrigin = { source: 'koios' },
 ): PoolEpochSnapshotRow {
   return {
     poolId: providerPoolData.poolId,
     epoch,
     snapshotSlot: at.slot,
     snapshotTime: at.time,
+    snapshotHash: origin.hash ?? null,
+    source: origin.source,
     blocksMinted: providerPoolData.blocksMinted,
     blocksEpoch: providerPoolData.blocksEpoch,
     liveStake: providerPoolData.liveStake,
@@ -546,12 +555,18 @@ export function mapDrepSnapshot(
   providerDrepData: DrepProviderData,
   epoch: number,
   at: { slot: number; time: number },
+  origin: SnapshotOrigin = { source: 'koios' },
 ): DrepEpochSnapshotRow {
   return {
     drepId: providerDrepData.drepId,
     epoch,
     snapshotSlot: at.slot,
     snapshotTime: at.time,
+    snapshotHash: origin.hash ?? null,
+    source: origin.source,
+    deposit: providerDrepData.deposit ?? null,
+    expiresEpoch: providerDrepData.expiresEpoch ?? null,
+    delegatorCount: providerDrepData.delegatorCount ?? null,
     amount: providerDrepData.amount,
     hasScript: providerDrepData.hasScript,
     lastActiveEpoch: providerDrepData.lastActiveEpoch,
@@ -969,6 +984,8 @@ export interface DecodedAddress {
   isScript: boolean;
   /** Reward account (bech32) of a base address; null for every other type. */
   stakeAddress: string | null;
+  /** Payment key/script hash (hex) of a base, pointer or enterprise address; null otherwise. */
+  paymentCredential: string | null;
   /** Network nibble of the header (1 = mainnet, 0 = testnets); null when not a Shelley address. */
   networkId: number | null;
 }
@@ -978,7 +995,7 @@ export interface DecodedAddress {
  * stake credential as a reward account. Byron (base58) and unparseable input yield `byron` / `unknown`.
  */
 export function decodeShelleyAddress(address: string): DecodedAddress {
-  const none: DecodedAddress = { type: 'unknown', isScript: false, stakeAddress: null, networkId: null };
+  const none: DecodedAddress = { type: 'unknown', isScript: false, stakeAddress: null, paymentCredential: null, networkId: null };
   if (typeof address !== 'string' || !address.length) return none;
   let bytes: Buffer;
   try {
@@ -994,19 +1011,20 @@ export function decodeShelleyAddress(address: string): DecodedAddress {
   const type = header >> 4;
   const networkId = header & 0x0f;
   const net = networkId === 1 ? 'mainnet' : 'preview';
+  const paymentCredential = type <= 7 && bytes.length >= 29 ? bytes.subarray(1, 29).toString('hex') : null;
   switch (type) {
     case 0: case 1: case 2: case 3: {
       const stakeAddress = bytes.length >= 57
         ? credentialToStakeAddress(bytes.subarray(29, 57).toString('hex'), type >= 2, net)
         : null;
-      return { type: 'base', isScript: type === 1 || type === 3, stakeAddress, networkId };
+      return { type: 'base', isScript: type === 1 || type === 3, stakeAddress, paymentCredential, networkId };
     }
     case 4: case 5:
-      return { type: 'pointer', isScript: type === 5, stakeAddress: null, networkId };
+      return { type: 'pointer', isScript: type === 5, stakeAddress: null, paymentCredential, networkId };
     case 6: case 7:
-      return { type: 'enterprise', isScript: type === 7, stakeAddress: null, networkId };
+      return { type: 'enterprise', isScript: type === 7, stakeAddress: null, paymentCredential, networkId };
     case 14: case 15:
-      return { type: 'reward', isScript: type === 15, stakeAddress: address, networkId };
+      return { type: 'reward', isScript: type === 15, stakeAddress: address, paymentCredential: null, networkId };
     default:
       return { ...none, networkId };
   }
@@ -1023,4 +1041,13 @@ export function credentialToDrepId(credentialHex: string, isScript: boolean): st
 /** `[code] ctx: msg` */
 function fmt(code: string, ctx: string, msg: string): string {
   return `[${code}] ${ctx}: ${msg}`;
+}
+
+/** Address balance from its UTxOs: lovelace first, then every native asset summed per unit. */
+export function sumUtxoAmounts(utxos: Array<{ amount: Array<{ unit: string; quantity: string }> }>): Array<{ unit: string; quantity: string }> {
+  const totals = new Map<string, bigint>([['lovelace', 0n]]);
+  for (const u of utxos) {
+    for (const a of u.amount ?? []) totals.set(a.unit, (totals.get(a.unit) ?? 0n) + BigInt(a.quantity || '0'));
+  }
+  return [...totals].map(([unit, q]) => ({ unit, quantity: q.toString() }));
 }

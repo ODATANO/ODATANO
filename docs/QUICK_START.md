@@ -219,8 +219,7 @@ For live-data / Ogmios-backend development you can run a local Cardano node and
 Ogmios bridge. The repo ships a `docker-compose.yml` that mirrors the CI sync
 setup (same images, config, and node-11 topology).
 
-**Prerequisites:** Docker Desktop. The `ghcr.io/odatano/ogmios` image must be
-public (it is) — otherwise run `docker login ghcr.io` first.
+**Prerequisites:** Docker Desktop. Ogmios runs from the public `cardanosolutions/ogmios:v7.0.0` image.
 
 ```bash
 # Bring up everything (cardano-node + Ogmios + ODATANO service)
