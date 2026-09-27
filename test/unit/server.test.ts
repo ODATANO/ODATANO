@@ -22,7 +22,7 @@ describe('server.ts', () => {
 
     beforeEach(() => {
       // Save env vars we'll modify
-      for (const key of ['NETWORK', 'BACKENDS', 'TX_BUILDERS', 'PRIMARY_TIMEOUT_MS', 'FALLBACK_TIMEOUT_MS', 'BLOCKFROST_API_KEY', 'KOIOS_API_KEY', 'OGMIOS_URL', 'INDEX_TTL_MS']) {
+      for (const key of ['NETWORK', 'BACKENDS', 'TX_BUILDERS', 'PRIMARY_TIMEOUT_MS', 'FALLBACK_TIMEOUT_MS', 'BLOCKFROST_API_KEY', 'KOIOS_API_KEY', 'OGMIOS_URL', 'INDEX_TTL_MS', 'ODATANO_URL', 'ODATANO_API_KEY']) {
         originalEnv[key] = env[key];
       }
       // Clear all to get clean defaults
@@ -35,6 +35,8 @@ describe('server.ts', () => {
       delete env.KOIOS_API_KEY;
       delete env.OGMIOS_URL;
       delete env.INDEX_TTL_MS;
+      delete env.ODATANO_URL;
+      delete env.ODATANO_API_KEY;
     });
 
     afterEach(() => {
@@ -56,6 +58,24 @@ describe('server.ts', () => {
       expect(config.primaryTimeoutMs).toBe(30000);
       expect(config.fallbackTimeoutMs).toBe(60000);
       expect(config.indexTtlMs).toBe(3600000);
+    });
+
+    it('reads the odatano backend URL and key', () => {
+      env.BACKENDS = 'ogmios,odatano';
+      env.ODATANO_URL = 'https://api.preprod.odatano.dev';
+      env.ODATANO_API_KEY = 'oda_test';
+      const config = loadConfigFromEnv();
+      expect(config.backends).toEqual(['ogmios', 'odatano']);
+      expect(config).toMatchObject({ odatanoUrl: 'https://api.preprod.odatano.dev', odatanoApiKey: 'oda_test' });
+    });
+
+    it('rejects a non-http ODATANO_URL and needs one for odatano on mainnet', () => {
+      env.BACKENDS = 'odatano';
+      env.ODATANO_URL = 'api.odatano.dev';
+      expect(() => loadConfigFromEnv()).toThrow(/Invalid ODATANO_URL/);
+      delete env.ODATANO_URL;
+      env.NETWORK = 'mainnet';
+      expect(() => loadConfigFromEnv()).toThrow(/ODATANO_URL is required/);
     });
 
     it('should parse valid env vars', () => {
@@ -167,6 +187,7 @@ describe('server.ts', () => {
       'CRAWLER_EPOCH_SNAPSHOTS',
       'CRAWLER_CERTIFICATES',
       'CRAWLER_UTXO_SET',
+      'CRAWLER_AUTHORITATIVE',
     ];
     const originalEnv: Record<string, string | undefined> = {};
     let previousCoreConfig: unknown;
@@ -217,6 +238,7 @@ describe('server.ts', () => {
         epochSnapshots: false,
         certificates: false,
         utxoSet: false,
+        authoritative: false,
       });
     });
 
@@ -235,6 +257,7 @@ describe('server.ts', () => {
       env.CRAWLER_EPOCH_SNAPSHOTS = 'true';
       env.CRAWLER_CERTIFICATES = 'true';
       env.CRAWLER_UTXO_SET = 'true';
+      env.CRAWLER_AUTHORITATIVE = 'true';
 
       expect(loadCrawlerConfigFromEnv()).toEqual({
         enabled: true,
@@ -251,6 +274,7 @@ describe('server.ts', () => {
         epochSnapshots: true,
         certificates: true,
         utxoSet: true,
+        authoritative: true,
       });
     });
 
@@ -266,7 +290,7 @@ describe('server.ts', () => {
       expect(() => loadCrawlerConfigFromEnv()).toThrow('Invalid CRAWLER_ASSET_CATALOGUE');
     });
 
-    it.each(['CRAWLER_ASSET_HISTORY', 'CRAWLER_EPOCH_SNAPSHOTS', 'CRAWLER_CERTIFICATES', 'CRAWLER_UTXO_SET'])('rejects a non-boolean %s', (key) => {
+    it.each(['CRAWLER_ASSET_HISTORY', 'CRAWLER_EPOCH_SNAPSHOTS', 'CRAWLER_CERTIFICATES', 'CRAWLER_UTXO_SET', 'CRAWLER_AUTHORITATIVE'])('rejects a non-boolean %s', (key) => {
       env[key] = 'sometimes';
       expect(() => loadCrawlerConfigFromEnv()).toThrow(`Invalid ${key}`);
     });

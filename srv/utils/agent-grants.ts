@@ -36,6 +36,7 @@ export const AGENT_SERVICE_NAMES: readonly string[] = [
   'CardanoWorkerService',
   'CardanoIndexerService',
   'CardanoAgentService',
+  'CardanoBackendService',
 ];
 
 /**
@@ -85,6 +86,12 @@ export const AGENT_ALWAYS_ALLOWED_EVENTS: ReadonlySet<string> = new Set([
   'GetJobStatus', 'GetWorkerStatus', 'getStatus', 'getLiveness',
   // CardanoAgentService: the token's own grant (GetGrantUsage is narrowed to it in enforceAgentGrant)
   'GetGrantStatus', 'GetGrantUsage',
+  // CardanoBackendService: reads and evaluation for another ODATANO instance (submit is allow-listed)
+  'GetTransaction', 'GetTransactionsBatch', 'GetTransactionMetadata', 'GetBlock', 'GetBlockByHeight',
+  'GetNextBlocks', 'GetBlockTransactions', 'GetCurrentSlot', 'GetEpoch', 'GetAddress', 'GetAddressUtxos',
+  'GetAddressTransactions', 'GetAddressTransactionHashes', 'GetCredentialUtxos', 'IsUtxoUnspent',
+  'GetUnspentOutputs', 'GetAccount', 'GetPool', 'GetPoolIds', 'GetPools', 'GetDrep', 'GetDrepIds', 'GetDreps',
+  'GetProtocolParameters', 'EvaluateTransaction',
 ]);
 
 /** Mirrors WalletJobKind in db/types.cds; kept literal so this module stays free of cds-models. */

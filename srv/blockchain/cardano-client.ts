@@ -23,6 +23,7 @@ import {
 import { OgmiosBackend } from './backends/ogmios-backend';
 import { BlockfrostBackend } from './backends/blockfrost-backend';
 import { KoiosBackend } from './backends/koios-backend';
+import { OdatanoBackend } from './backends/odatano-backend';
 
 const logger = cds.log('CardanoClient');
 
@@ -52,7 +53,7 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
 };
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
-export type BackendName = 'blockfrost' | 'koios' | 'ogmios';
+export type BackendName = 'blockfrost' | 'koios' | 'ogmios' | 'odatano';
 export type TransactionBuilderName = 'buildooor';
 
 export type CardanoClientConfig = {
@@ -62,6 +63,10 @@ export type CardanoClientConfig = {
   blockfrostCustomBackend?: string;
   koiosApiKey: string;
   ogmiosUrl: string;
+  /** Remote ODATANO for the `odatano` backend; defaults to the public API of the network. */
+  odatanoUrl?: string;
+  /** Key for the remote ODATANO (a gateway `oda_…` key or an agent grant token). */
+  odatanoApiKey?: string;
   transactionBuilders: TransactionBuilderName[];
   primaryTimeoutMs: number;
   fallbackTimeoutMs: number;
@@ -113,6 +118,11 @@ export class CardanoClient {
     }
     if (backends.includes('koios')) {
       this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));
+    }
+    if (backends.includes('odatano')) {
+      this.historicalBackends.push(new OdatanoBackend(
+        clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.odatanoUrl, clientConfig.odatanoApiKey,
+      ));
     }
 
     if (!this.liveBackend && this.historicalBackends.length === 0) {
@@ -396,18 +406,19 @@ export class CardanoClient {
 
   /**
    * UTxOs by 28-byte payment credential (56-char hex), across all bech32 forms sharing it.
-   * Koios-only: no other backend has a credential-keyed endpoint, so this throws without Koios.
+   * Needs a credential-keyed backend (Koios, or another ODATANO); Blockfrost has none.
    */
   getCredentialUtxos(credHash: string): Promise<UTxO[]> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
-    const koios = candidates.find(b => b?.name === 'koios' && typeof b.getCredentialUtxos === 'function');
-    if (!koios) {
+    const capable = candidates.filter((b): b is CardanoBackend => typeof b?.getCredentialUtxos === 'function');
+    const backend = capable.find(b => b.name === 'koios') ?? capable[0];
+    if (!backend) {
       throw new ProviderUnavailableError(
-        "getCredentialUtxos requires Koios backend. Configure 'koios' in cds.requires.odatano-core.backends.",
+        "getCredentialUtxos requires a Koios or odatano backend. Configure one in cds.requires.odatano-core.backends.",
         'koios'
       );
     }
-    return this.credCoalescer.get(credHash, () => this.callWithResilience(koios, () => koios.getCredentialUtxos!(credHash)));
+    return this.credCoalescer.get(credHash, () => this.callWithResilience(backend, () => backend.getCredentialUtxos!(credHash)));
   }
 
   getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
@@ -564,6 +575,15 @@ export class CardanoClient {
     return backend?.getUtxosByAddresses ? backend.getUtxosByAddresses(addresses) : null;
   }
 
+  /** True when an initialized backend implements `method` and does not declare it unsupported. */
+  hasBackendFor(method: string): boolean {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    return candidates.some((b) => !!b
+      && !this.uninitializedBackends.has(b)
+      && typeof (b as unknown as Record<string, unknown>)[method] === 'function'
+      && !b.unsupportedMethods?.has(method));
+  }
+
   /** A backend that reads pool/DRep/pot state at a block (Ogmios) — preferred source of epoch snapshots. */
   getEpochStateBackend(): EpochStateBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
@@ -680,21 +700,33 @@ export class CardanoClient {
     return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
   }
 
-  /** True when Ogmios is the live backend (script evaluation available). */
+  /** True when Ogmios is the live backend. */
   hasOgmiosBackend(): boolean {
     return this.liveBackend?.name === 'ogmios';
   }
 
-  /** Evaluate script execution units of an unsigned transaction (Ogmios only). */
+  /** The backend that evaluates scripts: the live one (Ogmios), else an evaluating historical one (odatano). */
+  private evaluatingBackend(): (CardanoBackend & { evaluateTransaction(cbor: string): Promise<ScriptEvaluationResult[]> }) | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) if (b && isEvaluatingBackend(b)) return b;
+    return null;
+  }
+
+  /** True when some backend can evaluate script execution units. */
+  hasEvaluatingBackend(): boolean {
+    return this.evaluatingBackend() != null;
+  }
+
+  /** Evaluate script execution units of an unsigned transaction. */
   async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     await this.ensureInitialized();
 
-    if (!this.liveBackend || !isEvaluatingBackend(this.liveBackend)) {
-      throw new ProviderUnavailableError('Transaction evaluation requires an evaluating backend (e.g., Ogmios)');
+    const backend = this.evaluatingBackend();
+    if (!backend) {
+      throw new ProviderUnavailableError('Transaction evaluation requires an evaluating backend (Ogmios or odatano)');
     }
 
     // timeout + breaker, so a hanging socket cannot block Plutus builds
-    const backend = this.liveBackend;
     return this.callWithResilience(backend, () => backend.evaluateTransaction(unsignedTxCbor));
   }
 }

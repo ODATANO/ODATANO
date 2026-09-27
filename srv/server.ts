@@ -21,7 +21,7 @@ import { env } from 'process';
 const logger = cds.log('ODATANO');
 
 const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
-const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios'];
+const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios', 'odatano'];
 
 const CRAWLER_LIMITS = {
   batchSize: { min: 1, max: 100 },
@@ -217,6 +217,8 @@ export async function createTestContext(
     blockfrostCustomBackend: env.BLOCKFROST_CUSTOM_BACKEND || undefined,
     koiosApiKey: env.KOIOS_API_KEY || '',
     ogmiosUrl: env.OGMIOS_URL || '',
+    odatanoUrl: env.ODATANO_URL || undefined,
+    odatanoApiKey: env.ODATANO_API_KEY || undefined,
     transactionBuilders: ['buildooor'],
     primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
     fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
@@ -309,6 +311,17 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   }
   const koiosApiKey = cdsConfig.koiosApiKey || env.KOIOS_API_KEY || '';
   const ogmiosUrl = cdsConfig.ogmiosUrl || env.OGMIOS_URL || '';
+  const odatanoUrl = cdsConfig.odatanoUrl || env.ODATANO_URL || '';
+  const odatanoApiKey = cdsConfig.odatanoApiKey || env.ODATANO_API_KEY || '';
+  if (odatanoUrl && !/^https?:\/\//i.test(odatanoUrl)) {
+    throw new ConfigError(`Invalid ODATANO_URL "${odatanoUrl}". Must be an http(s) URL (e.g. https://api.preprod.odatano.dev).`);
+  }
+  if (backends.includes('odatano') && !odatanoUrl && network === 'mainnet') {
+    throw new ConfigError('ODATANO_URL is required for the odatano backend on mainnet.');
+  }
+  if (backends.includes('odatano') && !odatanoApiKey) {
+    logger.warn('ODATANO_API_KEY is not set but odatano is listed in BACKENDS; the public API refuses calls without a key');
+  }
 
   if (backends.includes('blockfrost') && !blockfrostApiKey && !blockfrostCustomBackend) {
     logger.warn('Neither BLOCKFROST_API_KEY nor BLOCKFROST_CUSTOM_BACKEND is set but blockfrost is listed in BACKENDS');
@@ -326,6 +339,8 @@ export function loadConfigFromEnv(): CardanoClientConfig {
     blockfrostCustomBackend: blockfrostCustomBackend || undefined,
     koiosApiKey,
     ogmiosUrl,
+    odatanoUrl: odatanoUrl || undefined,
+    odatanoApiKey: odatanoApiKey || undefined,
     transactionBuilders: txBuilders,
     primaryTimeoutMs: Number(primaryTimeout) || 30000,   // || intentional: NaN (missing config) falls back to default
     fallbackTimeoutMs: Number(fallbackTimeout) || 60000,
@@ -473,10 +488,14 @@ export function loadCrawlerConfigFromEnv(): CrawlerConfig {
   const utxoSet = crawlerBoolean(
     c.utxoSet ?? env.CRAWLER_UTXO_SET, 'CRAWLER_UTXO_SET', false,
   );
+  // Crawled chain answers misses with 404 instead of a provider call.
+  const authoritative = crawlerBoolean(
+    c.authoritative ?? env.CRAWLER_AUTHORITATIVE, 'CRAWLER_AUTHORITATIVE', false,
+  );
 
   return {
     enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs,
-    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots, certificates, utxoSet,
+    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots, certificates, utxoSet, authoritative,
   };
 }
 

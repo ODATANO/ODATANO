@@ -905,6 +905,14 @@ describe('CardanoClient Configuration', () => {
       expect(result).toEqual(fakeUtxos);
     });
 
+    it('routes to another ODATANO when no Koios is configured', async () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['odatano'] }));
+      const odatano = { name: 'odatano', getCredentialUtxos: vi.fn().mockResolvedValue([]) };
+      (client as any).historicalBackends = [odatano];
+      await client.getCredentialUtxos(CRED);
+      expect(odatano.getCredentialUtxos).toHaveBeenCalledWith(CRED);
+    });
+
     it('throws ProviderUnavailableError when only Blockfrost is configured', async () => {
       const config = createTestConfig({ backends: ['blockfrost'] });
       const client = new CardanoClient(config);
@@ -913,7 +921,7 @@ describe('CardanoClient Configuration', () => {
       (client as any).historicalBackends = [blockfrostBackend];
 
       expect(() => client.getCredentialUtxos(CRED)).toThrow(ProviderUnavailableError);
-      expect(() => client.getCredentialUtxos(CRED)).toThrow(/requires Koios backend/);
+      expect(() => client.getCredentialUtxos(CRED)).toThrow(/requires a Koios or odatano backend/);
     });
 
     it('throws ProviderUnavailableError when only Ogmios is configured', async () => {
@@ -1050,5 +1058,22 @@ describe('CardanoClient Configuration', () => {
       expect(await client.isUtxoUnspent(TX, 0)).toBe(true);
       expect(histCheck).toHaveBeenCalledWith(TX, 0);
     });
+  });
+});
+
+describe('odatano backend', () => {
+  it('builds an OdatanoBackend for the public API of the network', () => {
+    const client = new CardanoClient(createTestConfig({ backends: ['odatano'], odatanoApiKey: 'oda_x' } as Partial<CardanoClientConfig>));
+    expect(client.listBackends()).toContain('odatano');
+  });
+
+  it('evaluates scripts through a historical evaluating backend when there is no Ogmios', async () => {
+    const client = new CardanoClient(createTestConfig({ backends: ['odatano'] }));
+    const remote = { name: 'odatano', evaluateTransaction: vi.fn().mockResolvedValue([{ validator: 'spend:0', budget: { memory: 1, cpu: 2 } }]) };
+    (client as any).historicalBackends = [remote];
+    (client as any).initialized = true;
+    expect(client.hasEvaluatingBackend()).toBe(true);
+    await client.evaluateTransaction('84a4');
+    expect(remote.evaluateTransaction).toHaveBeenCalledWith('84a4');
   });
 });

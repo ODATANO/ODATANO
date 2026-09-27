@@ -407,11 +407,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
         });
 
-        it('POST /BuildMintTransaction - uses evaluated execution units when Ogmios available', async () => {
+        it('POST /BuildMintTransaction - uses evaluated execution units when an evaluating backend is available', async () => {
 
           const cardanoClient = getCardanoClient();
 
-          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasEvaluatorSpy = vi.spyOn(cardanoClient, 'hasEvaluatingBackend').mockReturnValue(true);
 
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
             {
@@ -428,19 +428,19 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
           // chai's expect from cds.test has no spy matchers; use the global vitest expect.
           const viExpect = (global as any).expect;
-          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(hasEvaluatorSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
           expect(data).to.have.property('fee');
 
-          hasOgmiosSpy.mockRestore();
+          hasEvaluatorSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
 
         it('POST /BuildMintTransaction - uses default execution units when evaluation fails', async () => {
           const cardanoClient = getCardanoClient();
 
-          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasEvaluatorSpy = vi.spyOn(cardanoClient, 'hasEvaluatingBackend').mockReturnValue(true);
 
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
             new Error('Evaluation failed: script execution error')
@@ -455,10 +455,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
 
           // chai's expect from cds.test has no spy matchers; use the global vitest expect.
           const viExpect = (global as any).expect;
-          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(hasEvaluatorSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
-          hasOgmiosSpy.mockRestore();
+          hasEvaluatorSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
       });
@@ -638,11 +638,11 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(outputs.length).to.be.greaterThan(0);
         });
 
-        it('POST /BuildPlutusSpendTransaction - uses evaluated execution units when Ogmios available', async () => {
+        it('POST /BuildPlutusSpendTransaction - uses evaluated execution units when an evaluating backend is available', async () => {
           setupTxInfoMock(mockScriptTxInfo);
 
           const cardanoClient = getCardanoClient();
-          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasEvaluatorSpy = vi.spyOn(cardanoClient, 'hasEvaluatingBackend').mockReturnValue(true);
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockResolvedValue([
             {
               validator: { purpose: 'spend', index: 0 },
@@ -657,10 +657,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('fee');
 
           const viExpect = (global as any).expect;
-          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(hasEvaluatorSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
-          hasOgmiosSpy.mockRestore();
+          hasEvaluatorSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
 
@@ -668,7 +668,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           setupTxInfoMock(mockScriptTxInfo);
 
           const cardanoClient = getCardanoClient();
-          const hasOgmiosSpy = vi.spyOn(cardanoClient, 'hasOgmiosBackend').mockReturnValue(true);
+          const hasEvaluatorSpy = vi.spyOn(cardanoClient, 'hasEvaluatingBackend').mockReturnValue(true);
           const evaluateSpy = vi.spyOn(cardanoClient, 'evaluateTransaction').mockRejectedValue(
             new Error('Evaluation failed: script execution error')
           );
@@ -679,10 +679,10 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
           expect(data).to.have.property('unsignedTxCbor');
 
           const viExpect = (global as any).expect;
-          viExpect(hasOgmiosSpy).toHaveBeenCalled();
+          viExpect(hasEvaluatorSpy).toHaveBeenCalled();
           viExpect(evaluateSpy).toHaveBeenCalled();
 
-          hasOgmiosSpy.mockRestore();
+          hasEvaluatorSpy.mockRestore();
           evaluateSpy.mockRestore();
         });
 

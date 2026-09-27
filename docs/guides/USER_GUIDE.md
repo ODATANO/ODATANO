@@ -868,6 +868,25 @@ psql -f slot-leader.sql
 A VRF key of a pool that is no longer registered is listed as unmapped and left as it is;
 `--extra-map` takes such values as `<old value> <pool id>` lines.
 
+### The crawled chain as the authority
+
+With a crawl that started at or before the first Shelley slot and runs at the tip, the database
+holds every block and transaction since Shelley. `authoritative` (`CRAWLER_AUTHORITATIVE`, off)
+then answers a lookup the database misses with 404 instead of asking Blockfrost or Koios:
+
+| Lookup | Answer from the crawled chain |
+|---|---|
+| `Blocks`, `GetBlockByHash` | 404 `not in the crawled chain up to slot …` |
+| `Transactions`, `GetTransactionByHash` | same |
+| `GetMetadataByTxHash` | empty list for a crawled transaction without metadata; 404 for an unknown one |
+| `Assets`, `GetAssetInfo` | supply = mints − burns from `AssetHistory`, mint count, first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
+| `GetAssetHistory` | the crawled `AssetHistory` rows, newest first |
+
+The same answers apply without the knob when no configured backend can serve the lookup at all
+(an Ogmios-only deployment): a miss is then a 404 instead of a 503. Two gaps remain: blocks and
+transactions of the Byron era (mainnet and preprod before Shelley) and of the last
+`confirmationDepth` blocks are not in the database and answer 404 as well.
+
 **Notes:** Ogmios needs a synced cardano-node (a [Mithril](https://docs.cardano.org/developer-resources/scalability-solutions/mithril) bootstrap speeds that up). Full-history mainnet pre-sync is large — start from a recent block. Numeric fields (slot, lovelace, amounts) serialize as **strings** (CAP 10).
 
 ---

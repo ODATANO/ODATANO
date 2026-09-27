@@ -81,7 +81,7 @@ export interface CrawlerConfig {
   assetCatalogue: 'off' | 'bare' | 'enrich';
   /** Units per second the background enrichment resolves (`assetCatalogue: 'enrich'` only). */
   assetEnrichRate: number;
-  /** Snapshot every pool and DRep at each epoch boundary. Requires an enumerating backend (Koios). */
+  /** Snapshot every pool, DRep and the ada pots at each epoch boundary (Ogmios, or Koios at the tip). */
   epochSnapshots: boolean;
   /**
    * Write TransactionCertificates + TransactionWithdrawals per block (ledger-state
@@ -93,6 +93,11 @@ export interface CrawlerConfig {
    * Needs a one-off snapshot import (`importUtxoSet`) to become active.
    */
   utxoSet: boolean;
+  /**
+   * Treat the crawled chain as complete: a block, transaction, metadata or asset the database
+   * does not hold is answered 404 instead of asking a provider (crawl from Shelley, synced).
+   */
+  authoritative?: boolean;
 }
 
 /**
@@ -234,6 +239,7 @@ export class CardanoCrawler {
       assetEnrichRate: this.config.assetEnrichRate,
       certificates: this.config.certificates,
       utxoSet: this.config.utxoSet,
+      authoritative: this.config.authoritative ?? false,
     });
     // Ledger state is only ever applied from a known anchor — no snapshot, no writes.
     if (this.config.utxoSet) {

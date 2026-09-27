@@ -133,6 +133,8 @@ function makeIndexer() {
   const client = {
     network: 'preview',
     max_age_ms: 60_000,
+    // a provider is configured unless a test says otherwise
+    hasBackendFor: vi.fn((_method: string) => true),
     getPool: vi.fn(async () => ({
       poolId: POOL, vrfKeyHash: 'v', blocksMinted: 5, blocksEpoch: null, liveStake: '1', liveSize: 0,
       liveSaturation: 0, liveDelegators: 0, activeStake: '0', activeSize: 0, pledge: '0', margin: 0,
@@ -473,5 +475,93 @@ describe('addresses from the crawled UTxO set', () => {
     await indexer.indexAccount(mockTx as never, 'stake_test1x');
     const last = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Accounts').pop()!;
     expect((last.entries as Record<string, unknown>).withdrawalsSum).toBe('1200');
+  });
+});
+
+describe('crawled chain as the authority (crawler.authoritative)', () => {
+  const TX = 'a'.repeat(64);
+  const UNIT = `${'b'.repeat(56)}746f6b656e`;
+  const authoritative = () => {
+    const made = makeIndexer();
+    made.indexer.configureCrawlCoverage({ assetHistory: true, assetCatalogue: 'bare', authoritative: true });
+    return made;
+  };
+
+  it('answers a transaction the crawl does not hold with 404, without asking a provider', async () => {
+    const { client, indexer } = authoritative();
+    const getTransaction = vi.fn();
+    Object.assign(client, { getTransaction });
+    await expect(indexer.indexTransaction(mockTx as never, TX)).rejects.toMatchObject({ statusCode: 404 });
+    expect(getTransaction).not.toHaveBeenCalled();
+  });
+
+  it('also answers 404 without the knob when no configured backend can look the block up', async () => {
+    const { client, indexer } = makeIndexer();
+    client.hasBackendFor.mockReturnValue(false); // Ogmios only
+    const getBlock = vi.fn();
+    Object.assign(client, { getBlock });
+    await expect(indexer.indexBlock(mockTx as never, 'c'.repeat(64))).rejects.toMatchObject({ statusCode: 404 });
+    expect(getBlock).not.toHaveBeenCalled();
+  });
+
+  it('still asks the provider when the crawl started after Shelley', async () => {
+    cursor = synced({ startSlot: 50_000_000 });
+    const { client, indexer } = authoritative();
+    const getTransaction = vi.fn(async () => { throw new Error('provider asked'); });
+    Object.assign(client, { getTransaction });
+    await expect(indexer.indexTransaction(mockTx as never, TX)).rejects.toThrow('provider asked');
+  });
+
+  it('reports no metadata for a crawled transaction without metadata rows', async () => {
+    answer = (q) => (q.entity === 'Transactions' && q._op === 'SELECT.one' ? { hash: TX } : undefined);
+    const { client, indexer } = authoritative();
+    const getTransactionMetadata = vi.fn();
+    Object.assign(client, { getTransactionMetadata });
+    expect(await indexer.indexTransactionMetadata(mockTx as never, TX)).toEqual([]);
+    expect(getTransactionMetadata).not.toHaveBeenCalled();
+  });
+
+  it('builds the asset from crawled mint/burn rows and the CIP-25 payload of the latest mint', async () => {
+    const cip25 = { [('b').repeat(56)]: { token: { name: 'Token', image: 'ipfs://x' } } };
+    answer = (q) => {
+      if (q.entity === 'AssetHistory') return [
+        { txHash: 'm1', action: 'mint', quantity: '100', blockTime: 1_700_000_000, blockHeight: 10 },
+        { txHash: 'b1', action: 'burn', quantity: '30', blockTime: 1_700_000_100, blockHeight: 20 },
+        { txHash: 'm2', action: 'mint', quantity: '5', blockTime: 1_700_000_200, blockHeight: 30 },
+      ];
+      if (q.entity === 'TransactionMetadata') return (q.where as Record<string, unknown>).tx_hash === 'm2' ? { payload: JSON.stringify(cip25) } : undefined;
+      return undefined;
+    };
+    const { client, indexer } = authoritative();
+    const getAssetInfo = vi.fn();
+    Object.assign(client, { getAssetInfo });
+
+    const asset = await indexer.indexAsset(mockTx as never, UNIT) as unknown as Record<string, unknown>;
+
+    expect(getAssetInfo).not.toHaveBeenCalled();
+    expect(asset).toMatchObject({
+      unit: UNIT, policyId: 'b'.repeat(56), assetNameHex: '746f6b656e', assetName: 'token',
+      totalSupply: '75', mintOrBurnCount: 3, initialMintTxHash: 'm1', initialMintTime: 1_700_000_000,
+    });
+    expect(String(asset.fingerprint)).toMatch(/^asset1/);
+    expect(JSON.stringify(asset)).toContain('ipfs://x');
+  });
+
+  it('answers 404 for an asset the crawled chain never minted', async () => {
+    answer = (q) => (q.entity === 'AssetHistory' ? [] : undefined);
+    const { indexer } = authoritative();
+    await expect(indexer.indexAsset(mockTx as never, UNIT)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('serves the asset history from the crawled rows', async () => {
+    const rows = [{ unit: UNIT, txHash: 'm1', action: 'mint', quantity: '100', blockTime: 1, blockHeight: 10 }];
+    answer = (q) => (q.entity === 'AssetHistory' ? rows : undefined);
+    const { client, indexer } = authoritative();
+    const getAssetHistory = vi.fn();
+    Object.assign(client, { getAssetHistory });
+    expect(await indexer.indexAssetHistory(mockTx as never, UNIT, 5)).toEqual(rows);
+    expect(getAssetHistory).not.toHaveBeenCalled();
+    const q = runs.find(r => r.entity === 'AssetHistory') as Q & { orderBy?: string; limit?: number };
+    expect(q).toMatchObject({ orderBy: 'blockHeight desc', limit: 5 });
   });
 });

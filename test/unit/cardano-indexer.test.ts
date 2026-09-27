@@ -199,6 +199,8 @@ describe('CardanoIndexer', () => {
     mockClient = createMockClient();
     mockTxBuilder = createMockTxBuilder();
     indexer = new CardanoIndexer(mockClient, mockTxBuilder);
+    // no crawled chain unless a test says so
+    vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue(null);
   });
 
   describe('indexAddress', () => {

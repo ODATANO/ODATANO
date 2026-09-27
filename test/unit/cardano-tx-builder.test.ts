@@ -114,7 +114,7 @@ describe('CardanoTransactionBuilder', () => {
           ? [{ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr_test1script', amount: [{ unit: 'lovelace', quantity: '2000000' }] }]
           : mockUtxos
       ),
-      hasOgmiosBackend: vi.fn().mockReturnValue(false),
+      hasEvaluatingBackend: vi.fn().mockReturnValue(false),
       evaluateTransaction: vi.fn(),
       // no ledger-state backend: output refs resolve via getTransaction
       getUnspentOutputs: vi.fn().mockResolvedValue(null),
@@ -293,7 +293,7 @@ describe('CardanoTransactionBuilder', () => {
   // ============================================================================
   describe('buildMintTransaction()', () => {
     it('should build a mint transaction without Ogmios', async () => {
-      mockCardanoClient.hasOgmiosBackend.mockReturnValue(false);
+      mockCardanoClient.hasEvaluatingBackend.mockReturnValue(false);
 
       const result = await builder.buildMintTransaction(mockMintTxRequest, mockProtocolParameters);
 
@@ -303,7 +303,7 @@ describe('CardanoTransactionBuilder', () => {
     });
 
     it('should pass evaluator when Ogmios is available', async () => {
-      mockCardanoClient.hasOgmiosBackend.mockReturnValue(true);
+      mockCardanoClient.hasEvaluatingBackend.mockReturnValue(true);
       mockCardanoClient.evaluateTransaction.mockResolvedValue([
         { validator: { purpose: 'mint', index: 0 }, budget: { memory: 1000, cpu: 500 } }
       ]);
@@ -332,7 +332,7 @@ describe('CardanoTransactionBuilder', () => {
     });
 
     it('should not pass evaluator when Ogmios is not available', async () => {
-      mockCardanoClient.hasOgmiosBackend.mockReturnValue(false);
+      mockCardanoClient.hasEvaluatingBackend.mockReturnValue(false);
 
       let capturedContext: TxBuildContext | undefined;
       mockTxBuilder.buildUnsignedMintTransaction = vi.fn().mockImplementation(

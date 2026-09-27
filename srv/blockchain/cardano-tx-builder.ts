@@ -129,7 +129,7 @@ export class CardanoTransactionBuilder {
             utxos: mergeUtxosUnique(senderUtxos, forcedUtxos),
             protocolParameters: protocolParameters,
             // Pass evaluator if Ogmios is available for dynamic execution unit calculation
-            evaluateTransaction: cardanoClient.hasOgmiosBackend()
+            evaluateTransaction: cardanoClient.hasEvaluatingBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined,
             referenceInputUtxos: referenceInputUtxos.length > 0 ? referenceInputUtxos : undefined
@@ -185,7 +185,7 @@ export class CardanoTransactionBuilder {
         const txContext: TxBuildContext = {
             utxos: mergedUtxos,
             protocolParameters: protocolParameters,
-            evaluateTransaction: cardanoClient.hasOgmiosBackend()
+            evaluateTransaction: cardanoClient.hasEvaluatingBackend()
                 ? (cbor) => cardanoClient.evaluateTransaction(cbor)
                 : undefined,
             referenceInputUtxos: referenceInputUtxos.length > 0 ? referenceInputUtxos : undefined

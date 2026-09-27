@@ -42,7 +42,7 @@ All config options:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `network` | `preview` | `mainnet`, `preview`, or `preprod` |
-| `backends` | `["koios"]` | `blockfrost`, `koios`, `ogmios` (array) |
+| `backends` | `["koios"]` | `blockfrost`, `koios`, `ogmios`, `odatano` (array) |
 | `blockfrostApiKey` | | Required if using blockfrost backend |
 | `koiosApiKey` | | Optional for Koios |
 | `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |

@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.22",
+  "version": "2.0.0-rc.24",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -149,7 +149,8 @@
     "test:unit": "vitest run --project unit",
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
     "watch-wallet": "cds watch --open wallet/webapp/index.html",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "prepublishOnly": "node scripts/publish-guard.mjs"
   },
   "sapux": [
     "app/odatano"

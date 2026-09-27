@@ -1,5 +1,43 @@
 # Changelog
 
+## [v2.0.0-rc.24] - another ODATANO as backend
+
+ODATANO can run on another ODATANO (the public API) instead of Blockfrost or Koios; no schema change.
+
+### Added
+
+- Backend `odatano` (`ODATANO_URL`, `ODATANO_API_KEY`; `odatanoUrl`, `odatanoApiKey`): another
+  ODATANO instance as backend, by default the public API of the network (mainnet needs the URL).
+  Reads, crawler pagination, pool/DRep enumeration, credential UTxOs, script evaluation and
+  submit go through it.
+- `CardanoBackendService` (`/odata/v4/cardano-backend/`): the provider shape for such callers as
+  JSON. Stored blocks and transactions come from the index (without the phase-2 flag), the rest
+  from the instance's backends and crawled data; `GetNextBlocks` reports an orphaned cursor with
+  `CHAIN_POINT_MISMATCH:`. Agent tokens may call the reads and `EvaluateTransaction`;
+  `SubmitTransaction` needs the allow list.
+- `npm publish` refuses an uncommitted tree or a HEAD without the `v<version>` tag (`prepublishOnly`).
+
+### Changed
+
+- Script evaluation for Plutus builds uses any evaluating backend (Ogmios, or `odatano`);
+  `GetUTxOsByCredential` uses Koios or `odatano`.
+
+## [v2.0.0-rc.23] - the crawled chain as the authority, assets without providers
+
+Published from an uncommitted tree on top of rc.22 (no tag); deprecated in favour of rc.24, which contains it.
+
+### Added
+
+- `crawler.authoritative` (`CRAWLER_AUTHORITATIVE`, off): with a crawl that started at or before
+  the first Shelley slot and runs at the tip, a block, transaction, metadata or asset lookup the
+  database misses is answered 404 (`not in the crawled chain up to slot …`) instead of asking a
+  provider. Without the knob the same applies when no configured backend can serve the lookup
+  (Ogmios only: 404 instead of 503).
+- Assets from the crawled chain in that mode: `Assets` / `GetAssetInfo` take supply (mints − burns),
+  mint count, first mint and the CIP-25 payload (label 721) of the latest mint from `AssetHistory`
+  and `TransactionMetadata`; registry fields stay empty. `GetAssetHistory` reads the crawled rows.
+- `GetMetadataByTxHash` for a crawled transaction without metadata answers an empty list.
+
 ## [v2.0.0-rc.22] - Ogmios 7, epoch snapshots from the node, addresses from the crawled UTxO set
 
 Ogmios 7 support, and epoch snapshots plus address reads without Koios or Blockfrost; additive schema change, no migration.
