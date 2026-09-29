@@ -3,7 +3,7 @@ import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-build
 import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/buildooor-tx';
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
 import type { CardanoClient } from '../../srv/blockchain/cardano-client';
-import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO } from '../../srv/utils/types';
+import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO, TxBuildPlutusRequest } from '../../srv/utils/types';
 
 // Mock the Buildooor builder (the coordinator constructs it directly via `new BuildooorTxBuilder()`)
 vi.mock('../../srv/blockchain/transaction-building/buildooor-tx');
@@ -63,6 +63,10 @@ class MockTxBuilder implements CardanoTxBuilder {
       outputs: [],
       warnings: [],
     };
+  }
+
+  async buildUnsignedPlutusTransaction(_req: TxBuildPlutusRequest, _ctx: TxBuildContext): Promise<TxBuildResult> {
+    return { unsignedTxCbor: 'mock-plutus-tx-cbor', txBodyHash: 'mock-plutus-tx-hash', feeLovelace: '500000', inputs: [], outputs: [], warnings: [] };
   }
 }
 
@@ -554,6 +558,118 @@ describe('CardanoTransactionBuilder', () => {
 
       expect(result.unsignedTxCbor).toBe('mock-plutus-spend-tx-cbor');
       expect(mockCardanoClient.getTransaction).toHaveBeenCalledWith('a'.repeat(64));
+    });
+  });
+
+  describe('sender UTxOs from the crawled set', () => {
+    const setUtxo = { txHash: 'f'.repeat(64), outputIndex: 2, address: 'addr_test1sender', amount: [{ unit: 'lovelace', quantity: '9000000' }] };
+
+    it('reads the sender UTxOs from the local source instead of the node', async () => {
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([setUtxo]));
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedTransfer as any) = vi.fn().mockImplementation(async (_r: unknown, ctx: TxBuildContext) => {
+        captured = ctx;
+        return { unsignedTxCbor: 'm', txBodyHash: 'm', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+      });
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+      expect(mockCardanoClient.getAddressUtxos).not.toHaveBeenCalled();
+      expect(captured!.utxos).toEqual([setUtxo]);
+    });
+
+    it('leaves UTxOs carrying a reference script out of the funding', async () => {
+      const refUtxo = { ...setUtxo, outputIndex: 3, scriptRef: 'ab'.repeat(28), scriptRefCbor: '4e4d' };
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([refUtxo, setUtxo]));
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedTransfer as any) = vi.fn().mockImplementation(async (_r: unknown, ctx: TxBuildContext) => {
+        captured = ctx;
+        return { unsignedTxCbor: 'm', txBodyHash: 'm', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+      });
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+      expect(captured!.utxos).toEqual([setUtxo]);
+
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([refUtxo]));
+      await expect(builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters)).rejects.toThrow(/only UTxOs with a reference script/);
+    });
+
+    it('applies the transactions this process submitted: their inputs are not offered again', async () => {
+      const spent = { ...setUtxo, outputIndex: 1 };
+      const change = { ...setUtxo, txHash: 'c'.repeat(64), outputIndex: 0 };
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([spent, setUtxo]));
+      (mockCardanoClient as any).pendingSpends = { apply: vi.fn(() => [setUtxo, change]), spentBy: vi.fn(() => undefined) };
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedTransfer as any) = vi.fn().mockImplementation(async (_r: unknown, ctx: TxBuildContext) => {
+        captured = ctx;
+        return { unsignedTxCbor: 'm', txBodyHash: 'm', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+      });
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+      expect((mockCardanoClient as any).pendingSpends.apply).toHaveBeenCalledWith('addr_test1sender', [spent, setUtxo]);
+      expect(captured!.utxos).toEqual([setUtxo, change]);
+    });
+
+    it('refuses a forced input a submitted transaction already spends', async () => {
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([setUtxo]));
+      (mockCardanoClient as any).pendingSpends = { apply: (_a: string, u: unknown) => u, spentBy: vi.fn(() => 'd'.repeat(64)) };
+      await expect(builder.buildSimpleAdaTransaction({ ...mockTxRequest, forceInputs: [{ txHash: 'e'.repeat(64), outputIndex: 0 }] }, mockProtocolParameters))
+        .rejects.toThrow(/is spent by transaction d{64}, submitted and not yet on chain/);
+    });
+
+    it('asks the node when the set has nothing (funded in the last block) or cannot answer', async () => {
+      builder.setAddressUtxoSource(vi.fn().mockResolvedValue([]));
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+      expect(mockCardanoClient.getAddressUtxos).toHaveBeenCalledWith('addr_test1sender');
+
+      vi.mocked(mockCardanoClient.getAddressUtxos).mockClear();
+      builder.setAddressUtxoSource(vi.fn().mockRejectedValue(new Error('db busy')));
+      await builder.buildSimpleAdaTransaction(mockTxRequest, mockProtocolParameters);
+      expect(mockCardanoClient.getAddressUtxos).toHaveBeenCalledWith('addr_test1sender');
+    });
+  });
+
+  describe('buildPlutusTransaction() — several script inputs', () => {
+    const scriptA = { txHash: 'a1'.repeat(32), outputIndex: 0 };
+    const scriptB = { txHash: 'b2'.repeat(32), outputIndex: 1 };
+    const refScript = { txHash: 'e4'.repeat(32), outputIndex: 0 };
+    const callerRef = { txHash: 'f5'.repeat(32), outputIndex: 2 };
+    const ledgerUtxo = (r: { txHash: string; outputIndex: number }) => ({
+      txHash: r.txHash, outputIndex: r.outputIndex, address: 'addr_test1script',
+      amount: [{ unit: 'lovelace', quantity: '3000000' }], inlineDatum: 'd87980',
+      ...(r.txHash === refScript.txHash ? { scriptRef: 'ab'.repeat(28), scriptRefCbor: '4e4d01000033222220051200120011' } : {}),
+    });
+    const request = (): TxBuildPlutusRequest => ({
+      network: 'preview',
+      senderAddress: 'addr_test1sender',
+      scriptInputs: [
+        { ...scriptA, validatorScript: 'abcdef', redeemer: { int: 0 } },
+        { ...scriptB, referenceScript: refScript, redeemer: { int: 1 } },
+      ],
+      outputs: [{ address: 'addr_test1out', lovelaceAmount: '2000000' }],
+      referenceInputs: [callerRef],
+    });
+
+    it('resolves all script UTxOs in one ledger lookup and the reference-script UTxO from the ledger', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockImplementation(async (refs: Array<{ txHash: string; outputIndex: number }>) => refs.map(ledgerUtxo));
+      let captured: TxBuildContext | undefined;
+      (mockTxBuilder.buildUnsignedPlutusTransaction as any) = vi.fn().mockImplementation(async (_req: unknown, ctx: TxBuildContext) => {
+        captured = ctx;
+        return { unsignedTxCbor: 'mock', txBodyHash: 'mock', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+      });
+
+      await builder.buildPlutusTransaction(request(), mockProtocolParameters);
+
+      expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([scriptA, scriptB]);
+      expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refScript]);
+      const keys = captured!.utxos.map(u => `${u.txHash}#${u.outputIndex}`);
+      expect(keys).toEqual(expect.arrayContaining([`${scriptA.txHash}#0`, `${scriptB.txHash}#1`, 'abc123#0']));
+      const refs = captured!.referenceInputUtxos!;
+      expect(refs.map(u => u.txHash)).toEqual(expect.arrayContaining([refScript.txHash, callerRef.txHash]));
+      expect(refs.find(u => u.txHash === refScript.txHash)!.scriptRefCbor).toBe('4e4d01000033222220051200120011');
+    });
+
+    it('rejects a spent script input with a 400 naming it', async () => {
+      mockCardanoClient.getUnspentOutputs = vi.fn().mockImplementation(async (refs: Array<{ txHash: string; outputIndex: number }>) =>
+        refs.filter(r => r.txHash !== scriptB.txHash).map(ledgerUtxo));
+      await expect(builder.buildPlutusTransaction(request(), mockProtocolParameters))
+        .rejects.toThrow(`scriptInput ${scriptB.txHash}#1 not found on-chain or already spent`);
     });
   });
 

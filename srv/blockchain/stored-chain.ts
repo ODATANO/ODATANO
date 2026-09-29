@@ -11,6 +11,7 @@ import {
   TransactionMetadata_ as TransactionMetadata,
   TransactionCertificates,
   TransactionWithdrawals,
+  TransactionRedeemers,
   AssetHistory_ as AssetHistory,
 } from '#cds-models/odatano/cardano';
 import type {
@@ -21,6 +22,7 @@ import type {
   TxCertificate,
   TxInputLine,
   TxOutputLine,
+  TxRedeemer,
   TxWithdrawal,
 } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
@@ -29,8 +31,9 @@ const { SELECT } = cds.ql;
 
 /**
  * Stored blocks and transactions back in the provider shape (`BlockData`, `Transaction`), for
- * serving other ODATANO instances from what this one has indexed. Not stored, so absent: the
- * phase-2 flag (`spendsCollaterals`), `totalCollateral` and `outputAmount`.
+ * serving other ODATANO instances from what this one has indexed. The rows hold the ledger view
+ * (see ledgerView), so the phase-2 flag follows from them: a valid transaction always spends a
+ * regular input. Not stored, so absent: `totalCollateral` and `outputAmount`.
  */
 
 type Row = Record<string, unknown>;
@@ -73,7 +76,8 @@ export async function readBlockByHeight(db: CapTransaction, height: number): Pro
  */
 export async function readNextBlocks(db: CapTransaction, afterHeight: number, count: number): Promise<BlockData[]> {
   const rows = await db.run(
-    SELECT.from(Blocks).where({ height: { '>': afterHeight, '<=': afterHeight + count } }).orderBy('height asc')
+    // one operator per column object: `{ '>': a, '<=': b }` renders as `height > a <= b`
+    SELECT.from(Blocks).where({ height: { between: afterHeight + 1, and: afterHeight + count } }).orderBy('height asc')
   ) as Row[];
   const out: BlockData[] = [];
   let expected = afterHeight + 1;
@@ -83,6 +87,11 @@ export async function readNextBlocks(db: CapTransaction, afterHeight: number, co
     expected++;
   }
   return out;
+}
+
+/** True when a stored input lacks its outpoint (row indexed before outpoints were recorded). */
+export function lacksOutpoints(t: ProviderTransaction): boolean {
+  return (t.inputs ?? []).some(i => i.txHash == null);
 }
 
 /** Stored transactions by hash (missing hashes are absent from the map). */
@@ -151,7 +160,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     }
     return out;
   };
-  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, mints] = await Promise.all([
+  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, mints, redeemers] = await Promise.all([
     fetchIn(TransactionInputs, 'txSeq', seqs),
     fetchIn(TransactionInputAssets, 'input_txSeq', seqs),
     fetchIn(TransactionOutputs, 'txSeq', seqs),
@@ -160,6 +169,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     fetchIn(TransactionCertificates, 'tx_hash', hashes),
     fetchIn(TransactionWithdrawals, 'tx_hash', hashes),
     fetchIn(AssetHistory, 'txHash', hashes),
+    fetchIn(TransactionRedeemers, 'tx_hash', hashes),
   ]);
 
   const inputsBySeq = groupBy(inputs, r => str(r.txSeq));
@@ -170,6 +180,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
   const certsByHash = groupBy(certificates, r => str(r.tx_hash));
   const withdrawalsByHash = groupBy(withdrawals, r => str(r.tx_hash));
   const mintsByHash = groupBy(mints, r => str(r.txHash));
+  const redeemersByHash = groupBy(redeemers, r => str(r.tx_hash));
 
   return rows.map((t) => {
     const seq = str(t.txSeq);
@@ -179,14 +190,17 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
       .map(i => ({
         address: str(i.address_address),
         amount: amounts(inputAssetsByKey.get(`${seq}#${i.inputIndex}`) ?? []),
-        txHash: str(i.spentTxHash),
-        outputIndex: num(i.spentOutputIndex),
+        // null on rows indexed before the outpoint was recorded, never a made-up reference
+        txHash: (i.spentTxHash ?? null) as string,
+        outputIndex: numOrNull(i.spentOutputIndex) as number,
         dataHash: (i.utxoData_dataHash as string | null) ?? null,
         inlineDatum: (i.utxoData_inlineDatum as string | null) ?? null,
         referenceScriptHash: (i.utxoData_referenceScriptHash as string | null) ?? null,
         isCollateral: Boolean(i.isCollateral),
         isReference: Boolean(i.isReference),
       }));
+    // a phase-2 failure keeps only collateral and reference inputs, and its collateral return
+    const spendsCollaterals = txInputs.some(i => i.isCollateral) && !txInputs.some(i => !i.isCollateral && !i.isReference);
     const txOutputs: TxOutputLine[] = (outputsBySeq.get(seq) ?? [])
       .sort((a, b) => num(a.outputIndex) - num(b.outputIndex))
       .map(o => ({
@@ -196,12 +210,13 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
         outputIndex: num(o.outputIndex),
         dataHash: (o.utxo_dataHash as string | null) ?? null,
         inlineDatum: (o.utxo_inlineDatum as string | null) ?? null,
-        isCollateral: false,
+        isCollateral: spendsCollaterals,
         referenceScriptHash: (o.utxo_referenceScriptHash as string | null) ?? null,
       }));
     const certs = certsByHash.get(hash);
     const withdrawn = withdrawalsByHash.get(hash);
     const minted = mintsByHash.get(hash);
+    const redeemed = redeemersByHash.get(hash);
     return {
       hash,
       blockHash: str(t.blockHash),
@@ -212,6 +227,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
       deposit: str(t.deposit ?? '0'),
       size: numOrNull(t.size),
       blockTime: num(t.blockTime),
+      spendsCollaterals,
       mint: minted?.map(m => ({
         unit: str(m.unit),
         quantity: (m.action === 'burn' ? '-' : '') + str(m.quantity),
@@ -229,6 +245,18 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
         epoch: numOrNull(c.epoch),
       })),
       withdrawals: withdrawn?.map((w): TxWithdrawal => ({ stakeAddress: str(w.stakeAddress), amount: str(w.lovelace) })),
+      redeemers: redeemed
+        ?.sort((a, b) => str(a.purpose).localeCompare(str(b.purpose)) || num(a.redeemerIndex) - num(b.redeemerIndex))
+        .map((r): TxRedeemer => ({
+          purpose: str(r.purpose),
+          index: num(r.redeemerIndex),
+          data: str(r.data),
+          mem: str(r.mem),
+          steps: str(r.steps),
+          txHash: (r.spentTxHash as string | null) ?? null,
+          outputIndex: numOrNull(r.spentOutputIndex),
+          policyId: (r.policyId as string | null) ?? null,
+        })),
     };
   });
 }

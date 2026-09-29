@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
+import { getLovelace, isCollateralCandidate, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { TransactionValidationError, InsufficientFundsError } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
@@ -11,6 +11,17 @@ import { Cbor, CborBytes, CborArray, CborMap, CborUInt, CborTag } from '@harmoni
 import { Address } from '@harmoniclabs/cardano-ledger-ts';
 
 describe('tx-build-helper utilities', () => {
+  describe('isCollateralCandidate', () => {
+    const u = (over: Partial<OdatanoUtxo> = {}): OdatanoUtxo =>
+      ({ txHash: 'a'.repeat(64), outputIndex: 0, address: 'addr', amount: [{ unit: 'lovelace', quantity: '6000000' }], ...over });
+    it('takes ADA-only UTxOs without a reference script, like the builders', () => {
+      expect(isCollateralCandidate(u())).toBe(true);
+      expect(isCollateralCandidate(u({ amount: [{ unit: 'lovelace', quantity: '6000000' }, { unit: 'p'.repeat(56), quantity: '1' }] }))).toBe(false);
+      expect(isCollateralCandidate(u({ scriptRef: 'ab'.repeat(28) }))).toBe(false);
+      expect(isCollateralCandidate(u({ scriptRefCbor: '5901' }))).toBe(false);
+    });
+  });
+
   describe('getLovelace', () => {
     it('should extract lovelace amount from UTxO', () => {
       const utxo: OdatanoUtxo = {
@@ -493,6 +504,33 @@ describe('tx-build-helper utilities', () => {
       expect(() => mapBuilderError(new Error('not enough lovelace'), undefined,
         '1 UTxO(s) with 5000000 lovelace reserved as collateral; 0 UTxO(s) with 0 lovelace remained for coin selection'))
         .toThrow(/not enough lovelace \(1 UTxO\(s\) with 5000000 lovelace reserved as collateral/);
+    });
+
+    it('maps the builder min-ADA error of an output to a 400 with index, minimum and amount', () => {
+      // Buildooor's text (TxBuilder.assertMinOutLovelaces), output as in the failing spend
+      const builderMsg = [
+        'tx output at index 0 did not have enough lovelaces to meet the minimum allowed by protocol parameters.',
+        'output size: 116 bytes',
+        'protocol paramters "utxoCostPerByte": 4310',
+        'minimum lovelaces required: 1189560',
+        'output lovelaces          : 1000000',
+        `tx output: { "address": "addr_test1qz7", "value": { "lovelaces": "1000000", "${'f6'.repeat(28)}": { "0014df104147454e5453494d": "5000" } } }`,
+      ].join('\n');
+      let thrown: unknown;
+      try { mapBuilderError(new Error(builderMsg)); } catch (e) { thrown = e; }
+      expect(thrown).toBeInstanceOf(TransactionValidationError);
+      expect(thrown).toMatchObject({ statusCode: 400,
+        message: 'output 0 needs at least 1189560 lovelace (has 1000000, it carries native assets); raise its lovelace amount' });
+    });
+
+    it('omits the asset note for an ada-only output below min-ADA', () => {
+      const builderMsg = [
+        'tx output at index 2 did not have enough lovelaces to meet the minimum allowed by protocol parameters.',
+        'minimum lovelaces required: 857690',
+        'output lovelaces          : 500000',
+        'tx output: { "value": { "lovelaces": "500000" } }',
+      ].join('\n');
+      expect(() => mapBuilderError(new Error(builderMsg))).toThrow('output 2 needs at least 857690 lovelace (has 500000); raise its lovelace amount');
     });
 
     it('should throw InsufficientFundsError for "insufficient" messages', () => {

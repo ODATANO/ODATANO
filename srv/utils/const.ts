@@ -59,6 +59,11 @@ export const HRP = {
 export const MAX_JSON_SIZE = 1_048_576;
 /** Maximum nesting depth for JSON objects/arrays */
 export const MAX_DEPTH = 10;
+/**
+ * Nesting depth for PlutusData JSON (redeemers, datums, script params): every constructor takes two
+ * levels ({constructor, fields: [...]}), so protocol redeemers go past MAX_DEPTH; size stays capped.
+ */
+export const PLUTUS_DATA_MAX_DEPTH = 64;
 /** Maximum number of keys in a JSON object */
 export const MAX_KEYS = 100;
 /** Maximum number of elements in a JSON array */

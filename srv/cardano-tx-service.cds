@@ -37,6 +37,11 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
     entity TransactionBuildOutputs      as projection on db.TransactionBuildOutputs;
 
     @readonly
+    @title      : 'Transaction Build Redeemers'
+    @description: 'Projection for the redeemers of a script build with their execution units'
+    entity TransactionBuildRedeemers    as projection on db.TransactionBuildRedeemers;
+
+    @readonly
     @title      : 'Transaction Build Input Assets'
     @description: 'Projection for Transaction Build Input Assets'
     entity TransactionBuildInputAssets  as projection on db.TransactionBuildInputAssets;
@@ -327,6 +332,40 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        @title: 'Validity End (Posix ms)'
                                        @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
                                        validityEndMs: String) returns TransactionBuilds;
+
+    @title      : 'Build Plutus Transaction'
+    @description: 'Spend several script UTxOs in one transaction, each with its own redeemer (inline validator or a reference-script UTxO). The outputs are built exactly in the given order, change comes after them. The execution units of every redeemer are returned under redeemers.'
+    action BuildPlutusTransaction(
+                                  @title: 'Sender Address'
+                                  @description: 'Pays the fee, funds the rest and provides the ADA-only collateral'
+                                  senderAddress: Bech32,
+                                  @title: 'Change Address'
+                                  @description: 'Receives the change; defaults to senderAddress'
+                                  changeAddress: Bech32,
+                                  @title: 'Script Inputs JSON'
+                                  @description: 'Required JSON array, 1..16 entries: {txHash, outputIndex, validatorScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor, datumJson | datumCbor (hash datums only)}. The *Cbor forms take PlutusData CBOR hex byte for byte. __INPUT_IDX:<txHash>#<n>__ placeholders in any redeemer resolve against the final sorted inputs.'
+                                  scriptInputsJson: String,
+                                  @title: 'Outputs JSON'
+                                  @description: 'Required JSON array of outputs in this order: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson? | inlineDatumCbor? | datumHash?, referenceScriptHex?}. Each is min-ADA checked; change is appended after them and never merged into one.'
+                                  outputsJson: String,
+                                  @title: 'Reference Inputs JSON'
+                                  @description: 'Optional JSON array of {txHash, outputIndex} read-only reference inputs; reference-script UTxOs of scriptInputsJson are added automatically.'
+                                  referenceInputsJson: String,
+                                  @title: 'Force Inputs JSON'
+                                  @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must be consumed.'
+                                  forceInputsJson: String,
+                                  @title: 'Required Signers JSON'
+                                  @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction.'
+                                  requiredSignersJson: String,
+                                  @title: 'Mint Actions JSON'
+                                  @description: 'Optional JSON array of [{assetUnit, quantity, mintingPolicyScript, redeemerJson?}]; every action names its own policy script. Minted assets go where outputsJson puts them.'
+                                  mintActionsJson: String,
+                                  @title: 'Validity Start (Posix ms)'
+                                  @description: 'Optional validity-interval start in Posix milliseconds; defaults to now - 120 000 ms.'
+                                  validityStartMs: String,
+                                  @title: 'Validity End (Posix ms)'
+                                  @description: 'Optional validity-interval end in Posix milliseconds; defaults to now + 3 600 000 ms.'
+                                  validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'

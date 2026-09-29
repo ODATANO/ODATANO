@@ -426,6 +426,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/SubmitTransactio
 | `BuildMultiAssetTransaction` | Build multi-asset transfer |
 | `BuildMintTransaction` | Build token minting transaction |
 | `BuildPlutusSpendTransaction` | Spend UTxO locked at a Plutus script address |
+| `BuildPlutusTransaction` | Spend several script UTxOs in one transaction, each with its own redeemer; outputs as given |
 | `SetCollateral` | Ensure a dedicated ADA-only collateral UTxO exists |
 | `SubmitTransaction` | Submit previously built transaction |
 | `SubmitSignedTransaction` | Submit externally built transaction |
@@ -672,6 +673,7 @@ so the crawler also fills the tables that analytics need:
 | `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint | on (`bare`) |
 | `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | every pool and DRep once per epoch, plus treasury, reserves and stake totals | off |
 | `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
+| `TransactionRedeemers` | every redeemer: purpose, index, data (CBOR hex), execution units, the redeemed input or minted policy | on (Ogmios chain-sync) |
 
 ```jsonc
 "crawler": {
@@ -741,10 +743,39 @@ running. Rows are committed per 200 blocks, and `getStatus().certificateBackfill
 `atSlot`, counts and timestamps. One backfill runs per process at a time; the status is kept in
 memory and reads `none` after a restart. Requires Ogmios (Admin).
 
-Independent of any knob, every `TransactionInputs` row written since this version carries the
-outpoint it consumed (`spentTxHash`, `spentOutputIndex`), so a UTxO can be traced from the output
-that created it to the input that spent it. Rows indexed earlier keep `null` there until the range is
-re-crawled.
+Independent of any knob, every `TransactionInputs` row carries the outpoint it consumed
+(`spentTxHash`, `spentOutputIndex`) and the spent output's `utxoData` (datum hash, inline datum,
+reference-script hash), so a UTxO can be traced from the output that created it to the input that
+spent it.
+
+`TransactionRedeemers` holds one row per redeemer, keyed `(tx, purpose, redeemerIndex)`: `data` is
+the PlutusData as CBOR hex, `mem` / `steps` the execution units. A `spend` redeemer names the input
+it unlocks (`spentTxHash`, `spentOutputIndex`), a `mint` redeemer its `policyId`. Ogmios chain-sync
+delivers redeemers with the block; a crawl on Blockfrost or Koios leaves the table empty.
+
+Rows indexed before these fields existed are completed with a second backfill, same range rules and
+lifecycle as `backfillCertificates`:
+
+```
+POST /odata/v4/cardano-indexer/backfillTransactions   { "fromSlot": "…", "toSlot": "…" }
+GET  /odata/v4/cardano-indexer/getStatus()            # → transactionBackfill.status: running | done | failed
+```
+
+It fills empty input fields only (outpoint, `utxoData`, a missing address with its assets) and
+writes `TransactionRedeemers`.
+
+Transaction rows hold the same ledger view whichever source the crawl used: inputs in ledger order
+(regular, collateral, reference, each by transaction hash and output index); after a phase-2 failure
+only the collateral and reference inputs and the collateral return; otherwise no collateral return.
+Rows an earlier Koios or Blockfrost crawl stored differently are rewritten to it: inputs are moved
+by their outpoint, the regular inputs of a failed script and never-produced outputs are removed
+(`transactionBackfill.rewritten`). A transaction whose stored inputs cannot be matched (other count,
+flags, address or lovelace per position, no outpoint to move by) is left as it is and counted in
+`transactionBackfill.skipped`. Requires Ogmios (Admin).
+
+`CardanoBackendService` returns stored transactions with `redeemers`. An input whose outpoint is not
+recorded comes back with `txHash` and `outputIndex` `null`; `GetTransaction` and
+`GetTransactionsBatch` then take the transaction from a backend that can serve it.
 
 ### Crawler-fed UTxO set: balances without a provider
 
@@ -784,6 +815,12 @@ POST /odata/v4/cardano-indexer/importUtxoSet
 GET  /odata/v4/cardano-indexer/getStatus()             # → utxoSet.status
 POST /odata/v4/cardano-indexer/resumeCrawler
 ```
+
+The import loads the rows first and derives the sums (`LedgerAddresses`, `LedgerAddressAssets`,
+`LedgerAccounts`) at the end. If only that last phase fails, rebuild the sums from the loaded rows
+instead of importing again: `importUtxoSet { "source": "aggregates" }` (crawler paused). It uses the
+stored anchor; a cursor that moved past the anchor in the meantime is set back to it, and the blocks
+after it are crawled again. It refuses once blocks have been applied to the set.
 
 The import refuses to start while the crawler holds its lease or when the cursor is already past
 the anchor, and it holds the cursor lease itself for its whole duration, re-taking it inside every
@@ -835,9 +872,10 @@ Otherwise the backend's value stays.
 | `Pools.blocksEpoch` | crawled `Blocks` of the current epoch with `slotLeader` = the pool | crawler at the tip, crawl started before the epoch |
 | `Pools.blocksMinted` | all crawled `Blocks` of the pool | crawler at the tip, crawl started at or before the first Shelley slot |
 | `Accounts.controlledAmount` | `LedgerAccounts.controlledAmount` + the reward balance | crawler at the tip, UTxO set `active` |
+| `Accounts` → `Address` | `LedgerAddresses` of the stake key with their unspent `LedgerUTxOs` (also on Ogmios alone, whose account has no address list) | crawler at the tip, UTxO set `active` |
 | `NetworkInformation.circulatingSupply` | total of `LedgerAddresses.totalLovelace` | crawler at the tip, UTxO set `active` |
-| `GetUTxOsByCredential` | addresses from `LedgerAddresses.paymentCredential`, their outputs from Ogmios at the tip (without Ogmios: the unspent `LedgerUTxOs`) | crawler at the tip, UTxO set `active`, credential column filled |
-| `Addresses`, `GetAddressByBech32`, `GetAssetsByAddress`, `GetUTxOsByAddress` | outputs from Ogmios at the tip (without Ogmios: the unspent `LedgerUTxOs`), balance summed over them, type and stake address decoded from the address | crawler at the tip, UTxO set `active` |
+| `GetUTxOsByCredential` | addresses from `LedgerAddresses.paymentCredential`, their unspent `LedgerUTxOs` checked at the node by output reference | crawler at the tip, UTxO set `active`, credential column filled |
+| `Addresses`, `GetAddressByBech32`, `GetAssetsByAddress`, `GetUTxOsByAddress` | the unspent `LedgerUTxOs` of the address checked at the node by output reference, balance summed over them, type and stake address decoded from the address | crawler at the tip, UTxO set `active` |
 | `GetLatestTransactionsByAddress`, `AddressTransactions` | outputs the address received and spent since the anchor, net amounts per transaction | crawler at the tip, UTxO set `active`; addresses older than the anchor ask a provider when fewer than `limit` crawled transactions exist |
 | `Pools.activeStake`, `activeSize` | `PoolEpochSnapshots` of the running epoch (source `ogmios`) | crawler at the tip, backend reports no active stake |
 | `Accounts.withdrawalsSum` | sum of `TransactionWithdrawals` | crawler at the tip, certificates crawled since Shelley, backend reports none |
@@ -845,8 +883,12 @@ Otherwise the backend's value stays.
 
 `GetUTxOsByCredential` needs no Koios this way. `LedgerAddresses.paymentCredential` is filled in the
 background after an import and, once, for sets imported by an older version; until it is complete
-the action keeps using Koios. An address first used in the last `confirmationDepth` blocks is not in
-the crawled set yet and is therefore missing from the answer.
+the action keeps using Koios. The node check (Ogmios `queryLedgerState/utxo` by output reference, a
+keyed lookup) drops outputs spent after the crawler cursor; without Ogmios the answer is the set as of
+the cursor. The node's address query is not used here: it scans the whole UTxO set on every call,
+which is what an address read costs on an instance without an active set. Outputs
+created after the cursor are missing: on chain-sync that is the block being written, on pagination
+the last `confirmationDepth` blocks.
 
 The epoch totals are what makes an Ogmios-only crawl describe its epochs: Ogmios serves no past
 epoch, so the crawler writes the row from its own blocks, with start and end time derived from the

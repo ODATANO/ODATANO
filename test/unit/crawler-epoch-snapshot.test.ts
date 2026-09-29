@@ -109,7 +109,7 @@ function makeIndexer(snapshotEpoch = vi.fn().mockResolvedValue({ pools: 2, dreps
   return {
     indexer: {
       indexBlockFull: vi.fn(),
-      setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null),
+      setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn(),
       prefetchCrawlEpoch: vi.fn(),
       configureCrawlCoverage: vi.fn(),
       stopAssetEnrichment: vi.fn(),

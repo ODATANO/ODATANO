@@ -16,6 +16,7 @@ import {
   TransactionMetadata,
   TransactionCertificates,
   TransactionWithdrawals,
+  TransactionRedeemers,
   NetworkInformation,
   UTxOAssets,
   Block,
@@ -45,6 +46,7 @@ import {
   TransactionBuilds,
   TransactionBuildInputs,
   TransactionBuildOutputs,
+  TransactionBuildRedeemers,
   TransactionSubmission,
   TransactionSubmissions,
   AddressTransactionBuilds,
@@ -69,6 +71,7 @@ import {
   txSeqOf,
   mapTransactionCertificates,
   mapTransactionWithdrawals,
+  mapTransactionRedeemers,
   sumUtxoAmounts,
   decodeShelleyAddress,
   decodeAssetName,
@@ -100,10 +103,17 @@ import {
 } from '../utils/mappers';
 
 import { ProviderUnavailableError, AllBackendsFailedError, NotFoundError } from '../utils/errors';
-import { TxBuildRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
+import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
 import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
-import { applyBlockToLedger, backfillPaymentCredentials, type LedgerAnchor } from './ledger-state';
+import {
+  applyBlockToLedger,
+  backfillPaymentCredentials,
+  ledgerRowAmount,
+  readLedgerOutputs,
+  type LedgerAnchor,
+  type LedgerLookup,
+} from './ledger-state';
 import { readCursor, setUtxoSetState, isCrawlerLeaseActive } from './crawler/sync-state';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../utils/epoch-slots';
 import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../utils/const';
@@ -115,9 +125,32 @@ const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
 const logger = cds.log('CardanoIndexer');
 
 /** Lovelace aggregate from the DB (string, number or null) as an integer string. */
+/** TransactionOutputs columns resolveInputs copies onto a spending input. */
+interface StoredOutputRow {
+  txSeq: number | string;
+  outputIndex: number;
+  address_address: string | null;
+  utxo_dataHash: string | null;
+  utxo_inlineDatum: string | null;
+  utxo_referenceScriptHash: string | null;
+}
+
+/** Datum hash, inline datum and reference-script hash of the spent output onto its input. */
+function copyUtxoData(input: TxInputLine, dataHash?: string | null, inlineDatum?: string | null, referenceScriptHash?: string | null): void {
+  input.dataHash = input.dataHash ?? dataHash ?? null;
+  input.inlineDatum = input.inlineDatum ?? inlineDatum ?? null;
+  input.referenceScriptHash = input.referenceScriptHash ?? referenceScriptHash ?? null;
+}
+
 function lovelaceSum(value: unknown): string {
   if (value === null || value === undefined || value === '') return '0';
   return typeof value === 'number' ? BigInt(Math.trunc(value)).toString() : String(value).split('.')[0];
+}
+
+/** Provider-shaped address from its unspent outputs: type and stake address decoded from the address. */
+function addressFromUtxos(address: string, utxos: OdatanoUtxo[]): ProviderAddress {
+  const decoded = decodeShelleyAddress(address);
+  return { address, stakeAddress: decoded.stakeAddress, type: decoded.type, isScript: decoded.isScript, amount: sumUtxoAmounts(utxos), utxos };
 }
 
 /**
@@ -134,8 +167,8 @@ export class CardanoIndexer {
 
   /**
    * Crawler epoch memo: refreshed periodically while an epoch is live and once more when the
-   * next one starts; holds at most the current and previous epoch. Rows are UPSERTed in every
-   * block transaction because the caller owns the commit.
+   * next one starts; holds at most the current and previous epoch. A row is UPSERTed until a
+   * block transaction that wrote it has committed (`confirmBlockCommit`).
    */
   private crawlEpochCache = new Map<number, {
     row?: Epoch;
@@ -143,6 +176,10 @@ export class CardanoIndexer {
     finalized: boolean;
   }>();
   private crawlEpochCurrent: number | null = null;
+  /** Epoch rows known to be committed; a refresh creates a new row object and is written again. */
+  private crawlEpochWritten = new WeakSet<Epoch>();
+  /** Memo updates of the running block transaction, applied only after its commit. */
+  private pendingCommit: Array<() => void> = [];
   private crawlEpochPrevious: number | null = null;
 
   /** Analytics coverage of the crawl path; defaults mirror the crawler config defaults. */
@@ -174,6 +211,8 @@ export class CardanoIndexer {
 
   /** Units known to have an `Assets` row, so a repeat sighting costs no DB round-trip. */
   private static readonly ASSET_MEMO_CAP = 200_000;
+  /** Output references per node lookup when checking crawled UTxOs. */
+  private static readonly OUTREF_CHUNK = 500;
   private assetMemo = new Set<string>();
 
   /**
@@ -306,7 +345,7 @@ export class CardanoIndexer {
     return (await this.localAddress(tx, addr)) ?? await this.client.getAddress(addr);
   }
 
-  /** UTxOs of an address: the crawled set (outputs from the node at the tip) when it answers, else the backend. */
+  /** UTxOs of an address: the crawled set (checked unspent at the node) when it answers, else the backend. */
   async resolveAddressUtxos(tx: CapTransaction, addr: string): Promise<OdatanoUtxo[]> {
     return (await this.localAddress(tx, addr))?.utxos ?? await this.client.getAddressUtxos(addr);
   }
@@ -361,28 +400,25 @@ export class CardanoIndexer {
   }
 
   /**
-   * Address from the crawled UTxO set: outputs from the node at the tip (Ogmios) or the unspent
-   * `LedgerUTxOs`, type and stake address decoded from the address. An address the set has never
+   * Address from the crawled UTxO set: the unspent `LedgerUTxOs` (see openLedgerUtxos), type and
+   * stake address decoded from the address. An address the set has never
    * seen is an empty address, not an error. null = the set cannot answer.
    */
   private async localAddress(tx: CapTransaction, addr: string): Promise<ProviderAddress | null> {
     if (!(await this.localCoverage(tx))?.ledger) return null;
-    let utxos: OdatanoUtxo[] | null = null;
-    try {
-      utxos = await this.client.getUtxosByAddresses([addr]);
-    } catch (err) {
-      logger.warn(`address ${addr}: node UTxO query failed, answering from the crawled set: ${(err as Error)?.message ?? err}`);
-    }
-    utxos ??= await this.ledgerUtxosOf(tx, [addr]);
-    const decoded = decodeShelleyAddress(addr);
-    return {
-      address: addr,
-      stakeAddress: decoded.stakeAddress,
-      type: decoded.type,
-      isScript: decoded.isScript,
-      amount: sumUtxoAmounts(utxos),
-      utxos,
-    };
+    return addressFromUtxos(addr, await this.openLedgerUtxos(tx, [addr]));
+  }
+
+  /** Addresses of a stake key from the crawled UTxO set, with their unspent outputs (one read for all). */
+  private async localAccountAddresses(tx: CapTransaction, stakeAddress: string): Promise<ProviderAddress[]> {
+    const rows = await tx.run(
+      SELECT.from(LedgerAddresses).columns('address').where({ stakeAddress })
+    ) as Array<{ address: string }>;
+    const addresses = (rows ?? []).map(r => r.address);
+    if (addresses.length === 0) return [];
+    const byAddress = new Map<string, OdatanoUtxo[]>(addresses.map(a => [a, []]));
+    for (const u of await this.openLedgerUtxos(tx, addresses)) byAddress.get(u.address)?.push(u);
+    return addresses.map(a => addressFromUtxos(a, byAddress.get(a)!));
   }
 
   /**
@@ -508,6 +544,13 @@ export class CardanoIndexer {
   /** Null while the mode is off, nothing is imported, or an invalidation awaits its commit. */
   getUtxoAnchor(): LedgerAnchor | null {
     return this.crawlUtxoSet && !this.ledgerInvalidation ? this.utxoAnchor : null;
+  }
+
+  /** Apply the memo updates of the block transaction that just committed. */
+  confirmBlockCommit(): void {
+    const pending = this.pendingCommit;
+    this.pendingCommit = [];
+    for (const apply of pending) apply();
   }
 
   /** Hand out a pending invalidation (dropping the anchor) exactly once after the block commit, or null. */
@@ -655,7 +698,16 @@ export class CardanoIndexer {
   constructor(client: CardanoClient, txBuilder: CardanoTransactionBuilder) {
     this.client = client;
     this.txBuilder = txBuilder;
+    txBuilder.setAddressUtxoSource?.((address) => this.localAddressUtxos(address));
     logger.info('CardanoIndexer instance created');
+  }
+
+  /**
+   * Unspent outputs of an address from the crawled set for the transaction builder; null = the set
+   * cannot answer. Runs on `cds.db`, i.e. inside the caller's request transaction when there is one.
+   */
+  private async localAddressUtxos(address: string): Promise<OdatanoUtxo[] | null> {
+    return (await this.localAddress(cds.db as unknown as CapTransaction, address))?.utxos ?? null;
   }
 
   /**
@@ -696,10 +748,10 @@ export class CardanoIndexer {
 
   /**
    * Index address data with assets and UTxOs; transactions are loaded separately via
-   * indexAddressTransactions().
+   * indexAddressTransactions(). `prefetched` = address data the caller already fetched in a batch.
    */
-  async indexAddress(tx: CapTransaction, addr: string): Promise<Address> {
-    const addrData = await this.resolveAddress(tx, addr);
+  async indexAddress(tx: CapTransaction, addr: string, prefetched?: ProviderAddress): Promise<Address> {
+    const addrData = prefetched ?? await this.resolveAddress(tx, addr);
 
     logger.debug(`indexAddress: provider response for ${addr}: ${addrData.amount?.length ?? 0} amounts, ${addrData.utxos?.length ?? 0} utxos`);
 
@@ -821,8 +873,8 @@ export class CardanoIndexer {
   }
 
   /**
-   * UTxOs of a payment credential without a provider: addresses from the crawled UTxO set, outputs
-   * from the node at the tip (Ogmios) or, without one, the unspent `LedgerUTxOs` as of the cursor.
+   * UTxOs of a payment credential without a provider: addresses and unspent outputs from the crawled
+   * UTxO set (see openLedgerUtxos).
    * null = the crawled set cannot answer (not synced, no set, credential column still filling).
    * An address first used in the last `confirmationDepth` blocks is not in the set yet.
    */
@@ -833,13 +885,34 @@ export class CardanoIndexer {
     ) as Array<{ address: string }>;
     const addresses = (rows ?? []).map(r => r.address);
     if (addresses.length === 0) return [];
+    return this.openLedgerUtxos(tx, addresses);
+  }
+
+  /**
+   * Unspent outputs of addresses from the crawled set, checked against the node by output reference
+   * (a keyed lookup; the node's address query scans its whole UTxO set): drops what was spent after
+   * the cursor. Without a usable node, or when the check fails, the set as of the cursor.
+   */
+  private async openLedgerUtxos(tx: CapTransaction, addresses: string[]): Promise<OdatanoUtxo[]> {
+    const rows = await this.ledgerUtxosOf(tx, addresses);
+    if (rows.length === 0) return rows;
     try {
-      const live = await this.client.getUtxosByAddresses(addresses);
-      if (live) return live;
+      const unspent = new Map<string, OdatanoUtxo>();
+      for (const refChunk of chunk(rows, CardanoIndexer.OUTREF_CHUNK)) {
+        const live = await this.client.getUnspentOutputs(refChunk.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })));
+        if (live === null) return rows;
+        for (const u of live) unspent.set(`${u.txHash}#${u.outputIndex}`, u);
+      }
+      // The node's answer names the reference script, which a snapshot row from a file import lacks
+      return rows.flatMap(u => {
+        const live = unspent.get(`${u.txHash}#${u.outputIndex}`);
+        if (!live) return [];
+        return [{ ...u, scriptRef: u.scriptRef ?? live.scriptRef ?? undefined, scriptRefCbor: live.scriptRefCbor ?? u.scriptRefCbor }];
+      });
     } catch (err) {
-      logger.warn(`credential ${credHash}: node UTxO query failed, answering from the crawled set: ${(err as Error)?.message ?? err}`);
+      logger.warn(`unspent check of ${rows.length} crawled outputs failed, answering as of the cursor: ${(err as Error)?.message ?? err}`);
+      return rows;
     }
-    return this.ledgerUtxosOf(tx, addresses);
   }
 
   /** Unspent `LedgerUTxOs` (+ assets) of the given addresses in the provider UTxO shape. */
@@ -1092,6 +1165,8 @@ export class CardanoIndexer {
    * atomically. Bare chain-sync inputs are backfilled by resolveInputs() first.
    */
   async indexBlockFull(tx: CapTransaction, blockData: BlockData, txs: ProviderTransaction[]): Promise<void> {
+    // Memo updates of a rolled-back attempt must not survive into this one.
+    this.pendingCommit = [];
     // Epoch from the prefetched memo; if the caller skipped prefetchCrawlEpoch, resolve now
     // (memoized) and accept the in-tx fetch.
     let epoch: Epoch | undefined;
@@ -1101,13 +1176,34 @@ export class CardanoIndexer {
 
       const epochRows = [...this.crawlEpochCache.values()]
         .map((entry) => entry.row)
-        .filter((row): row is Epoch => row !== undefined);
-      if (epochRows.length) await tx.run(UPSERT.into(Epoch).entries(epochRows));
+        .filter((row): row is Epoch => row !== undefined && !this.crawlEpochWritten.has(row));
+      if (epochRows.length) {
+        await tx.run(UPSERT.into(Epoch).entries(epochRows));
+        this.pendingCommit.push(() => { for (const row of epochRows) this.crawlEpochWritten.add(row); });
+      }
     }
+    // Ledger state (crawler.utxoSet): only blocks AFTER the anchor the imported set describes.
+    // Decided up front so input resolution and the ledger apply share one read of the set.
+    const ledgerDue = this.crawlUtxoSet && this.utxoAnchor != null && (blockData.slot ?? 0) > this.utxoAnchor.slot;
+    const priorInvalidation = ledgerDue ? this.ledgerInvalidation : null;
+    let anchorVerified = false;
+    if (ledgerDue && !priorInvalidation) {
+      anchorVerified = this.utxoAnchorVerified;
+      if (!anchorVerified) {
+        const anchor = this.utxoAnchor!;
+        anchorVerified = await this.verifyUtxoAnchor(tx, anchor);
+        // Remembered only once this transaction commits, like the other crawl memos.
+        if (anchorVerified) this.pendingCommit.push(() => { if (this.utxoAnchor === anchor) this.utxoAnchorVerified = true; });
+      }
+    }
+    const ledgerLookup: LedgerLookup | undefined = anchorVerified
+      ? { hashes: new Set(), rows: new Map(), assets: new Map() }
+      : undefined;
+
     // Backfill chain-sync inputs (empty address/amount) from local outputs, then settle
     // the fee of any phase-2 failure. Both run before the block row is written, because a
     // corrected fee changes the block's fee total.
-    await this.resolveInputs(tx, txs);
+    await this.resolveInputs(tx, txs, ledgerLookup);
     this.applyCollateralFees(blockData, txs);
 
     await tx.run(UPSERT.into(Block).entries(mapBlock(blockData, epoch)));
@@ -1131,6 +1227,8 @@ export class CardanoIndexer {
       ? txs.flatMap(t => mapTransactionWithdrawals(t.hash, t.withdrawals ?? []))
       : [];
     if (this.crawlCertificates) this.warnIfCertificatesUnreported(txs);
+    // Redeemers come with the block on chain-sync; keyed (tx, purpose, index) like the certificates.
+    const redeemerRows = txs.flatMap(t => mapTransactionRedeemers(t.hash, t.redeemers ?? []));
     // Mint/burn is derived from rows already in hand — keyed (unit, txHash), so a re-crawl is
     // idempotent and a reorg removes these rows with their transactions (crawler handleReorg).
     const assetHistoryRows = this.crawlAssetHistory ? this.buildAssetHistoryRows(blockData, txs) : [];
@@ -1143,15 +1241,15 @@ export class CardanoIndexer {
     if (metadataRows.length) await tx.run(UPSERT.into(TransactionMetadata).entries(metadataRows));
     if (certificateRows.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certificateRows));
     if (withdrawalRows.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawalRows));
-    // Ledger state (crawler.utxoSet): only blocks AFTER the anchor the imported set describes;
-    // same transaction, so the UTxO set can never be a block ahead of or behind the cursor.
-    if (this.crawlUtxoSet && this.utxoAnchor && (blockData.slot ?? 0) > this.utxoAnchor.slot) {
-      if (this.ledgerInvalidation) {
+    if (redeemerRows.length) await tx.run(UPSERT.into(TransactionRedeemers).entries(redeemerRows));
+    // Same transaction, so the UTxO set can never be a block ahead of or behind the cursor.
+    if (ledgerDue) {
+      if (priorInvalidation) {
         // Decided in an earlier attempt of this block whose transaction rolled back: re-write
         // the verdict so whichever attempt commits carries it; nothing is applied meanwhile.
-        await setUtxoSetState(tx, { status: 'invalid', error: this.ledgerInvalidation.slice(0, 500) });
-      } else if (this.utxoAnchorVerified || (this.utxoAnchorVerified = await this.verifyUtxoAnchor(tx, this.utxoAnchor))) {
-        const ledger = await applyBlockToLedger(tx, blockData, txs);
+        await setUtxoSetState(tx, { status: 'invalid', error: priorInvalidation.slice(0, 500) });
+      } else if (ledgerLookup) {
+        const ledger = await applyBlockToLedger(tx, blockData, txs, ledgerLookup);
         if (ledger.missing) {
           logger.warn(
             `ledger: block ${blockData.hash} consumed ${ledger.missing} outpoint(s) with no open row — ` +
@@ -1228,16 +1326,15 @@ export class CardanoIndexer {
   }
 
   /**
-   * Backfill address/amount of bare chain-sync inputs: from this block's own outputs first,
-   * then earlier-indexed outputs from the DB. Inputs that already carry an address are skipped.
+   * Backfill address, amount and datum/script fields of bare chain-sync inputs: from this block's
+   * own outputs first, then the UTxO set, then earlier-indexed outputs from the DB. Inputs that
+   * already carry an address are skipped.
    */
-  private async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[]): Promise<void> {
-    // 1. In-memory index of this block's outputs (txHash#outputIndex -> {address, amount})
-    const blockOutputs = new Map<string, { address: string; amount: Amount[] }>();
+  async resolveInputs(tx: CapTransaction, txs: ProviderTransaction[], ledger?: LedgerLookup): Promise<void> {
+    // 1. In-memory index of this block's outputs (txHash#outputIndex -> output)
+    const blockOutputs = new Map<string, TxOutputLine>();
     for (const t of txs) {
-      for (const o of t.outputs ?? []) {
-        blockOutputs.set(`${t.hash}#${o.outputIndex}`, { address: o.address, amount: o.amount ?? [] });
-      }
+      for (const o of t.outputs ?? []) blockOutputs.set(`${t.hash}#${o.outputIndex}`, o);
     }
 
     // 2. Collect inputs still needing resolution after the same-block pass
@@ -1249,7 +1346,8 @@ export class CardanoIndexer {
         const local = blockOutputs.get(key);
         if (local) {
           input.address = local.address;
-          input.amount = local.amount;
+          input.amount = local.amount ?? [];
+          copyUtxoData(input, local.dataHash, local.inlineDatum, local.referenceScriptHash);
         } else {
           unresolved.push({ input, key });
         }
@@ -1257,22 +1355,37 @@ export class CardanoIndexer {
     }
     if (!unresolved.length) return;
 
-    // 3. Batch-read prior-block outputs from the DB, chunked so a dense block's input set
+    // 3. With the ledger due for this block, its UTxO rows answer first; the ledger apply
+    //    reuses the same lookup instead of reading these outpoints a second time.
+    if (ledger) {
+      await readLedgerOutputs(tx, unresolved.map(u => u.input.txHash), ledger);
+      for (let i = unresolved.length - 1; i >= 0; i--) {
+        const row = ledger.rows.get(unresolved[i].key);
+        if (!row) continue;
+        unresolved[i].input.address = row.address;
+        unresolved[i].input.amount = ledgerRowAmount(row, ledger.assets.get(unresolved[i].key));
+        copyUtxoData(unresolved[i].input, row.utxo_dataHash, row.utxo_inlineDatum, row.utxo_referenceScriptHash);
+        unresolved.splice(i, 1);
+      }
+      if (!unresolved.length) return;
+    }
+
+    // 4. Batch-read prior-block outputs from the DB, chunked so a dense block's input set
     //    never exceeds a driver's bind-variable cap
     const sourceHashes = [...new Set(unresolved.map(u => u.input.txHash))];
     const hashBySeq = new Map<string, string>();
     for (const k of await readTxKeys(tx, sourceHashes)) {
       if (k.txSeq != null) hashBySeq.set(seqKey(k.txSeq), k.hash);
     }
-    const addrByKey = new Map<string, string>();
+    const outByKey = new Map<string, StoredOutputRow>();
     const amtByKey = new Map<string, Amount[]>();
     for (const seqChunk of chunk([...hashBySeq.keys()].map(Number), IN_CHUNK)) {
       const [outRows, assetRows] = await Promise.all([
         tx.run(SELECT.from(TransactionOutputs).where({ txSeq: { in: seqChunk } })),
         tx.run(SELECT.from(TransactionOutputAssets).where({ output_txSeq: { in: seqChunk } })),
       ]);
-      for (const r of outRows as Array<{ txSeq: number | string; outputIndex: number; address_address: string }>) {
-        addrByKey.set(`${hashBySeq.get(seqKey(r.txSeq))}#${r.outputIndex}`, r.address_address);
+      for (const r of outRows as StoredOutputRow[]) {
+        outByKey.set(`${hashBySeq.get(seqKey(r.txSeq))}#${r.outputIndex}`, r);
       }
       for (const r of assetRows as Array<{ output_txSeq: number | string; output_outputIndex: number; unit: string; asset_quantity: unknown }>) {
         const k = `${hashBySeq.get(seqKey(r.output_txSeq))}#${r.output_outputIndex}`;
@@ -1283,8 +1396,9 @@ export class CardanoIndexer {
     }
 
     for (const { input, key } of unresolved) {
-      const addr = addrByKey.get(key);
-      if (addr != null) input.address = addr;
+      const out = outByKey.get(key);
+      if (out?.address_address != null) input.address = out.address_address;
+      if (out) copyUtxoData(input, out.utxo_dataHash, out.utxo_inlineDatum, out.utxo_referenceScriptHash);
       const amt = amtByKey.get(key);
       if (amt) input.amount = amt;
     }
@@ -1431,8 +1545,9 @@ export class CardanoIndexer {
     for (const rowChunk of chunk(rows, IN_CHUNK)) {
       await tx.run(UPSERT.into(AssetsTable).entries(rowChunk));
     }
-    // Memoize also the units mapBareAsset rejected, so they cost no SELECT per block.
-    for (const unit of missing) this.noteAssetSeen(unit);
+    // Memoize also the units mapBareAsset rejected, so they cost no SELECT per block. Only after
+    // the commit: a rolled-back block must write its bare rows again.
+    this.pendingCommit.push(() => { for (const unit of missing) this.noteAssetSeen(unit); });
 
     if (this.crawlAssetCatalogue === 'enrich' && rows.length) {
       for (const row of rows) {
@@ -1615,10 +1730,8 @@ export class CardanoIndexer {
 
     await tx.run(UPSERT.into(Accounts).entries(accountEntity))
 
-    const addresses = accountInfo.addresses.map(a => a.address);
-
     if (accountEntity.hasAddresses) {
-      await this._ensureAddresses(tx, addresses);
+      await this._ensureAddresses(tx, accountInfo.addresses);
     }
 
     return accountEntity;
@@ -1627,12 +1740,14 @@ export class CardanoIndexer {
   /** Account from the backend with the crawled overlays (controlled amount, withdrawals). */
   async resolveAccount(tx: CapTransaction, stakeAddress: string): Promise<AccountData> {
     const accountInfo = { ...(await this.client.getAccount(stakeAddress)) };
-    // controlled amount = UTxOs under the stake key (crawled set, when current) + reward balance
+    // controlled amount = UTxOs under the stake key (crawled set, when current) + reward balance;
+    // the addresses come from the set too (the node has no stake-key -> address index)
     if ((await this.localCoverage(tx))?.ledger) {
       const ledger = await tx.run(
         SELECT.one.from(LedgerAccounts).columns('controlledAmount').where({ stakeAddress })
       ) as { controlledAmount?: unknown } | undefined;
       accountInfo.controlledAmount = (BigInt(lovelaceSum(ledger?.controlledAmount)) + BigInt(accountInfo.withdrawableAmount || '0')).toString();
+      accountInfo.addresses = await this.localAccountAddresses(tx, stakeAddress);
     }
     if (accountInfo.withdrawalsSum === '0') {
       const local = await this.localWithdrawalsSum(tx, stakeAddress);
@@ -1695,10 +1810,10 @@ export class CardanoIndexer {
   }
 
   /** Build a transaction and persist the build result with inputs/outputs/address association. */
-  private async _indexBuildResult(
+  private async _indexBuildResult<R extends Pick<TxBuildRequest, 'senderAddress' | 'changeAddress'>>(
     tx: CapTransaction,
-    buildreq: TxBuildRequest,
-    buildFn: (req: TxBuildRequest, params: LedgerProtocolParameter) => Promise<TxBuildResult>
+    buildreq: R,
+    buildFn: (req: R, params: LedgerProtocolParameter) => Promise<TxBuildResult>
   ): Promise<TransactionBuild> {
     const protocolParams = await this.indexProtocolParameters(tx);
     const txbuildResult = await buildFn(buildreq, protocolParams);
@@ -1714,6 +1829,13 @@ export class CardanoIndexer {
     if (buildResult.id && txbuildResult.outputs && txbuildResult.outputs.length > 0) {
       const outputRows = mapBuildOutputs(buildResult.id, txbuildResult.outputs, buildreq.changeAddress || buildreq.senderAddress);
       await tx.run(UPSERT.into(TransactionBuildOutputs).entries(outputRows));
+    }
+
+    if (buildResult.id && txbuildResult.redeemers && txbuildResult.redeemers.length > 0) {
+      const buildId = buildResult.id;
+      await tx.run(UPSERT.into(TransactionBuildRedeemers).entries(
+        txbuildResult.redeemers.map(r => ({ build_id: buildId, tag: r.tag, redeemerIndex: r.index, mem: Number(r.mem), steps: Number(r.steps) }))
+      ));
     }
 
     if (buildResult.id && buildreq.senderAddress) {
@@ -1741,6 +1863,11 @@ export class CardanoIndexer {
 
   async indexPlutusSpendBuildResult(tx: CapTransaction, buildreq: TxBuildRequest): Promise<TransactionBuild> {
     return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildPlutusSpendTransaction(req, params));
+  }
+
+  /** BuildPlutusTransaction: several script inputs; the redeemers are stored with the build. */
+  async indexPlutusBuildResult(tx: CapTransaction, buildreq: TxBuildPlutusRequest): Promise<TransactionBuild> {
+    return this._indexBuildResult(tx, buildreq, (req, params) => this.txBuilder.buildPlutusTransaction(req, params));
   }
 
   /** Protocol parameters, served from the DB row within a 5-minute TTL. */
@@ -2077,15 +2204,19 @@ export class CardanoIndexer {
   // Private Helpers
   //-----------------------------------------------------------------------------
 
-  /** Index addresses with bounded concurrency. */
+  /**
+   * Index the addresses of an account with bounded concurrency. The address data the account
+   * carries (from the backend, or from the crawled set) is used as is, so an account costs no
+   * request per address; an entry without UTxOs is fetched.
+   */
   private async _ensureAddresses(
     tx: CapTransaction,
-    bech32List: string[]
+    accountAddresses: ProviderAddress[]
   ): Promise<void> {
     const concurrency = CardanoIndexer.ADDR_CONCURRENCY;
-    for (let i = 0; i < bech32List.length; i += concurrency) {
-      const chunk = bech32List.slice(i, i + concurrency);
-      await Promise.all(chunk.map(addr => this.indexAddress(tx, addr)));
+    for (let i = 0; i < accountAddresses.length; i += concurrency) {
+      const chunk = accountAddresses.slice(i, i + concurrency);
+      await Promise.all(chunk.map(a => this.indexAddress(tx, a.address, Array.isArray(a.utxos) ? a : undefined)));
     }
   }
 }

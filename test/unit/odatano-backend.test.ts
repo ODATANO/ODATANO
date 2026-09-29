@@ -87,4 +87,18 @@ describe('OdatanoBackend', () => {
     await expect(b.getNextBlocks('aa', 20, 9)).rejects.toThrow(/^CHAIN_POINT_MISMATCH:/);
     expect(post).toHaveBeenCalledWith('/GetNextBlocks', { afterHash: 'aa', count: 20, afterHeight: 9 });
   });
+
+  it('looks up unspent outputs at the remote in batches of JSON refs', async () => {
+    post.mockResolvedValue({ data: { value: JSON.stringify([{ txHash: 'aa', outputIndex: 0, scriptRefCbor: '4e4d' }]) }, headers: {} });
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    const out = await b.getUnspentOutputs([{ txHash: 'aa', outputIndex: 0 }]);
+    expect(post).toHaveBeenCalledWith('/GetUnspentOutputs', { refs: JSON.stringify([{ txHash: 'aa', outputIndex: 0 }]) });
+    expect(out[0].scriptRefCbor).toBe('4e4d');
+  });
+
+  it('strips the remote error prefix, so the marker starts the message', async () => {
+    post.mockRejectedValueOnce(httpError(409, '[ODATANO_CHAIN_POINT_MISMATCH] GetNextBlocks: CHAIN_POINT_MISMATCH: cursor block aa is unknown to this instance'));
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    await expect(b.getNextBlocks('aa', 20)).rejects.toThrow(/^CHAIN_POINT_MISMATCH: cursor block aa/);
+  });
 });

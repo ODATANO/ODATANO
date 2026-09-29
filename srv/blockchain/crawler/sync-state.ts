@@ -282,6 +282,8 @@ export async function latchPoisonBlock(db: CapTransaction, message: string): Pro
 /**
  * Advance the cursor to a freshly indexed block, clear the error streak and optionally
  * record the latest known tip. Pass status 'synced' when the block is at the tip.
+ * With `leaseOwner` the same UPDATE renews and fences the crawler lease (see renewCrawlerLease).
+ * @returns false when the lease is no longer held; the caller must roll back
  */
 export async function advanceCursor(
   db: CapTransaction,
@@ -290,7 +292,10 @@ export async function advanceCursor(
   status: CrawlSyncStatusValue = 'syncing',
   /** Extra cursor columns written in the same statement (e.g. the ledger's `utxoAppliedSlot`). */
   extra?: Record<string, unknown>,
-): Promise<void> {
+  leaseOwner?: string,
+  now = new Date(),
+  ttlMs = CRAWLER_LEASE_TTL_MS,
+): Promise<boolean> {
   const set: Record<string, unknown> = {
     lastSlot: block.slot,
     lastBlockHash: block.hash,
@@ -305,7 +310,18 @@ export async function advanceCursor(
     set.tipSlot = tip.slot;
     if (tip.height !== undefined) set.tipHeight = tip.height;
   }
-  await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
+  if (!leaseOwner) {
+    await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
+    return true;
+  }
+  set.leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
+  await db.run(UPDATE.entity(CardanoSyncState).set(set).where({
+    ID: SINGLETON_ID,
+    leaseOwner,
+    desiredRunning: true,
+  }));
+  const verified = await readCursor(db);
+  return leaseDeadlineReached(verified, leaseOwner, now.getTime() + ttlMs);
 }
 
 /**

@@ -2,14 +2,14 @@ import cds, { Request } from '@sap/cds';
 import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, isAssetUnit } from './utils/validators';
-import { getTxHashFromCbor, getLovelace, applyScriptParameters, extractTxCacheTargets } from './utils/tx-build-helper';
+import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, validatePlutusJson, isAssetUnit } from './utils/validators';
+import { getTxHashFromCbor, getLovelace, isCollateralCandidate, applyScriptParameters, extractTxCacheTargets } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
-import type { JSONValue, MintAction, TxBuildPlutusSpendRequest } from './utils/types';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields } from './utils/tx-request-parsers';
+import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput } from './utils/types';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions } from './utils/tx-request-parsers';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -48,7 +48,7 @@ module.exports = (srv: cds.Service) => {
     cleanData.forceInputs = forceInputsResult.parsed;
     delete cleanData.forceInputsJson;
     if (outputDatumJson) {
-      const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+      const jsonResult = validatePlutusJson(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
       cleanData.outputDatum = jsonResult.parsed;
       delete cleanData.outputDatumJson;
@@ -65,7 +65,7 @@ module.exports = (srv: cds.Service) => {
     // Parameters for a parameterized validator
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
-      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'scriptParamsJson');
       scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
@@ -173,7 +173,7 @@ module.exports = (srv: cds.Service) => {
     delete cleanData.assetsJson;
 
     if (outputDatumJson) {
-      const jsonResult = validateJsonWithLimits(outputDatumJson, 'outputDatumJson');
+      const jsonResult = validatePlutusJson(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
       cleanData.outputDatum = jsonResult.parsed;
       delete cleanData.outputDatumJson;
@@ -274,7 +274,7 @@ module.exports = (srv: cds.Service) => {
 
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
-      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'scriptParamsJson');
       scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
@@ -284,14 +284,14 @@ module.exports = (srv: cds.Service) => {
 
     let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
-      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      const jsonResult = validatePlutusJson(inlineDatumJson, 'inlineDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'inlineDatumJson');
       inlineDatum = jsonResult.parsed as JSONValue;
     }
 
     let mintRedeemer: JSONValue | undefined;
     if (mintRedeemerJson) {
-      const jsonResult = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+      const jsonResult = validatePlutusJson(mintRedeemerJson, 'mintRedeemerJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'mintRedeemerJson');
       mintRedeemer = jsonResult.parsed as JSONValue;
     }
@@ -472,7 +472,7 @@ module.exports = (srv: cds.Service) => {
 
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
-      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'scriptParamsJson');
       scriptParams = jsonResult.parsed as JSONValue[];
       if (!Array.isArray(scriptParams)) {
@@ -482,7 +482,7 @@ module.exports = (srv: cds.Service) => {
 
     let inlineDatum: JSONValue | undefined;
     if (inlineDatumJson) {
-      const jsonResult = validateJsonWithLimits(inlineDatumJson, 'inlineDatumJson');
+      const jsonResult = validatePlutusJson(inlineDatumJson, 'inlineDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'inlineDatumJson');
       inlineDatum = jsonResult.parsed as JSONValue;
     }
@@ -567,7 +567,7 @@ module.exports = (srv: cds.Service) => {
         };
       });
       if (mintRedeemerJson) {
-        const mrJson = validateJsonWithLimits(mintRedeemerJson, 'mintRedeemerJson');
+        const mrJson = validatePlutusJson(mintRedeemerJson, 'mintRedeemerJson');
         if (!mrJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mrJson.error!, 'mintRedeemerJson');
         parsedMintRedeemer = mrJson.parsed as JSONValue;
       }
@@ -703,6 +703,74 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
+  // BuildPlutusTransaction — several script UTxOs in one transaction, each with its own redeemer.
+  srv.on('BuildPlutusTransaction', async (req: Request) => {
+    const { senderAddress, changeAddress, scriptInputsJson, outputsJson, referenceInputsJson, forceInputsJson, requiredSignersJson, mintActionsJson, validityStartMs, validityEndMs } = req.data;
+    const action = 'BuildPlutusTransaction';
+
+    const errors = validateTransactionInputs({ senderAddress, validityStartMs, validityEndMs }, ['senderAddress']);
+    throwIfValidationErrors(req, action, errors);
+    if (changeAddress && !isValidBech32Address(changeAddress)) {
+      return rejectInvalid(req, action, 'Invalid changeAddress format', 'changeAddress');
+    }
+
+    const scriptInputsResult = parseScriptInputs(scriptInputsJson);
+    if (scriptInputsResult.error) return rejectInvalid(req, action, scriptInputsResult.error, 'scriptInputsJson');
+    if (!outputsJson) return rejectMissing(req, action, 'outputsJson');
+    const outputsResult = parseOutputList(outputsJson, 'outputsJson');
+    if (outputsResult.error) return rejectInvalid(req, action, outputsResult.error, 'outputsJson');
+    if (!outputsResult.parsed) return rejectInvalid(req, action, 'outputsJson must list at least one output', 'outputsJson');
+    const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
+    if (refInputsResult.error) return rejectInvalid(req, action, refInputsResult.error, 'referenceInputsJson');
+    const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
+    if (forceInputsResult.error) return rejectInvalid(req, action, forceInputsResult.error, 'forceInputsJson');
+    const signersResult = parseRequiredSigners(requiredSignersJson);
+    if (signersResult.error) return rejectInvalid(req, action, signersResult.error, 'requiredSignersJson');
+    const mintResult = parsePolicyMintActions(mintActionsJson);
+    if (mintResult.error) return rejectInvalid(req, action, mintResult.error, 'mintActionsJson');
+
+    // Script params are applied here, so the builder sees the final validators
+    const scriptInputs: ScriptInput[] = [];
+    for (const [i, si] of scriptInputsResult.parsed!.entries()) {
+      let validatorScript = si.validatorScript;
+      if (validatorScript && si.scriptParams) {
+        try {
+          validatorScript = applyScriptParameters(validatorScript, si.scriptParams);
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          return rejectInvalid(req, action, `scriptInputs[${i}]: failed to apply script parameters: ${errMsg}`, 'scriptInputsJson');
+        }
+      }
+      scriptInputs.push({
+        txHash: si.txHash,
+        outputIndex: si.outputIndex,
+        ...(validatorScript ? { validatorScript } : { referenceScript: si.referenceScript }),
+        redeemer: si.redeemer,
+        ...(si.redeemerCbor ? { redeemerCbor: si.redeemerCbor } : {}),
+        ...(si.datum !== undefined ? { datum: si.datum } : {}),
+        ...(si.datumCbor ? { datumCbor: si.datumCbor } : {}),
+      });
+    }
+
+    const buildReq: TxBuildPlutusRequest = {
+      network: getCardanoClient().network,
+      senderAddress,
+      ...(changeAddress ? { changeAddress } : {}),
+      scriptInputs,
+      outputs: outputsResult.parsed,
+      referenceInputs: refInputsResult.parsed,
+      forceInputs: forceInputsResult.parsed,
+      requiredSigners: signersResult.parsed,
+      mintActions: mintResult.parsed,
+      validityStartMs,
+      validityEndMs,
+    };
+    return handleRequest(req, async (db) => {
+      logger.debug({ senderAddress, scriptInputs: scriptInputs.length, outputs: buildReq.outputs.length }, 'Building multi-script Plutus transaction');
+      return getCardanoIndexer().indexPlutusBuildResult(db, buildReq);
+    });
+  });
+
   // GetBuildDetails — an existing transaction build by id.
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
@@ -717,7 +785,8 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // SetCollateral — ensures >= 2 UTxOs of >= 5 ADA; otherwise builds a self-send that creates one.
+  // SetCollateral — collateral is available when the builders would find it: an ADA-only UTxO of
+  // >= 5 ADA without a reference script, plus another UTxO to fund with; otherwise a self-send creates one.
   srv.on('SetCollateral', async (req: Request) => {
     const { address } = req.data;
 
@@ -729,15 +798,16 @@ module.exports = (srv: cds.Service) => {
     return handleRequest(req, async (db) => {
       // Inside handleRequest use rejectInvalid (typed BackendError 400), not req.reject,
       // so mapError preserves the status.
-      const utxos = await getCardanoClient().getAddressUtxos(address);
+      const ledger = await getCardanoIndexer().resolveAddressUtxos(db, address);
+      const utxos = getCardanoClient().pendingSpends?.apply(address, ledger) ?? ledger;
 
       if (utxos.length === 0) {
         return rejectInvalid(req, 'SetCollateral', 'No UTxOs found at address', 'address');
       }
 
-      const qualifyingUtxos = utxos.filter(u => getLovelace(u) >= COLLATERAL_LOVELACE);
+      const qualifyingUtxos = utxos.filter(u => isCollateralCandidate(u) && getLovelace(u) >= COLLATERAL_LOVELACE);
 
-      if (qualifyingUtxos.length >= 2) {
+      if (qualifyingUtxos.length >= 1 && utxos.length >= 2) {
         return {
           id: cds.utils.uuid(),
           network: getCardanoClient().network,
@@ -935,7 +1005,7 @@ module.exports = (srv: cds.Service) => {
 
     let scriptParams: JSONValue[] | undefined;
     if (scriptParamsJson) {
-      const jsonResult = validateJsonWithLimits(scriptParamsJson, 'scriptParamsJson');
+      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'DeriveScriptAddress', jsonResult.error!, 'scriptParamsJson');
       if (!Array.isArray(jsonResult.parsed)) {
         return rejectInvalid(req, 'DeriveScriptAddress', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');

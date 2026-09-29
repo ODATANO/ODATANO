@@ -94,6 +94,14 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
     return out;
   }
   getCredentialUtxos(credHash: string): Promise<UTxO[]> { return this.call('GetCredentialUtxos', { credential: credHash }); }
+  /** Unspent outputs among `refs`, from the remote's node (with reference-script bytes). */
+  async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> {
+    const out: UTxO[] = [];
+    for (let i = 0; i < refs.length; i += ENUMERATION_BATCH) {
+      out.push(...await this.call<UTxO[]>('GetUnspentOutputs', { refs: JSON.stringify(refs.slice(i, i + ENUMERATION_BATCH)) }));
+    }
+    return out;
+  }
   getNetworkInformation(): Promise<NetworkInformation> { return this.call('GetNetworkInformation'); }
   getTransactionMetadata(txHash: string): Promise<MetadataLabelTx[]> { return this.call('GetTransactionMetadata', { hash: txHash }); }
   getBlock(blockHash: string): Promise<BlockData> { return this.call('GetBlock', { hash: blockHash }); }
@@ -162,6 +170,9 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
     if (!ax?.isAxiosError) return err instanceof Error ? err : new Error(String(err));
     const status = ax.response?.status;
     const message = ax.response?.data?.error?.message ?? ax.message;
+    // the remote prefixes `[CODE] Operation: `; the crawler recognises the reorg marker at the start
+    const marker = message.indexOf('CHAIN_POINT_MISMATCH:');
+    if (marker >= 0) return new ProviderUnavailableError(message.slice(marker), this.name);
     // NotFoundError appends " not found" itself; the remote message already ends with it
     if (status === 404) return new NotFoundError(message.replace(/ not found$/, ''), this.name);
     if (status === 429) {

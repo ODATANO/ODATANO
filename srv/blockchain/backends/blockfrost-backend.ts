@@ -2,7 +2,7 @@ import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
-import { normalizeCostModels, decodeAssetName } from '../../utils/mappers';
+import { normalizeCostModels, decodeAssetName, ledgerView } from '../../utils/mappers';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
   Transaction,
@@ -120,7 +120,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           json: md.json_metadata as JSONValue | null,
         })) : undefined;
 
-        return {
+        // ledger view: inputs in ledger order, only what the ledger applied (see ledgerView)
+        return ledgerView({
           hash: tx.hash,
           blockHash: tx.block,
           blockHeight: tx.block_height,
@@ -133,6 +134,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           // `spends === 'collaterals'` in Ogmios terms: the script phase failed, so the
           // ledger applied neither the declared inputs/outputs nor the declared mint.
           spendsCollaterals: tx.valid_contract === false,
+          // one mixed list in Blockfrost's order; ledgerView groups and sorts it
           inputs: txUtxos.inputs.map(input => ({
             address: input.address,
             txHash: input.tx_hash,
@@ -155,7 +157,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
             referenceScriptHash: output.reference_script_hash,
           })),
           metadata: metadata,
-        };
+        });
       },
       this.name
     );

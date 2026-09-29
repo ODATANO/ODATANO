@@ -175,6 +175,8 @@ export class CardanoCrawler {
   private snapshotRetryAfter = 0;
   private leaseHeld = false;
   private leaseHeartbeat: Promise<void> | null = null;
+  /** Last successful lease renewal by a block commit (epoch ms). */
+  private leaseRenewedAt = 0;
   private leaseWake: (() => void) | null = null;
 
   constructor(
@@ -802,23 +804,24 @@ export class CardanoCrawler {
       if (!this.running) return false;
       try {
         await cds.tx(async (tx) => {
-          if (this.leaseOwner) {
-            const renewed = await renewCrawlerLease(tx, this.leaseOwner);
-            if (!renewed) throw new CrawlerLeaseLostError();
-          }
           await this.indexer.indexBlockFull(tx, block, txs);
           // Ledger progress marker: written in the same statement as the cursor, so "the
           // cursor is ahead of the marker" always means blocks went by without the set.
           const anchor = this.indexer.getUtxoAnchor();
           const ledgerApplied = anchor != null && (block.slot ?? 0) > anchor.slot;
-          await advanceCursor(
+          // The cursor UPDATE also renews and fences the lease; a lost lease rolls the block back.
+          const leaseHeld = await advanceCursor(
             tx,
             { slot: block.slot ?? 0, hash: block.hash, height: block.height ?? 0 },
             tip ? { slot: tip.slot, height: tip.height } : undefined,
             isAtTip ? 'synced' : 'syncing',
             ledgerApplied ? { utxoAppliedSlot: block.slot ?? 0 } : undefined,
+            this.leaseOwner,
           );
+          if (!leaseHeld) throw new CrawlerLeaseLostError();
         });
+        this.leaseRenewedAt = Date.now();
+        this.indexer.confirmBlockCommit();
         if (CardanoCrawler.poison?.hash === block.hash) CardanoCrawler.poison = null;
         // A ledger invalidation decided inside the block transaction takes effect in memory
         // only now, after the commit that carries it — a rolled-back attempt changes nothing.
@@ -1078,7 +1081,7 @@ export class CardanoCrawler {
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }
 
-  /** Renew the lease while an Ogmios stream is idle; block writes renew it transactionally. */
+  /** Renew the lease while no block commits; block writes renew it transactionally. */
   private startLeaseHeartbeat(): void {
     if (!this.leaseOwner || this.leaseHeartbeat) return;
     const intervalMs = Math.max(1_000, Math.floor(CRAWLER_LEASE_TTL_MS / 3));
@@ -1086,6 +1089,8 @@ export class CardanoCrawler {
       while (this.running) {
         await this.leaseSleep(intervalMs);
         if (!this.running) return;
+        // Block commits renew the lease; the heartbeat only covers idle stretches.
+        if (Date.now() - this.leaseRenewedAt < intervalMs) continue;
         try {
           const renewed = await cds.tx((tx) => renewCrawlerLease(tx, this.leaseOwner!));
           if (!renewed) {

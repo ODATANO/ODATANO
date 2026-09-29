@@ -15,6 +15,7 @@ import {
   TxOutputLine as TxOutputProviderData,
   TxCertificate as TxCertificateProviderData,
   TxWithdrawal as TxWithdrawalProviderData,
+  TxRedeemer as TxRedeemerProviderData,
   Amount as AmountProviderData,
   NetworkInformation as NetworkInfoProviderData,
   BlockData as BlockProviderData,
@@ -41,6 +42,7 @@ import {
   TransactionOutputAsset as TransactionOutputAssetRow,
   TransactionCertificate as TransactionCertificateRow,
   TransactionWithdrawal as TransactionWithdrawalRow,
+  TransactionRedeemer as TransactionRedeemerRow,
   NetworkInformation as NetworkInfoRow,
   TransactionMetadata as TransactionMetadataRow,
   Block as BlockRow,
@@ -185,6 +187,54 @@ export function mapTransactionWithdrawals(
       stakeAddress: w.stakeAddress,
       lovelace: String(w.amount ?? '0'),
     }));
+}
+
+/** Ledger order of output references: transaction hash bytewise, then output index. */
+export function compareOutRef(a: { txHash: string; outputIndex: number }, b: { txHash: string; outputIndex: number }): number {
+  const ha = a.txHash.toLowerCase(), hb = b.txHash.toLowerCase();
+  return ha < hb ? -1 : ha > hb ? 1 : a.outputIndex - b.outputIndex;
+}
+
+/**
+ * Inputs of a transaction in the order chain-sync reports them: regular, collateral, reference,
+ * each sorted like the ledger's input sets. `inputIndex` and spend-redeemer indices rely on it.
+ */
+export function ledgerInputOrder(inputs: TxInputProviderData[]): TxInputProviderData[] {
+  const rank = (i: TxInputProviderData): number => (i.isReference ? 2 : i.isCollateral ? 1 : 0);
+  return [...inputs].sort((a, b) => rank(a) - rank(b) || compareOutRef(a, b));
+}
+
+/**
+ * The transaction as the ledger applied it, the same for every source: inputs in ledger order;
+ * after a phase-2 failure only collateral and reference inputs, the collateral return as the only
+ * output and no mint; otherwise no collateral return (never produced). Unknown validity
+ * (`spendsCollaterals` undefined) keeps what the source reported.
+ */
+export function ledgerView<T extends TransactionProviderData>(tx: T): T {
+  const inputs = ledgerInputOrder(tx.inputs ?? []);
+  if (tx.spendsCollaterals === undefined) return { ...tx, inputs };
+  const failed = tx.spendsCollaterals;
+  return {
+    ...tx,
+    inputs: failed ? inputs.filter(i => i.isCollateral || i.isReference) : inputs,
+    outputs: (tx.outputs ?? []).filter(o => (failed ? o.isCollateral : !o.isCollateral)),
+    mint: failed ? undefined : tx.mint,
+  };
+}
+
+/** Normalized redeemers to TransactionRedeemerRows, keyed (tx, purpose, index). */
+export function mapTransactionRedeemers(txHash: string, redeemers: TxRedeemerProviderData[]): TransactionRedeemerRow[] {
+  return redeemers.map((r) => ({
+    tx_hash: txHash,
+    purpose: r.purpose,
+    redeemerIndex: r.index,
+    data: r.data,
+    mem: Number(r.mem),
+    steps: Number(r.steps),
+    spentTxHash: r.txHash ?? null,
+    spentOutputIndex: r.outputIndex ?? null,
+    policyId: r.policyId ?? null,
+  }));
 }
 
 /** Provider transaction outputs to TransactionOutputRows. */

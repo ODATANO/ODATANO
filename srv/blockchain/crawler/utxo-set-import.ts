@@ -14,6 +14,7 @@ import {
   tryAcquireImportLease,
   renewImportLease,
   releaseImportLease,
+  resetCursorTo,
   CRAWLER_LEASE_TTL_MS,
 } from './sync-state';
 import {
@@ -22,10 +23,11 @@ import {
   LedgerAddresses,
   LedgerAddressAssets,
   LedgerAccounts,
+  Blocks,
 } from '#cds-models/odatano/cardano';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 
-const { UPSERT, DELETE } = cds.ql;
+const { UPSERT, DELETE, SELECT } = cds.ql;
 const logger = cds.log('LedgerState');
 
 /**
@@ -191,11 +193,11 @@ export function aggregateStatements(): string[] {
     `INSERT INTO ${T.addresses} (address, stakeAddress, addressType, isScript, totalLovelace, utxoCount, firstSeenSlot, lastActiveSlot) ` +
     `SELECT address, MIN(stakeAddress), MIN(addressType), ` +
     `CASE WHEN MAX(CASE WHEN isScript THEN 1 ELSE 0 END) = 1 THEN TRUE ELSE FALSE END, ` +
-    `SUM(lovelace), COUNT(*), NULL, NULL FROM ${T.utxos} GROUP BY address`,
+    `SUM(lovelace), COUNT(*), NULL, NULL FROM ${T.utxos} WHERE spentTxHash IS NULL GROUP BY address`,
     `INSERT INTO ${T.addressAssets} (address_address, unit, asset_quantity, asset_policyId, asset_assetNameHex, asset_assetName) ` +
     `SELECT u.address, a.unit, SUM(a.asset_quantity), MIN(a.asset_policyId), MIN(a.asset_assetNameHex), MIN(a.asset_assetName) ` +
     `FROM ${T.utxoAssets} a JOIN ${T.utxos} u ON a.utxo_txHash = u.txHash AND a.utxo_outputIndex = u.outputIndex ` +
-    `GROUP BY u.address, a.unit`,
+    `WHERE u.spentTxHash IS NULL GROUP BY u.address, a.unit`,
     `INSERT INTO ${T.accounts} (stakeAddress, controlledAmount, addressCount, utxoCount, lastActiveSlot) ` +
     `SELECT stakeAddress, SUM(totalLovelace), COUNT(*), SUM(utxoCount), NULL FROM ${T.addresses} ` +
     `WHERE stakeAddress IS NOT NULL GROUP BY stakeAddress`,
@@ -221,38 +223,16 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
   }
   if (source === 'file' && !opts.filePath) throw new UtxoSetImportError('source "file" needs filePath.');
 
-  // Cluster-wide exclusion: hold the cursor lease for the whole import. A crawler start on
-  // any instance (resumeCrawler, standby) and a second import are refused while it is held;
-  // renewed on a heartbeat, released in `finally`.
-  const leaseOwner = `import:${process.pid}:${Date.now().toString(36)}`;
-  const acquired = await cds.tx((tx) => tryAcquireImportLease(tx, leaseOwner));
-  if (!acquired) throw new UtxoSetImportError('Could not take the cursor lease — a crawler or another import holds it.');
-  let leaseLost = false;
-  const heartbeat = setInterval(() => {
-    cds.tx((tx) => renewImportLease(tx, leaseOwner))
-      .then((ok) => { if (!ok) leaseLost = true; })
-      .catch(() => { leaseLost = true; });
-  }, Math.max(1000, Math.floor(CRAWLER_LEASE_TTL_MS / 3)));
-  heartbeat.unref();
-  /**
-   * Every write re-takes the lease INSIDE its transaction (conditional UPDATE + read-back), so
-   * a successor that took the lease between two batches fails this transaction before commit.
-   */
-  const writeTx = <T>(fn: (tx: CapTransaction) => Promise<T>): Promise<T> =>
-    cds.tx(async (tx: CapTransaction) => {
-      if (leaseLost || !(await renewImportLease(tx, leaseOwner))) throw new UtxoSetLeaseLostError();
-      return fn(tx);
-    }) as unknown as Promise<T>;
-
-  opts.indexer.setUtxoAnchor(null);
-  try {
-  await writeTx(async (tx) => {
-    await setUtxoSetState(tx, { status: 'importing', anchorSlot: anchor.slot, anchorHash: anchor.hash, error: null, importedAt: null, appliedSlot: null });
-    await tx.run(DELETE.from(LedgerUTxOAssets));
-    await tx.run(DELETE.from(LedgerUTxOs));
-    await tx.run(DELETE.from(LedgerAddressAssets));
-    await tx.run(DELETE.from(LedgerAddresses));
-    await tx.run(DELETE.from(LedgerAccounts));
+  return withImportLease(async (lease) => {
+    const { writeTx } = lease;
+      opts.indexer.setUtxoAnchor(null);
+      await writeTx(async (tx) => {
+        await setUtxoSetState(tx, { status: 'importing', anchorSlot: anchor.slot, anchorHash: anchor.hash, error: null, importedAt: null, appliedSlot: null });
+        await tx.run(DELETE.from(LedgerUTxOAssets));
+        await tx.run(DELETE.from(LedgerUTxOs));
+        await tx.run(DELETE.from(LedgerAddressAssets));
+        await tx.run(DELETE.from(LedgerAddresses));
+        await tx.run(DELETE.from(LedgerAccounts));
   });
 
   let imported = 0;
@@ -279,17 +259,7 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
     }
     await flush();
 
-    // Aggregates + activation in ONE lease-checked transaction: the set can never be
-    // `active` with sums a successor's import has meanwhile truncated.
-    const importedAt = new Date().toISOString();
-    await writeTx(async (tx) => {
-      for (const sql of aggregateStatements()) await (tx as unknown as { run: (sql: string) => Promise<unknown> }).run(sql);
-      await setUtxoSetState(tx, { status: 'active', anchorSlot: anchor.slot, anchorHash: anchor.hash, importedAt, error: null });
-    });
-    opts.indexer.setUtxoAnchor(anchor);
-    // The aggregation leaves paymentCredential empty; filled in the background.
-    opts.indexer.resetPaymentCredentials();
-    void opts.indexer.paymentCredentialsReady();
+    await activateWithAggregates(lease, opts.indexer, anchor);
     logger.info(`UTxO set imported: ${imported} entries at anchor ${anchor.slot}/${anchor.hash} (source=${source})`);
     return { utxos: imported, anchor };
   } catch (err) {
@@ -297,15 +267,152 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
     logger.error(`UTxO set import failed after ${imported} entries: ${message}`);
     // Only the lease holder may write the failure state; after a takeover the row is the
     // successor's and the truncated tables are its problem to fill.
-    if (!(err instanceof UtxoSetLeaseLostError)) {
-      await cds.tx(async (tx) => {
-        if (await renewImportLease(tx, leaseOwner)) await setUtxoSetState(tx, { status: 'invalid', error: message.slice(0, 500) });
-      }).catch(() => undefined);
-    }
+    if (!(err instanceof UtxoSetLeaseLostError)) await lease.markInvalid(message);
     throw err;
   }
+  });
+}
+
+type WriteTx = <T>(fn: (tx: CapTransaction) => Promise<T>) => Promise<T>;
+
+interface ImportLease {
+  /** Short write: the lease is re-taken first, so a successor that took it in between fails here. */
+  writeTx: WriteTx;
+  /**
+   * Long write: the lease is re-taken as the LAST statement. The cursor row is locked only for the
+   * moment before commit, so heartbeats and readers never queue behind the long work.
+   */
+  writeTxLeaseLast: WriteTx;
+  /** Write the failure state if the lease is still ours; ignores a lost heartbeat, never throws. */
+  markInvalid: (message: string) => Promise<void>;
+}
+
+/**
+ * Hold the cursor lease for the whole run: a crawler start on any instance and a second import
+ * are refused while it is held; renewed on a heartbeat (one at a time), released at the end.
+ */
+async function withImportLease<R>(run: (lease: ImportLease) => Promise<R>): Promise<R> {
+  const leaseOwner = `import:${process.pid}:${Date.now().toString(36)}`;
+  const acquired = await cds.tx((tx) => tryAcquireImportLease(tx, leaseOwner));
+  if (!acquired) throw new UtxoSetImportError('Could not take the cursor lease — a crawler or another import holds it.');
+  let leaseLost = false;
+  let renewing = false;
+  const heartbeat = setInterval(() => {
+    // A renewal still waiting keeps its connection; a second one would only take another from the pool
+    if (renewing) return;
+    renewing = true;
+    cds.tx(async (tx) => { if (!(await renewImportLease(tx, leaseOwner))) leaseLost = true; })
+      .catch(() => { leaseLost = true; })
+      .finally(() => { renewing = false; });
+  }, Math.max(1000, Math.floor(CRAWLER_LEASE_TTL_MS / 3)));
+  heartbeat.unref();
+  const lease: ImportLease = {
+    writeTx: <T>(fn: (tx: CapTransaction) => Promise<T>): Promise<T> =>
+      cds.tx(async (tx: CapTransaction) => {
+        if (leaseLost || !(await renewImportLease(tx, leaseOwner))) throw new UtxoSetLeaseLostError();
+        return fn(tx);
+      }) as unknown as Promise<T>,
+    writeTxLeaseLast: <T>(fn: (tx: CapTransaction) => Promise<T>): Promise<T> =>
+      cds.tx(async (tx: CapTransaction) => {
+        const result = await fn(tx);
+        if (!(await renewImportLease(tx, leaseOwner))) throw new UtxoSetLeaseLostError();
+        return result;
+      }) as unknown as Promise<T>,
+    markInvalid: (message: string) =>
+      cds.tx(async (tx) => {
+        if (await renewImportLease(tx, leaseOwner)) await setUtxoSetState(tx, { status: 'invalid', error: message.slice(0, 500) });
+      }).then(() => undefined, () => undefined),
+  };
+  try {
+    return await run(lease);
   } finally {
     clearInterval(heartbeat);
     await cds.tx((tx) => releaseImportLease(tx, leaseOwner)).catch(() => undefined);
   }
+}
+
+/** A bigger sort/hash budget for the GROUP BY over millions of rows (PostgreSQL only). */
+const AGGREGATE_WORK_MEM = '256MB';
+
+/**
+ * Aggregates + activation in ONE transaction, so the set is never `active` with sums a successor's
+ * import has meanwhile truncated. `prepare` runs first; `finish` and the activation run last,
+ * together with the lease check, so the cursor row is not locked during the aggregation.
+ */
+async function activateWithAggregates(
+  lease: ImportLease,
+  indexer: CardanoIndexer,
+  anchor: LedgerAnchor,
+  hooks: { prepare?: (tx: CapTransaction) => Promise<void>; finish?: (tx: CapTransaction) => Promise<void> } = {},
+): Promise<void> {
+  const importedAt = new Date().toISOString();
+  await lease.writeTxLeaseLast(async (tx) => {
+    const raw = tx as unknown as { run: (sql: string) => Promise<unknown> };
+    if ((cds.db as { kind?: string } | undefined)?.kind === 'postgres') {
+      await raw.run(`SET LOCAL work_mem = '${AGGREGATE_WORK_MEM}'`);
+      // The planner overestimates the join and walks the address index row by row; hash join + hash aggregate read each table once.
+      await raw.run('SET LOCAL enable_nestloop = off');
+    }
+    await hooks.prepare?.(tx);
+    for (const sql of aggregateStatements()) await raw.run(sql);
+    await hooks.finish?.(tx);
+    await setUtxoSetState(tx, { status: 'active', anchorSlot: anchor.slot, anchorHash: anchor.hash, importedAt, error: null });
+  });
+  indexer.setUtxoAnchor(anchor);
+  // The aggregation leaves paymentCredential empty; filled in the background.
+  indexer.resetPaymentCredentials();
+  void indexer.paymentCredentialsReady();
+}
+
+/**
+ * Rebuild only the sums (LedgerAddresses, LedgerAddressAssets, LedgerAccounts) from the rows an
+ * earlier import left at the stored anchor, e.g. after the aggregate phase failed. Nothing may have
+ * been applied since the anchor; a cursor past it is set back to the anchor, and the blocks after
+ * it are crawled again (idempotent writes) so the set follows them.
+ */
+export async function rebuildUtxoSetAggregates(opts: { indexer: CardanoIndexer }): Promise<UtxoSetImportResult> {
+  const cursor = await cds.tx((tx) => readCursor(tx));
+  if (!cursor) throw new UtxoSetImportError('No crawler cursor yet.');
+  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running — pause it first (pauseCrawler).');
+  const { anchorSlot, anchorHash, appliedSlot, status } = cursor.utxoSet;
+  if (anchorSlot == null || !anchorHash) throw new UtxoSetImportError('No imported UTxO set to rebuild the sums from — run importUtxoSet first.');
+  if (status === 'importing') throw new UtxoSetImportError('The import is still loading rows (status "importing").');
+  if (appliedSlot != null) {
+    throw new UtxoSetImportError(`Blocks up to slot ${appliedSlot} were already applied to the set — its rows are past the anchor; import again.`);
+  }
+  const anchor: LedgerAnchor = { slot: anchorSlot, hash: anchorHash };
+  const rows = await cds.tx((tx) => tx.run(SELECT.one.from(LedgerUTxOs).columns('count(*) as n'))) as { n?: number | string } | undefined;
+  const utxos = Number(rows?.n ?? 0);
+  if (utxos === 0) throw new UtxoSetImportError('LedgerUTxOs is empty — run importUtxoSet first.');
+
+  let rewindTo: { slot: number; hash: string; height: number } | null = null;
+  if (cursor.lastSlot > anchor.slot) {
+    const block = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).columns('height').where({ hash: anchor.hash }))) as { height?: number | string } | undefined;
+    if (!block) throw new UtxoSetImportError(`Cursor is past the anchor and the anchor block ${anchor.hash} is not stored — cannot set the cursor back.`);
+    rewindTo = { slot: anchor.slot, hash: anchor.hash, height: Number(block.height ?? 0) };
+  }
+
+  return withImportLease(async (lease) => {
+    opts.indexer.setUtxoAnchor(null);
+    // The previous failure no longer describes the set; a new one replaces it below
+    await lease.writeTx((tx) => setUtxoSetState(tx, { error: null }));
+    try {
+      await activateWithAggregates(lease, opts.indexer, anchor, {
+        prepare: async (tx) => {
+          await tx.run(DELETE.from(LedgerAddressAssets));
+          await tx.run(DELETE.from(LedgerAddresses));
+          await tx.run(DELETE.from(LedgerAccounts));
+        },
+        finish: rewindTo ? (tx) => resetCursorTo(tx, rewindTo!) : undefined,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`UTxO set aggregate rebuild failed: ${message}`);
+      if (!(err instanceof UtxoSetLeaseLostError)) await lease.markInvalid(message);
+      throw err;
+    }
+    logger.info(`UTxO set sums rebuilt from ${utxos} rows at anchor ${anchor.slot}/${anchor.hash}` +
+      (rewindTo ? ` (cursor set back from slot ${cursor.lastSlot})` : ''));
+    return { utxos, anchor };
+  });
 }

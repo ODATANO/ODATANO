@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 import type { CardanoClient } from './cardano-client';
 import type { UTxO } from '../utils/types';
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, TxBuildContext, TxBuildResult, LedgerProtocolParameters } from '../utils/types';
 import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
@@ -19,6 +19,14 @@ export class CardanoTransactionBuilder {
     constructor(client: CardanoClient) {
         this.client = client;
         logger.debug('CardanoTransactionBuilder instance created');
+    }
+
+    /** Unspent outputs of an address from local data (the crawled UTxO set); null = it cannot answer. */
+    private addressUtxoSource: ((address: string) => Promise<UTxO[] | null>) | null = null;
+
+    /** Read sender UTxOs from `source` first; the node's address query is the fallback. */
+    setAddressUtxoSource(source: (address: string) => Promise<UTxO[] | null>): void {
+        this.addressUtxoSource = source;
     }
 
     /** @param protocolParams optional; fetched from the backend when omitted */
@@ -205,11 +213,45 @@ export class CardanoTransactionBuilder {
     }
 
     /**
+     * Several script inputs in one transaction: resolve every script UTxO and every reference-script
+     * UTxO (one ledger lookup each), plus the sender's UTxOs, forced and reference inputs.
+     */
+    async buildPlutusTransaction(req: TxBuildPlutusRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
+        const builder = await this.ensureInitialized();
+        const cardanoClient = this.client;
+
+        const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
+        const scriptUtxos = await this._resolveInputRefs(
+            req.scriptInputs.map(s => ({ txHash: s.txHash, outputIndex: s.outputIndex })), senderUtxos, 'scriptInput');
+        const allUtxos = mergeUtxosUnique(senderUtxos, scriptUtxos);
+        const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], allUtxos);
+
+        // Reference-script UTxOs always from the ledger: a known sender UTxO may carry only the script hash
+        const refScriptUtxos = await this._resolveInputRefs(
+            req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : [])), [], 'referenceScript');
+        const callerRefUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], allUtxos);
+        const referenceInputUtxos = mergeUtxosUnique(callerRefUtxos, refScriptUtxos);
+
+        const txContext: TxBuildContext = {
+            utxos: mergeUtxosUnique(allUtxos, forcedUtxos),
+            protocolParameters,
+            evaluateTransaction: cardanoClient.hasEvaluatingBackend()
+                ? (cbor) => cardanoClient.evaluateTransaction(cbor)
+                : undefined,
+            referenceInputUtxos: referenceInputUtxos.length > 0 ? referenceInputUtxos : undefined,
+        };
+        logger.debug(`Prepared multi-script build context: ${senderUtxos.length} sender + ${scriptUtxos.length} script + ${forcedUtxos.length} forced UTxOs, ${referenceInputUtxos.length} reference inputs`);
+        return builder.buildUnsignedPlutusTransaction(req, txContext);
+    }
+
+    /**
      * Resolve the script UTxO of a Plutus spend from the node's ledger, otherwise from its producing
      * transaction. Spending an already-consumed script UTxO is the most common replay mistake —
      * both paths reject it with a clear 400 instead of a node-side rejection at submit.
      */
     private async _resolveScriptUtxo(scriptRef: { txHash: string; outputIndex: number }): Promise<UTxO> {
+        const by = this.client.pendingSpends?.spentBy(scriptRef.txHash, scriptRef.outputIndex);
+        if (by) throw new TransactionValidationError(`scriptUtxo ${outRefKey(scriptRef)} is spent by transaction ${by}, submitted and not yet on chain`);
         const ledger = await this._lookupUnspent([scriptRef]);
         if (ledger) {
             const live = ledger.get(outRefKey(scriptRef));
@@ -309,9 +351,13 @@ export class CardanoTransactionBuilder {
     private async _resolveInputRefs(
         refs: Array<{ txHash: string; outputIndex: number }>,
         knownUtxos: UTxO[],
-        kind: 'forceInput' | 'referenceInput'
+        kind: 'forceInput' | 'referenceInput' | 'scriptInput' | 'referenceScript'
     ): Promise<UTxO[]> {
         if (!refs || refs.length === 0) return [];
+        for (const r of refs) {
+            const by = this.client.pendingSpends?.spentBy(r.txHash, r.outputIndex);
+            if (by) throw new TransactionValidationError(`${kind} ${r.txHash}#${r.outputIndex} is spent by transaction ${by}, submitted and not yet on chain`);
+        }
         // Dedup by "txHash#index" key
         const seen = new Set<string>();
         const dedupedRefs = refs.filter(r => {
@@ -375,7 +421,19 @@ export class CardanoTransactionBuilder {
     /** Fetch the UTxOs of an address; throws InsufficientFundsError when it has none. */
     private async _fetchUtxosForAddress(address: string): Promise<UTxO[]> {
         logger.debug(`Fetching UTxOs for address: ${address}`);
-        const utxos = await this.client.getAddressUtxos(address);
+        // The crawled set answers with an index lookup; the node's address query scans its whole
+        // UTxO set. An empty answer from the set is re-checked there (funded in the last block).
+        const local = await this.addressUtxoSource?.(address).catch((err: unknown) => {
+            logger.warn(`Local UTxO lookup for ${address} failed, asking the node: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+        });
+        const ledger = local && local.length > 0 ? local : await this.client.getAddressUtxos(address);
+        // the ledger view still lists what our own submitted transactions spend while they wait in the mempool
+        const all = this.client.pendingSpends?.apply(address, ledger) ?? ledger;
+        // A UTxO carrying a reference script is deployed on purpose, not change to spend; only a
+        // forced input consumes it (the fee of a spent reference script is also not counted by the builder).
+        const utxos = all.filter(u => !u.scriptRef && !u.scriptRefCbor);
+        if (utxos.length < all.length) logger.debug(`${all.length - utxos.length} UTxO(s) with a reference script left out of coin selection`);
         logger.debug(`Found ${utxos.length} UTxOs for address ${address.substring(0, 20)}...`);
         if (utxos.length === 0) {
             throw new InsufficientFundsError(
@@ -383,7 +441,9 @@ export class CardanoTransactionBuilder {
                 BigInt(0),
                 BigInt(0),
                 undefined,
-                `address ${address} has no UTxOs — verify this is the correct sender address and that it has been funded`
+                all.length > 0
+                    ? `address ${address} holds only UTxOs with a reference script — they are not spent as funding; pass one in forceInputsJson to consume it`
+                    : `address ${address} has no UTxOs — verify this is the correct sender address and that it has been funded`
             );
         }
         return utxos;

@@ -149,52 +149,94 @@ describe('KoiosBackend', () => {
   });
 
   describe('getProtocolParameters', () => {
-    it('should return protocol parameters from /cli_protocol_params', async () => {
-      const mockProtocolParams = {
-        txFeePerByte: 44,
-        txFeeFixed: 155381,
-        maxTxSize: 16384,
-        maxBlockHeaderSize: 1100,
-        maxBlockBodySize: 65536,
-        stakeAddressDeposit: 2000000,
-        stakePoolDeposit: 500000000,
-        poolRetireMaxEpoch: 18,
-        stakePoolTargetNum: 500,
-        poolPledgeInfluence: 0.3,
-        monetaryExpansion: 0.003,
-        treasuryCut: 0.2,
-        minPoolCost: 340000000,
-        protocolVersion: { major: 8, minor: 0 },
-        executionUnitPrices: { priceMemory: 0.0577, priceSteps: 0.0000721 },
-        maxTxExecutionUnits: { memory: 14000000, steps: 10000000000 },
-        maxBlockExecutionUnits: { memory: 62000000, steps: 20000000000 },
-        maxValueSize: 5000,
-        collateralPercentage: 150,
-        maxCollateralInputs: 3,
-        utxoCostPerByte: 4310,
-        costModels: {
-          'PlutusV3': Array(297).fill(1000)
-        }
-      };
+    const mockProtocolParams = {
+      txFeePerByte: 44,
+      txFeeFixed: 155381,
+      maxTxSize: 16384,
+      maxBlockHeaderSize: 1100,
+      maxBlockBodySize: 65536,
+      stakeAddressDeposit: 2000000,
+      stakePoolDeposit: 500000000,
+      poolRetireMaxEpoch: 18,
+      stakePoolTargetNum: 500,
+      poolPledgeInfluence: 0.3,
+      monetaryExpansion: 0.003,
+      treasuryCut: 0.2,
+      minPoolCost: 340000000,
+      protocolVersion: { major: 8, minor: 0 },
+      executionUnitPrices: { priceMemory: 0.0577, priceSteps: 0.0000721 },
+      maxTxExecutionUnits: { memory: 14000000, steps: 10000000000 },
+      maxBlockExecutionUnits: { memory: 62000000, steps: 20000000000 },
+      maxValueSize: 5000,
+      collateralPercentage: 150,
+      maxCollateralInputs: 3,
+      utxoCostPerByte: 4310,
+      costModels: {
+        'PlutusV3': Array(297).fill(1000)
+      }
+    };
 
+    it('should return protocol parameters from /cli_protocol_params', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/cli_protocol_params')
-        .reply(200, mockProtocolParams);
+        .reply(200, mockProtocolParams)
+        .get('/api/v1/tip')
+        .reply(200, [{ epoch_no: 316, abs_slot: 1 }]);
 
       const result = await backend.getProtocolParameters();
 
+      expect(result).toHaveProperty('epoch', 316); // from the tip, the endpoint has none
       expect(result).toHaveProperty('minFeeA', 44);
       expect(result).toHaveProperty('minFeeB', 155381);
       expect(result).toHaveProperty('maxTxSize', 16384);
       expect(result).toHaveProperty('network', 'mainnet');
     });
 
+    it('keeps the parameters with epoch 0 when the tip is unavailable', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/cli_protocol_params')
+        .reply(200, mockProtocolParams)
+        .get('/api/v1/tip')
+        .reply(500, {});
+      const result = await backend.getProtocolParameters().catch((e: Error) => e);
+      expect(result).not.toBeInstanceOf(Error);
+      expect(result).toHaveProperty('epoch', 0);
+    });
+
     it('should throw on API error', async () => {
       nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .reply(200, [{ epoch_no: 316 }])
         .get('/api/v1/cli_protocol_params')
         .reply(500, { error: 'Internal server error' });
 
       await expect(backend.getProtocolParameters()).rejects.toThrow();
+    });
+  });
+
+  describe('submitTransaction', () => {
+    it('returns the tx hash Koios answers', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/submittx').reply(202, '"' + 'ab'.repeat(32) + '"');
+      await expect(backend.submitTransaction('84a4')).resolves.toBe('ab'.repeat(32));
+    });
+
+    it("passes the node's rejection on as a 400 instead of the bare HTTP status", async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/submittx').reply(400, {
+        contents: { contents: { contents: { era: 'ShelleyBasedEraConway',
+          error: ['ConwayUtxowFailure (ExtraneousScriptWitnessesUTXOW (NonEmptySet (fromList [ScriptHash "61e3"])))'] } } },
+        tag: 'TxSubmitFail',
+      });
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('ExtraneousScriptWitnessesUTXOW'),
+      });
+    });
+  });
+
+  describe('submitTransaction duplicates', () => {
+    it('keeps an already-submitted transaction a 409', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/submittx').reply(400, { error: `Transaction ${'ab'.repeat(32)} already exists in mempool` });
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 409 });
     });
   });
 
@@ -616,9 +658,52 @@ describe('KoiosBackend', () => {
       const tx = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
 
       expect(tx.spendsCollaterals).toBe(true);
-      expect(tx.inputs.map(i => [i.outputIndex, Boolean(i.isCollateral), Boolean(i.isReference)])).toEqual([[0, false, false], [1, true, false], [2, false, true]]);
-      expect(tx.outputs.map(o => [o.outputIndex, o.isCollateral, o.txHash])).toEqual([[0, false, txHash], [1, true, txHash]]);
-      expect(tx.outputs[1].amount).toEqual([{ unit: 'lovelace', quantity: '6000000' }, { unit: `${'p'.repeat(56)}746f6b656e`, quantity: '3' }]);
+      // the ledger view, as chain-sync reports it: no declared input, the collateral return as the only output
+      expect(tx.inputs.map(i => [i.outputIndex, Boolean(i.isCollateral), Boolean(i.isReference)])).toEqual([[1, true, false], [2, false, true]]);
+      expect(tx.outputs.map(o => [o.outputIndex, o.isCollateral, o.txHash])).toEqual([[1, true, txHash]]);
+      expect(tx.outputs[0].amount).toEqual([{ unit: 'lovelace', quantity: '6000000' }, { unit: `${'p'.repeat(56)}746f6b656e`, quantity: '3' }]);
+    });
+
+    it('drops the collateral return of a valid transaction and the mint of a failed one', async () => {
+      const txHash = 'a'.repeat(64);
+      const io = (i: number) => ({ payment_addr: { bech32: TEST_ADDR }, tx_hash: 'd'.repeat(64), tx_index: i, value: '1', asset_list: [] });
+      const row = (valid: boolean) => ({
+        tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1,
+        valid_contract: valid, inputs: [io(0)], collateral_inputs: [io(1)], outputs: [{ ...io(0), tx_hash: undefined }],
+        collateral_output: { ...io(1), tx_hash: undefined }, assets_minted: [{ policy_id: 'p'.repeat(56), asset_name: '', quantity: '1' }], metadata: null,
+      });
+      nock(KOIOS_BASE_URL).post('/api/v1/tx_info').reply(200, [row(true)]);
+      const valid = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+      expect(valid.outputs.map(o => [o.outputIndex, o.isCollateral])).toEqual([[0, false]]);
+      expect(valid.mint).toHaveLength(1);
+
+      nock(KOIOS_BASE_URL).post('/api/v1/tx_info').reply(200, [row(false)]);
+      const failed = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+      expect(failed.mint).toBeUndefined();
+    });
+
+    it('orders the inputs like the ledger: per class, by transaction hash and output index', async () => {
+      const txHash = 'a'.repeat(64);
+      const io = (h: string, i: number) => ({ payment_addr: { bech32: TEST_ADDR }, tx_hash: h, tx_index: i, value: '1', asset_list: [] });
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info')
+        .reply(200, [{
+          tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1,
+          valid_contract: true,
+          // as Koios delivered 01e5c59e…: #1 before #0
+          inputs: [io('7d'.repeat(32), 1), io('7d'.repeat(32), 0), io('0a'.repeat(32), 5)],
+          collateral_inputs: [io('ff'.repeat(32), 0), io('01'.repeat(32), 0)],
+          reference_inputs: [io('bb'.repeat(32), 2), io('bb'.repeat(32), 1)],
+          outputs: [], metadata: null,
+        }]);
+
+      const tx = (await backend.getTransactionsBatch([txHash])).get(txHash)!;
+
+      expect(tx.inputs.map(i => [i.txHash.slice(0, 2), i.outputIndex, Boolean(i.isCollateral), Boolean(i.isReference)])).toEqual([
+        ['0a', 5, false, false], ['7d', 0, false, false], ['7d', 1, false, false],
+        ['01', 0, true, false], ['ff', 0, true, false],
+        ['bb', 1, false, true], ['bb', 2, false, true],
+      ]);
     });
 
     it('tolerates null collateral/reference fields and a collateral_output array (spec shape)', async () => {
@@ -1020,7 +1105,8 @@ describe('KoiosBackend', () => {
     it('derives action from sign and stores absolute quantity', async () => {
       let captured: any = null;
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/asset_history', (body) => { captured = body; return true; })
+        .get('/api/v1/asset_history')
+        .query((q) => { captured = q; return true; })
         .reply(200, [{
           policy_id: POLICY,
           asset_name: ASSET_NAME_HEX,
@@ -1032,9 +1118,7 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getAssetHistory(UNIT);
 
-      expect(captured).toMatchObject({
-        _asset_list: [[POLICY, ASSET_NAME_HEX]],
-      });
+      expect(captured).toEqual({ _asset_policy: POLICY, _asset_name: ASSET_NAME_HEX });
       expect(result).toEqual([
         { unit: UNIT, txHash: 'a'.repeat(64), action: 'mint', quantity: '1000', blockTime: 1700000200, blockHeight: 200 },
         { unit: UNIT, txHash: 'b'.repeat(64), action: 'burn', quantity: '50',   blockTime: 1700000100, blockHeight: 199 },
@@ -1043,7 +1127,8 @@ describe('KoiosBackend', () => {
 
     it('sorts by block_time descending and applies limit', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/asset_history')
+        .get('/api/v1/asset_history')
+        .query(true)
         .reply(200, [{
           policy_id: POLICY,
           asset_name: ASSET_NAME_HEX,
@@ -1063,7 +1148,8 @@ describe('KoiosBackend', () => {
 
     it('returns empty array when asset has no minting_txs', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/asset_history')
+        .get('/api/v1/asset_history')
+        .query(true)
         .reply(200, [{ policy_id: POLICY, asset_name: ASSET_NAME_HEX, minting_txs: [] }]);
 
       const result = await backend.getAssetHistory(UNIT);
@@ -1072,7 +1158,8 @@ describe('KoiosBackend', () => {
 
     it('returns empty array when response is empty', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/asset_history')
+        .get('/api/v1/asset_history')
+        .query(true)
         .reply(200, []);
 
       const result = await backend.getAssetHistory(UNIT);

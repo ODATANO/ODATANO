@@ -472,6 +472,28 @@ describe('OgmiosBackend', () => {
       expect(mockTxSubmissionClient.submitTransaction).toHaveBeenCalledWith(signedTxCbor);
     });
 
+    it("turns a node rejection (JSON-RPC 3xxx) into a 400 carrying the node's reason", async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const rejection = Object.assign(new Error('Extraneous (i.e. non-required) scripts found in the transaction.'), {
+        code: 3104, data: { extraneousScripts: ['61e32e15'] },
+      });
+      (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(rejection) };
+      (backend as any).isShutdown = false;
+
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringMatching(/node rejected the transaction \(3104\): Extraneous .*61e32e15/),
+      });
+    });
+
+    it('keeps an already-known transaction a 409', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const known = Object.assign(new Error('transaction already known in the mempool'), { code: 3117 });
+      (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(known) };
+      (backend as any).isShutdown = false;
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 409 });
+    });
+
     it('should throw error when backend is shutdown', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).isShutdown = true;
@@ -973,6 +995,21 @@ describe('OgmiosBackend', () => {
       });
       expect(address.utxos).toHaveLength(2);
       expect(backend.unsupportedMethods.has('getAddress')).toBe(false);
+    });
+
+    it('runs address queries on their own connection, not on the one tip and parameters use', async () => {
+      const ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const open = { readyState: 1, OPEN: 1 };
+      const shared = { utxo: vi.fn() };
+      const scan = { utxo: vi.fn().mockResolvedValue([]) };
+      Object.assign(backend as any, { context: { socket: open }, stateQueryClient: shared, scanContext: { socket: open }, scanClient: scan, isShutdown: false });
+
+      await backend.getAddressUtxos(ADDR);
+      await backend.getAddress(ADDR);
+
+      expect(scan.utxo).toHaveBeenCalledTimes(2);
+      expect(shared.utxo).not.toHaveBeenCalled();
     });
 
     it('getNetworkInformation reports treasury, reserves and total from treasuryAndReserves', async () => {

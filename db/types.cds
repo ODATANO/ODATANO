@@ -16,6 +16,8 @@ type HexBytes         : String(5000);
 @title      : 'Lovelace'
 @description: 'Amount of ADA in lovelace (1 ADA = 1_000_000 lovelace)'
 type Lovelace         : Decimal(20, 0);
+// Sum of asset quantities: one output holds at most 2^64-1, a sum over an address's outputs does not
+type AssetAmount      : Decimal(38, 0);
 
 @title      : 'Asset Unit'
 @description: 'Concatenation of policyId and assetNameHex representing a unique asset'
@@ -39,6 +41,31 @@ type AssetSlice {
     @title      : 'Asset Quantity'
     @description: 'Quantity of the Asset'
     quantity     : Lovelace;
+
+    @title      : 'Asset Policy Id'
+    @description: 'Policy Id of the Asset'
+    policyId     : Blake2b224;
+
+    @title      : 'Asset Name Hex'
+    @description: 'Asset Name as Hex String'
+    assetNameHex : HexBytes;
+
+    @title      : 'Asset Name'
+    @description: 'Asset Name as UTF-8 String'
+    assetName    : String(128);
+
+    @title      : 'Asset Fingerprint'
+    @description: 'CIP-14 Asset Fingerprint'
+    fingerprint  : String(44);
+}
+
+@title      : 'Asset Sum Slice'
+@description: 'Asset details with the quantity summed over several outputs (per address)'
+type AssetSumSlice {
+
+    @title      : 'Asset Quantity'
+    @description: 'Quantity of the Asset summed over the outputs of the address'
+    quantity     : AssetAmount;
 
     @title      : 'Asset Policy Id'
     @description: 'Policy Id of the Asset'

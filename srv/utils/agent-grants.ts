@@ -50,6 +50,7 @@ export const AGENT_ALLOWLISTABLE_ACTIONS: readonly string[] = [
   'BuildMultiAssetTransaction',
   'BuildMintTransaction',
   'BuildPlutusSpendTransaction',
+  'BuildPlutusTransaction',
   'SetCollateral',
   // externally signed transactions
   'CreateSigningRequest',

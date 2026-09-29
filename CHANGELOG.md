@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased]
+
+## [v2.0.0-rc.25] - multi-script builds, redeemers, one ledger view per source
+
+Several script inputs per build, redeemers of crawled transactions, the same rows from every source; run `cds deploy` (new `TransactionBuildRedeemers`, `TransactionRedeemers`; asset sums `Decimal(38,0)`).
+
+### Added
+
+- `BuildPlutusTransaction`: several script inputs (inline `validatorScript` or `referenceScript`),
+  ordered `outputsJson`, mints, reference/forced inputs, required signers, validity bounds;
+  PlutusData also as CBOR (`redeemerCbor`, `datumCbor`, `inlineDatumCbor`).
+- `TransactionBuildRedeemers` (execution units per build) and `TransactionRedeemers` (crawled
+  redeemers from Ogmios chain-sync, with redeemed input or policy); `redeemers` in the backend service.
+- `backfillTransactions(fromSlot, toSlot)`: fills input outpoints, datums, addresses and redeemers of
+  crawled transactions and rewrites rows stored in another shape; `getStatus().transactionBackfill`.
+- `importUtxoSet { source: "aggregates" }`: rebuilds only the address sums.
+
+### Changed
+
+- Address, account, build and `SetCollateral` reads come from the crawled UTxO set, checked at the
+  node by output reference; Ogmios address scans run on a second connection.
+- Every source yields the same transaction rows (`ledgerView`): inputs in ledger order, phase-2
+  partition applied, no unproduced collateral return.
+- Crawler and Postgres: lease renewed with the cursor update, rows sent inline instead of `COPY`.
+- PlutusData JSON may nest 64 levels.
+
+### Fixed
+
+- Coin selection skips reference inputs and UTxOs carrying a reference script; collateral and
+  `SetCollateral` use one rule (ADA-only, no reference script).
+- Builds right after a submit no longer reuse its inputs (pending transactions of this process).
+- Min-ADA shortfall is a 400; reference scripts on outputs are `[language, bytes]`; datum-hash outputs build.
+- Submit: a node rejection is final and carries the node's reason (Ogmios, Koios).
+- Missing input outpoints are `null` (was `""`/`0`); stored transactions carry `spendsCollaterals`.
+- `GetNextBlocks` on Postgres and orphaned cursor as 409; Koios asset history, protocol-parameter
+  epoch; UTxO set sums overflow and import lock.
+
 ## [v2.0.0-rc.24] - another ODATANO as backend
 
 ODATANO can run on another ODATANO (the public API) instead of Blockfrost or Koios; no schema change.

@@ -87,6 +87,23 @@ export interface TxWithdrawal {
   amount: Lovelace | string;
 }
 
+/** One redeemer of a transaction. */
+export interface TxRedeemer {
+  /** spend | mint | publish | withdraw | vote | propose */
+  purpose: string;
+  /** Index within its purpose, as the ledger counts it. */
+  index: number;
+  /** PlutusData CBOR hex. */
+  data: string;
+  mem: string;
+  steps: string;
+  /** spend: the redeemed input. */
+  txHash?: Hex | null;
+  outputIndex?: number | null;
+  /** mint: the policy. */
+  policyId?: Hex | null;
+}
+
 /** Normalized transaction */
 export interface Transaction {
   hash: Hex;
@@ -123,6 +140,8 @@ export interface Transaction {
   certificates?: TxCertificate[];
   /** Reward-account withdrawals; same `[]` vs undefined convention as `certificates`. */
   withdrawals?: TxWithdrawal[];
+  /** Redeemers; `[]` when the tx has none, undefined when the source does not report them (Blockfrost, Koios). */
+  redeemers?: TxRedeemer[];
 }
 
 /** Address view with current value and known UTxOs */
@@ -145,6 +164,8 @@ export interface UTxO {
   blockHash?: Hex;
   datumHash?: Hex | null;
   scriptRef?: Hex | null;
+  /** Full CBOR of the reference script (Plutus) when the source delivers it; builder use only. */
+  scriptRefCbor?: Hex | null;
   inlineDatum?: string | null;
 }
 
@@ -433,6 +454,40 @@ export type TxBuildPlutusSpendRequest = TxBuildRequest & {
   plutusScriptExecution: PlutusScriptExecution;
 };
 
+/** One script UTxO spent by a BuildPlutusTransaction: an inline validator or a UTxO carrying the script. */
+export type ScriptInput = {
+  txHash: string;
+  outputIndex: number;
+  /** Validator CBOR hex (script params already applied); exclusive with referenceScript. */
+  validatorScript?: string;
+  /** UTxO that carries the validator as reference script; added as reference input. */
+  referenceScript?: { txHash: string; outputIndex: number };
+  /** Redeemer (PlutusData JSON); `__INPUT_IDX__` placeholders resolve against the final inputs. */
+  redeemer: JSONValue;
+  /** Redeemer as PlutusData CBOR hex; wins over `redeemer`, no placeholders. */
+  redeemerCbor?: string;
+  /** Datum preimage (PlutusData JSON) for a hash-datum UTxO; inline datums are read from the UTxO. */
+  datum?: JSONValue;
+  /** Datum preimage as PlutusData CBOR hex; wins over `datum`. */
+  datumCbor?: string;
+};
+
+/** Output of a BuildPlutusTransaction, kept in the given order. */
+export type PlutusTxOutput = NonNullable<TxBuildRequest['extraOutputs']>[number] & {
+  /** Datum hash to lock the output with (hex); exclusive with inlineDatum. */
+  datumHash?: string;
+  /** Inline datum as PlutusData CBOR hex, taken byte for byte; exclusive with inlineDatum. */
+  inlineDatumCbor?: string;
+};
+
+/** BuildPlutusTransaction: several script inputs, the outputs as given, change after them. */
+export type TxBuildPlutusRequest = Pick<TxBuildRequest,
+  'network' | 'senderAddress' | 'changeAddress' | 'requiredSigners' | 'forceInputs' | 'referenceInputs'
+  | 'mintActions' | 'validityStartMs' | 'validityEndMs'> & {
+  scriptInputs: ScriptInput[];
+  outputs: PlutusTxOutput[];
+};
+
 /** Execution budget for Plutus scripts */
 export type ExecutionBudget = {
   memory: number;
@@ -486,6 +541,8 @@ export type TxBuildResult = {
   forcedInputsUsed?: number;
   /** Number of CIP-31 reference inputs included in the built transaction (0 if referenceInputs was not used). */
   referenceInputsUsed?: number;
+  /** Execution units stamped on each redeemer (script builds). */
+  redeemers?: Array<{ tag: string; index: number; mem: string; steps: string }>;
 };
 
 /** Supported external signer types */

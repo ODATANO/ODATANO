@@ -169,8 +169,50 @@ function applyDelta(d: AddressDelta, row: LedgerUtxoRow, assets: LedgerUtxoAsset
   }
 }
 
+/** `LedgerUTxOs` rows (+ asset rows) of a set of source transactions, keyed `txHash#outputIndex`. */
+export interface LedgerLookup {
+  /** Source transaction hashes this lookup covers (found or not). */
+  hashes: Set<string>;
+  rows: Map<string, LedgerUtxoRow>;
+  assets: Map<string, LedgerUtxoAssetRow[]>;
+}
+
+/**
+ * Read the ledger rows of the given source transactions. Asset rows are read only for
+ * transactions with at least one row carrying assets, so an ada-only block costs one SELECT.
+ */
+export async function readLedgerOutputs(tx: CapTransaction, txHashes: Iterable<string>, into?: LedgerLookup): Promise<LedgerLookup> {
+  const lookup: LedgerLookup = into ?? { hashes: new Set(), rows: new Map(), assets: new Map() };
+  const todo = [...new Set(txHashes)].filter(h => !lookup.hashes.has(h));
+  for (const hashChunk of chunk(todo, IN_CHUNK)) {
+    const rows = await tx.run(SELECT.from(LedgerUTxOs).where({ txHash: { in: hashChunk } })) as LedgerUtxoRow[];
+    for (const r of rows ?? []) lookup.rows.set(outpoint(r.txHash, num(r.outputIndex)), r);
+    const withAssets = [...new Set((rows ?? []).filter(r => r.hasAssets).map(r => r.txHash))];
+    if (withAssets.length) {
+      const assets = await tx.run(SELECT.from(LedgerUTxOAssets).where({ utxo_txHash: { in: withAssets } })) as LedgerUtxoAssetRow[];
+      for (const a of assets ?? []) {
+        const k = outpoint(a.utxo_txHash, num(a.utxo_outputIndex));
+        const list = lookup.assets.get(k) ?? [];
+        list.push(a);
+        lookup.assets.set(k, list);
+      }
+    }
+    for (const h of hashChunk) lookup.hashes.add(h);
+  }
+  return lookup;
+}
+
+/** Amount list (lovelace + native assets) of a ledger row, the shape a resolved input carries. */
+export function ledgerRowAmount(row: LedgerUtxoRow, assets: LedgerUtxoAssetRow[] | undefined): Amount[] {
+  return [
+    { unit: 'lovelace', quantity: String(row.lovelace ?? '0') },
+    ...(assets ?? []).map(a => ({ unit: a.unit, quantity: String(a.asset_quantity) })),
+  ];
+}
+
 /**
  * Apply one block to the ledger tables. Caller guarantees `block.slot > anchor.slot`.
+ * `lookup` may carry rows the caller already read for this block (input resolution).
  * Never throws for a missing outpoint (it is counted and logged); DB errors propagate so the
  * block transaction rolls back as a whole.
  */
@@ -178,6 +220,7 @@ export async function applyBlockToLedger(
   tx: CapTransaction,
   block: BlockData,
   txs: ProviderTransaction[],
+  lookup?: LedgerLookup,
 ): Promise<LedgerApplyResult> {
   const slot = block.slot ?? 0;
 
@@ -206,22 +249,7 @@ export async function applyBlockToLedger(
       }
     }
   }
-  const dbRows = new Map<string, LedgerUtxoRow>();
-  const dbAssets = new Map<string, LedgerUtxoAssetRow[]>();
-  const sourceHashes = [...new Set(lookups.map(l => l.txHash))];
-  for (const hashChunk of chunk(sourceHashes, IN_CHUNK)) {
-    const [rows, assets] = await Promise.all([
-      tx.run(SELECT.from(LedgerUTxOs).where({ txHash: { in: hashChunk } })) as Promise<LedgerUtxoRow[]>,
-      tx.run(SELECT.from(LedgerUTxOAssets).where({ utxo_txHash: { in: hashChunk } })) as Promise<LedgerUtxoAssetRow[]>,
-    ]);
-    for (const r of rows ?? []) dbRows.set(outpoint(r.txHash, num(r.outputIndex)), r);
-    for (const a of assets ?? []) {
-      const k = outpoint(a.utxo_txHash, num(a.utxo_outputIndex));
-      const list = dbAssets.get(k) ?? [];
-      list.push(a);
-      dbAssets.set(k, list);
-    }
-  }
+  const { rows: dbRows, assets: dbAssets } = await readLedgerOutputs(tx, lookups.map(l => l.txHash), lookup);
   const spentRows: LedgerUtxoRow[] = [];
   let missing = 0;
   for (const l of lookups) {

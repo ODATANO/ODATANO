@@ -64,6 +64,16 @@ export class ScriptValidationError extends BackendError {
   }
 }
 
+/**
+ * A crawler cursor block this instance does not follow (409). A 4xx keeps its message in production,
+ * so a remote crawler receives the `CHAIN_POINT_MISMATCH:` marker it recovers on.
+ */
+export class ChainPointMismatchError extends BackendError {
+  constructor(message: string, backendName?: string) {
+    super(message, 409, ERROR_CODES.CHAIN_POINT_MISMATCH, backendName);
+  }
+}
+
 /** Transaction already in mempool or on chain (409). */
 export class TransactionAlreadySubmittedError extends BackendError {
   constructor(

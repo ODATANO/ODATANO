@@ -13,7 +13,7 @@ describe('CardanoODataService — @readonly entities', () => {
       ([name, def]) => name.startsWith('CardanoODataService.') && def.kind === 'entity'
     );
 
-    expect(entities.length).toBe(30);
+    expect(entities.length).toBe(31);
     for (const [name, def] of entities) {
       // include the name in the assertion so a failure pinpoints the entity
       expect({ name, readonly: def['@readonly'] }).toEqual({ name, readonly: true });

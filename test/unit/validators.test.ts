@@ -12,6 +12,8 @@ import {
   validateRequiredSigners,
   validateTransactionInputs,
   extractPaymentCredential,
+  validateJsonWithLimits,
+  validatePlutusJson,
 } from '../../srv/utils/validators';
 // Network-aware validators read the active network from this leaf module.
 import { setActiveNetwork } from '../../srv/utils/network-context';
@@ -1149,5 +1151,36 @@ describe('Validator Helper Methods and Type Guards', () => {
       expect(extractPaymentCredential('not-an-address')).toBeNull();
       expect(extractPaymentCredential('')).toBeNull();
     });
+  });
+});
+
+describe('PlutusData JSON depth', () => {
+  // {constructor, fields: [ ... ]} takes two levels per constructor
+  const nested = (constructors: number): string => {
+    let v: unknown = { int: 1 };
+    for (let i = 0; i < constructors; i++) v = { constructor: 0, fields: [v] };
+    return JSON.stringify(v);
+  };
+
+  it('accepts a redeemer twelve levels deep and more, up to 64', () => {
+    expect(validatePlutusJson(nested(6), 'redeemerJson').valid).toBe(true);   // 12 levels
+    expect(validatePlutusJson(nested(31), 'redeemerJson').valid).toBe(true);  // 62 levels
+  });
+
+  it('rejects PlutusData deeper than 64 levels', () => {
+    const r = validatePlutusJson(nested(33), 'redeemerJson');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('Maximum nesting depth of 64');
+  });
+
+  it('keeps the general limit of 10 for other JSON', () => {
+    const r = validateJsonWithLimits(nested(6), 'metadataJson');
+    expect(r.valid).toBe(false);
+    expect(r.error).toContain('Maximum nesting depth of 10');
+  });
+
+  it('applies the PlutusData depth to redeemerJson and datumJson of the Build actions', () => {
+    const errors = validateTransactionInputs({ redeemerJson: nested(6), datumJson: nested(6) }, []);
+    expect(errors).toEqual([]);
   });
 });

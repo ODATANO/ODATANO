@@ -21,6 +21,9 @@ export const ERROR_CODES = {
   /** 400: ledger rejected the tx on script evaluation (PlutusFailure, CekError, budget, hash mismatch). */
   SCRIPT_VALIDATION_FAILURE: 'ODATANO_SCRIPT_VALIDATION_FAILURE',
 
+  /** 409: a crawler cursor block is not on this instance's chain (orphaned by a reorg). */
+  CHAIN_POINT_MISMATCH: 'ODATANO_CHAIN_POINT_MISMATCH',
+
   /** 409: transaction already submitted (duplicate / replay). */
   TX_ALREADY_SUBMITTED: 'ODATANO_TX_ALREADY_SUBMITTED',
 

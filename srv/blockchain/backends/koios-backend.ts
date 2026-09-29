@@ -2,8 +2,8 @@ import cds from '@sap/cds';
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { CardanoBackend, PaginatingBackend, EnumeratingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, isPostgrestServerErrorCode } from '../../utils/errors';
-import { normalizeCostModels, decodeAssetName } from '../../utils/mappers';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError, ScriptValidationError, normalizeBackendError, isPostgrestServerErrorCode } from '../../utils/errors';
+import { normalizeCostModels, decodeAssetName, ledgerView } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 
@@ -128,6 +128,21 @@ function sortAddressTxsDesc<T extends { block_height?: number | string | null; b
   return [...rows].sort((a, b) =>
     Number(b.block_height ?? b.block_time ?? 0) - Number(a.block_height ?? a.block_time ?? 0)
   );
+}
+
+/** The `error` entries of a cardano-submit-api rejection, else the body as text. */
+function nodeRejection(body: unknown): string {
+  const errors: string[] = [];
+  const walk = (v: unknown): void => {
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.error)) errors.push(...o.error.map(String));
+    else if (typeof o.error === 'string') errors.push(o.error);
+    for (const child of Object.values(o)) walk(child);
+  };
+  walk(typeof body === 'string' ? (() => { try { return JSON.parse(body); } catch { return undefined; } })() : body);
+  const text = errors.length > 0 ? errors.join('; ') : (typeof body === 'string' ? body : JSON.stringify(body));
+  return text.slice(0, 1000);
 }
 
 /** CardanoBackend implementation on the Koios REST API (Axios). */
@@ -710,8 +725,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const policyId = unit.slice(0, 56);
         const assetNameHex = unit.slice(56);
 
-        const { data } = await this.api.post('/asset_history', {
-          _asset_list: [[policyId, assetNameHex]],
+        // GET only: Koios answers a POST to /asset_history with 404
+        const { data } = await this.api.get('/asset_history', {
+          params: { _asset_policy: policyId, _asset_name: assetNameHex },
         });
 
         if (!Array.isArray(data) || data.length === 0) return [];
@@ -839,12 +855,25 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       async () => {
         // Koios /submittx expects raw CBOR bytes with Content-Type: application/cbor
         const cborBytes = Buffer.from(signedTxCbor, 'hex');
-        const { data } = await this.api.post('/submittx', cborBytes, {
-          headers: { 'Content-Type': 'application/cbor' },
-          // Prevent axios from JSON-serializing the Buffer
-          transformRequest: [(d: unknown) => d],
-        });
-        return data.trim().replace(/^"|"$/g, '');
+        try {
+          const { data } = await this.api.post('/submittx', cborBytes, {
+            headers: { 'Content-Type': 'application/cbor' },
+            // Prevent axios from JSON-serializing the Buffer
+            transformRequest: [(d: unknown) => d],
+          });
+          return data.trim().replace(/^"|"$/g, '');
+        } catch (err: unknown) {
+          // 400 carries the node's rejection (e.g. ExtraneousScriptWitnessesUTXOW); keep it
+          const response = (err as { response?: { status?: number; data?: unknown } }).response;
+          if (response?.status === 400 && response.data) {
+            const reason = nodeRejection(response.data);
+            // known kinds keep their class (already submitted = 409, script failure = 400)
+            const known = normalizeBackendError(new Error(reason), this.name);
+            if (known.statusCode === 409 || known instanceof ScriptValidationError) throw known;
+            throw new TransactionValidationError(`node rejected the transaction: ${reason}`, err);
+          }
+          throw err;
+        }
       },
       this.name
     );
@@ -857,11 +886,21 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.get('/cli_protocol_params');
+        // /cli_protocol_params carries no epoch; the tip does. Without it the epoch stays 0.
+        const [{ data }, epoch] = await Promise.all([
+          this.api.get('/cli_protocol_params'),
+          this.api.get('/tip').then(
+            (r) => Number((r.data as Array<{ epoch_no?: number }>)?.[0]?.epoch_no ?? 0),
+            (err: unknown) => {
+              logger.warn(`Koios /tip failed, protocol parameters without epoch: ${err instanceof Error ? err.message : String(err)}`);
+              return 0;
+            },
+          ),
+        ]);
 
         return {
           network: this.network,
-          epoch: 0, // Koios doesn't provide current epoch in this endpoint
+          epoch,
           // --- Fees / Sizes ---
           minFeeA: data.txFeePerByte,
           minFeeB: data.txFeeFixed,
@@ -1316,7 +1355,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   // Private Helpers
   //-----------------------------------------------------------------------------
 
-  /** Map a Koios /tx_info row to the normalized Transaction. */
+  /** Map a Koios /tx_info row to the normalized Transaction (ledger view, see ledgerView). */
   private _mapKoiosTx(tx: KoiosTxInfo): Transaction {
     let labels: MetadataLabelTx[] = [];
 
@@ -1329,7 +1368,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         }));
     }
 
-    return {
+    return ledgerView({
       hash: tx.tx_hash,
       blockHash: tx.block_hash,
       blockHeight: Number(tx.block_height),
@@ -1353,6 +1392,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       // Phase-2 validity as db-sync records it; undefined on a Koios without the field, so the
       // indexer keeps treating such a source as "no phase-2 information".
       spendsCollaterals: typeof tx.valid_contract === 'boolean' ? tx.valid_contract === false : undefined,
+      // Koios lists inputs in its own order; ledgerView sorts them like the ledger
       inputs: [
         ...asKoiosList(tx.inputs).map((input) => mapKoiosInput(input)),
         ...asKoiosList(tx.collateral_inputs).map((input) => mapKoiosInput(input, { isCollateral: true })),
@@ -1360,7 +1400,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       ],
       outputs: [
         ...asKoiosList(tx.outputs).map((output) => mapKoiosOutput(tx.tx_hash, output, false)),
-        // CIP-40 collateral return: produced only when the script phase failed
+        // CIP-40 collateral return: produced only when the script phase failed (ledgerView keeps it then)
         ...asKoiosList(tx.collateral_output).map((output) => mapKoiosOutput(tx.tx_hash, output, true)),
       ],
       metadata: labels,
@@ -1372,7 +1412,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             .filter((w) => !!w.stake_addr)
             .map((w) => ({ stakeAddress: String(w.stake_addr), amount: String(w.amount ?? '0') }))
         : undefined,
-    };
+    });
   }
 }
 

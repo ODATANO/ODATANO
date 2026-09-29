@@ -184,8 +184,6 @@ export interface LedgerStateBackend extends CardanoBackend {
   queryUtxoSetAt(point: ChainPoint): Promise<UTxO[]>;
   /** Outputs among `refs` that are unspent at the tip; spent or unknown references are absent. */
   getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]>;
-  /** Unspent outputs of several addresses at the tip. */
-  getUtxosByAddresses?(addresses: string[]): Promise<UTxO[]>;
 }
 
 export function isLedgerStateBackend(backend: CardanoBackend): backend is LedgerStateBackend {

@@ -69,34 +69,51 @@ export async function intersectionBefore(db: CapTransaction, slot: number): Prom
   return 'origin';
 }
 
-export async function backfillCertificates(opts: CertificateBackfillOptions): Promise<CertificateBackfillResult> {
+/** One streamed block of a backfill, with what the collector took from it. */
+export interface StreamedBlock<T> {
+  hash: string;
+  slot: number;
+  transactions: number;
+  payload: T;
+}
+
+export interface CrawledBlockStreamOptions {
+  client: CardanoClient;
+  fromSlot: number;
+  toSlot: number;
+  batchBlocks?: number;
+  /** Error class the range and backend checks throw. */
+  errorType?: new (message: string) => Error;
+}
+
+/**
+ * Streams the crawled range `fromSlot..toSlot` over a second chain-sync connection and hands
+ * batches of blocks the index holds to `writeBatch`, each in its own DB transaction. A block
+ * the index does not know (rolled back since) is skipped. Returns the intersection used.
+ */
+export async function streamCrawledBlocks<T>(
+  opts: CrawledBlockStreamOptions,
+  collect: (block: BlockData, txs: Transaction[]) => T,
+  writeBatch: (tx: CapTransaction, blocks: StreamedBlock<T>[]) => Promise<void>,
+  afterBatch: (toSlot: number) => void,
+): Promise<ChainPoint | 'origin'> {
   const { client, fromSlot, toSlot } = opts;
+  const Err = opts.errorType ?? CertificateBackfillError;
   if (!Number.isInteger(fromSlot) || !Number.isInteger(toSlot) || fromSlot < 0 || toSlot < fromSlot) {
-    throw new CertificateBackfillError(`Invalid slot range ${fromSlot}..${toSlot}`);
+    throw new Err(`Invalid slot range ${fromSlot}..${toSlot}`);
   }
   const backend = client.getChainSyncBackend();
-  if (!backend) throw new CertificateBackfillError('No chain-sync backend available (the backfill streams from Ogmios).');
+  if (!backend) throw new Err('No chain-sync backend available (the backfill streams from Ogmios).');
   const batchBlocks = Math.max(1, opts.batchBlocks ?? 200);
 
   const intersection = await cds.tx((tx) => intersectionBefore(tx, fromSlot));
   const points: ChainPoint[] | 'origin' = intersection === 'origin' ? 'origin' : [intersection];
 
-  const progress: CertificateBackfillProgress = { atSlot: intersection === 'origin' ? 0 : intersection.slot, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0 };
-
-  /** One streamed block with its mapped rows, held until the batch is checked against the index. */
-  interface Pending {
-    hash: string;
-    slot: number;
-    transactions: number;
-    certs: ReturnType<typeof mapTransactionCertificates>;
-    withdrawals: ReturnType<typeof mapTransactionWithdrawals>;
-  }
-  let pending: Pending[] = [];
+  let pending: StreamedBlock<T>[] = [];
 
   /**
    * Writes a batch: the index's blocks of the batch's slot range are read once (a sequential
-   * index range, not one random lookup per block) and only rows of blocks the index holds
-   * are written; a block it never had (rolled back since) is skipped.
+   * index range, not one random lookup per block) and only blocks the index holds are passed on.
    */
   const flush = async (): Promise<void> => {
     if (!pending.length) return;
@@ -108,21 +125,14 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
         SELECT.from(Block).columns('hash').where({ slot: { between: fromBatch, and: toBatch } }) as any
       )) as Array<{ hash: string }>;
       const known = new Set(rows.map((r) => r.hash));
-      const certs = [], withdrawals = [];
-      for (const b of batch) {
-        if (!known.has(b.hash)) { logger.warn(`Block ${b.hash} at slot ${b.slot} is not in the index — skipped`); continue; }
-        certs.push(...b.certs);
-        withdrawals.push(...b.withdrawals);
-        progress.blocks++;
-        progress.transactions += b.transactions;
-        progress.certificates += b.certs.length;
-        progress.withdrawals += b.withdrawals.length;
-      }
-      if (certs.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certs));
-      if (withdrawals.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawals));
+      const held = batch.filter((b) => {
+        if (known.has(b.hash)) return true;
+        logger.warn(`Block ${b.hash} at slot ${b.slot} is not in the index — skipped`);
+        return false;
+      });
+      await writeBatch(tx, held);
     });
-    progress.atSlot = toBatch;
-    opts.onProgress?.({ ...progress });
+    afterBatch(toBatch);
   };
 
   let handle: ChainSyncHandle | null = null;
@@ -138,11 +148,7 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
       const slot = block.slot ?? 0;
       if (slot > toSlot) { finish(); return; }
       if (slot < fromSlot) return;   // between the intersection and the range: skipped, not counted
-      pending.push({
-        hash: block.hash, slot, transactions: txs.length,
-        certs: txs.flatMap((t) => mapTransactionCertificates(t.hash, t.certificates ?? [])),
-        withdrawals: txs.flatMap((t) => mapTransactionWithdrawals(t.hash, t.withdrawals ?? [])),
-      });
+      pending.push({ hash: block.hash, slot, transactions: txs.length, payload: collect(block, txs) });
       if (pending.length >= batchBlocks) await flush();
       if (slot === toSlot) finish();
     };
@@ -162,6 +168,39 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
     const h = handle as ChainSyncHandle | null;
     if (h) { try { await h.close(); } catch { /* best effort */ } }
   }
+  return intersection;
+}
+
+export async function backfillCertificates(opts: CertificateBackfillOptions): Promise<CertificateBackfillResult> {
+  const { fromSlot, toSlot } = opts;
+  const progress: CertificateBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0 };
+  let started = false;
+
+  const intersection = await streamCrawledBlocks(
+    opts,
+    (_block, txs) => ({
+      certs: txs.flatMap((t) => mapTransactionCertificates(t.hash, t.certificates ?? [])),
+      withdrawals: txs.flatMap((t) => mapTransactionWithdrawals(t.hash, t.withdrawals ?? [])),
+    }),
+    async (tx, blocks) => {
+      const certs = blocks.flatMap((b) => b.payload.certs);
+      const withdrawals = blocks.flatMap((b) => b.payload.withdrawals);
+      for (const b of blocks) {
+        progress.blocks++;
+        progress.transactions += b.transactions;
+      }
+      progress.certificates += certs.length;
+      progress.withdrawals += withdrawals.length;
+      if (certs.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certs));
+      if (withdrawals.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawals));
+    },
+    (atSlot) => {
+      started = true;
+      progress.atSlot = atSlot;
+      opts.onProgress?.({ ...progress });
+    },
+  );
+  if (!started) progress.atSlot = intersection === 'origin' ? 0 : intersection.slot;
   logger.info(`Certificate backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.certificates} certificates, ${progress.withdrawals} withdrawals`);
   return { ...progress, fromSlot, toSlot, intersection };
 }

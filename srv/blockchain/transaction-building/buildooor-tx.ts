@@ -1,8 +1,8 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
-import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters, TxEvaluator, MintAction } from "../../utils/types";
+import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, PlutusTxOutput, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters, TxEvaluator, MintAction } from "../../utils/types";
 import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
-import { assertAdaOnly, getLovelace, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
+import { assertAdaOnly, getLovelace, isCollateralCandidate, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
@@ -148,6 +148,21 @@ function chunkUtf8(str: string, maxBytes: number): string[] {
   return chunks;
 }
 
+/**
+ * The same script without the CBOR it was parsed from. Script.fromCbor keeps the input bytes (the
+ * compiler's bare bytestring) and toCbor() returns them, while an output's script_ref must hold the
+ * ledger form [language, bytes]; the hash is the same either way.
+ */
+function ledgerScript(script: Script): Script {
+  return new Script(script.type, script.bytes);
+}
+
+// Hash32 inherits Hash.clone(), which returns a plain Hash; TxOut rejects that as datum when
+// Buildooor clones outputs, so a datum-hash output could never be built. Hash28 has its own clone.
+if (!Object.prototype.hasOwnProperty.call(Hash32.prototype, 'clone')) {
+  Hash32.prototype.clone = function (this: Hash32): Hash32 { return new Hash32(this.toString()); };
+}
+
 /** CardanoTxBuilder implementation on top of Buildooor. */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = 'BuildooorTxBuilder';
@@ -229,7 +244,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.outputDatum, refScript)];
 
       // Partition: forced UTxOs become fixed inputs; rest is the coin-selection pool
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs));
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
       const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
@@ -275,7 +290,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Partition forced vs candidate UTxOs. Forced inputs are already committed;
       // collateral and coin selection operate on the remainder only.
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs);
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs));
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
@@ -395,7 +410,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const forceInputsFiltered = (req.forceInputs ?? []).filter(
         r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
       );
-      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered);
+      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs));
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
@@ -420,7 +435,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Compute the final input order (Buildooor's lex sort) and resolve __INPUT_IDX__ placeholders
       // in redeemer / datum / output datums BEFORE PlutusData encoding.
-      const sortedInputs = this._computeSortedInputs(scriptUtxoRef, forced, this._extractFundingRefs(selectedFundingInputs));
+      const sortedInputs = this._computeSortedInputs([scriptUtxoRef], forced, this._extractFundingRefs(selectedFundingInputs));
       const resolveCtx = { sortedInputs };
       const resolvedRedeemer = resolveIndexPlaceholders(plutusScriptExecution.redeemer, resolveCtx);
       const redeemerData = jsonToPlutusData(resolvedRedeemer);
@@ -511,6 +526,164 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
+  /**
+   * Several script inputs in one transaction, each with its own redeemer (inline validator or a
+   * reference-script UTxO), the outputs exactly in the given order and change after them.
+   */
+  public async buildUnsignedPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    let coinSelectionContext: string | undefined;
+    try {
+      this._ensureCurrentProtocolParameters(ctx);
+      const keyOf = (r: { txHash: string; outputIndex: number }) => `${r.txHash.toLowerCase()}#${r.outputIndex}`;
+      const utxoByKey = new Map(ctx.utxos.map(u => [keyOf(u), u]));
+      const refUtxoByKey = new Map((ctx.referenceInputUtxos ?? []).map(u => [keyOf(u), u]));
+      const scriptKeys = new Set(req.scriptInputs.map(keyOf));
+
+      // Scripts the reference inputs already carry: the ledger rejects the same script again as a
+      // witness (ExtraneousScriptWitnesses), so an inline validator with such a hash uses the reference.
+      const referencedByHash = new Map<string, LedgerUTxO>();
+      for (const u of ctx.referenceInputUtxos ?? []) {
+        const ledgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(u);
+        const hash = ledgerUtxo.resolved.refScript?.hash.toString();
+        if (hash && !referencedByHash.has(hash)) referencedByHash.set(hash, ledgerUtxo);
+      }
+
+      // Script inputs: each UTxO with its script (inline, or the ledger UTxO carrying it)
+      const scriptEntries = req.scriptInputs.map((si, i) => {
+        const utxo = utxoByKey.get(keyOf(si));
+        if (!utxo) throw new TransactionValidationError(`scriptInputs[${i}] ${keyOf(si)} not found on-chain or already spent`);
+        if (si.validatorScript) {
+          const script = this._parsePlutusV3Script(si.validatorScript, `scriptInputs[${i}].validatorScript`);
+          const scriptHash = script.hash.toString();
+          const referenced = referencedByHash.get(scriptHash);
+          return referenced ? { si, utxo, refLedgerUtxo: referenced, scriptHash } : { si, utxo, script };
+        }
+        const refKey = keyOf(si.referenceScript!);
+        const refUtxo = refUtxoByKey.get(refKey);
+        if (!refUtxo) throw new TransactionValidationError(`scriptInputs[${i}].referenceScript ${refKey} not found on-chain or already spent`);
+        const refLedgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(refUtxo);
+        if (!refLedgerUtxo.resolved.refScript) {
+          throw new TransactionValidationError(
+            `scriptInputs[${i}].referenceScript ${refKey} carries no reference script, or its bytes are not available ` +
+            `from the configured backends (Ogmios or Koios deliver them, Blockfrost only the hash)`
+          );
+        }
+        return { si, utxo, refLedgerUtxo, scriptHash: refLedgerUtxo.resolved.refScript.hash.toString() };
+      });
+
+      const senderUtxos = ctx.utxos.filter(u => !scriptKeys.has(keyOf(u)));
+      const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
+      const { forced, rest } = this._partitionForcedInputs(senderUtxos, (req.forceInputs ?? []).filter(r => !scriptKeys.has(keyOf(r))),
+        this._referencedKeys(ctx, req.referenceInputs, req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : []))));
+      const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
+
+      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      const allFundingInputs = fundingUtxos.map(utxo => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(utxo) }));
+
+      // Funding covers only what the outputs need beyond the script inputs, forced inputs and mints
+      // (keepRelevant adds its own lovelace margin for fee and change).
+      const need = new Map<string, bigint>();
+      const add = (unit: string, qty: bigint) => need.set(unit, (need.get(unit) ?? 0n) + qty);
+      for (const o of req.outputs) {
+        add('lovelace', BigInt(o.lovelaceAmount));
+        for (const a of o.assets ?? []) add(a.unit, BigInt(a.quantity));
+      }
+      for (const u of [...scriptEntries.map(e => e.utxo), ...forced]) {
+        for (const a of u.amount) add(a.unit.toLowerCase() === 'lovelace' ? 'lovelace' : a.unit, -BigInt(a.quantity));
+      }
+      for (const m of req.mintActions ?? []) add(m.assetUnit, -BigInt(m.quantity));
+      let requiredFundingValue = Value.lovelaces(0n);
+      for (const [unit, qty] of need) {
+        if (qty <= 0n) continue;
+        requiredFundingValue = Value.add(requiredFundingValue, unit === 'lovelace'
+          ? Value.lovelaces(qty)
+          : this._buildLedgerValue(0n, [{ unit, quantity: qty.toString() }]));
+      }
+      const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
+
+      // Placeholders resolve against the final input order, over all script inputs at once
+      const sortedInputs = this._computeSortedInputs(req.scriptInputs, forced, this._extractFundingRefs(selectedFundingInputs));
+      const resolveCtx = { sortedInputs };
+
+      const scriptInputs = scriptEntries.map(({ si, utxo, script, refLedgerUtxo }) => {
+        const redeemer = si.redeemerCbor ? dataFromCbor(si.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(si.redeemer, resolveCtx));
+        const datum = si.datumCbor ? dataFromCbor(si.datumCbor)
+          : si.datum !== undefined ? jsonToPlutusData(resolveIndexPlaceholders(si.datum, resolveCtx)) : "inline" as const;
+        const ledgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(utxo);
+        return script
+          ? { utxo: ledgerUtxo, inputScript: { script, datum, redeemer } }
+          : { utxo: ledgerUtxo, referenceScript: { refUtxo: refLedgerUtxo!, datum, redeemer } };
+      });
+
+      const outputs: TxOut[] = [];
+      this._appendPlutusOutputs(outputs, req.outputs.map(o => ({
+        ...o,
+        inlineDatum: o.inlineDatum !== undefined ? resolveIndexPlaceholders(o.inlineDatum, resolveCtx) : undefined,
+      })));
+
+      const mints = req.mintActions && req.mintActions.length > 0
+        ? this._buildMintEntries(req.mintActions, this._parsePlutusV3Script(req.mintActions[0].mintingPolicyScript!, 'mintActions[0].mintingPolicyScript'), undefined, resolveCtx)
+        : undefined;
+
+      // Reference inputs: the caller's, minus the reference-script UTxOs Buildooor adds itself
+      const refScriptKeys = new Set(scriptEntries.filter(e => e.refLedgerUtxo).map(e =>
+        keyOf({ txHash: e.refLedgerUtxo!.utxoRef.id.toString(), outputIndex: e.refLedgerUtxo!.utxoRef.index })));
+      const readonlyRefInputs = this._mapReferenceInputs((ctx.referenceInputUtxos ?? []).filter(u =>
+        !refScriptKeys.has(keyOf(u)) && (req.referenceInputs ?? []).some(r => keyOf(r) === keyOf(u))));
+
+      const { invalidBefore, invalidAfter } = this._resolveValiditySlots(req, 'script');
+      const buildParams: ITxBuildArgs = {
+        inputs: [...scriptInputs, ...forcedInputs, ...selectedFundingInputs],
+        outputs, changeAddress, mints,
+        collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
+        invalidBefore, invalidAfter,
+        ...(collateralReturn && { collateralReturn }),
+        ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
+      };
+      const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction);
+
+      const details = this._extractTxDetails(tx);
+      const maxTxSize = Number(this.txBuilder.protocolParamters.maxTxSize);
+      if (details.sizeBytes > maxTxSize) {
+        const inline = scriptEntries.filter(e => e.script).length;
+        throw new TransactionValidationError(
+          `transaction is ${details.sizeBytes} bytes, above the maximum of ${maxTxSize}` +
+          (inline > 0 ? `; ${inline} script input(s) carry their validator inline, a referenceScript would move it out of the transaction` : '')
+        );
+      }
+      const scriptHashes = scriptEntries.map(e => e.script ? e.script.hash.toString() : e.scriptHash!);
+      logger.debug(`Built unsigned Plutus transaction with ${scriptInputs.length} script input(s), fee ${details.feeLovelace}`);
+      return this._buildResult(req, ctx, details, {
+        scriptHash: scriptHashes[0],
+        forcedInputsUsed: forcedInputs.length,
+        referenceInputsUsed: readonlyRefInputs.length + refScriptKeys.size
+      });
+    } catch (err: unknown) {
+      mapBuilderError(err, undefined, coinSelectionContext);
+    }
+  }
+
+  /** Outputs of a BuildPlutusTransaction in the given order: inline datum or datum hash, ref script, min-ADA each. */
+  private _appendPlutusOutputs(outputs: TxOut[], list: PlutusTxOutput[]): void {
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i];
+      const value = this._buildLedgerValue(BigInt(o.lovelaceAmount), o.assets);
+      const refScript = this._parseReferenceScript(o.referenceScript);
+      const datum = o.datumHash ? new Hash32(o.datumHash) : o.inlineDatumCbor ? dataFromCbor(o.inlineDatumCbor) : undefined;
+      const txOut = datum
+        ? new TxOut({ address: Address.fromString(o.address), value, datum, ...(refScript && { refScript }) })
+        : this._buildTxOut(Address.fromString(o.address), value, o.inlineDatum, refScript);
+      const minLovelaces = this.txBuilder.getMinimumOutputLovelaces(txOut);
+      if (BigInt(o.lovelaceAmount) < minLovelaces) {
+        throw new TransactionValidationError(
+          `outputs[${i}] needs at least ${minLovelaces.toString()} lovelace (has ${o.lovelaceAmount}); raise its lovelaceAmount`
+        );
+      }
+      outputs.push(txOut);
+    }
+  }
+
   //---------------------------------------------------------------------------
   // Shared Helper Methods
   //---------------------------------------------------------------------------
@@ -521,6 +694,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     feeLovelace: string;
     inputRefs: Array<{ txHash: string; index: number }>;
     outputs: Array<{ address: string; lovelace: string }>;
+    redeemers: NonNullable<TxBuildResult['redeemers']>;
   } {
     const unsignedTxBytes = tx.toCbor();
     return {
@@ -536,12 +710,18 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         address: o.address?.toString?.() ?? "",
         lovelace: o.value?.lovelaces?.toString?.() ?? "0"
       })),
+      redeemers: (tx.witnesses.redeemers ?? []).map((r) => ({
+        tag: txRedeemerTagToString(r.tag),
+        index: r.index,
+        mem: r.execUnits.mem.toString(),
+        steps: r.execUnits.cpu.toString(),
+      })),
     };
   }
 
   /** Build the standard TxBuildResult object */
   private _buildResult(
-    req: TxBuildRequest, ctx: TxBuildContext,
+    req: Pick<TxBuildRequest, 'senderAddress'>, ctx: TxBuildContext,
     txDetails: ReturnType<BuildooorTxBuilder['_extractTxDetails']>,
     extra?: { scriptHash?: string; mintScriptHash?: string; forcedInputsUsed?: number; referenceInputsUsed?: number }
   ): TxBuildResult {
@@ -565,6 +745,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       feeLovelace: txDetails.feeLovelace,
       inputs,
       outputs: txDetails.outputs,
+      ...(txDetails.redeemers.length > 0 ? { redeemers: txDetails.redeemers } : {}),
       ...extra,
       warnings: [],
     };
@@ -800,17 +981,33 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   private _partitionForcedInputs(
     utxos: OdatanoUtxo[],
-    forceInputs?: Array<{ txHash: string; outputIndex: number }>
+    forceInputs?: Array<{ txHash: string; outputIndex: number }>,
+    referenced: ReadonlySet<string> = new Set()
   ): { forced: OdatanoUtxo[]; rest: OdatanoUtxo[] } {
-    if (!forceInputs || forceInputs.length === 0) return { forced: [], rest: utxos };
-    const forcedKeys = new Set(forceInputs.map(r => `${r.txHash}#${r.outputIndex}`));
+    const hasRefScript = (u: OdatanoUtxo) => Boolean(u.scriptRef || u.scriptRefCbor);
+    if ((!forceInputs || forceInputs.length === 0) && referenced.size === 0 && !utxos.some(hasRefScript)) return { forced: [], rest: utxos };
+    const key = (r: { txHash: string; outputIndex: number }) => `${r.txHash.toLowerCase()}#${r.outputIndex}`;
+    const forcedKeys = new Set((forceInputs ?? []).map(key));
+    // a UTxO cannot be spent and referenced in one transaction
+    const clash = [...forcedKeys].find(k => referenced.has(k));
+    if (clash) throw new TransactionValidationError(`forceInputs ${clash} is also a reference input — a UTxO cannot be spent and referenced in one transaction`);
     const forced: OdatanoUtxo[] = [];
     const rest: OdatanoUtxo[] = [];
     for (const u of utxos) {
-      if (forcedKeys.has(`${u.txHash}#${u.outputIndex}`)) forced.push(u);
-      else rest.push(u);
+      if (forcedKeys.has(key(u))) forced.push(u);
+      // reference inputs and UTxOs carrying a reference script stay out of coin selection and
+      // collateral; a deployed script is spent only when forced
+      else if (!referenced.has(key(u)) && !hasRefScript(u)) rest.push(u);
     }
     return { forced, rest };
+  }
+
+  /** Keys (`txhash#index`) of the reference inputs of a build, from the resolved UTxOs and the request refs. */
+  private _referencedKeys(ctx: TxBuildContext, ...refs: Array<Array<{ txHash: string; outputIndex: number }> | undefined>): Set<string> {
+    const keys = new Set<string>();
+    for (const u of ctx.referenceInputUtxos ?? []) keys.add(`${u.txHash.toLowerCase()}#${u.outputIndex}`);
+    for (const list of refs) for (const r of list ?? []) keys.add(`${r.txHash.toLowerCase()}#${r.outputIndex}`);
+    return keys;
   }
 
   /** Map resolved CIP-31 reference input UTxOs to Buildooor LedgerUTxO; empty when none. */
@@ -924,9 +1121,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     collateralUtxos: LedgerUTxO[]; fundingUtxos: OdatanoUtxo[];
     collateralReturn?: { address: Address; value: Value };
   } {
-    const adaOnly = utxos.filter(u => u.amount.every(a => a.unit.toLowerCase() === 'lovelace'));
+    // ADA-only and without a reference script (a deployed script is not collateral); SetCollateral uses the same rule
+    const adaOnly = utxos.filter(isCollateralCandidate);
     if (adaOnly.length === 0) {
-      throw new TransactionValidationError('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral.');
+      throw new TransactionValidationError('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral; create one with SetCollateral.');
     }
 
     const sorted = [...adaOnly].sort((a, b) => {
@@ -1016,21 +1214,21 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   /** Parse a Plutus V3 CBOR hex into a Buildooor Script for refScript attachment. */
   private _parseReferenceScript(hex: string | undefined): Script | undefined {
     if (!hex) return undefined;
-    return this._parsePlutusV3Script(hex, 'referenceScript');
+    return ledgerScript(this._parsePlutusV3Script(hex, 'referenceScript'));
   }
 
   /**
-   * Map an input UTxO's scriptRef to a Script. Blockfrost/Ogmios set scriptRef to the 28-byte
-   * hash (56 hex chars), Koios to the full CBOR bytes; only full bytes are usable locally.
+   * Map an input UTxO's reference script to a Script: `scriptRefCbor` (Ogmios), else a full-CBOR
+   * `scriptRef` (Koios); Blockfrost and the tables carry the 28-byte hash only, unusable locally.
    */
   private _buildInputRefScript(utxo: OdatanoUtxo): Script | undefined {
-    if (!utxo.scriptRef) return undefined;
-    if (utxo.scriptRef.length <= 56) {
-      logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only — local Plutus eval will not see the script`);
+    const cbor = utxo.scriptRefCbor ?? (utxo.scriptRef && utxo.scriptRef.length > 56 ? utxo.scriptRef : undefined);
+    if (!cbor) {
+      if (utxo.scriptRef) logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only — local Plutus eval will not see the script`);
       return undefined;
     }
     try {
-      const script = Script.fromCbor(Buffer.from(utxo.scriptRef, 'hex'));
+      const script = ledgerScript(Script.fromCbor(Buffer.from(cbor, 'hex')));
       // chain data, not consumer input — warn instead of rejecting
       const b = script.bytes;
       if (b.length >= 3 && b[0] === 1 && b[1] === 0 && b[2] === 0) {
@@ -1049,12 +1247,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * in build(): all inputs (script, forced, funding) sorted lexicographically on (txHash, outputIndex).
    */
   private _computeSortedInputs(
-    scriptUtxoRef: { txHash: string; outputIndex: number },
+    scriptUtxoRefs: Array<{ txHash: string; outputIndex: number }>,
     forcedUtxos: OdatanoUtxo[],
     fundingRefs: InputRef[]
   ): InputRef[] {
     const all: InputRef[] = [
-      { txHash: scriptUtxoRef.txHash, outputIndex: scriptUtxoRef.outputIndex },
+      ...scriptUtxoRefs.map(r => ({ txHash: r.txHash, outputIndex: r.outputIndex })),
       ...forcedUtxos.map(u => ({ txHash: u.txHash, outputIndex: u.outputIndex })),
       ...fundingRefs
     ];
@@ -1115,7 +1313,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Validity window (slots) from the request. Script builds default to `now - 2 min` / `now + 1 h`;
    * plain transfers pass explicit bounds through without defaulting.
    */
-  private _resolveValiditySlots(req: TxBuildRequest, mode: 'script' | 'passthrough'): { invalidBefore?: bigint; invalidAfter?: bigint } {
+  private _resolveValiditySlots(req: Pick<TxBuildRequest, 'validityStartMs' | 'validityEndMs'>, mode: 'script' | 'passthrough'): { invalidBefore?: bigint; invalidAfter?: bigint } {
     const hasStart = req.validityStartMs !== undefined && req.validityStartMs !== null && req.validityStartMs !== '';
     const hasEnd = req.validityEndMs !== undefined && req.validityEndMs !== null && req.validityEndMs !== '';
 

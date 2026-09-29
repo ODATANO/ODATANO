@@ -14,6 +14,11 @@ export function getLovelace(u: OdatanoUtxo): bigint {
   return BigInt(entry?.quantity ?? "0");
 }
 
+/** A UTxO the builders may take as collateral: lovelace only and no reference script. */
+export function isCollateralCandidate(u: OdatanoUtxo): boolean {
+  return u.amount.every(a => a.unit.toLowerCase() === 'lovelace' || BigInt(a.quantity) === 0n) && !u.scriptRef && !u.scriptRefCbor;
+}
+
 /** Throws MixedAssetsError when the UTxO carries non-ADA assets. */
 export function assertAdaOnly(u: OdatanoUtxo): void {
   const nonAda = u.amount.filter(a => (a.unit).toLowerCase() !== "lovelace" && BigInt(a.quantity) !== 0n);
@@ -128,6 +133,15 @@ export function mapBuilderError(err: unknown, assetUnit?: string, context?: stri
   const errObj = err as { message?: string; toString?: () => string } | null;
   const rawMsg = errObj?.message || errObj?.toString?.() || String(err);
   const msg = rawMsg.toLowerCase();
+
+  // An output below the protocol's min-ADA: a request error, not missing funds
+  const minAda = rawMsg.match(/tx output at index (\d+) did not have enough lovelaces[\s\S]*?minimum lovelaces required:\s*(\d+)[\s\S]*?output lovelaces\s*:\s*(\d+)/);
+  if (minAda) {
+    const [, index, minimum, actual] = minAda;
+    const withAssets = /tx output:[\s\S]*"[0-9a-f]{56}"\s*:/i.test(rawMsg) ? ', it carries native assets' : '';
+    throw new TransactionValidationError(
+      `output ${index} needs at least ${minimum} lovelace (has ${actual}${withAssets}); raise its lovelace amount`, err);
+  }
 
   if (msg.includes('not enough') ||
       msg.includes('insufficient') ||

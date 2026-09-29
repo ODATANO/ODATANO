@@ -9,6 +9,7 @@ import {
   TransactionMetadata_ as TransactionMetadata,
   TransactionCertificates,
   TransactionWithdrawals,
+  TransactionRedeemers,
 } from '#cds-models/odatano/cardano';
 import { chunk, IN_CHUNK } from '../utils/collections';
 
@@ -31,7 +32,7 @@ export async function readTxKeys(tx: CapTransaction, hashes: string[]): Promise<
   return keys;
 }
 
-/** Delete transactions with their input/output, asset, metadata, certificate and withdrawal rows. */
+/** Delete transactions with their input/output, asset, metadata, certificate, withdrawal and redeemer rows. */
 export async function deleteTransactionRows(tx: CapTransaction, keys: TxKey[]): Promise<void> {
   for (const keyChunk of chunk(keys, IN_CHUNK)) {
     const hashes = keyChunk.map(k => k.hash);
@@ -45,6 +46,7 @@ export async function deleteTransactionRows(tx: CapTransaction, keys: TxKey[]): 
     await tx.run(DELETE.from(TransactionMetadata).where({ tx_hash: { in: hashes } }));
     await tx.run(DELETE.from(TransactionCertificates).where({ tx_hash: { in: hashes } }));
     await tx.run(DELETE.from(TransactionWithdrawals).where({ tx_hash: { in: hashes } }));
+    await tx.run(DELETE.from(TransactionRedeemers).where({ tx_hash: { in: hashes } }));
     await tx.run(DELETE.from(Transactions).where({ hash: { in: hashes } }));
   }
 }

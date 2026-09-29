@@ -13,6 +13,7 @@ const { fakeDb, stored, client, indexer } = vi.hoisted(() => ({
     readBlockTransactions: vi.fn(),
     readTransactionsByHash: vi.fn(),
     readTransactionMetadata: vi.fn(),
+    lacksOutpoints: vi.fn((t: { inputs?: Array<{ txHash: unknown }> }) => (t.inputs ?? []).some(i => i.txHash == null)),
   },
   client: {
     getTransaction: vi.fn(),
@@ -84,6 +85,26 @@ describe('CardanoBackendService', () => {
     expect(client.getTransactionsBatch).toHaveBeenCalledWith([other]);
   });
 
+  it('replaces a stored transaction without input outpoints by the backend copy, keeps it when none can serve', async () => {
+    const old = { hash: TX, inputs: [{ txHash: null, outputIndex: null }] };
+    const full = { hash: TX, inputs: [{ txHash: 'a'.repeat(64), outputIndex: 1 }] };
+    stored.readTransactionsByHash.mockResolvedValue(new Map([[TX, old]]));
+    client.getTransaction.mockResolvedValueOnce(full);
+    expect(JSON.parse(String(await call('GetTransaction', { hash: TX })))).toEqual(full);
+
+    client.getTransaction.mockRejectedValueOnce(new Error('backend down'));
+    expect(JSON.parse(String(await call('GetTransaction', { hash: TX })))).toEqual(old);
+
+    client.hasBackendFor.mockReturnValueOnce(false);
+    client.getTransaction.mockClear();
+    expect(JSON.parse(String(await call('GetTransaction', { hash: TX })))).toEqual(old);
+    expect(client.getTransaction).not.toHaveBeenCalled();
+
+    // batch: an unreachable backend keeps the stored copies
+    client.getTransactionsBatch.mockRejectedValueOnce(new Error('backend down'));
+    expect(JSON.parse(String(await call('GetTransactionsBatch', { hashes: JSON.stringify([TX]) })))).toEqual({ [TX]: old });
+  });
+
   it('rejects missing and malformed parameters with 400', async () => {
     await expect(call('GetTransaction', {})).rejects.toMatchObject({ statusCode: 400 });
     await expect(call('GetTransaction', { hash: 'xyz' })).rejects.toMatchObject({ statusCode: 400 });
@@ -102,6 +123,16 @@ describe('CardanoBackendService', () => {
     stored.readBlock.mockResolvedValue(null);
     stored.readBlockByHeight.mockResolvedValue({ hash: 'canonical', height: 9 });
     await expect(call('GetNextBlocks', { afterHash: BLK, count: 5, afterHeight: 9 })).rejects.toThrow(/^CHAIN_POINT_MISMATCH:.*canonical/);
+    // 409, not 5xx: production masks the message of a 5xx and the marker would never arrive
+    await expect(call('GetNextBlocks', { afterHash: BLK, count: 5, afterHeight: 9 })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('passes a provider reorg marker on as 409', async () => {
+    stored.readBlock.mockResolvedValue(null);
+    stored.readBlockByHeight.mockResolvedValue(null);
+    const getNextBlocks = vi.fn(async () => { throw new Error('CHAIN_POINT_MISMATCH: cursor block x is unknown to koios'); });
+    client.getPaginatingBackend.mockReturnValue({ getNextBlocks } as never);
+    await expect(call('GetNextBlocks', { afterHash: BLK, count: 5, afterHeight: 9 })).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/^CHAIN_POINT_MISMATCH:.*koios/) });
   });
 
   it('answers an empty page at its own tip', async () => {

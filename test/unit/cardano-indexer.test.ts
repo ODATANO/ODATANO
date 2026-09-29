@@ -98,6 +98,7 @@ vi.mock('#cds-models/CardanoTransactionService', () => ({
   TransactionBuilds: 'TransactionBuilds',
   TransactionBuildInputs: 'TransactionBuildInputs',
   TransactionBuildOutputs: 'TransactionBuildOutputs',
+  TransactionBuildRedeemers: 'TransactionBuildRedeemers',
   TransactionSubmission: 'TransactionSubmission',
   TransactionSubmissions: 'TransactionSubmissions',
   AddressTransactionBuilds: 'AddressTransactionBuilds',
@@ -184,6 +185,7 @@ function createMockTxBuilder(overrides: Record<string, any> = {}) {
     buildMultiAssetTransaction: vi.fn(),
     buildMintTransaction: vi.fn(),
     buildPlutusSpendTransaction: vi.fn(),
+    buildPlutusTransaction: vi.fn(),
     ...overrides,
   } as any;
 }
@@ -578,25 +580,51 @@ describe('CardanoIndexer', () => {
     beforeEach(() => {
       vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue({ fromSlot: 0, lastSlot: 10, ledger: true });
       vi.spyOn(indexer, 'paymentCredentialsReady').mockResolvedValue(true);
-      mockClient.getUtxosByAddresses = vi.fn();
+      mockClient.getUnspentOutputs = vi.fn();
     });
 
-    it('resolves the addresses locally and reads their outputs from the node, not from Koios', async () => {
-      mockRun.mockResolvedValueOnce([{ address: A1 }, { address: A2 }]);
-      mockClient.getUtxosByAddresses.mockResolvedValue([
+    it('answers from the crawled set and drops outputs the node reports spent, without Koios', async () => {
+      mockRun
+        .mockResolvedValueOnce([{ address: A1 }, { address: A2 }])
+        .mockResolvedValueOnce([
+          { txHash: 'c'.repeat(64), outputIndex: 0, address: A1, lovelace: '5', hasAssets: false },
+          { txHash: 'f'.repeat(64), outputIndex: 2, address: A2, lovelace: '9', hasAssets: false },
+        ]);
+      // f…#2 was spent after the crawl cursor
+      mockClient.getUnspentOutputs.mockResolvedValue([
         { txHash: 'c'.repeat(64), outputIndex: 0, address: A1, amount: [{ unit: 'lovelace', quantity: '5' }] },
       ]);
 
       await indexer.indexCredentialUtxos(mockTx as any, CRED);
 
-      expect(mockClient.getUtxosByAddresses).toHaveBeenCalledWith([A1, A2]);
+      // lookup by output reference, never by address (the node scans its whole UTxO set for that)
+      expect(mockClient.getUnspentOutputs).toHaveBeenCalledWith([
+        { txHash: 'c'.repeat(64), outputIndex: 0 }, { txHash: 'f'.repeat(64), outputIndex: 2 },
+      ]);
       expect(mockClient.getCredentialUtxos).not.toHaveBeenCalled();
       const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
       expect(mapAddressUtxos).toHaveBeenCalledWith(A1, expect.any(String), expect.any(String), [expect.objectContaining({ txHash: 'c'.repeat(64) })]);
+      expect(mapAddressUtxos).not.toHaveBeenCalledWith(A2, expect.anything(), expect.anything(), expect.anything());
+    });
+
+    it('takes the reference script from the node when the set row has none (snapshot from a file)', async () => {
+      mockRun
+        .mockResolvedValueOnce([{ address: A1 }])
+        .mockResolvedValueOnce([{ txHash: 'c'.repeat(64), outputIndex: 0, address: A1, lovelace: '5', hasAssets: false, utxo_referenceScriptHash: null }]);
+      mockClient.getUnspentOutputs.mockResolvedValue([
+        { txHash: 'c'.repeat(64), outputIndex: 0, address: A1, amount: [], scriptRef: 'ab'.repeat(28), scriptRefCbor: '5901' },
+      ]);
+
+      await indexer.indexCredentialUtxos(mockTx as any, CRED);
+
+      const mapAddressUtxos = vi.mocked((await import('../../srv/utils/mappers')).mapAddressUtxos);
+      expect(mapAddressUtxos).toHaveBeenCalledWith(A1, expect.any(String), expect.any(String), [expect.objectContaining({
+        txHash: 'c'.repeat(64), scriptRef: 'ab'.repeat(28), scriptRefCbor: '5901',
+      })]);
     });
 
     it('answers from the unspent LedgerUTxOs (with assets) when no node query is possible', async () => {
-      mockClient.getUtxosByAddresses.mockResolvedValue(null);
+      mockClient.getUnspentOutputs.mockResolvedValue(null);
       mockRun
         .mockResolvedValueOnce([{ address: A1 }])
         .mockResolvedValueOnce([{ txHash: 'd'.repeat(64), outputIndex: 1, address: A1, lovelace: '7', hasAssets: true, utxo_inlineDatum: 'd8799f', utxo_dataHash: null, utxo_referenceScriptHash: null }])
@@ -836,5 +864,34 @@ describe('CardanoIndexer', () => {
       expect(upsertInto).toHaveBeenCalledWith('AssetHistory');
       expect(result).toHaveLength(1);
     });
+  });
+});
+
+describe('CardanoIndexer.indexPlutusBuildResult', () => {
+  it('stores the redeemers of the build with their execution units', async () => {
+    const txBuilder = createMockTxBuilder({
+      buildPlutusTransaction: vi.fn().mockResolvedValue({
+        unsignedTxCbor: 'cbor', txBodyHash: 'h', feeLovelace: '1', inputs: [], outputs: [], warnings: [],
+        redeemers: [{ tag: 'Spend', index: 0, mem: '1200', steps: '340000' }, { tag: 'Spend', index: 2, mem: '900', steps: '120000' }],
+      }),
+    });
+    const indexer = new CardanoIndexer(createMockClient({ getProtocolParameters: vi.fn().mockResolvedValue({}) }), txBuilder);
+    const upsertInto = vi.mocked((await import('@sap/cds')).ql.UPSERT.into);
+    const original = (upsertInto as any)();
+    // record which entity each row set goes to
+    upsertInto.mockImplementation(((entity: string) => ({ entries: (rows: unknown) => ({ entity, rows }) })) as any);
+    mockRun.mockClear();
+
+    try {
+      await indexer.indexPlutusBuildResult(mockTx as any, { network: 'preview', senderAddress: 'addr_test1s', scriptInputs: [], outputs: [] });
+    } finally {
+      upsertInto.mockReturnValue(original);
+    }
+
+    const rows = mockRun.mock.calls.map(c => c[0]).find((q: any) => q?.entity === 'TransactionBuildRedeemers')?.rows;
+    expect(rows).toEqual([
+      { build_id: 'build-1', tag: 'Spend', redeemerIndex: 0, mem: 1200, steps: 340000 },
+      { build_id: 'build-1', tag: 'Spend', redeemerIndex: 2, mem: 900, steps: 120000 },
+    ]);
   });
 });

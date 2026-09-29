@@ -1,5 +1,5 @@
 import { bech32 } from "bech32";
-import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,HEX_56_REGEX,ASSET_UNIT_REGEX,
+import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,PLUTUS_DATA_MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,HEX_56_REGEX,ASSET_UNIT_REGEX,
   POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
 } from "./const";
 
@@ -39,7 +39,7 @@ interface JsonValidationResult {
 }
 
 /** Parse a JSON string under size and complexity limits (DoS prevention); `fieldName` is for messages. */
-export function validateJsonWithLimits(jsonString: string, fieldName: string): JsonValidationResult {
+export function validateJsonWithLimits(jsonString: string, fieldName: string, maxDepth = MAX_DEPTH): JsonValidationResult {
   // Size limit before parsing
   if (jsonString.length > MAX_JSON_SIZE) {
     return { valid: false, error: `${fieldName} exceeds maximum size of ${MAX_JSON_SIZE} bytes` };
@@ -52,7 +52,7 @@ export function validateJsonWithLimits(jsonString: string, fieldName: string): J
     return { valid: false, error: `Invalid JSON in ${fieldName}` };
   }
 
-  const complexityError = checkJsonComplexity(parsed, 0);
+  const complexityError = checkJsonComplexity(parsed, 0, maxDepth);
   if (complexityError) {
     return { valid: false, error: `${fieldName}: ${complexityError}` };
   }
@@ -60,10 +60,20 @@ export function validateJsonWithLimits(jsonString: string, fieldName: string): J
   return { valid: true, parsed };
 }
 
+/** PlutusData JSON (redeemer, datum, script params): the same limits with PLUTUS_DATA_MAX_DEPTH. */
+export function validatePlutusJson(jsonString: string, fieldName: string): JsonValidationResult {
+  return validateJsonWithLimits(jsonString, fieldName, PLUTUS_DATA_MAX_DEPTH);
+}
+
+/** Request fields that carry PlutusData JSON. */
+export const PLUTUS_JSON_FIELDS: ReadonlySet<string> = new Set([
+  'redeemerJson', 'datumJson', 'inlineDatumJson', 'outputDatumJson', 'mintRedeemerJson', 'scriptParamsJson',
+]);
+
 /** Recursive complexity check (depth, keys, array length, string length); error message or null. */
-function checkJsonComplexity(value: unknown, depth: number): string | null {
-  if (depth > MAX_DEPTH) {
-    return `Maximum nesting depth of ${MAX_DEPTH} exceeded`;
+function checkJsonComplexity(value: unknown, depth: number, maxDepth: number): string | null {
+  if (depth > maxDepth) {
+    return `Maximum nesting depth of ${maxDepth} exceeded`;
   }
 
   if (value === null || typeof value !== 'object') {
@@ -78,7 +88,7 @@ function checkJsonComplexity(value: unknown, depth: number): string | null {
       return `Array exceeds maximum length of ${MAX_ARRAY_LENGTH}`;
     }
     for (const item of value) {
-      const error = checkJsonComplexity(item, depth + 1);
+      const error = checkJsonComplexity(item, depth + 1, maxDepth);
       if (error) return error;
     }
   } else {
@@ -87,7 +97,7 @@ function checkJsonComplexity(value: unknown, depth: number): string | null {
       return `Object exceeds maximum key count of ${MAX_KEYS}`;
     }
     for (const key of keys) {
-      const error = checkJsonComplexity((value as Record<string, unknown>)[key], depth + 1);
+      const error = checkJsonComplexity((value as Record<string, unknown>)[key], depth + 1, maxDepth);
       if (error) return error;
     }
   }
@@ -423,7 +433,7 @@ export function validateTransactionInputs(
   }
 
   if (inputs.redeemerJson) {
-    const result = validateJsonWithLimits(inputs.redeemerJson, 'redeemerJson');
+    const result = validatePlutusJson(inputs.redeemerJson, 'redeemerJson');
     if (!result.valid) {
       errors.push({
         type: 'invalid',
@@ -434,7 +444,7 @@ export function validateTransactionInputs(
   }
 
   if (inputs.datumJson) {
-    const result = validateJsonWithLimits(inputs.datumJson, 'datumJson');
+    const result = validatePlutusJson(inputs.datumJson, 'datumJson');
     if (!result.valid) {
       errors.push({
         type: 'invalid',

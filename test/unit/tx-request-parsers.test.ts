@@ -22,7 +22,11 @@ import {
   parseAssetsArray,
   parseExtraOutputs,
   parseMintActionPolicyFields,
+  parseOutputList,
+  parseScriptInputs,
+  parsePolicyMintActions,
   MAX_EXTRA_OUTPUTS,
+  MAX_SCRIPT_INPUTS,
 } from '../../srv/utils/tx-request-parsers';
 import { TEST_FIXTURES } from '../integration/test-fixtures';
 import { setActiveNetwork } from '../../srv/utils/network-context';
@@ -211,5 +215,120 @@ describe('parseMintActionPolicyFields (multi-policy mint)', () => {
   it('rejects a redeemer without its script', () => {
     expect(parseMintActionPolicyFields({ redeemerJson: '{}' }, 3).error)
       .toMatch(/requires mintActions\[3\].mintingPolicyScript/);
+  });
+});
+
+describe('parseScriptInputs', () => {
+  const H1 = '1'.repeat(64);
+  const H2 = '2'.repeat(64);
+  const redeemerJson = JSON.stringify({ constructor: 0, fields: [] });
+
+  it('parses inline and reference-script entries with their own redeemers', () => {
+    const r = parseScriptInputs(JSON.stringify([
+      { txHash: H1, outputIndex: 0, validatorScript: 'abcd', scriptParamsJson: '[{"int":1}]', redeemerJson },
+      { txHash: H2, outputIndex: 3, referenceScript: { txHash: H1, outputIndex: 1 }, redeemerJson: '{"int":5}', datumJson: '{"int":7}' },
+    ]));
+    expect(r.error).toBeUndefined();
+    expect(r.parsed).toEqual<unknown[]>([
+      { txHash: H1, outputIndex: 0, validatorScript: 'abcd', scriptParams: [{ int: 1 }], redeemer: { constructor: 0, fields: [] } },
+      { txHash: H2, outputIndex: 3, referenceScript: { txHash: H1, outputIndex: 1 }, redeemer: { int: 5 }, datum: { int: 7 } },
+    ]);
+  });
+
+  it.each([
+    [undefined, 'scriptInputsJson is required'],
+    ['[]', 'must be a non-empty JSON array'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, redeemerJson }]), 'exactly one of validatorScript or referenceScript'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', referenceScript: { txHash: H2, outputIndex: 0 }, redeemerJson }]), 'exactly one of'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab' }]), 'scriptInputs[0] needs exactly one of redeemerJson or redeemerCbor'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerJson }, { txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerJson }]), 'a second time'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, referenceScript: { txHash: H2 }, redeemerJson }]), 'referenceScript must be {txHash, outputIndex}'],
+    [JSON.stringify([{ txHash: H1, outputIndex: 0, referenceScript: { txHash: H2, outputIndex: 0 }, scriptParamsJson: '[]', redeemerJson }]), 'inline validatorScript only'],
+    [JSON.stringify([{ txHash: 'xyz', outputIndex: 0, validatorScript: 'ab', redeemerJson }]), 'txHash must be 64 hex'],
+  ])('rejects %s', (json, message) => {
+    expect(parseScriptInputs(json as string | undefined).error).toContain(message);
+  });
+
+  it('caps the number of script inputs', () => {
+    const many = Array.from({ length: MAX_SCRIPT_INPUTS + 1 }, (_, i) => ({ txHash: H1, outputIndex: i, validatorScript: 'ab', redeemerJson }));
+    expect(parseScriptInputs(JSON.stringify(many)).error).toContain('exceeds maximum');
+  });
+});
+
+describe('parseOutputList (outputsJson)', () => {
+  const HASH = 'a'.repeat(64);
+
+  it('accepts a datum hash in outputsJson and keeps the order', () => {
+    const r = parseOutputList(JSON.stringify([
+      { address: ADDR, lovelaceAmount: '2000000', datumHash: HASH.toUpperCase() },
+      { address: ADDR, lovelaceAmount: '1500000', inlineDatumJson: '{"int":1}' },
+    ]), 'outputsJson');
+    expect(r.parsed).toEqual([
+      { address: ADDR, lovelaceAmount: '2000000', datumHash: HASH, assets: undefined, inlineDatum: undefined, referenceScript: undefined },
+      { address: ADDR, lovelaceAmount: '1500000', assets: undefined, inlineDatum: { int: 1 }, referenceScript: undefined },
+    ]);
+  });
+
+  it('names outputs[i] in errors and refuses a datum hash in extraOutputsJson', () => {
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '0' }]), 'outputsJson').error).toContain('outputs[0].lovelaceAmount');
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '1', datumHash: HASH }]), 'extraOutputsJson').error).toContain('only supported in outputsJson');
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '1', datumHash: HASH, inlineDatumJson: '{"int":1}' }]), 'outputsJson').error).toContain('not both');
+  });
+});
+
+describe('parsePolicyMintActions', () => {
+  // always-succeeds Plutus V3 script used across the builder tests
+  const SCRIPT = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+  const { Script } = require('@harmoniclabs/cardano-ledger-ts');
+  const POLICY = Script.fromCbor(Buffer.from(SCRIPT, 'hex')).hash.toString();
+
+  it('prefixes a bare asset name with the policy id of the action script', () => {
+    const r = parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '-5', mintingPolicyScript: SCRIPT, redeemerJson: '{"int":0}' }]));
+    expect(r.parsed).toEqual([{ assetUnit: POLICY + '746f6b', quantity: -5n, mintingPolicyScript: SCRIPT, redeemerJson: { int: 0 } }]);
+  });
+
+  it('requires a script per action and a matching policy id', () => {
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '1' }])).error).toContain('mintingPolicyScript is required');
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: 'ab'.repeat(28) + '746f6b', quantity: '1', mintingPolicyScript: SCRIPT }])).error).toContain('does not start with its policy id');
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '0', mintingPolicyScript: SCRIPT }])).error).toContain('non-zero');
+  });
+});
+
+describe('PlutusData as CBOR', () => {
+  const H1 = '1'.repeat(64);
+  const UNIT_CBOR = 'd87980'; // Constr 0 []
+  const deep = (constructors: number): string => {
+    let v: unknown = { int: 1 };
+    for (let i = 0; i < constructors; i++) v = { constructor: 0, fields: [v] };
+    return JSON.stringify(v);
+  };
+
+  it('takes redeemerCbor / datumCbor instead of the JSON forms', () => {
+    const r = parseScriptInputs(JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerCbor: UNIT_CBOR.toUpperCase(), datumCbor: UNIT_CBOR }]));
+    expect(r.error).toBeUndefined();
+    expect(r.parsed![0]).toMatchObject({ redeemerCbor: UNIT_CBOR, datumCbor: UNIT_CBOR });
+  });
+
+  it('accepts a redeemerJson twelve levels deep', () => {
+    const r = parseScriptInputs(JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerJson: deep(6) }]));
+    expect(r.error).toBeUndefined();
+  });
+
+  it('refuses both or neither redeemer form, and CBOR that is no PlutusData', () => {
+    expect(parseScriptInputs(JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerCbor: UNIT_CBOR, redeemerJson: '{"int":1}' }])).error)
+      .toContain('exactly one of redeemerJson or redeemerCbor');
+    expect(parseScriptInputs(JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab' }])).error)
+      .toContain('exactly one of redeemerJson or redeemerCbor');
+    expect(parseScriptInputs(JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', redeemerCbor: 'ff' }])).error)
+      .toContain('is not PlutusData CBOR');
+  });
+
+  it('takes inlineDatumCbor on outputsJson only', () => {
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '2000000', inlineDatumCbor: UNIT_CBOR }]), 'outputsJson').parsed![0])
+      .toMatchObject({ inlineDatumCbor: UNIT_CBOR });
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '2000000', inlineDatumCbor: UNIT_CBOR }]), 'extraOutputsJson').error)
+      .toContain('only supported in outputsJson');
+    expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '2000000', inlineDatumCbor: UNIT_CBOR, inlineDatumJson: '{"int":1}' }]), 'outputsJson').error)
+      .toContain('not both');
   });
 });

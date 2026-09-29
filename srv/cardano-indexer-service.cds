@@ -54,6 +54,8 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         utxoSet           : UtxoSetStatus;
         // one-off certificate/withdrawal backfill over already crawled blocks (this process)
         certificateBackfill : CertificateBackfillStatus;
+        // one-off input/redeemer backfill over already crawled blocks (this process)
+        transactionBackfill : TransactionBackfillStatus;
         // per-epoch pool/DRep/pot snapshots (crawler.epochSnapshots)
         epochSnapshots    : EpochSnapshotStatus;
     }
@@ -78,6 +80,24 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         blocks       : Integer64;
         certificates : Integer64;
         withdrawals  : Integer64;
+        startedAt    : Timestamp;
+        finishedAt   : Timestamp;
+        error        : String;
+    }
+
+    @title      : 'Transaction Backfill Status'
+    @description: 'Progress of the backfill started with backfillTransactions; process-local, none after a restart'
+    type TransactionBackfillStatus {
+        status       : String;    // none | running | done | failed
+        fromSlot     : String;
+        toSlot       : String;
+        atSlot       : String;    // last slot handled
+        blocks       : Integer64;
+        transactions : Integer64;
+        inputs       : Integer64; // input rows that got at least one field
+        redeemers    : Integer64;
+        rewritten    : Integer64; // transactions whose stored rows differed in order or extent from the ledger view, now rewritten
+        skipped      : Integer64; // transactions whose stored inputs differ from the stream
         startedAt    : Timestamp;
         finishedAt   : Timestamp;
         error        : String;
@@ -165,7 +185,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     action   resumeCrawler() returns Boolean;
 
     @title      : 'Import UTxO Set'
-    @description: 'One-off import of the UTxO set that anchors crawler.utxoSet. Pause the crawler first. source=ogmios acquires the set at the crawler cursor (crawl must be at the tip); source=file loads a cardano-cli query utxo --whole-utxo dump (.json, or .ndjson from jq -c to_entries[]) taken at anchorSlot/anchorHash. Runs in the background; progress via getStatus().utxoSet.'
+    @description: 'One-off import of the UTxO set that anchors crawler.utxoSet. Pause the crawler first. source=ogmios acquires the set at the crawler cursor (crawl must be at the tip); source=file loads a cardano-cli query utxo --whole-utxo dump (.json, or .ndjson from jq -c to_entries[]) taken at anchorSlot/anchorHash. source=aggregates rebuilds only the sums (LedgerAddresses, LedgerAddressAssets, LedgerAccounts) from the rows an earlier import left, e.g. after its aggregate phase failed; a cursor past the anchor is set back to it. Runs in the background; progress via getStatus().utxoSet.'
     @requires   : 'Admin'
     action   importUtxoSet(source: String, filePath: String, anchorSlot: Integer64, anchorHash: String) returns UtxoSetImportResult;
 
@@ -173,4 +193,9 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @description: 'Fill TransactionCertificates and TransactionWithdrawals for blocks the crawl already holds, from a second chain-sync stream (Ogmios). fromSlot defaults to the crawl start, toSlot to the cursor. Writes only those two tables; the crawler may keep running. Runs in the background; progress via getStatus().certificateBackfill.'
     @requires   : 'Admin'
     action   backfillCertificates(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
+
+    @title      : 'Backfill Transactions'
+    @description: 'Complete transactions the crawl already holds from a second chain-sync stream (Ogmios): input outpoints, the spent output datum and reference-script hash, missing input addresses, and TransactionRedeemers. Fills empty fields only; a transaction whose stored inputs differ from the stream is skipped. fromSlot defaults to the crawl start, toSlot to the cursor; the crawler may keep running. Runs in the background; progress via getStatus().transactionBackfill.'
+    @requires   : 'Admin'
+    action   backfillTransactions(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
 }

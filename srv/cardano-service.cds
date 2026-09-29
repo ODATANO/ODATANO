@@ -123,6 +123,11 @@ service CardanoODataService @(impl: './cardano-service') {
     entity TransactionWithdrawals   as projection on db.TransactionWithdrawals;
 
     @readonly
+    @title      : 'Transaction Redeemers'
+    @description: 'Projection for Transaction Redeemers (crawler-fed, Ogmios chain-sync)'
+    entity TransactionRedeemers     as projection on db.TransactionRedeemers;
+
+    @readonly
     @title      : 'Ledger UTxOs'
     @description: 'Crawler-maintained UTxO set (crawler.utxoSet); unspent while spentTxHash is null'
     entity LedgerUTxOs              as projection on db.LedgerUTxOs;

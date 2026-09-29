@@ -57,6 +57,13 @@ eslint.config.*
 # Code coverage
 codecov.yml
 
+# Local keys, notes and deploy artifacts
+payment.*
+local_docs/
+mta_archives/
+mta-op-*/
+*.mtaext
+
 # Docker files themselves
 Dockerfile
 docker-compose.yml

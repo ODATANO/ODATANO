@@ -9,6 +9,7 @@ import { setActiveNetwork } from './utils/network-context';
 import { installDbSanitizer } from './utils/db-sanitize';
 import { ensureDbIndexes } from './utils/db-indexes';
 import { installPostgresOrderNulls } from './utils/pg-order-nulls';
+import { installPostgresInlineJson } from './utils/pg-inline-json';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
@@ -85,8 +86,10 @@ async function initializeAppContext(
   logger.debug('Initializing blockchain components...');
 
   // Database first. Postgres ORDER BY without a NULLS clause on key / NOT NULL columns so
-  // the indexes serve `$top` / `$orderby`; then the secondary indexes the model cannot declare.
+  // the indexes serve `$top` / `$orderby`, bulk rows inline instead of through a COPY buffer;
+  // then the secondary indexes the model cannot declare.
   installPostgresOrderNulls();
+  installPostgresInlineJson();
   try {
     await ensureDbIndexes();
   } catch (err) {

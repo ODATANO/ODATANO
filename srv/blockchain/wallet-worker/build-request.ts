@@ -1,7 +1,7 @@
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { BackendError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
-import { validateJsonWithLimits, isAssetUnit } from '../../utils/validators';
+import { validateJsonWithLimits, validatePlutusJson, PLUTUS_JSON_FIELDS, isAssetUnit } from '../../utils/validators';
 import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields } from '../../utils/tx-request-parsers';
 import { applyScriptParameters } from '../../utils/tx-build-helper';
 import { scriptHashToEnterpriseAddress } from '../../utils/mappers';
@@ -32,7 +32,7 @@ function parseJsonField(raw: RawRequest, field: string): JSONValue | undefined {
   const value = raw[field];
   if (value == null) return undefined;
   if (typeof value !== 'string') fail(`${field} must be a JSON string`);
-  const result = validateJsonWithLimits(value, field);
+  const result = PLUTUS_JSON_FIELDS.has(field) ? validatePlutusJson(value, field) : validateJsonWithLimits(value, field);
   if (!result.valid) fail(result.error!);
   return result.parsed as JSONValue;
 }

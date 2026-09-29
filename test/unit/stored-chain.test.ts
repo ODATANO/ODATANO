@@ -12,7 +12,7 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown> = 
     if (v && typeof v === 'object') {
       const c = v as Record<string, number>;
       const n = Number(row[k]);
-      return (c['>'] == null || n > c['>']) && (c['<='] == null || n <= c['<=']);
+      return c.between != null && n >= c.between && n <= c.and;
     }
     return String(row[k]) === String(v);
   });
@@ -50,10 +50,11 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionInputAssets: 'TransactionInputAssets', TransactionOutputs: 'TransactionOutputs',
   TransactionOutputAssets: 'TransactionOutputAssets', TransactionMetadata_: 'TransactionMetadata',
   TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
+  TransactionRedeemers: 'TransactionRedeemers',
   AssetHistory_: 'AssetHistory',
 }));
 
-import { blockRowToData, readNextBlocks, readTransactionsByHash, readBlockTransactions, readTransactionMetadata } from '../../srv/blockchain/stored-chain';
+import { blockRowToData, readNextBlocks, readTransactionsByHash, readBlockTransactions, readTransactionMetadata, lacksOutpoints } from '../../srv/blockchain/stored-chain';
 
 const T1 = '1'.repeat(64);
 const B1 = 'b'.repeat(64);
@@ -76,6 +77,10 @@ beforeEach(() => {
     TransactionMetadata: [{ tx_hash: T1, label: '674', payload: '{"msg":["hi"],"n":18446744073709551615}' }],
     TransactionCertificates: [{ tx_hash: T1, certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake_test1x', poolId: 'pool1x' }],
     TransactionWithdrawals: [{ tx_hash: T1, stakeAddress: 'stake_test1x', lovelace: '42' }],
+    TransactionRedeemers: [
+      { tx_hash: T1, purpose: 'spend', redeemerIndex: 0, data: 'd87980', mem: '1000', steps: '2000', spentTxHash: '8'.repeat(64), spentOutputIndex: 0, policyId: null },
+      { tx_hash: T1, purpose: 'mint', redeemerIndex: 0, data: 'd87a80', mem: '10', steps: '20', spentTxHash: null, spentOutputIndex: null, policyId: 'p'.repeat(56) },
+    ],
     AssetHistory: [{ unit: UNIT, txHash: T1, action: 'burn', quantity: '5' }],
   };
 });
@@ -91,6 +96,8 @@ describe('stored chain in the provider shape', () => {
   it('returns next blocks only as long as the heights are contiguous', async () => {
     const next = await readNextBlocks(db as never, 9, 5);
     expect(next.map(b => b.height)).toEqual([10, 11]); // 12 is missing, 13 is not reached
+    // a single operator per column object; two render as `height > $1 <= $2` (a Postgres syntax error)
+    expect(db.run.mock.calls.at(-1)![0].q.where).toEqual({ height: { between: 10, and: 14 } });
   });
 
   it('assembles a transaction with its children in order, lovelace first, burn as negative mint', async () => {
@@ -103,8 +110,33 @@ describe('stored chain in the provider shape', () => {
     expect(tx.mint).toEqual([{ unit: UNIT, quantity: '-5' }]);
     expect(tx.certificates).toEqual([{ certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake_test1x', poolId: 'pool1x', drepId: null, deposit: null, epoch: null }]);
     expect(tx.withdrawals).toEqual([{ stakeAddress: 'stake_test1x', amount: '42' }]);
+    expect(tx.redeemers).toEqual([
+      { purpose: 'mint', index: 0, data: 'd87a80', mem: '10', steps: '20', txHash: null, outputIndex: null, policyId: 'p'.repeat(56) },
+      { purpose: 'spend', index: 0, data: 'd87980', mem: '1000', steps: '2000', txHash: '8'.repeat(64), outputIndex: 0, policyId: null },
+    ]);
+    expect(lacksOutpoints(tx)).toBe(false);
     // metadata numbers above 2^53 survive (safeJSON)
     expect(String((tx.metadata![0].json as { n: unknown }).n)).toBe('18446744073709551615');
+  });
+
+  it('reports a missing input outpoint as null, never as an empty hash and index 0', async () => {
+    tables.TransactionInputs[0].spentTxHash = null; // inputIndex 1
+    tables.TransactionInputs[0].spentOutputIndex = null;
+    tables.TransactionRedeemers = [];
+    const tx = (await readTransactionsByHash(db as never, [T1])).get(T1)!;
+    expect(tx.inputs[0]).toMatchObject({ txHash: '8'.repeat(64), outputIndex: 0 });
+    expect(tx.inputs[1]).toMatchObject({ txHash: null, outputIndex: null });
+    expect(lacksOutpoints(tx)).toBe(true);
+    expect(tx.redeemers).toBeUndefined();
+  });
+
+  it('derives the phase-2 flag from the ledger view: only collateral and reference inputs mean a failure', async () => {
+    expect((await readTransactionsByHash(db as never, [T1])).get(T1)!.spendsCollaterals).toBe(false);
+    // the stored failure: the collateral input and the collateral return output remain
+    tables.TransactionInputs = tables.TransactionInputs.filter(r => r.isCollateral);
+    const failed = (await readTransactionsByHash(db as never, [T1])).get(T1)!;
+    expect(failed.spendsCollaterals).toBe(true);
+    expect(failed.outputs.every(o => o.isCollateral)).toBe(true);
   });
 
   it('leaves unknown hashes out of the batch', async () => {

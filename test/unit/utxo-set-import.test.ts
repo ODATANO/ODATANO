@@ -11,10 +11,19 @@ const txRuns: Array<Record<string, unknown>> = [];
 const rawSql: string[] = [];
 const cursorState: { cursor: Record<string, unknown> | null } = { cursor: null };
 const utxoSetStates: Array<Record<string, unknown>> = [];
-const lease = { acquire: true, renewFailAfter: null as number | null, acquired: [] as string[], released: [] as string[], renewCalls: 0 };
+const lease = { acquire: true, renewFailAfter: null as number | null, acquired: [] as string[], released: [] as string[], renewCalls: 0, hang: false };
+// answers to SELECT queries (row count of LedgerUTxOs, the anchor block) and a failing statement
+const db = { utxoCount: 0, anchorBlock: null as Record<string, unknown> | null, failOn: null as RegExp | null, hold: null as Promise<void> | null };
+const cursorResets: Array<Record<string, unknown>> = [];
 
 vi.mock('@sap/cds', () => {
-  const fakeTx = { run: vi.fn(async (q: Record<string, unknown>) => { txRuns.push(q); return undefined; }) };
+  const fakeTx = { run: vi.fn(async (q: Record<string, unknown> | string) => {
+    if (typeof q === 'string' && db.failOn?.test(q)) throw new Error('numeric field overflow');
+    if (typeof q === 'string' && db.hold) await db.hold;
+    txRuns.push(q as Record<string, unknown>);
+    if (typeof q === 'object' && q._op === 'SELECT') return q.entity === 'LedgerUTxOs' ? { n: String(db.utxoCount) } : db.anchorBlock;
+    return undefined;
+  }) };
   const cdsMock = {
     log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
     tx: vi.fn(async (fn: (tx: unknown) => unknown) => fn(fakeTx)),
@@ -22,6 +31,10 @@ vi.mock('@sap/cds', () => {
     ql: {
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
       DELETE: { from: (entity: string) => ({ _op: 'DELETE', entity, where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
+      SELECT: { one: { from: (entity: string) => ({ columns: () => {
+        const q = { _op: 'SELECT', entity };
+        return { ...q, where: (where: unknown) => ({ ...q, where }) };
+      } }) } },
     },
   };
   return { default: cdsMock, ...cdsMock };
@@ -29,18 +42,25 @@ vi.mock('@sap/cds', () => {
 vi.mock('#cds-models/odatano/cardano', () => ({
   LedgerUTxOs: 'LedgerUTxOs', LedgerUTxOAssets: 'LedgerUTxOAssets',
   LedgerAddresses: 'LedgerAddresses', LedgerAddressAssets: 'LedgerAddressAssets', LedgerAccounts: 'LedgerAccounts',
+  Blocks: 'Blocks',
 }));
 vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   readCursor: vi.fn(async () => cursorState.cursor),
   isCrawlerLeaseActive: (cursor: { leaseUntil?: string } | null) => Boolean(cursor?.leaseUntil && Date.parse(cursor.leaseUntil) > Date.now()),
   setUtxoSetState: vi.fn(async (_tx: unknown, state: Record<string, unknown>) => { utxoSetStates.push(state); }),
   tryAcquireImportLease: vi.fn(async (_tx: unknown, owner: string) => { if (lease.acquire) lease.acquired.push(owner); return lease.acquire; }),
-  renewImportLease: vi.fn(async () => { lease.renewCalls++; return lease.renewFailAfter == null || lease.renewCalls <= lease.renewFailAfter; }),
+  renewImportLease: vi.fn(async () => {
+    lease.renewCalls++;
+    if (lease.hang) return new Promise<boolean>(() => undefined); // blocked on the cursor row lock
+    txRuns.push({ _op: 'RENEW' });
+    return lease.renewFailAfter == null || lease.renewCalls <= lease.renewFailAfter;
+  }),
   releaseImportLease: vi.fn(async (_tx: unknown, owner: string) => { lease.released.push(owner); }),
+  resetCursorTo: vi.fn(async (_tx: unknown, point: Record<string, unknown>) => { cursorResets.push(point); txRuns.push({ _op: 'RESET' }); }),
   CRAWLER_LEASE_TTL_MS: 15_000,
 }));
 
-import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, UtxoSetImportError, UtxoSetLeaseLostError, parseJsonLossless } from '../../srv/blockchain/crawler/utxo-set-import';
+import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, rebuildUtxoSetAggregates, UtxoSetImportError, UtxoSetLeaseLostError, parseJsonLossless } from '../../srv/blockchain/crawler/utxo-set-import';
 
 const TX = 'a'.repeat(64);
 const ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
@@ -120,7 +140,8 @@ describe('readUtxoSetFile', () => {
 describe('aggregateStatements', () => {
   it('derives addresses, address assets and accounts from the imported rows with portable SQL', () => {
     const [addresses, assets, accounts] = aggregateStatements();
-    expect(addresses).toMatch(/^INSERT INTO odatano_cardano_LedgerAddresses .* FROM odatano_cardano_LedgerUTxOs GROUP BY address$/);
+    expect(addresses).toMatch(/^INSERT INTO odatano_cardano_LedgerAddresses .* FROM odatano_cardano_LedgerUTxOs WHERE spentTxHash IS NULL GROUP BY address$/);
+    expect(assets).toContain('WHERE u.spentTxHash IS NULL GROUP BY u.address, a.unit');
     expect(addresses).toContain('SUM(lovelace), COUNT(*)');
     expect(assets).toContain('JOIN odatano_cardano_LedgerUTxOs u ON a.utxo_txHash = u.txHash AND a.utxo_outputIndex = u.outputIndex');
     expect(accounts).toMatch(/WHERE stakeAddress IS NOT NULL GROUP BY stakeAddress$/);
@@ -216,5 +237,105 @@ describe('importUtxoSet preconditions', () => {
     expect(lease.acquired[0]).toMatch(/^import:/);
     expect(lease.released).toEqual(lease.acquired);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('rebuildUtxoSetAggregates', () => {
+  const indexer = () => ({ setUtxoAnchor: vi.fn(), resetPaymentCredentials: vi.fn(), paymentCredentialsReady: vi.fn(async () => false) });
+  const anchored = (over: Record<string, unknown> = {}) => ({
+    lastSlot: 10, leaseUntil: null,
+    utxoSet: { status: 'invalid', anchorSlot: 10, anchorHash: 'h', appliedSlot: null, importedAt: null, error: 'numeric field overflow' },
+    ...over,
+  });
+  const statements = () => txRuns.filter((q): q is never => typeof q === 'string') as unknown as string[];
+  beforeEach(() => {
+    txRuns.length = 0; utxoSetStates.length = 0; cursorResets.length = 0;
+    lease.acquire = true; lease.renewFailAfter = null; lease.renewCalls = 0; lease.acquired.length = 0; lease.released.length = 0;
+    db.utxoCount = 22_995_892; db.anchorBlock = { height: '4000' }; db.failOn = null; db.hold = null; lease.hang = false;
+  });
+
+  it('rebuilds only the sums from the imported rows and activates the set at the stored anchor', async () => {
+    cursorState.cursor = anchored();
+    const ix = indexer();
+
+    const result = await rebuildUtxoSetAggregates({ indexer: ix as never });
+
+    expect(result).toEqual({ utxos: 22_995_892, anchor: { slot: 10, hash: 'h' } });
+    // the raw rows stay, the three aggregate tables are emptied and refilled
+    const deletes = txRuns.filter(q => typeof q === 'object' && q._op === 'DELETE').map(q => q.entity);
+    expect(deletes).toEqual(['LedgerAddressAssets', 'LedgerAddresses', 'LedgerAccounts']);
+    expect(statements()).toEqual(aggregateStatements());
+    expect(utxoSetStates.at(-1)).toMatchObject({ status: 'active', anchorSlot: 10, anchorHash: 'h', error: null });
+    expect(ix.setUtxoAnchor).toHaveBeenLastCalledWith({ slot: 10, hash: 'h' });
+    expect(cursorResets).toHaveLength(0);
+    expect(lease.released).toHaveLength(1);
+  });
+
+  it('sets a cursor that went past the anchor back to the anchor block in the same transaction', async () => {
+    cursorState.cursor = anchored({ lastSlot: 900 });
+    await rebuildUtxoSetAggregates({ indexer: indexer() as never });
+    expect(cursorResets).toEqual([{ slot: 10, hash: 'h', height: 4000 }]);
+  });
+
+  it('touches the cursor row only after the sums: heartbeats never wait for the aggregation', async () => {
+    cursorState.cursor = anchored({ lastSlot: 900 });
+    await rebuildUtxoSetAggregates({ indexer: indexer() as never });
+    const ops = txRuns.map(q => (typeof q === 'string' ? 'SQL' : String(q._op)));
+    const firstDelete = ops.indexOf('DELETE');
+    const tail = ops.slice(firstDelete);
+    // deletes and the three statements first; cursor reset and lease re-take are the last statements
+    expect(tail).toEqual(['DELETE', 'DELETE', 'DELETE', 'SQL', 'SQL', 'SQL', 'RESET', 'RENEW']);
+    expect(utxoSetStates[0]).toEqual({ error: null }); // the old failure text is cleared at the start
+    expect(utxoSetStates.at(-1)).toMatchObject({ status: 'active' });
+  });
+
+  it('starts no second heartbeat while one is still waiting, so a blocked renewal holds one connection', async () => {
+    vi.useFakeTimers();
+    try {
+      cursorState.cursor = anchored();
+      let release!: () => void;
+      db.hold = new Promise<void>((r) => { release = r; });
+      const run = rebuildUtxoSetAggregates({ indexer: indexer() as never });
+      await vi.advanceTimersByTimeAsync(0); // the aggregation is now running (held)
+      lease.hang = true;
+      const before = lease.renewCalls;
+      await vi.advanceTimersByTimeAsync(5_000 * 4); // four heartbeat ticks
+      expect(lease.renewCalls - before).toBe(1);
+      lease.hang = false;
+      db.hold = null;
+      release();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the set invalid with the reason when an aggregate statement fails', async () => {
+    cursorState.cursor = anchored();
+    db.failOn = /LedgerAddressAssets/;
+    await expect(rebuildUtxoSetAggregates({ indexer: indexer() as never })).rejects.toThrow('numeric field overflow');
+    expect(utxoSetStates.at(-1)).toMatchObject({ status: 'invalid', error: 'numeric field overflow' });
+  });
+
+  it.each([
+    ['no imported set', () => anchored({ utxoSet: { status: 'none', anchorSlot: null, anchorHash: null, appliedSlot: null } }), /run importUtxoSet first/],
+    ['blocks already applied', () => anchored({ utxoSet: { status: 'active', anchorSlot: 10, anchorHash: 'h', appliedSlot: 50 } }), /already applied/],
+    ['import still loading', () => anchored({ utxoSet: { status: 'importing', anchorSlot: 10, anchorHash: 'h', appliedSlot: null } }), /still loading/],
+    ['crawler running', () => anchored({ leaseUntil: '2999-01-01T00:00:00.000Z' }), /pause/],
+  ])('refuses before any write: %s', async (_name, cursor, message) => {
+    cursorState.cursor = cursor();
+    await expect(rebuildUtxoSetAggregates({ indexer: indexer() as never })).rejects.toThrow(message);
+    expect(txRuns.filter(q => typeof q === 'string' || q._op !== 'SELECT')).toHaveLength(0);
+    expect(utxoSetStates).toHaveLength(0);
+  });
+
+  it('refuses without rows, and past the anchor without the anchor block', async () => {
+    cursorState.cursor = anchored();
+    db.utxoCount = 0;
+    await expect(rebuildUtxoSetAggregates({ indexer: indexer() as never })).rejects.toThrow(/LedgerUTxOs is empty/);
+    db.utxoCount = 5; db.anchorBlock = null;
+    cursorState.cursor = anchored({ lastSlot: 900 });
+    await expect(rebuildUtxoSetAggregates({ indexer: indexer() as never })).rejects.toThrow(/cannot set the cursor back/);
+    expect(utxoSetStates).toHaveLength(0);
   });
 });

@@ -451,6 +451,25 @@ describe('CardanoClient Configuration', () => {
       // Should throw AllBackendsFailedError when all backends fail
       await expect(client.getProtocolParameters()).rejects.toThrow(AllBackendsFailedError);
     });
+
+    it('keeps the node values when the fallback answers for the same epoch, takes the fallback on a new epoch', async () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'] }));
+      const node = { name: 'ogmios', getProtocolParameters: vi.fn().mockResolvedValue({ epoch: 316, minFeeA: 44, source: 'node' }) };
+      const koios = { name: 'koios', getProtocolParameters: vi.fn().mockResolvedValue({ epoch: 316, minFeeA: 44, source: 'koios' }) };
+      Object.assign(client as any, { liveBackend: node, historicalBackends: [koios], initialized: true });
+
+      expect(await client.getProtocolParameters()).toMatchObject({ source: 'node' });
+
+      // cache expired, the node times out: same epoch -> the node's last values
+      (client as any).protocolParamsCache = undefined;
+      node.getProtocolParameters.mockRejectedValue(new Error('Backend timeout'));
+      expect(await client.getProtocolParameters()).toMatchObject({ source: 'node', epoch: 316 });
+
+      // a new epoch from the fallback wins over stale node values
+      (client as any).protocolParamsCache = undefined;
+      koios.getProtocolParameters.mockResolvedValue({ epoch: 317, minFeeA: 45, source: 'koios' });
+      expect(await client.getProtocolParameters()).toMatchObject({ source: 'koios', epoch: 317 });
+    });
   });
 
   // ============================================================================
@@ -1061,10 +1080,63 @@ describe('CardanoClient Configuration', () => {
   });
 });
 
+describe('submitTransaction failover', () => {
+  const setup = (liveError: Error) => {
+    const client = new CardanoClient(createTestConfig({ backends: ['koios'] }));
+    const node = { name: 'ogmios', submitTransaction: vi.fn().mockRejectedValue(liveError) };
+    const koios = { name: 'koios', submitTransaction: vi.fn().mockResolvedValue('ab'.repeat(32)) };
+    Object.assign(client as any, { liveBackend: node, historicalBackends: [koios], initialized: true });
+    return { client, node, koios };
+  };
+
+  it("stops at the node's rejection instead of submitting through another backend", async () => {
+    const { TransactionValidationError } = await import('../../srv/utils/errors');
+    const { client, koios } = setup(new TransactionValidationError('node rejected the transaction (3104): Extraneous scripts'));
+    await expect(client.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('Extraneous') });
+    expect(koios.submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it('remembers a submitted transaction as pending, also when a backend reports it already submitted', async () => {
+    const { ProviderUnavailableError, TransactionAlreadySubmittedError } = await import('../../srv/utils/errors');
+    const { client } = setup(new ProviderUnavailableError('Backend timeout', 'ogmios'));
+    const record = vi.spyOn(client.pendingSpends, 'record');
+    await client.submitTransaction('84a4');
+    expect(record).toHaveBeenCalledWith('84a4');
+
+    const again = setup(new TransactionAlreadySubmittedError('ab'.repeat(32)));
+    const record2 = vi.spyOn(again.client.pendingSpends, 'record');
+    (again as any).koios.submitTransaction.mockRejectedValue(new TransactionAlreadySubmittedError('ab'.repeat(32)));
+    await expect(again.client.submitTransaction('84a5')).rejects.toBeInstanceOf(TransactionAlreadySubmittedError);
+    expect(record2).toHaveBeenCalledWith('84a5');
+  });
+
+  it('fails over when the node is unavailable', async () => {
+    const { ProviderUnavailableError } = await import('../../srv/utils/errors');
+    const { client, koios } = setup(new ProviderUnavailableError('Backend timeout', 'ogmios'));
+    await expect(client.submitTransaction('84a4')).resolves.toBe('ab'.repeat(32));
+    expect(koios.submitTransaction).toHaveBeenCalled();
+  });
+});
+
 describe('odatano backend', () => {
   it('builds an OdatanoBackend for the public API of the network', () => {
     const client = new CardanoClient(createTestConfig({ backends: ['odatano'], odatanoApiKey: 'oda_x' } as Partial<CardanoClientConfig>));
     expect(client.listBackends()).toContain('odatano');
+  });
+
+  it('waits the fallback timeout for the remote, which runs its own failover within the primary one', () => {
+    const client = new CardanoClient(createTestConfig({ backends: ['odatano'], primaryTimeoutMs: 30_000, fallbackTimeoutMs: 60_000 }));
+    const remote = (client as any).historicalBackends.find((b: { name: string }) => b.name === 'odatano');
+    expect((client as any).getTimeoutForBackend(remote)).toBe(60_000);
+    expect(remote.api.defaults.timeout).toBe(60_000);
+  });
+
+  it('answers output lookups through the remote when there is no Ogmios', async () => {
+    const client = new CardanoClient(createTestConfig({ backends: ['odatano'] }));
+    const remote = { name: 'odatano', getUnspentOutputs: vi.fn().mockResolvedValue([{ txHash: 'aa', outputIndex: 0 }]) };
+    (client as any).historicalBackends = [remote];
+    (client as any).liveBackend = undefined;
+    expect(await client.getUnspentOutputs([{ txHash: 'aa', outputIndex: 0 }])).toEqual([{ txHash: 'aa', outputIndex: 0 }]);
   });
 
   it('evaluates scripts through a historical evaluating backend when there is no Ogmios', async () => {

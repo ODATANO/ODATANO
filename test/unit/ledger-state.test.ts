@@ -81,7 +81,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   LedgerAddresses: 'LedgerAddresses', LedgerAddressAssets: 'LedgerAddressAssets', LedgerAccounts: 'LedgerAccounts',
 }));
 
-import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials } from '../../srv/blockchain/ledger-state';
+import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
 // base address (preview) + its reward account; a second base address on the SAME stake key
@@ -191,6 +191,38 @@ describe('applyBlockToLedger', () => {
     ]);
     expect(r).toMatchObject({ missing: 1, created: 1, spent: 0 });
     expect(addr(ADDR_E)).toMatchObject({ totalLovelace: '1' });
+  });
+});
+
+describe('readLedgerOutputs (shared lookup)', () => {
+  const selects = (e: string) => fakeTx.run.mock.calls.filter(([q]) => q._op === 'SELECT.many' && q.entity === e);
+
+  it('skips the asset SELECT when no row of the source transactions carries assets', async () => {
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000')] })]);
+    fakeTx.run.mockClear();
+
+    const lookup = await readLedgerOutputs(fakeTx as never, [T1]);
+
+    expect(lookup.rows.get(`${T1}#0`)).toMatchObject({ address: ADDR_A });
+    expect(selects('LedgerUTxOs')).toHaveLength(1);
+    expect(selects('LedgerUTxOAssets')).toHaveLength(0);
+  });
+
+  it('lets the apply reuse a lookup: the consumed outpoints are not read again', async () => {
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }])] })]);
+    const lookup = await readLedgerOutputs(fakeTx as never, [T1]);
+    expect(ledgerRowAmount(lookup.rows.get(`${T1}#0`)!, lookup.assets.get(`${T1}#0`)))
+      .toEqual([{ unit: 'lovelace', quantity: '5000000' }, { unit: UNIT, quantity: '3' }]);
+    fakeTx.run.mockClear();
+
+    const r = await applyBlockToLedger(fakeTx as never, block(110), [
+      tx(T2, { inputs: [inp(T1, 0)], outputs: [out(T2, 0, ADDR_E, '4800000', [{ unit: UNIT, quantity: '3' }])] }),
+    ], lookup);
+
+    expect(r).toEqual({ created: 1, spent: 1, missing: 0, addresses: 2 });
+    expect(selects('LedgerUTxOs')).toHaveLength(0);
+    expect(selects('LedgerUTxOAssets')).toHaveLength(0);
+    expect(addr(ADDR_A)).toMatchObject({ totalLovelace: '0', utxoCount: 0 });
   });
 });
 

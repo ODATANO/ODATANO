@@ -331,6 +331,48 @@ describe('CardanoTransactionService Handler Validations', () => {
   });
 
   // ==========================================================================
+  // BuildPlutusTransaction — Input Validations
+  // ==========================================================================
+
+  describe('BuildPlutusTransaction validations', () => {
+    const post = (body: Record<string, unknown>) =>
+      test.post('/odata/v4/cardano-transaction/BuildPlutusTransaction', body)
+        .catch((err: any) => err.response ?? { status: err.status ?? 500, data: undefined });
+    const scriptInputsJson = JSON.stringify([
+      { txHash: 'a'.repeat(64), outputIndex: 0, validatorScript: TEST_FIXTURES.validSpendingScript, redeemerJson: '{"int": 0}' },
+    ]);
+    const outputsJson = JSON.stringify([{ address: TEST_FIXTURES.addressWithAssets, lovelaceAmount: '2000000' }]);
+
+    it('rejects a missing scriptInputsJson', async () => {
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, outputsJson });
+      expect(status).toBe(400);
+    });
+
+    it('rejects a missing outputsJson', async () => {
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, scriptInputsJson });
+      expect(status).toBe(400);
+    });
+
+    it('rejects a script input with both an inline and a reference script', async () => {
+      const both = JSON.stringify([{ txHash: 'a'.repeat(64), outputIndex: 0, validatorScript: TEST_FIXTURES.validSpendingScript,
+        referenceScript: { txHash: 'b'.repeat(64), outputIndex: 0 }, redeemerJson: '{"int": 0}' }]);
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, scriptInputsJson: both, outputsJson });
+      expect(status).toBe(400);
+    });
+
+    it('rejects a mint action without its own policy script', async () => {
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, scriptInputsJson, outputsJson,
+        mintActionsJson: JSON.stringify([{ assetUnit: '746f6b', quantity: '1' }]) });
+      expect(status).toBe(400);
+    });
+
+    it('rejects an invalid changeAddress', async () => {
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, changeAddress: 'nope', scriptInputsJson, outputsJson });
+      expect(status).toBe(400);
+    });
+  });
+
+  // ==========================================================================
   // BuildPlutusSpendTransaction — Input Validations
   // ==========================================================================
 
@@ -1196,6 +1238,31 @@ describe('CardanoTransactionService Handler Validations', () => {
 
       expect(status).toBe(200);
       expect(data.collateralAvailable).toBe(true);
+    });
+
+    it('does not count UTxOs that carry tokens: the builders take only ADA-only collateral', async () => {
+      setupUtxoMock([
+        {
+          tx_hash: 'a'.repeat(64),
+          tx_index: 0,
+          address: TEST_FIXTURES.addressWithAssets,
+          value: '5500000',
+          asset_list: [{ policy_id: 'b'.repeat(56), asset_name: '746f6b', quantity: '1' }],
+        },
+        {
+          tx_hash: 'b'.repeat(64),
+          tx_index: 1,
+          address: TEST_FIXTURES.addressWithAssets,
+          value: '6000000',
+          asset_list: [{ policy_id: 'b'.repeat(56), asset_name: '746f6b', quantity: '2' }],
+        },
+      ]);
+
+      const { data } = await test.post('/odata/v4/cardano-transaction/SetCollateral', {
+        address: TEST_FIXTURES.addressWithAssets,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500, data: {} });
+
+      expect(data?.collateralAvailable).not.toBe(true);
     });
 
     it('should reject when insufficient funds (< 6 ADA)', async () => {

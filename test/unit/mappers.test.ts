@@ -31,8 +31,10 @@ import {
   credentialToStakeAddress,
   credentialToDrepId,
   decodeShelleyAddress,
+  ledgerView,
 } from '../../srv/utils/mappers';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
+import type { Transaction } from '../../srv/utils/types';
 
 // Mock cds logger + utils
 vi.mock('@sap/cds', () => {
@@ -745,4 +747,45 @@ describe('crawler analytics mappers', () => {
     });
   });
 });
+});
+
+describe('ledgerView — the same transaction rows whichever source reported it', () => {
+  const H = (c: string) => c.repeat(64);
+  const inp = (h: string, i: number, flags: Record<string, boolean> = {}) => ({ address: 'a', amount: [], txHash: H(h), outputIndex: i, ...flags });
+  const out = (i: number, isCollateral: boolean) => ({ address: 'o', amount: [], txHash: H('9'), outputIndex: i, dataHash: null, inlineDatum: null, isCollateral });
+  const base = { hash: H('9'), blockHash: H('8'), blockHeight: 1, slot: 1, index: 0, fee: '1', deposit: '0', size: null, blockTime: 0 };
+
+  it('gives chain-sync, Koios and Blockfrost shapes of one phase-2 failure identical inputs, outputs and mint', () => {
+    // chain-sync: the ledger partition already applied
+    const chainSync: Transaction = ledgerView({ ...base, spendsCollaterals: true, mint: undefined,
+      inputs: [inp('c', 0, { isCollateral: true }), inp('e', 1, { isReference: true })], outputs: [out(2, true)] });
+    // Koios: declared inputs and outputs too, per-class lists in its own order, the declared mint
+    const koios: Transaction = ledgerView({ ...base, spendsCollaterals: true, mint: [{ unit: 'p'.repeat(56), quantity: '1' }],
+      inputs: [inp('b', 1), inp('a', 0), inp('c', 0, { isCollateral: true }), inp('e', 1, { isReference: true })],
+      outputs: [out(0, false), out(1, false), out(2, true)] });
+    // Blockfrost: one mixed list
+    const blockfrost: Transaction = ledgerView({ ...base, spendsCollaterals: true,
+      inputs: [inp('e', 1, { isReference: true }), inp('a', 0), inp('c', 0, { isCollateral: true })],
+      outputs: [out(2, true), out(0, false)] });
+
+    for (const t of [koios, blockfrost]) {
+      expect(t.inputs).toEqual(chainSync.inputs);
+      expect(t.outputs).toEqual(chainSync.outputs);
+      expect(t.mint).toBeUndefined();
+    }
+  });
+
+  it('drops the collateral return of a valid transaction and sorts every input class', () => {
+    const t = ledgerView({ ...base, spendsCollaterals: false,
+      inputs: [inp('b', 0), inp('a', 3), inp('a', 1), inp('f', 0, { isCollateral: true }), inp('d', 0, { isCollateral: true })],
+      outputs: [out(0, false), out(1, true)] });
+    expect(t.inputs.map(i => [i.txHash[0], i.outputIndex])).toEqual([['a', 1], ['a', 3], ['b', 0], ['d', 0], ['f', 0]]);
+    expect(t.outputs.map(o => o.outputIndex)).toEqual([0]);
+  });
+
+  it('only sorts when the source does not report the phase-2 validity', () => {
+    const t = ledgerView({ ...base, inputs: [inp('b', 0), inp('a', 0)], outputs: [out(0, false), out(1, true)] });
+    expect(t.inputs.map(i => i.txHash[0])).toEqual(['a', 'b']);
+    expect(t.outputs).toHaveLength(2);
+  });
 });

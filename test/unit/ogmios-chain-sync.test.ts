@@ -589,3 +589,42 @@ describe('OgmiosBackend chain-sync — certificates and withdrawals (crawler.cer
     ]);
   });
 });
+
+describe('OgmiosBackend chain-sync — redeemers', () => {
+  beforeEach(() => {
+    captured.handlers = undefined;
+    captured.opts = undefined;
+  });
+
+  const P1 = '1'.repeat(56), P2 = '2'.repeat(56);
+
+  it('reports [] for a transaction without redeemers', async () => {
+    const { rolled } = await openStream();
+    await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, vi.fn());
+    expect(rolled[0].txs[0].redeemers).toEqual([]);
+  });
+
+  it('names the redeemed input (sorted inputs) and the minted policy (sorted policies)', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    // body order differs from the ledger's sorted order the redeemer index points into
+    tx.inputs = [
+      { transaction: { id: 'f'.repeat(64) }, index: 0 },
+      { transaction: { id: 'e'.repeat(64) }, index: 2 },
+      { transaction: { id: 'e'.repeat(64) }, index: 1 },
+    ];
+    tx.mint = { [P2]: { '': 1n }, [P1]: { '': -1n } };
+    tx.redeemers = [
+      { validator: { purpose: 'spend', index: 1 }, redeemer: 'd87980', executionUnits: { memory: 1200n, cpu: 3400000n } },
+      { validator: { purpose: 'mint', index: 1 }, redeemer: 'd87a80', executionUnits: { memory: 10, cpu: 20 } },
+      { validator: { purpose: 'withdraw', index: 0 }, redeemer: '00', executionUnits: { memory: 1, cpu: 2 } },
+    ];
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+    expect(rolled[0].txs[0].redeemers).toEqual([
+      { purpose: 'spend', index: 1, data: 'd87980', mem: '1200', steps: '3400000', txHash: 'e'.repeat(64), outputIndex: 2, policyId: null },
+      { purpose: 'mint', index: 1, data: 'd87a80', mem: '10', steps: '20', txHash: null, outputIndex: null, policyId: P2 },
+      { purpose: 'withdraw', index: 0, data: '00', mem: '1', steps: '2', txHash: null, outputIndex: null, policyId: null },
+    ]);
+  });
+});

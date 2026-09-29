@@ -188,8 +188,14 @@ For HSM security details, supported hardware, and SoftHSM dev setup, see [Securi
 2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemer + lockOnScript) → Sign → Submit
 ```
 
+### Several Script Inputs
+**Action:** `BuildPlutusTransaction` — Spend several script UTxOs in one transaction (for example a batcher filling
+orders against a state UTxO), each with its own redeemer. A script input carries its validator inline or points
+at a UTxO holding it as reference script. The outputs are built exactly in the given order with their datums,
+change comes after them. Every redeemer's execution units come back under `redeemers`.
+
 ### Collateral Setup
-**Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. When the address already has **at least two** UTxOs of >= 5 ADA, it returns **200** with `collateralAvailable: true` and builds nothing. Returns 400 if the address holds less than 6 ADA in total (5 ADA collateral + 1 ADA fee buffer).
+**Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. When the address already holds an ADA-only UTxO of >= 5 ADA without a reference script (the only kind the builders take as collateral) and at least one other UTxO to fund with, it returns **200** with `collateralAvailable: true` and builds nothing. Returns 400 if the address holds less than 6 ADA in total (5 ADA collateral + 1 ADA fee buffer).
 
 ---
 
@@ -271,6 +277,40 @@ length-indistinguishable from a full unit and must always be passed as a full un
 
 Returns `scriptHash`, `scriptAddress` when applicable.
 
+### BuildPlutusTransaction
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| senderAddress | bech32 | Yes | Pays the fee, funds the rest, provides the ADA-only collateral |
+| scriptInputsJson | String | Yes | 1..16 script UTxOs, see below |
+| outputsJson | String | Yes | Outputs in order: `{address, lovelaceAmount, assets?, inlineDatumJson? \| inlineDatumCbor? \| datumHash?, referenceScriptHex?}` |
+| changeAddress | bech32 | No | Change address (defaults to senderAddress) |
+| referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only inputs; reference-script UTxOs are added automatically |
+| forceInputsJson | String | No | Sender UTxOs that must be consumed |
+| requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
+| mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript, redeemerJson?}]`, a policy script per action |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms |
+
+A `scriptInputsJson` entry:
+
+```json
+{ "txHash": "…", "outputIndex": 0,
+  "validatorScript": "<cbor hex>", "scriptParamsJson": "[…]",
+  "redeemerJson": "{\"constructor\":0,\"fields\":[]}", "datumJson": null }
+```
+
+or with `"referenceScript": {"txHash": "…", "outputIndex": 0}` instead of `validatorScript`. `datumJson` is
+only for hash datums; inline datums are read from the UTxO. `redeemerCbor`, `datumCbor` and an output's
+`inlineDatumCbor` take PlutusData as CBOR hex instead of JSON and put those bytes into the transaction
+unchanged (no `__INPUT_IDX__` placeholders there). PlutusData JSON may nest up to 64 levels, every other
+JSON parameter up to 10; the size limit is 1 MB for both. `__INPUT_IDX:<txHash>#<n>__` in any redeemer or
+output datum resolves to the input's index in the final sorted inputs. Reference-script bytes come from Ogmios
+or Koios; with Blockfrost alone a reference script cannot be used.
+
+The response lists `redeemers` (`tag`, `index`, `mem`, `steps`); they are stored as `TransactionBuildRedeemers` (`tag`, `redeemerIndex`, `mem`, `steps`).
+400 errors name the cause: the output below min-ADA, the redeemer whose evaluation failed, a missing collateral
+(create one with `SetCollateral`), or a transaction above `maxTxSize`.
+
 ### SetCollateral
 
 | Parameter | Type | Required | Description |
@@ -315,13 +355,16 @@ For externally built transactions (not via ODATANO actions).
 Ogmios node not fully synchronized. Check: `curl http://localhost:1337/health` — wait until `networkSynchronization > 0.99`.
 
 ### "Insufficient funds" but wallet has balance
-UTxOs not yet confirmed or spent in a pending transaction. Wait 1-2 minutes for confirmations.
+UTxOs not yet confirmed or spent in a pending transaction. Transactions submitted through this
+instance are tracked: their inputs are not offered again and their change to the sender is, until a
+crawled block holds them (at most 10 minutes). Transactions submitted elsewhere are not known until
+they are on chain; wait 1-2 minutes for confirmations.
 
 ### "Invalid signature" after signing
 Wrong signing key or unsigned TX was modified. Verify key matches sender address, check `--testnet-magic` matches network. Re-build if needed.
 
 ### "No ADA-only UTxO available for collateral"
-Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has **two or more** UTxOs of >= 5 ADA each — that is the condition under which `SetCollateral` reports `collateralAvailable: true`.
+Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has an ADA-only UTxO of >= 5 ADA without a reference script plus another UTxO — that is the condition under which `SetCollateral` reports `collateralAvailable: true`, the same rule the builders apply.
 
 ---
 

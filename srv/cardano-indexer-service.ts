@@ -3,8 +3,9 @@ import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, TransactionValidationError } from './utils/errors';
 import { getCrawler, isCrawlerRunning, isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
 import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
-import { importUtxoSet } from './blockchain/crawler/utxo-set-import';
+import { importUtxoSet, rebuildUtxoSetAggregates } from './blockchain/crawler/utxo-set-import';
 import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
+import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -33,6 +34,34 @@ let certificateBackfill: CertificateBackfillState = {
   status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
   startedAt: null, finishedAt: null, error: null,
 };
+
+/** The transaction backfill of this process, same lifecycle as the certificate backfill. */
+interface TransactionBackfillState extends TransactionBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  fromSlot: number;
+  toSlot: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+let transactionBackfillStarting = false;
+let transactionBackfill: TransactionBackfillState = {
+  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0,
+  startedAt: null, finishedAt: null, error: null,
+};
+
+type BackfillData = { fromSlot?: string | number | null; toSlot?: string | number | null };
+
+/** Slot range of a backfill: defaults to crawl start .. cursor, never past the cursor. */
+async function backfillRange(db: Parameters<typeof readCursor>[0], data: BackfillData): Promise<{ fromSlot: number; toSlot: number }> {
+  const cursor = await readCursor(db);
+  if (!cursor) throw new TransactionValidationError('No crawler cursor yet — the backfill covers crawled blocks only.');
+  const fromSlot = data.fromSlot != null ? Number(data.fromSlot) : (cursor.startSlot ?? 0);
+  const toSlot = data.toSlot != null ? Number(data.toSlot) : cursor.lastSlot;
+  if (toSlot < fromSlot) throw new TransactionValidationError(`toSlot ${toSlot} lies before fromSlot ${fromSlot}.`);
+  if (toSlot > cursor.lastSlot) throw new TransactionValidationError(`toSlot ${toSlot} is past the crawler cursor (slot ${cursor.lastSlot}) — only crawled blocks can be backfilled.`);
+  return { fromSlot, toSlot };
+}
 
 function utxoSetConfigured(): boolean {
   try {
@@ -111,6 +140,21 @@ module.exports = (srv: cds.Service) => {
           finishedAt: certificateBackfill.finishedAt,
           error: certificateBackfill.error,
         },
+        transactionBackfill: {
+          status: transactionBackfill.status,
+          fromSlot: String(transactionBackfill.fromSlot),
+          toSlot: String(transactionBackfill.toSlot),
+          atSlot: String(transactionBackfill.atSlot),
+          blocks: transactionBackfill.blocks,
+          transactions: transactionBackfill.transactions,
+          inputs: transactionBackfill.inputs,
+          redeemers: transactionBackfill.redeemers,
+          rewritten: transactionBackfill.rewritten,
+          skipped: transactionBackfill.skipped,
+          startedAt: transactionBackfill.startedAt,
+          finishedAt: transactionBackfill.finishedAt,
+          error: transactionBackfill.error,
+        },
         epochSnapshots: {
           enabled: epochSnapshotsConfigured(),
           source: epochSnapshotSource(),
@@ -133,12 +177,7 @@ module.exports = (srv: cds.Service) => {
     certificateBackfillStarting = true;
     try {
       return await handleRequest(req, async (db) => {
-        const cursor = await readCursor(db);
-        if (!cursor) throw new TransactionValidationError('No crawler cursor yet — the backfill covers crawled blocks only.');
-        const fromSlot = data.fromSlot != null ? Number(data.fromSlot) : (cursor.startSlot ?? 0);
-        const toSlot = data.toSlot != null ? Number(data.toSlot) : cursor.lastSlot;
-        if (toSlot < fromSlot) throw new TransactionValidationError(`toSlot ${toSlot} lies before fromSlot ${fromSlot}.`);
-        if (toSlot > cursor.lastSlot) throw new TransactionValidationError(`toSlot ${toSlot} is past the crawler cursor (slot ${cursor.lastSlot}) — only crawled blocks can be backfilled.`);
+        const { fromSlot, toSlot } = await backfillRange(db, data);
         certificateBackfill = {
           status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
           startedAt: new Date().toISOString(), finishedAt: null, error: null,
@@ -168,12 +207,72 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
+  // backfillTransactions — second chain-sync stream over already crawled blocks; fills empty
+  // input fields (outpoint, datum, address) and the redeemers. Validates, then runs detached.
+  srv.on('backfillTransactions', async (req: Request) => {
+    const data = (req.data ?? {}) as BackfillData;
+    if (data.fromSlot != null && !Number.isInteger(Number(data.fromSlot))) return rejectInvalid(req, 'backfillTransactions', 'fromSlot must be an integer', 'fromSlot');
+    if (data.toSlot != null && !Number.isInteger(Number(data.toSlot))) return rejectInvalid(req, 'backfillTransactions', 'toSlot must be an integer', 'toSlot');
+    if (transactionBackfill.status === 'running' || transactionBackfillStarting) return rejectInvalid(req, 'backfillTransactions', 'A transaction backfill is already running');
+    if (!getCardanoClient().getChainSyncBackend()) return rejectInvalid(req, 'backfillTransactions', 'No chain-sync backend available (needs Ogmios)');
+    transactionBackfillStarting = true;
+    try {
+      return await handleRequest(req, async (db) => {
+        const { fromSlot, toSlot } = await backfillRange(db, data);
+        transactionBackfill = {
+          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0,
+          startedAt: new Date().toISOString(), finishedAt: null, error: null,
+        };
+        void backfillTransactions({
+          client: getCardanoClient(), indexer: getCardanoIndexer(), fromSlot, toSlot,
+          onProgress: (p) => {
+            Object.assign(transactionBackfill, p);
+            if (transactionBackfill.blocks % 20_000 < 200) logger.info(`Transaction backfill at slot ${p.atSlot}: ${p.blocks} blocks, ${p.inputs} inputs, ${p.redeemers} redeemers`);
+          },
+        })
+          .then((r) => { Object.assign(transactionBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            Object.assign(transactionBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+            logger.error(`Transaction backfill failed: ${message}`);
+          });
+        return {
+          accepted: true,
+          fromSlot: String(fromSlot),
+          toSlot: String(toSlot),
+          message: `Transaction backfill started for slots ${fromSlot}..${toSlot}; poll getStatus().transactionBackfill.`,
+        };
+      });
+    } finally {
+      transactionBackfillStarting = false;
+    }
+  });
+
   // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validates, then
   // runs detached; progress via getStatus().utxoSet.
   srv.on('importUtxoSet', async (req: Request) => {
     const data = (req.data ?? {}) as { source?: string; filePath?: string; anchorSlot?: string | number | null; anchorHash?: string | null };
+    if (data.source === 'aggregates') {
+      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process — pauseCrawler first');
+      if (utxoSetImportInFlight) return rejectInvalid(req, 'importUtxoSet', 'A UTxO set import is already running');
+      return handleRequest(req, async (db) => {
+        const cursor = await readCursor(db);
+        const { anchorSlot, anchorHash } = cursor?.utxoSet ?? {};
+        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to rebuild the sums from — run importUtxoSet first.');
+        utxoSetImportInFlight = rebuildUtxoSetAggregates({ indexer: getCardanoIndexer() })
+          .then((r) => logger.info(`UTxO set sums rebuilt: ${r.utxos} rows at ${r.anchor.slot}/${r.anchor.hash}`))
+          .catch((err: unknown) => logger.error(`UTxO set aggregate rebuild failed: ${err instanceof Error ? err.message : String(err)}`))
+          .finally(() => { utxoSetImportInFlight = null; });
+        return {
+          accepted: true,
+          anchorSlot: String(anchorSlot),
+          anchorHash,
+          message: 'UTxO set sums are rebuilt from the imported rows; poll getStatus().utxoSet, then resumeCrawler.',
+        };
+      });
+    }
     const source = data.source === 'file' || data.source === 'ogmios' ? data.source : null;
-    if (!source) return rejectInvalid(req, 'importUtxoSet', 'source must be "ogmios" or "file"', 'source');
+    if (!source) return rejectInvalid(req, 'importUtxoSet', 'source must be "ogmios", "file" or "aggregates"', 'source');
     if (source === 'file' && !data.filePath) return rejectMissing(req, 'importUtxoSet', 'filePath');
     const anchorGiven = data.anchorSlot != null || !!data.anchorHash;
     if (source === 'file' && !anchorGiven) {

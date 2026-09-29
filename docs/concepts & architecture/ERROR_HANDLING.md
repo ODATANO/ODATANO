@@ -138,6 +138,7 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds/assets for transaction |
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | Transaction failed protocol validation |
 | `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Duplicate transaction (already in mempool/on chain) |
+| `ODATANO_CHAIN_POINT_MISMATCH` | 409 | `GetNextBlocks`: the cursor block is not on this instance's chain (orphaned by a reorg); message starts with `CHAIN_POINT_MISMATCH:` |
 | `ODATANO_PROVIDER_RATE_LIMITED` | 429 | Backend rate limit exceeded |
 | `ODATANO_PROVIDER_UNAVAILABLE` | 503 | Backend temporarily unavailable |
 | `ODATANO_INTERNAL_ERROR` | 500 | Unexpected internal error (fallback) |

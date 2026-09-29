@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, AssetSumSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -601,7 +601,7 @@ entity AddressAssets : temporal {
 
         @title      : 'Asset Details'
         @description: 'Structural slice for asset details'
-        asset   : AssetSlice;
+        asset   : AssetSumSlice;
 }
 
 @title      : 'Address UTxOs'
@@ -1021,7 +1021,7 @@ entity LedgerAddressAssets {
 
         @title      : 'Asset'
         @description: 'Quantity and decomposed unit'
-        asset   : AssetSlice;
+        asset   : AssetSumSlice;
 }
 
 @title      : 'Ledger Accounts'
@@ -1109,6 +1109,48 @@ entity TransactionWithdrawals {
         @title      : 'Lovelace'
         @description: 'Amount withdrawn in lovelace'
         lovelace     : Lovelace;
+}
+
+@title      : 'Transaction Redeemers'
+@description: 'Redeemers of a transaction as the chain crawler saw them (Ogmios chain-sync). A spend redeemer names the redeemed input, a mint redeemer the policy. Not written by the lazy path.'
+@readonly
+entity TransactionRedeemers {
+
+        @title      : 'Transaction (key)'
+        @description: 'The transaction carrying the redeemer'
+    key tx               : Association to Transactions;
+
+        @title      : 'Purpose (key)'
+        @description: 'spend | mint | publish | withdraw | vote | propose'
+    key purpose          : String(10);
+
+        @title      : 'Redeemer Index (key)'
+        @description: 'Index within its purpose (spend: position of the input in the sorted inputs; mint: of the policy in the sorted policies)'
+    key redeemerIndex    : Integer;
+
+        @title      : 'Data'
+        @description: 'Redeemer data as PlutusData CBOR hex'
+        data             : LargeString;
+
+        @title      : 'Memory Units'
+        @description: 'Execution memory units'
+        mem              : Integer64;
+
+        @title      : 'CPU Steps'
+        @description: 'Execution CPU steps'
+        steps            : Integer64;
+
+        @title      : 'Redeemed Input Transaction'
+        @description: 'spend: transaction that created the redeemed input'
+        spentTxHash      : Blake2b256;
+
+        @title      : 'Redeemed Input Index'
+        @description: 'spend: output index of the redeemed input'
+        spentOutputIndex : Integer;
+
+        @title      : 'Policy ID'
+        @description: 'mint: the policy the redeemer runs'
+        policyId         : Blake2b224;
 }
 
 @title      : 'Transaction Outputs'
@@ -1391,6 +1433,10 @@ entity TransactionBuilds : temporal {
         @description: 'The outputs created in the transaction build'
         outputs        : Composition of many TransactionBuildOutputs
                              on outputs.build = $self;
+        @title      : 'Redeemers'
+        @description: 'Redeemers of a script build with the execution units stamped on them'
+        redeemers      : Composition of many TransactionBuildRedeemers
+                             on redeemers.build = $self;
 
         @title      : 'Associated Submission'
         @description: 'Association to the transaction submission if submitted'
@@ -1525,6 +1571,31 @@ entity TransactionBuildOutputs {
         @title      : 'Has Assets'
         @description: 'Indicates if output has native assets'
         hasAssets   : Boolean;
+}
+
+@title      : 'Transaction Build Redeemers'
+@description: 'Redeemers of a script build (spend, mint, …) with the execution units stamped on them; compare with maxTxExecutionUnits of the protocol parameters'
+entity TransactionBuildRedeemers {
+
+        @title      : 'Build (key)'
+        @description: 'Association to parent transaction build'
+    key build : Association to TransactionBuilds;
+
+        @title      : 'Tag (key)'
+        @description: 'Redeemer purpose: Spend, Mint, Cert, Withdraw, Vote or Propose'
+    key tag   : String(10);
+
+        @title      : 'Redeemer Index (key)'
+        @description: 'Index within its purpose (spend: position of the input in the sorted inputs)'
+    key redeemerIndex : Integer;
+
+        @title      : 'Memory Units'
+        @description: 'Execution memory units stamped on the redeemer'
+        mem   : Integer64;
+
+        @title      : 'CPU Steps'
+        @description: 'Execution CPU steps stamped on the redeemer'
+        steps : Integer64;
 }
 
 @title      : 'Transaction Build Output Assets'

@@ -11,10 +11,10 @@ import { bech32 } from 'bech32';
 import { blake2b_224 } from '@harmoniclabs/crypto';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError } from '../../utils/errors';
+import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionValidationError, normalizeBackendError } from '../../utils/errors';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../../utils/epoch-slots';
-import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId, decodeShelleyAddress, sumUtxoAmounts } from '../../utils/mappers';
+import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId, decodeShelleyAddress, sumUtxoAmounts, compareOutRef, ledgerView } from '../../utils/mappers';
 import {
   Transaction,
   BlockData,
@@ -32,7 +32,8 @@ import {
   Amount,
   TxInputLine,
   TxOutputLine,
-  TxCertificate
+  TxCertificate,
+  TxRedeemer
 } from '../../utils/types';
 
 import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend, EpochStateBackend, EpochLedgerState } from './cardano-backend';
@@ -88,6 +89,12 @@ export function ogmiosScriptHash(script: unknown): string | null {
   if (tag === undefined || typeof s?.cbor !== 'string' || s.cbor.length === 0) return null;
   const bytes = Uint8Array.from(Buffer.concat([Buffer.from([tag]), Buffer.from(s.cbor, 'hex')]));
   return Buffer.from(blake2b_224(bytes)).toString('hex');
+}
+
+/** Full CBOR of a Plutus reference script as Ogmios delivers it; null for native or absent scripts. */
+export function ogmiosPlutusScriptCbor(script: unknown): string | null {
+  const s = script as { language?: string; cbor?: string } | null | undefined;
+  return s?.language?.startsWith('plutus:') && typeof s.cbor === 'string' && s.cbor.length > 0 ? s.cbor : null;
 }
 
 /** Bech32 pool id of a block issuer: blake2b-224 of its cold verification key. */
@@ -248,6 +255,30 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
 }
 
 /**
+ * Redeemers of a chain-sync tx. A spend index points into the body inputs sorted by
+ * (txHash, index), a mint index into the sorted policy ids; both are resolved here.
+ */
+function mapOgmiosRedeemers(tx: OgmiosChainSyncTx): TxRedeemer[] {
+  const sortedInputs = [...(tx.inputs ?? [])].sort((a, b) =>
+    compareOutRef({ txHash: a.transaction.id, outputIndex: a.index }, { txHash: b.transaction.id, outputIndex: b.index }));
+  const sortedPolicies = Object.keys(tx.mint ?? {}).sort();
+  return (tx.redeemers ?? []).map((r) => {
+    const { purpose, index } = r.validator;
+    const spent = purpose === 'spend' ? sortedInputs[index] : undefined;
+    return {
+      purpose,
+      index,
+      data: r.redeemer,
+      mem: r.executionUnits.memory.toString(),
+      steps: r.executionUnits.cpu.toString(),
+      txHash: spent?.transaction.id ?? null,
+      outputIndex: spent?.index ?? null,
+      policyId: purpose === 'mint' ? (sortedPolicies[index] ?? null) : null,
+    };
+  });
+}
+
+/**
  * Structural views of the Ogmios chain-sync `BlockPraos` / `Transaction` JSON we consume
  * (Shelley-era onward); declared locally so the mapper is not coupled to the schema package.
  */
@@ -269,6 +300,7 @@ interface OgmiosChainSyncTx {
   certificates?: OgmiosCertificate[];
   /** Keyed by reward account (bech32 `stake…` / `stake_test…`). */
   withdrawals?: Record<string, { ada?: { lovelace?: number | bigint } }>;
+  redeemers?: { redeemer: string; executionUnits: { memory: number | bigint; cpu: number | bigint }; validator: { purpose: string; index: number } }[];
 }
 /**
  * Ogmios v6 `Certificate` (cardano.json), structurally typed for the fields we index.
@@ -316,6 +348,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   private stateQueryClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
   private txSubmissionClient: Awaited<ReturnType<typeof createTransactionSubmissionClient>> | null = null;
   private context: Awaited<ReturnType<typeof createInteractionContext>> | null = null;
+  /** Second connection for address queries (see scanQueryClient). */
+  private scanClient: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
+  private scanContext: Awaited<ReturnType<typeof createInteractionContext>> | null = null;
+  private scanConnecting: Promise<Awaited<ReturnType<typeof createLedgerStateQueryClient>>> | null = null;
   private isShutdown = false;
   private reconnectPromise: Promise<void> | null = null;
   private network: Network;
@@ -438,6 +474,40 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
     this.context = context;
     return true;
+  }
+
+  /**
+   * Query client for address queries. The node answers them by scanning its whole UTxO set (seconds
+   * each), and Ogmios serves the queries of one connection in order; on their own connection they no
+   * longer hold up tip, epoch and protocol parameters. Opened on first use, reopened after a close.
+   */
+  private async scanQueryClient(): Promise<Awaited<ReturnType<typeof createLedgerStateQueryClient>>> {
+    this.ensureNotShutdown();
+    // never initialized (test-injected clients): the shared client
+    if (!this.context) return this.stateQueryClient!;
+    const socket = this.scanContext?.socket as { readyState?: number; OPEN?: number } | undefined;
+    if (this.scanClient && socket && socket.readyState === (socket.OPEN ?? 1)) return this.scanClient;
+    if (!this.scanConnecting) {
+      this.scanConnecting = (async () => {
+        const url = new URL(this.ogmiosUrl);
+        const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
+        const context = await this.withInitTimeout(createInteractionContext(
+          (err) => logger.error(`[OgmiosBackend] address-query context error: ${err.message}`),
+          () => { this.scanClient = null; },
+          { connection }
+        ), 'scan/createInteractionContext');
+        try {
+          const client = await this.withInitTimeout(createLedgerStateQueryClient(context), 'scan/ledgerStateQueryClient');
+          this.scanContext = context;
+          this.scanClient = client;
+          return client;
+        } catch (err: unknown) {
+          this.forceCloseContext(context);
+          throw err;
+        }
+      })().finally(() => { this.scanConnecting = null; });
+    }
+    return this.scanConnecting;
   }
 
   /**
@@ -634,7 +704,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return handleBackendRequest(async () => {
       await this.ensureConnected();
       const decoded = decodeShelleyAddress(address);
-      const raw = await this.stateQueryClient!.utxo({ addresses: [address] });
+      const raw = await (await this.scanQueryClient()).utxo({ addresses: [address] });
       const utxos = raw.map((u: typeof raw[number]) => this.mapOgmiosUtxo(u, address));
       return {
         address,
@@ -655,7 +725,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return handleBackendRequest(async () => {
       await this.ensureConnected();
       
-      const utxos = await this.stateQueryClient!.utxo({ addresses: [address] });
+      const utxos = await (await this.scanQueryClient()).utxo({ addresses: [address] });
       return utxos.map((u: typeof utxos[number]) => this.mapOgmiosUtxo(u, address));
     }, this.name);
   }
@@ -675,6 +745,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       // Ogmios delivers the inline datum as CBOR hex in `datum`
       inlineDatum: typeof u.datum === 'string' ? u.datum : null,
       scriptRef: ogmiosScriptHash(u.script) ?? undefined,
+      scriptRefCbor: ogmiosPlutusScriptCbor(u.script),
     };
   }
 
@@ -849,8 +920,20 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return handleBackendRequest(async () => {
       await this.ensureConnected();
 
-      const txHash = await this.txSubmissionClient!.submitTransaction(signedTxCbor);
-      return txHash;
+      try {
+        return await this.txSubmissionClient!.submitTransaction(signedTxCbor);
+      } catch (err: unknown) {
+        // JSON-RPC 3000-3999: the node rejected the transaction. Known kinds keep their class
+        // (already submitted = 409, script failure = 400); anything else becomes a 400 with its reason.
+        const known = normalizeBackendError(err, this.name);
+        if (known.statusCode >= 400 && known.statusCode < 500) throw known;
+        const e = err as { code?: unknown; message?: unknown; data?: unknown };
+        if (typeof e?.code === 'number' && e.code >= 3000 && e.code < 4000) {
+          const detail = e.data === undefined ? '' : ` ${JSON.stringify(e.data).slice(0, 800)}`;
+          throw new TransactionValidationError(`node rejected the transaction (${e.code}): ${String(e.message ?? '')}${detail}`, err);
+        }
+        throw err;
+      }
     }, this.name);
   }
 
@@ -1024,20 +1107,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** Unspent outputs of several addresses in the live ledger (one query per 100 addresses). */
-  async getUtxosByAddresses(addresses: string[]): Promise<UTxO[]> {
-    if (addresses.length === 0) return [];
-    return handleBackendRequest(async () => {
-      await this.ensureConnected();
-      const out: UTxO[] = [];
-      for (let i = 0; i < addresses.length; i += 100) {
-        const utxos = await this.stateQueryClient!.utxo({ addresses: addresses.slice(i, i + 100) });
-        for (const u of utxos) out.push(this.mapOgmiosUtxo(u));
-      }
-      return out;
-    }, this.name);
-  }
-
   /** Outputs among `refs` that are unspent in the live ledger; spent or unknown references are absent. */
   async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> {
     if (refs.length === 0) return [];
@@ -1076,9 +1145,12 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       }
     }
 
+    if (this.scanContext) this.forceCloseContext(this.scanContext);
     this.stateQueryClient = null;
     this.txSubmissionClient = null;
     this.context = null;
+    this.scanClient = null;
+    this.scanContext = null;
   }
 
   isConnected(): boolean {
@@ -1366,7 +1438,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     const declaredFee = (tx.fee?.ada?.lovelace ?? 0).toString();
     const totalCollateral = tx.totalCollateral ? tx.totalCollateral.ada.lovelace.toString() : null;
 
-    return {
+    // the same ledger view the pagination sources produce (ordering; the partition is already applied)
+    return ledgerView({
       hash: tx.id,
       blockHash: block.id,
       blockHeight: block.height,
@@ -1393,7 +1466,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         stakeAddress,
         amount: (value?.ada?.lovelace ?? 0).toString(),
       })),
-    };
+      redeemers: mapOgmiosRedeemers(tx),
+    });
   }
 
   /**

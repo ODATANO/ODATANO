@@ -1,7 +1,7 @@
 import cds, { Request } from '@sap/cds';
 import { safeJSON } from '@cardano-ogmios/client';
 import { handleRequest } from './utils/backend-request-handler';
-import { rejectInvalid, rejectMissing, ProviderUnavailableError } from './utils/errors';
+import { rejectInvalid, rejectMissing, ProviderUnavailableError, ChainPointMismatchError } from './utils/errors';
 import {
   isTxHash,
   isBlockHash,
@@ -21,9 +21,10 @@ import {
   readNextBlocks,
   readBlockTransactions,
   readTransactionsByHash,
+  lacksOutpoints,
   readTransactionMetadata,
 } from './blockchain/stored-chain';
-import type { PoolData, DrepData } from './utils/types';
+import type { PoolData, DrepData, Transaction as ProviderTransaction } from './utils/types';
 
 const logger = cds.log('CardanoBackendService');
 
@@ -76,7 +77,12 @@ module.exports = (srv: cds.Service) => {
   // --- blocks and transactions -------------------------------------------------------------------
   op('GetTransaction', async ({ hash }, db) => {
     const stored = (await readTransactionsByHash(db, [String(hash)])).get(String(hash));
-    if (stored) return stored;
+    if (stored && !lacksOutpoints(stored)) return stored;
+    if (stored) {
+      // An old row without input outpoints: the backend's copy when one can serve it
+      if (!client().hasBackendFor('getTransaction')) return stored;
+      return client().getTransaction(String(hash)).catch(() => stored);
+    }
     await indexer().refuseOutsideCrawl(db, 'getTransaction', `Transaction ${hash}`);
     return client().getTransaction(String(hash));
   }, need(isTxHash, 'hash', 'transaction hash'));
@@ -84,9 +90,18 @@ module.exports = (srv: cds.Service) => {
   op('GetTransactionsBatch', async ({ hashes }, db) => {
     const wanted = hashes as string[];
     const found = await readTransactionsByHash(db, wanted);
-    const missing = wanted.filter(h => !found.has(h));
-    if (missing.length && client().hasBackendFor('getTransactionsBatch')) {
-      for (const [h, t] of await client().getTransactionsBatch(missing)) found.set(h, t);
+    const absent = wanted.filter(h => !found.has(h));
+    // old rows without input outpoints: the backend's copy replaces them when it has one
+    const stale = wanted.filter(h => found.has(h) && lacksOutpoints(found.get(h)!));
+    if ((absent.length || stale.length) && client().hasBackendFor('getTransactionsBatch')) {
+      let fetched: Map<string, ProviderTransaction>;
+      try {
+        fetched = await client().getTransactionsBatch([...absent, ...stale]);
+      } catch (err) {
+        if (absent.length) throw err;
+        fetched = new Map();
+      }
+      for (const [h, t] of fetched) found.set(h, t);
     }
     return found;
   }, jsonList('hashes', isTxHash, 'transaction hashes'));
@@ -125,17 +140,26 @@ module.exports = (srv: cds.Service) => {
     if (!anchor && afterHeight != null) {
       const canonical = await readBlockByHeight(db, Number(afterHeight));
       if (canonical) {
-        throw new ProviderUnavailableError(
+        throw new ChainPointMismatchError(
           `CHAIN_POINT_MISMATCH: cursor block ${afterHash} at height ${afterHeight} is no longer canonical (canonical block: ${canonical.hash})`,
           'odatano',
         );
       }
     }
     const paging = client().getPaginatingBackend();
-    if (paging) return paging.getNextBlocks(String(afterHash), n, afterHeight == null ? undefined : Number(afterHeight));
+    if (paging) {
+      try {
+        return await paging.getNextBlocks(String(afterHash), n, afterHeight == null ? undefined : Number(afterHeight));
+      } catch (err) {
+        // the provider's reorg marker, as 409 so it survives production error masking
+        const message = err instanceof Error ? err.message : '';
+        if (message.startsWith('CHAIN_POINT_MISMATCH:')) throw new ChainPointMismatchError(message, 'odatano');
+        throw err;
+      }
+    }
     // Nothing indexed past the cursor yet: the caller is at this instance's tip.
     if (anchor) return [];
-    throw new ProviderUnavailableError(`CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to this instance`, 'odatano');
+    throw new ChainPointMismatchError(`CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to this instance`, 'odatano');
   }, need(isBlockHash, 'afterHash', 'block hash'));
 
   op('GetBlockTransactions', async ({ blockHash }, db) => {

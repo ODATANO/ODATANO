@@ -906,6 +906,26 @@ describe('BlockfrostBackend getTransaction — input flags and phase-2 validity'
     ]);
   });
 
+  it('orders the mixed input list like the ledger: regular, collateral, reference, each by outpoint', async () => {
+    const backend = backendFor(txBody(), {
+      hash: TX,
+      inputs: [
+        input({ tx_hash: 'e'.repeat(64), output_index: 0, reference: true }),
+        input({ tx_hash: 'd'.repeat(64), output_index: 1 }),
+        input({ tx_hash: 'f'.repeat(64), output_index: 0, collateral: true }),
+        input({ tx_hash: 'd'.repeat(64), output_index: 0 }),
+      ],
+      outputs: [],
+    });
+    await backend.init();
+
+    const tx = await backend.getTransaction(TX);
+
+    expect(tx.inputs.map(i => [i.txHash[0], i.outputIndex, i.isCollateral, i.isReference])).toEqual([
+      ['d', 0, false, false], ['d', 1, false, false], ['f', 0, true, false], ['e', 0, false, true],
+    ]);
+  });
+
   it('reports a phase-2 failure through spendsCollaterals', async () => {
     const backend = backendFor(txBody({ valid_contract: false }), {
       hash: TX, inputs: [input({ collateral: true })], outputs: [],
@@ -920,6 +940,23 @@ describe('BlockfrostBackend getTransaction — input flags and phase-2 validity'
     await backend.init();
 
     expect((await backend.getTransaction(TX)).spendsCollaterals).toBe(false);
+  });
+
+  it('keeps only what the ledger applied: no declared input or output after a phase-2 failure, no collateral return otherwise', async () => {
+    const output = (i: number, collateral: boolean) => ({ address: 'addr_test1out', amount: [], output_index: i, data_hash: null, inline_datum: null, collateral, reference_script_hash: null });
+    const utxos = { hash: TX, inputs: [input(), input({ output_index: 1, collateral: true })], outputs: [output(0, false), output(1, true)] };
+
+    const failed = backendFor(txBody({ valid_contract: false }), utxos);
+    await failed.init();
+    const f = await failed.getTransaction(TX);
+    expect(f.inputs.map(i => [i.outputIndex, i.isCollateral])).toEqual([[1, true]]);
+    expect(f.outputs.map(o => [o.outputIndex, o.isCollateral])).toEqual([[1, true]]);
+
+    const valid = backendFor(txBody(), utxos);
+    await valid.init();
+    const v = await valid.getTransaction(TX);
+    expect(v.inputs.map(i => [i.outputIndex, i.isCollateral])).toEqual([[0, false], [1, true]]);
+    expect(v.outputs.map(o => [o.outputIndex, o.isCollateral])).toEqual([[0, false]]);
   });
 
   it('has no mint field — the indexer must fall back to the input/output delta', async () => {

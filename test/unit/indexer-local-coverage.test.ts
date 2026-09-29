@@ -434,22 +434,27 @@ describe('addresses from the crawled UTxO set', () => {
     expect(rows.map(r => r.tx_hash)).toEqual([T1]);
   });
 
-  it('builds the address from its UTxOs at the node tip, balance summed, type decoded', async () => {
+  it('builds the address from the crawled set, checked unspent at the node by output reference', async () => {
     const { client, indexer } = makeIndexer();
     const getAddress = vi.fn();
-    Object.assign(client, {
-      getAddress,
-      getAddressTransactionHashes: vi.fn(async () => []),
-      getUtxosByAddresses: vi.fn(async () => [
-        { txHash: T1, outputIndex: 0, address: ADDR, amount: [{ unit: 'lovelace', quantity: '2000000' }] },
-        { txHash: T2, outputIndex: 1, address: ADDR, amount: [{ unit: 'lovelace', quantity: '3000000' }, { unit: UNIT, quantity: '4' }] },
-      ]),
-    });
-    answer = (q) => (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one' ? { firstSeenSlot: 1 } : q.entity === 'LedgerUTxOs' ? [] : undefined);
+    const T3 = '3'.repeat(64);
+    const getUnspentOutputs = vi.fn(async (refs: Array<{ txHash: string }>) => refs.filter(r => r.txHash !== T3));
+    Object.assign(client, { getAddress, getAddressTransactionHashes: vi.fn(async () => []), getUnspentOutputs });
+    answer = (q) => {
+      if (q.entity === 'LedgerAddresses' && q._op === 'SELECT.one') return { firstSeenSlot: 1 };
+      if (q.entity === 'LedgerUTxOs') return [
+        { txHash: T1, outputIndex: 0, address: ADDR, lovelace: '2000000', hasAssets: false },
+        { txHash: T2, outputIndex: 1, address: ADDR, lovelace: '3000000', hasAssets: true },
+        { txHash: T3, outputIndex: 0, address: ADDR, lovelace: '9000000', hasAssets: false }, // spent after the cursor
+      ];
+      if (q.entity === 'LedgerUTxOAssets') return [{ utxo_txHash: T2, utxo_outputIndex: 1, unit: UNIT, asset_quantity: '4' }];
+      return undefined;
+    };
 
     const address = await indexer.indexAddress(mockTx as never, ADDR) as unknown as Record<string, unknown>;
 
     expect(getAddress).not.toHaveBeenCalled();
+    expect(getUnspentOutputs).toHaveBeenCalledTimes(1);
     expect(address).toMatchObject({ address: ADDR, type: 'base', totalLovelace: '5000000', utxoCount: 2, hasAssets: true,
       stakeAddress: 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh' });
   });
@@ -463,6 +468,48 @@ describe('addresses from the crawled UTxO set', () => {
     const snap = runs.find(q => q.entity === 'PoolEpochSnapshots')!;
     expect(snap.where).toEqual({ poolId: POOL, epoch: 1432, source: 'ogmios' });
     expect(upserted('Pools')).toMatchObject({ activeStake: '777' });
+  });
+
+  it('indexes the addresses an account carries without a request per address; the set answers them itself', async () => {
+    const A1 = 'addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0';
+    const A2 = ADDR;
+    const { client, indexer } = makeIndexer();
+    const full = (a: string, lovelace: string) => ({ address: a, stakeAddress: null, type: 'enterprise', isScript: false,
+      amount: [{ unit: 'lovelace', quantity: lovelace }], utxos: [{ txHash: T1, outputIndex: 0, address: a, amount: [{ unit: 'lovelace', quantity: lovelace }] }] });
+    const getAddress = vi.fn();
+    client.getAccount.mockResolvedValue({ ...(await client.getAccount()), addresses: [full(A1, '7'), full(A2, '9')] } as never);
+    Object.assign(client, { getAddress, getAddressTransactionHashes: vi.fn(async () => []), getUnspentOutputs: vi.fn(async () => []) });
+
+    cursor = synced({ utxoSet: { status: 'none' } });
+    await indexer.indexAccount(mockTx as never, 'stake_test1x');
+    expect(getAddress).not.toHaveBeenCalled();
+    const written = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Addresses').map(q => q.entries as Record<string, unknown>);
+    expect(written.map(r => [r.address, r.totalLovelace])).toEqual([[A1, '7'], [A2, '9']]);
+
+  });
+
+  it('takes the addresses of a stake key from the crawled set, also when the node lists none', async () => {
+    const { client, indexer } = makeIndexer();
+    const getAddress = vi.fn();
+    // Ogmios: getAccount carries no addresses (the node has no stake-key index)
+    Object.assign(client, { getAddress, getAddressTransactionHashes: vi.fn(async () => []),
+      getUnspentOutputs: vi.fn(async (refs: Array<{ txHash: string; outputIndex: number }>) => refs) });
+    answer = (q) => {
+      if (q.entity === 'LedgerAddresses' && q._op === 'SELECT.many') return [{ address: ADDR }];
+      if (q.entity === 'LedgerUTxOs') return [{ txHash: T1, outputIndex: 0, address: ADDR, lovelace: '4000000', hasAssets: false }];
+      return undefined;
+    };
+
+    const account = await indexer.indexAccount(mockTx as never, 'stake_test1x') as unknown as Record<string, unknown>;
+
+    expect(account.hasAddresses).toBe(true);
+    expect(getAddress).not.toHaveBeenCalled();
+    const written = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Addresses').map(q => q.entries as Record<string, unknown>);
+    expect(written.map(r => [r.address, r.totalLovelace, r.utxoCount])).toEqual([[ADDR, '4000000', 1]]);
+    // one read of the open outputs for all addresses of the key, not one per address
+    const openReads = runs.filter(q => q.entity === 'LedgerUTxOs' && (q.where as Record<string, unknown>)?.spentTxHash === null);
+    expect(openReads).toHaveLength(1);
+    expect(openReads[0].where).toEqual({ address: { in: [ADDR] }, spentTxHash: null });
   });
 
   it('sums crawled withdrawals only when certificates are crawled since Shelley', async () => {

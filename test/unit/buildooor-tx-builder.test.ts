@@ -446,6 +446,17 @@ describe('BuildooorTxBuilder', () => {
       expect(rest).toEqual(utxos);
     });
 
+    it('keeps UTxOs with a reference script out of the rest (every builder), but spends a forced one', () => {
+      const withHash = { ...mkUtxo('dddd', 0), scriptRef: 'ab'.repeat(28) };
+      const withCbor = { ...mkUtxo('eeee', 0), scriptRefCbor: '5901' };
+      const utxos = [mkUtxo('aaaa', 0), withHash, withCbor];
+
+      expect(partition(utxos, undefined).rest.map((u: UTxO) => u.txHash)).toEqual(['aaaa']);
+      const { forced, rest } = partition(utxos, [{ txHash: 'dddd', outputIndex: 0 }]);
+      expect(forced.map((u: UTxO) => u.txHash)).toEqual(['dddd']);
+      expect(rest.map((u: UTxO) => u.txHash)).toEqual(['aaaa']);
+    });
+
     it('should silently ignore refs not present in the UTxO pool', () => {
       const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0)];
       const { forced, rest } = partition(utxos, [
@@ -558,7 +569,7 @@ describe('BuildooorTxBuilder', () => {
 
   describe('_computeSortedInputs (__INPUT_IDX__ placeholders)', () => {
     const compute = (script: any, forced: any[], funding: any[]) =>
-      (builder as any)._computeSortedInputs(script, forced, funding);
+      (builder as any)._computeSortedInputs([script], forced, funding);
 
     const mkUtxo = (txHash: string, outputIndex: number): UTxO => ({
       txHash, outputIndex, address: TEST_ADDRESS,
@@ -734,7 +745,7 @@ describe('BuildooorTxBuilder', () => {
 
     it('includes mintScriptHash in the result when supplied via extra', () => {
       const buildResult = (req: any, ctx: any, txDetails: any, extra: any) =>
-        (builder as any)._buildResult(req, ctx, txDetails, extra);
+        (builder as any)._buildResult(req, ctx, { redeemers: [], ...txDetails }, extra);
 
       const result = buildResult(
         { senderAddress: TEST_ADDRESS, network: 'preview' },
@@ -748,7 +759,7 @@ describe('BuildooorTxBuilder', () => {
 
     it('omits mintScriptHash when not provided in extra', () => {
       const buildResult = (req: any, ctx: any, txDetails: any, extra: any) =>
-        (builder as any)._buildResult(req, ctx, txDetails, extra);
+        (builder as any)._buildResult(req, ctx, { redeemers: [], ...txDetails }, extra);
 
       const result = buildResult(
         { senderAddress: TEST_ADDRESS, network: 'preview' },
@@ -1128,6 +1139,16 @@ describe('BuildooorTxBuilder', () => {
       expect(parsed.body.scriptDataHash?.toString()).toBe(recomputed?.toString());
       return parsed;
     };
+
+    it('rejects an output below min-ADA with a 400 naming the output, not a 500', async () => {
+      await initBuilder();
+      const ctx: TxBuildContext = { utxos: [adaOnlyUtxo, fundingUtxo], protocolParameters: PROTOCOL_PARAMS };
+      // 1 ADA to an output that also carries the minted token: below its min-ADA
+      const err = await builder.buildUnsignedMintTransaction({ ...mintReq(), lovelaceAmount: '1000000' }, ctx).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toMatch(/^output \d+ needs at least \d+ lovelace \(has 1000000, it carries native assets\); raise its lovelace amount$/);
+    });
 
     it('stamps buffered local units and a consistent scriptDataHash without an evaluator', async () => {
       await initBuilder();

@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
-import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
+import { PendingSpends } from './pending-spends';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
 
@@ -28,7 +29,7 @@ import { OdatanoBackend } from './backends/odatano-backend';
 const logger = cds.log('CardanoClient');
 
 /** Which backend type to prefer per method. */
-const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
+const METHOD_ROUTING: Record<string, { preferLive: boolean; finalOnClientError?: boolean }> = {
   getTransaction: { preferLive: false },
   // node first: UTxOs at the tip; Ogmios decodes the type itself (base/enterprise/…, not shelley/byron)
   getAddress: { preferLive: true },
@@ -49,7 +50,8 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean }> = {
   getAccount: { preferLive: true },
   getAssetInfo: { preferLive: false },
   getProtocolParameters: { preferLive: true },
-  submitTransaction: { preferLive: true },
+  // a node's rejection (4xx) is final: another backend submits to the same ledger
+  submitTransaction: { preferLive: true, finalOnClientError: true },
 };
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
@@ -89,8 +91,12 @@ export class CardanoClient {
   private uninitializedBackends = new Set<CardanoBackend>();
   network: Network;
   max_age_ms: number = 60000; // default 1 minute for temporary caching
+  /** Transactions submitted through this client that the ledger view does not show yet. */
+  readonly pendingSpends = new PendingSpends();
   private protocolParamsCache?: { data: LedgerProtocolParameters; fetchedAt: number };
   private protocolParamsFetchPromise: Promise<LedgerProtocolParameters> | null = null;
+  /** Last protocol parameters the live backend (node) answered. */
+  private lastLiveProtocolParams?: LedgerProtocolParameters;
   private static readonly PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   // Request coalescers — deduplicate concurrent fetches for the same resource
@@ -120,8 +126,9 @@ export class CardanoClient {
       this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));
     }
     if (backends.includes('odatano')) {
+      // A remote ODATANO runs its own failover chain: allow its primary timeout plus the fallback.
       this.historicalBackends.push(new OdatanoBackend(
-        clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.odatanoUrl, clientConfig.odatanoApiKey,
+        clientConfig.network, clientConfig.fallbackTimeoutMs, clientConfig.odatanoUrl, clientConfig.odatanoApiKey,
       ));
     }
 
@@ -274,9 +281,9 @@ export class CardanoClient {
     });
   }
 
-  /** Per-backend timeout: Koios gets the fallback timeout, everything else the primary one. */
+  /** Per-backend timeout: Koios and a remote ODATANO get the fallback timeout, everything else the primary one. */
   private getTimeoutForBackend(backend: CardanoBackend): number {
-    if (backend.name === 'koios') return this.config.fallbackTimeoutMs;
+    if (backend.name === 'koios' || backend.name === 'odatano') return this.config.fallbackTimeoutMs;
     return this.config.primaryTimeoutMs;
   }
 
@@ -310,7 +317,8 @@ export class CardanoClient {
   private async executeWithPriority<T>(
     fn: (backend: CardanoBackend) => Promise<T>,
     preferLive: boolean,
-    methodName?: string
+    methodName?: string,
+    finalOnClientError = false
   ): Promise<T> {
     await this.ensureInitialized();
     const errors: BackendError[] = [];
@@ -371,6 +379,7 @@ export class CardanoClient {
         logger[logLevel](
           `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}: ${backend.name} - ${backendError.message}`
         );
+        if (finalOnClientError && isClientError) throw backendError;
       }
     }
 
@@ -383,7 +392,7 @@ export class CardanoClient {
     fn: (backend: CardanoBackend) => Promise<T>
   ): Promise<T> {
     const config = METHOD_ROUTING[methodName] ?? { preferLive: false };
-    return this.executeWithPriority(fn, config.preferLive, methodName);
+    return this.executeWithPriority(fn, config.preferLive, methodName, config.finalOnClientError);
   }
 
   /** Transaction by hash (coalesced across concurrent callers). */
@@ -561,18 +570,25 @@ export class CardanoClient {
   }
 
   /**
-   * Outputs among `refs` that are unspent at the tip, read from the node's ledger; null when no
-   * ledger-state backend is usable (the caller then resolves via the producing transaction).
+   * Outputs among `refs` that are unspent at the tip, read from the node's ledger (Ogmios, or a remote
+   * ODATANO that asks its node); null when no backend can (the caller then resolves via the producing
+   * transaction, which carries no reference-script bytes).
    */
   async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
-    const backend = this.getLedgerStateBackend();
+    const backend = this.getLedgerStateBackend() ?? this.outputLookupBackend();
     return backend ? backend.getUnspentOutputs(refs) : null;
   }
 
-  /** Unspent outputs of several addresses from the node's ledger; null when no ledger-state backend can do it. */
-  async getUtxosByAddresses(addresses: string[]): Promise<UTxO[] | null> {
-    const backend = this.getLedgerStateBackend();
-    return backend?.getUtxosByAddresses ? backend.getUtxosByAddresses(addresses) : null;
+  /** A usable backend answering output-reference lookups without a whole-ledger dump (the odatano backend). */
+  private outputLookupBackend(): { getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> } | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      const lookup = b as (CardanoBackend & { getUnspentOutputs?: (refs: Array<{ txHash: string; outputIndex: number }>) => Promise<UTxO[]> }) | undefined;
+      if (lookup && !this.uninitializedBackends.has(lookup) && typeof lookup.getUnspentOutputs === 'function') {
+        return lookup as { getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> };
+      }
+    }
+    return null;
   }
 
   /** True when an initialized backend implements `method` and does not declare it unsupported. */
@@ -632,7 +648,16 @@ export class CardanoClient {
 
     if (!this.protocolParamsFetchPromise) {
       logger.debug('Fetching fresh protocol parameters');
-      this.protocolParamsFetchPromise = this.route('getProtocolParameters', b => b.getProtocolParameters())
+      this.protocolParamsFetchPromise = this.route('getProtocolParameters', async (b) => {
+        const params = await b.getProtocolParameters();
+        if (b === this.liveBackend) {
+          this.lastLiveProtocolParams = params;
+          return params;
+        }
+        // A fallback answering for the epoch the node last reported: keep the node's values
+        const live = this.lastLiveProtocolParams;
+        return live && Number(live.epoch) === Number(params.epoch) ? live : params;
+      })
         .then(params => {
           this.protocolParamsCache = { data: params, fetchedAt: Date.now() };
           this.protocolParamsFetchPromise = null;
@@ -696,8 +721,16 @@ export class CardanoClient {
    * Submit a signed transaction (CBOR hex); returns its hash. On failover after a lost response
    * the next backend may answer 409 "already submitted" — callers treat that as success.
    */
-  submitTransaction(signedTxCbor: string): Promise<string> {
-    return this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
+  async submitTransaction(signedTxCbor: string): Promise<string> {
+    try {
+      const hash = await this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));
+      this.pendingSpends.record(signedTxCbor);
+      return hash;
+    } catch (err) {
+      // already in the mempool or on chain: its inputs are gone all the same
+      if (err instanceof TransactionAlreadySubmittedError) this.pendingSpends.record(signedTxCbor);
+      throw err;
+    }
   }
 
   /** True when Ogmios is the live backend. */

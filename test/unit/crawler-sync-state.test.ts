@@ -157,6 +157,26 @@ describe('sync-state: cluster lease', () => {
     expect(isCrawlerLeaseActive(await readCursor(db as never), now)).toBe(true);
   });
 
+  it('advanceCursor with an owner renews the lease in the cursor UPDATE and fences a lost one', async () => {
+    const { db, state } = stateDb(base);
+    const now = new Date('2026-01-01T00:00:00.500Z');
+    await tryAcquireCrawlerLease(db as never, 'owner-a', now, 15_000);
+
+    const later = new Date('2026-01-01T00:00:10.500Z');
+    await expect(advanceCursor(db as never, { slot: 10, hash: 'h', height: 4 }, undefined, 'syncing', undefined, 'owner-a', later, 15_000))
+      .resolves.toBe(true);
+    expect(state.lastBlockHash).toBe('h');
+    expect(Date.parse(state.leaseUntil as string)).toBe(Date.parse('2026-01-01T00:00:25.000Z'));
+
+    await expect(advanceCursor(db as never, { slot: 11, hash: 'h2', height: 5 }, undefined, 'syncing', undefined, 'owner-b', later, 15_000))
+      .resolves.toBe(false);
+    expect(state.lastBlockHash).toBe('h');
+
+    state.desiredRunning = false; // pauseCrawler
+    await expect(advanceCursor(db as never, { slot: 11, hash: 'h2', height: 5 }, undefined, 'syncing', undefined, 'owner-a', later, 15_000))
+      .resolves.toBe(false);
+  });
+
   it('an errored release keeps the cluster runnable — a restart must resume', async () => {
     // A dropped chain-sync socket (node restart, provider blip) must not clear desiredRunning,
     // or the pre-sync stays silently down until an operator calls resumeCrawler.

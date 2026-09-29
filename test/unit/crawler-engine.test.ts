@@ -53,6 +53,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   EpochLedgerSnapshots: 'odatano.cardano.EpochLedgerSnapshots',
   TransactionCertificates: 'odatano.cardano.TransactionCertificates',
   TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
+  TransactionRedeemers: 'odatano.cardano.TransactionRedeemers',
   LedgerUTxOs: 'odatano.cardano.LedgerUTxOs', LedgerUTxOAssets: 'odatano.cardano.LedgerUTxOAssets',
   LedgerAddresses: 'odatano.cardano.LedgerAddresses', LedgerAddressAssets: 'odatano.cardano.LedgerAddressAssets',
   LedgerAccounts: 'odatano.cardano.LedgerAccounts',
@@ -71,7 +72,7 @@ const CONFIG: CrawlerConfig = {
 const stubIndexer = () => ({
   indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(),
   configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), snapshotEpoch: vi.fn(),
-  setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null),
+  setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn(),
 });
 
 const makeCrawler = (config: CrawlerConfig = CONFIG, client: unknown = {}) =>
