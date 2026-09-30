@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.26] - first address read returns the indexed rows
+
+No schema change.
+
+### Fixed
+
+- `GetUTxOsByAddress` and `GetAssetsByAddress`: the first read of an address not indexed yet
+  returns its UTxOs / assets (was `[]`, the rows only on the second call).
+
+### Security
+
+- `brace-expansion` 5.0.12 / 1.1.21 (lockfile).
+
 ## [v2.0.0-rc.25] - multi-script builds, redeemers, one ledger view per source
 
 Several script inputs per build, redeemers of crawled transactions, the same rows from every source; run `cds deploy` (new `TransactionBuildRedeemers`, `TransactionRedeemers`; asset sums `Decimal(38,0)`).

@@ -22,7 +22,7 @@ const TEMPORAL_WINDOW_SLACK_MS = 60 * 60 * 1000;
 /**
  * Let this request see the temporal slices it writes during index-on-miss: CAP's temporal
  * filter (`validFrom < $valid.to`) defaults to a `now`..`now+1ms` window fixed at transaction
- * start, so a slice stamped after the backend fetch would be invisible to the `req.query`
+ * start, so a slice stamped after the backend fetch would be invisible to the handler's
  * re-read. Only the upper bound moves; explicit `sap-valid-*` options are left alone.
  * Must run before the handler's first DB statement.
  */
@@ -248,6 +248,7 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetAssetsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
+      widenTemporalWindow(req); // before the first DB statement
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) await indexer().indexAddress(db, address);
       const assets = await db.run(SELECT.from(AddressAssets).where({ address_address: address }));
@@ -270,6 +271,7 @@ module.exports = (srv: cds.Service) => {
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetUTxOsByAddress', 'Invalid bech32 address format', 'address');
 
     return handleRequest(req, async (db) => {
+      widenTemporalWindow(req); // before the first DB statement
       const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {

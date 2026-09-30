@@ -634,7 +634,8 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const after = await cds.run(SELECT.from(AddressUTxOs).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(after.length).to.be.greaterThan(0);
             expect(status).to.equal(200);
-            expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
+            // the cold read itself returns what it just indexed
+            expect((data.value ?? data).length).to.equal(after.length);
           });
 
           it('POST /GetAssetsByAddress – cold read triggers Asset indexing and persists', async () => {
@@ -644,11 +645,13 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.post('/odata/v4/cardano-odata/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             const after = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(after.length).to.be.greaterThan(0);
             expect(status).to.equal(200);
+            // the cold read itself returns what it just indexed
+            expect((data.value ?? data).length).to.equal(after.length);
           });
 
           it('POST /GetAddressByBech32 – cold read triggers Address indexing and persists', async () => {
