@@ -109,6 +109,9 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      @title: 'Force Inputs JSON'
                                      @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
                                      forceInputsJson: String,
+                                     @title: 'Protect Inputs JSON'
+                                     @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must never be spent: left out of coin selection and collateral.'
+                                     protectInputsJson: String,
                                      @title: 'Validator Script'
                                      @description: 'Optional Plutus validator CBOR hex. Required when lockOnScript=true. Used only to derive the target script address — the script itself is not attached to the transaction.'
                                      validatorScript: String,
@@ -217,6 +220,9 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @title: 'Force Inputs JSON'
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
                                 forceInputsJson: String,
+                                @title: 'Protect Inputs JSON'
+                                @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must never be spent: left out of coin selection and collateral.'
+                                protectInputsJson: String,
                                 @title: 'Reference Inputs JSON'
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
                                 referenceInputsJson: String,
@@ -308,6 +314,9 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        @title: 'Force Inputs JSON'
                                        @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that MUST be consumed as inputs. Added before coin selection. Use for one-shot minting seeds, token-carrying UTxOs, or deterministic input control.'
                                        forceInputsJson: String,
+                                       @title: 'Protect Inputs JSON'
+                                       @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must never be spent: left out of coin selection and collateral.'
+                                       protectInputsJson: String,
                                        @title: 'Extra Outputs JSON'
                                        @description: 'Optional JSON array of additional outputs appended after the primary recipient output, before change. Each entry: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson?, referenceScriptHex?}. Use for multi-output state-machine transitions (counter updates + batch NFT outputs) or per-output CIP-33 ref-script deploy. Each extra output is independently min-ADA checked.'
                                        extraOutputsJson: String,
@@ -352,8 +361,17 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   @description: 'Optional JSON array of {txHash, outputIndex} read-only reference inputs; reference-script UTxOs of scriptInputsJson are added automatically.'
                                   referenceInputsJson: String,
                                   @title: 'Force Inputs JSON'
-                                  @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must be consumed.'
+                                  @description: 'Optional JSON array of {txHash, outputIndex} UTxOs that must be consumed. A UTxO of another key address needs that address''s payment key hash in requiredSignersJson, and every unit it brings must be spent by outputsJson (nothing of it goes to the change); it is never collateral.'
                                   forceInputsJson: String,
+                                  @title: 'Protect Inputs JSON'
+                                  @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must never be spent: left out of coin selection and collateral.'
+                                  protectInputsJson: String,
+                                  @title: 'Withdrawals JSON'
+                                  @description: 'Optional JSON array, 1..16 entries: {rewardAddress, lovelace (0 allowed), stakingScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor}. With a script the withdrawal runs it under the Reward purpose (withdraw-zero pattern), without one the stake key signs. The reward account must be registered on chain.'
+                                  withdrawalsJson: String,
+                                  @title: 'Certificates JSON'
+                                  @description: 'Optional JSON array, 1..16 entries: {type: registerStake | deregisterStake, stakeAddress, deposit?, stakingScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor}. A registration without a script needs no witness (key or script credential); with a script it is the Conway deposit form and the script runs under the Certifying purpose. A deregistration of a script credential needs the script; of a key credential the key''s witness. The deposit is balanced by the builder.'
+                                  certificatesJson: String,
                                   @title: 'Required Signers JSON'
                                   @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction.'
                                   requiredSignersJson: String,

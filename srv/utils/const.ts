@@ -92,9 +92,12 @@ export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
 /** Minimum lovelace for a change output carrying native assets (2 ADA) */
 export const MIN_CHANGE_LOVELACE = 2_000_000;
 
-/** Shelley genesis parameters per network for Buildooor's GenesisInfos (`TxBuilder.posixToSlot()`). */
+/**
+ * Shelley genesis parameters per network for Buildooor's GenesisInfos (`TxBuilder.posixToSlot()`)
+ * and `slotToPosixSeconds()`. `systemStartPosixMs` is the first Shelley slot's wall-clock time.
+ */
 export const GENESIS_INFOS_BY_NETWORK = {
-  mainnet: { systemStartPosixMs: 1596491091000, slotLengthMs: 1000, startSlotNo: 4492800 },
+  mainnet: { systemStartPosixMs: 1596059091000, slotLengthMs: 1000, startSlotNo: 4492800 }, // 2020-07-29T21:44:51Z
   preprod: { systemStartPosixMs: 1655683200000, slotLengthMs: 1000, startSlotNo: 0 },
   preview: { systemStartPosixMs: 1666656000000, slotLengthMs: 1000, startSlotNo: 0 },
 } as const;

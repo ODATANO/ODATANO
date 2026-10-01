@@ -425,6 +425,8 @@ export type TxBuildRequest = {
    * deduplicated against plutusScriptExecution.scriptUtxo.
    */
   forceInputs?: Array<{ txHash: string; outputIndex: number }>;
+  /** UTxOs the build must never spend: left out of coin selection and collateral. */
+  protectInputs?: Array<{ txHash: string; outputIndex: number }>;
   /** CIP-31 reference inputs (read-only, not consumed), passed as readonlyRefInputs to Buildooor. */
   referenceInputs?: Array<{ txHash: string; outputIndex: number }>;
   /** Additional outputs after the primary recipient output, before change; each min-ADA checked. */
@@ -480,12 +482,52 @@ export type PlutusTxOutput = NonNullable<TxBuildRequest['extraOutputs']>[number]
   inlineDatumCbor?: string;
 };
 
+/**
+ * Reward-account withdrawal of a BuildPlutusTransaction. A staking script (inline or by reference)
+ * runs with the redeemer under the Reward purpose; without a script the stake key signs.
+ */
+export type WithdrawalInput = {
+  /** Bech32 reward account (stake address). */
+  rewardAddress: string;
+  /** Withdrawn lovelace; 0 for the withdraw-zero pattern. */
+  lovelace: string;
+  /** Staking script CBOR hex (script params already applied); exclusive with referenceScript. */
+  stakingScript?: string;
+  /** UTxO that carries the staking script as reference script; added as reference input. */
+  referenceScript?: { txHash: string; outputIndex: number };
+  /** Redeemer (PlutusData JSON); `__INPUT_IDX__` placeholders resolve against the final inputs. */
+  redeemer?: JSONValue;
+  /** Redeemer as PlutusData CBOR hex; wins over `redeemer`, no placeholders. */
+  redeemerCbor?: string;
+};
+
+/**
+ * Stake-credential certificate of a BuildPlutusTransaction. A registration without a script is the
+ * witness-free legacy form (key or script credential); with a script the Conway deposit form, run
+ * under the Certifying purpose. A deregistration needs the key's witness or the script.
+ */
+export type CertificateInput = {
+  type: 'registerStake' | 'deregisterStake';
+  /** Bech32 stake address of the credential. */
+  stakeAddress: string;
+  /** Explicit deposit (lovelace) for the Conway forms; defaults to the protocol's stake deposit. */
+  deposit?: string;
+  stakingScript?: string;
+  referenceScript?: { txHash: string; outputIndex: number };
+  redeemer?: JSONValue;
+  redeemerCbor?: string;
+};
+
 /** BuildPlutusTransaction: several script inputs, the outputs as given, change after them. */
 export type TxBuildPlutusRequest = Pick<TxBuildRequest,
-  'network' | 'senderAddress' | 'changeAddress' | 'requiredSigners' | 'forceInputs' | 'referenceInputs'
-  | 'mintActions' | 'validityStartMs' | 'validityEndMs'> & {
+  'network' | 'senderAddress' | 'changeAddress' | 'requiredSigners' | 'forceInputs' | 'protectInputs'
+  | 'referenceInputs' | 'mintActions' | 'validityStartMs' | 'validityEndMs'> & {
   scriptInputs: ScriptInput[];
   outputs: PlutusTxOutput[];
+  /** Reward-account withdrawals, with or without a staking script. */
+  withdrawals?: WithdrawalInput[];
+  /** Stake-credential registrations and deregistrations. */
+  certificates?: CertificateInput[];
 };
 
 /** Execution budget for Plutus scripts */

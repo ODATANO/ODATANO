@@ -5,7 +5,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
-import { InsufficientFundsError, TransactionValidationError } from '../utils/errors';
+import { InsufficientFundsError, NotFoundError, TransactionValidationError } from '../utils/errors';
 
 const logger = cds.log('CardanoTransactionBuilder');
 
@@ -227,10 +227,17 @@ export class CardanoTransactionBuilder {
         const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], allUtxos);
 
         // Reference-script UTxOs always from the ledger: a known sender UTxO may carry only the script hash
-        const refScriptUtxos = await this._resolveInputRefs(
-            req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : [])), [], 'referenceScript');
+        const refScriptUtxos = await this._resolveInputRefs([
+            ...req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : [])),
+            ...(req.withdrawals ?? []).flatMap(w => (w.referenceScript ? [w.referenceScript] : [])),
+            ...(req.certificates ?? []).flatMap(c => (c.referenceScript ? [c.referenceScript] : [])),
+        ], [], 'referenceScript');
         const callerRefUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], allUtxos);
         const referenceInputUtxos = mergeUtxosUnique(callerRefUtxos, refScriptUtxos);
+
+        // A credential this transaction registers is withdrawable in the same transaction
+        const registeredHere = new Set((req.certificates ?? []).filter(c => c.type === 'registerStake').map(c => c.stakeAddress.toLowerCase()));
+        await this._assertRewardAccountsRegistered(req.withdrawals ?? [], registeredHere);
 
         const txContext: TxBuildContext = {
             utxos: mergeUtxosUnique(allUtxos, forcedUtxos),
@@ -242,6 +249,30 @@ export class CardanoTransactionBuilder {
         };
         logger.debug(`Prepared multi-script build context: ${senderUtxos.length} sender + ${scriptUtxos.length} script + ${forcedUtxos.length} forced UTxOs, ${referenceInputUtxos.length} reference inputs`);
         return builder.buildUnsignedPlutusTransaction(req, txContext);
+    }
+
+    /**
+     * The ledger rejects a withdrawal from an unregistered reward account (also a zero one), so the
+     * build fails here with the account named. A provider failure is passed on as it is.
+     */
+    private async _assertRewardAccountsRegistered(
+        withdrawals: ReadonlyArray<{ rewardAddress: string }>, registeredHere: ReadonlySet<string> = new Set()
+    ): Promise<void> {
+        for (const [i, w] of withdrawals.entries()) {
+            if (registeredHere.has(w.rewardAddress.toLowerCase())) continue;
+            let active: boolean;
+            try {
+                active = (await this.client.getAccount(w.rewardAddress)).active;
+            } catch (err: unknown) {
+                if (!(err instanceof NotFoundError)) throw err;
+                active = false;
+            }
+            if (!active) {
+                throw new TransactionValidationError(
+                    `withdrawals[${i}] reward account ${w.rewardAddress} is not registered on chain; register the stake credential first`
+                );
+            }
+        }
     }
 
     /**

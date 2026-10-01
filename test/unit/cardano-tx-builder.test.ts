@@ -4,6 +4,7 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
 import type { CardanoClient } from '../../srv/blockchain/cardano-client';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO, TxBuildPlutusRequest } from '../../srv/utils/types';
+import { NotFoundError } from '../../srv/utils/errors';
 
 // Mock the Buildooor builder (the coordinator constructs it directly via `new BuildooorTxBuilder()`)
 vi.mock('../../srv/blockchain/transaction-building/buildooor-tx');
@@ -670,6 +671,65 @@ describe('CardanoTransactionBuilder', () => {
         refs.filter(r => r.txHash !== scriptB.txHash).map(ledgerUtxo));
       await expect(builder.buildPlutusTransaction(request(), mockProtocolParameters))
         .rejects.toThrow(`scriptInput ${scriptB.txHash}#1 not found on-chain or already spent`);
+    });
+
+    describe('withdrawals', () => {
+      const STAKE = 'stake_test1uqevw2xnsc0pvn9tm0tynp3nqfvxalykdzhcm8c3gkvsjyqsdmzpc';
+      const stakingRef = { txHash: 'c7'.repeat(32), outputIndex: 0 };
+      const withRequest = (lovelace = '0'): TxBuildPlutusRequest => ({
+        ...request(),
+        withdrawals: [{ rewardAddress: STAKE, lovelace, referenceScript: stakingRef, redeemer: { int: 0 } }],
+      });
+      let captured: TxBuildContext | undefined;
+      beforeEach(() => {
+        captured = undefined;
+        mockCardanoClient.getUnspentOutputs = vi.fn().mockImplementation(async (refs: Array<{ txHash: string; outputIndex: number }>) =>
+          refs.map(r => ({ ...ledgerUtxo(r), ...(r.txHash === stakingRef.txHash ? { scriptRef: 'cd'.repeat(28), scriptRefCbor: '4e4d01000033222220051200120011' } : {}) })));
+        (mockTxBuilder.buildUnsignedPlutusTransaction as any) = vi.fn().mockImplementation(async (_req: unknown, ctx: TxBuildContext) => {
+          captured = ctx;
+          return { unsignedTxCbor: 'mock', txBodyHash: 'mock', feeLovelace: '0', inputs: [], outputs: [], warnings: [] };
+        });
+      });
+
+      it('resolves the staking reference script from the ledger and checks the reward account is registered', async () => {
+        mockCardanoClient.getAccount = vi.fn().mockResolvedValue({ stakeaddress: STAKE, active: true });
+
+        await builder.buildPlutusTransaction(withRequest(), mockProtocolParameters);
+
+        expect(mockCardanoClient.getAccount).toHaveBeenCalledWith(STAKE);
+        expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refScript, stakingRef]);
+        expect(captured!.referenceInputUtxos!.find(u => u.txHash === stakingRef.txHash)!.scriptRefCbor).toBe('4e4d01000033222220051200120011');
+      });
+
+      it('rejects a withdrawal from a reward account the backend does not know', async () => {
+        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new NotFoundError('Account', 'mock'));
+        await expect(builder.buildPlutusTransaction(withRequest(), mockProtocolParameters))
+          .rejects.toThrow(`withdrawals[0] reward account ${STAKE} is not registered on chain`);
+        expect(mockTxBuilder.buildUnsignedPlutusTransaction).not.toHaveBeenCalled();
+      });
+
+      it('rejects a withdrawal from a deregistered reward account', async () => {
+        mockCardanoClient.getAccount = vi.fn().mockResolvedValue({ stakeaddress: STAKE, active: false });
+        await expect(builder.buildPlutusTransaction(withRequest('5000000'), mockProtocolParameters))
+          .rejects.toThrow('is not registered on chain');
+      });
+
+      it('passes a provider failure of the account lookup on as it is', async () => {
+        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new Error('koios down'));
+        await expect(builder.buildPlutusTransaction(withRequest(), mockProtocolParameters)).rejects.toThrow('koios down');
+      });
+
+      it('skips the registration check for a credential the same transaction registers, and resolves the certificate\'s reference script', async () => {
+        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new NotFoundError('Account', 'mock'));
+        const certRef = { txHash: 'd8'.repeat(32), outputIndex: 1 };
+        await builder.buildPlutusTransaction({
+          ...withRequest(),
+          certificates: [{ type: 'registerStake', stakeAddress: STAKE, referenceScript: certRef, redeemer: { int: 0 } }],
+        }, mockProtocolParameters);
+        expect(mockCardanoClient.getAccount).not.toHaveBeenCalled();
+        expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refScript, stakingRef, certRef]);
+        expect(captured!.referenceInputUtxos!.map(u => u.txHash)).toContain(certRef.txHash);
+      });
     });
   });
 

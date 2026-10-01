@@ -121,6 +121,8 @@ function prepareSimpleAda(raw: RawRequest, network: Network): TxBuildRequest {
   const clean: RawRequest = { ...raw };
   clean.forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
   delete clean.forceInputsJson;
+  clean.protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
+  delete clean.protectInputsJson;
 
   const outputDatum = parseJsonField(raw, 'outputDatumJson');
   if (outputDatum !== undefined) clean.outputDatum = outputDatum;
@@ -186,6 +188,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
   const inlineDatum = parseJsonField(raw, 'inlineDatumJson');
   const mintRedeemer = parseJsonField(raw, 'mintRedeemerJson');
   const forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
+  const protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
   const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
   const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
 
@@ -209,6 +212,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
   delete clean.mintRedeemerJson;
   delete clean.lockOnScript;
   delete clean.forceInputsJson;
+  delete clean.protectInputsJson;
   delete clean.referenceInputsJson;
   delete clean.extraOutputsJson;
   if (parsedMetadata) clean.metadataJson = parsedMetadata; else delete clean.metadataJson;
@@ -251,6 +255,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
     inlineDatum,
     mintRedeemer,
     forceInputs,
+    protectInputs,
     referenceInputs,
     extraOutputs,
   } as TxBuildRequest;
@@ -271,6 +276,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
     fail('lockOnScript requires scriptParamsJson to derive script address');
   }
   const forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
+  const protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
   const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
   const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
 
@@ -332,6 +338,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
     requiredSigners,
     inlineDatum,
     forceInputs,
+    protectInputs,
     referenceInputs,
     extraOutputs,
     mintActions,
@@ -343,6 +350,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
   delete clean.scriptParamsJson;
   delete clean.inlineDatumJson;
   delete clean.forceInputsJson;
+  delete clean.protectInputsJson;
   delete clean.referenceInputsJson;
   delete clean.extraOutputsJson;
   delete clean.mintActionsJson;

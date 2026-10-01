@@ -194,6 +194,19 @@ orders against a state UTxO), each with its own redeemer. A script input carries
 at a UTxO holding it as reference script. The outputs are built exactly in the given order with their datums,
 change comes after them. Every redeemer's execution units come back under `redeemers`.
 
+`withdrawalsJson` adds reward-account withdrawals: with a staking script (inline or by reference) the script runs
+under the Reward purpose, which is how withdraw-zero oracles and shared validators are consumed; without a script
+the stake key signs. The reward account must be registered on chain, otherwise the build is refused;
+`certificatesJson` registers (or deregisters) the credential, in the same transaction if needed. A registration
+without a script is the witness-free legacy certificate, also for a script credential; with a script it is the
+Conway deposit certificate and the script runs under the Certifying purpose. The deposit is balanced by the builder.
+
+`forceInputsJson` may name UTxOs of other key addresses, for a purchase that a third party funds in the same
+transaction. Each such address must have its payment key hash in `requiredSignersJson`, every unit its UTxOs bring
+must be spent by `outputsJson` (the sender's change never carries it), and it is never used as collateral. Each
+party adds its witness to the same `unsignedTxCbor`. `protectInputsJson` keeps named sender UTxOs out of coin
+selection and collateral on every build action.
+
 ### Collateral Setup
 **Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. When the address already holds an ADA-only UTxO of >= 5 ADA without a reference script (the only kind the builders take as collateral) and at least one other UTxO to fund with, it returns **200** with `collateralAvailable: true` and builds nothing. Returns 400 if the address holds less than 6 ADA in total (5 ADA collateral + 1 ADA fee buffer).
 
@@ -286,7 +299,10 @@ Returns `scriptHash`, `scriptAddress` when applicable.
 | outputsJson | String | Yes | Outputs in order: `{address, lovelaceAmount, assets?, inlineDatumJson? \| inlineDatumCbor? \| datumHash?, referenceScriptHex?}` |
 | changeAddress | bech32 | No | Change address (defaults to senderAddress) |
 | referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only inputs; reference-script UTxOs are added automatically |
-| forceInputsJson | String | No | Sender UTxOs that must be consumed |
+| forceInputsJson | String | No | UTxOs that must be consumed; another key address's UTxO needs its key hash in `requiredSignersJson` and its value spent by `outputsJson` |
+| protectInputsJson | String | No | Sender UTxOs that must never be spent (also on the other build actions) |
+| withdrawalsJson | String | No | 1..16 withdrawals: `{rewardAddress, lovelace, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
+| certificatesJson | String | No | 1..16 certificates: `{type: registerStake | deregisterStake, stakeAddress, deposit?, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
 | requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
 | mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript, redeemerJson?}]`, a policy script per action |
 | validityStartMs / validityEndMs | String | No | Validity interval in Posix ms |

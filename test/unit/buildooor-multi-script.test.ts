@@ -6,7 +6,7 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import type { TxBuildPlutusRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
 import { TransactionValidationError } from '../../srv/utils/errors';
 
-const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
+const { Tx, Address, Script, StakeAddress, StakeValidatorHash, StakeKeyHash, TxRedeemerTag, CertificateType } = require('@harmoniclabs/cardano-ledger-ts');
 
 const SENDER = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
 const OTHER = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
@@ -229,5 +229,190 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     const err = await builder.buildUnsignedPlutusTransaction(request(), context({ utxos: [scriptUtxo(A), scriptUtxo(B), collateral, funding] })).catch(e => e);
     expect(err).toBeInstanceOf(TransactionValidationError);
     expect(err.message).toMatch(/scriptInputs\[2\] .* not found on-chain or already spent/);
+  });
+
+  describe('forced inputs of other addresses', () => {
+    const TOKEN = `${'f6'.repeat(28)}746f6b`;
+    const otherKeyHash = Address.fromString(OTHER).paymentCreds.hash.toString();
+    // the lender's UTxO: ADA plus a token, at a key address that is not the sender
+    const lent: UTxO = { txHash: 'ee'.repeat(32), outputIndex: 0, address: OTHER, amount: [{ unit: 'lovelace', quantity: '10000000' }, { unit: TOKEN, quantity: '100' }] };
+    const forceLent = { forceInputs: [{ txHash: lent.txHash, outputIndex: 0 }] };
+    const ctx = () => context({ utxos: [scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral, funding, lent] });
+    // outputs that spend everything the lender brings: part to the script, the rest back to the lender
+    const outputs = [
+      { address: SCRIPT_ADDRESS, lovelaceAmount: '3000000', assets: [{ unit: TOKEN, quantity: '60' }], inlineDatum: { constructor: 7, fields: [] } },
+      { address: OTHER, lovelaceAmount: '7000000', assets: [{ unit: TOKEN, quantity: '40' }] },
+    ];
+
+    it('spends it when the owner co-signs and the outputs spend what it brings; change stays the sender\'s', async () => {
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(
+        request({ ...forceLent, outputs, requiredSigners: [otherKeyHash] }), ctx())).unsignedTxCbor);
+      expect(tx.body.inputs.map((i: any) => i.utxoRef.id.toString())).toContain(lent.txHash);
+      expect((tx.body.collateralInputs ?? []).map((i: any) => i.utxoRef.id.toString())).not.toContain(lent.txHash);
+      expect((tx.body.requiredSigners ?? []).map((h: any) => h.toString())).toContain(otherKeyHash);
+      const outs = tx.body.outputs;
+      expect(outs[1].address.toString()).toBe(OTHER);
+      expect(outs[outs.length - 1].address.toString()).toBe(SENDER);
+      // the token went where the outputs put it, none of it into the change
+      expect(outs[outs.length - 1].value.toUnits().map((u: any) => u.unit)).toEqual(['lovelace']);
+    });
+
+    it('refuses it without the owner\'s key hash among the required signers', async () => {
+      const err = await builder.buildUnsignedPlutusTransaction(request({ ...forceLent, outputs }), ctx()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toContain(`payment key hash ${otherKeyHash} must be in requiredSigners`);
+    });
+
+    it('refuses it when the outputs spend less than it brings', async () => {
+      const err = await builder.buildUnsignedPlutusTransaction(
+        request({ ...forceLent, requiredSigners: [otherKeyHash] }), ctx()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/bring 10000000 lovelace but the outputs spend only 3500000/);
+    });
+
+    it('refuses a forced UTxO at a script address', async () => {
+      const locked = scriptUtxo('9a'.repeat(32));
+      const err = await builder.buildUnsignedPlutusTransaction(
+        request({ forceInputs: [{ txHash: locked.txHash, outputIndex: 0 }] }),
+        context({ utxos: [scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral, funding, locked] })).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/at the script address .* spend script UTxOs via scriptInputs/);
+    });
+  });
+
+  describe('protected inputs', () => {
+    const spare: UTxO = { txHash: 'a7'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '30000000' }] };
+    const protectFunding = { protectInputs: [{ txHash: funding.txHash, outputIndex: funding.outputIndex }] };
+
+    it('never spends a protected UTxO', async () => {
+      // the biggest sender UTxO, so coin selection would pick it first
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(request(protectFunding), context({
+        utxos: [scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral, funding, spare],
+      }))).unsignedTxCbor);
+      const inputs = tx.body.inputs.map((i: any) => i.utxoRef.id.toString());
+      expect(inputs).not.toContain(funding.txHash);
+      expect(inputs).toContain(spare.txHash);
+    });
+
+    it('refuses a UTxO that is forced and protected, or protected and a script input', async () => {
+      const both = await builder.buildUnsignedPlutusTransaction(
+        request({ ...protectFunding, forceInputs: protectFunding.protectInputs }), context()).catch(e => e);
+      expect(both).toBeInstanceOf(TransactionValidationError);
+      expect(both.message).toMatch(/is also in protectInputs/);
+      const script = await builder.buildUnsignedPlutusTransaction(
+        request({ protectInputs: [{ txHash: A, outputIndex: 0 }] }), context()).catch(e => e);
+      expect(script).toBeInstanceOf(TransactionValidationError);
+      expect(script.message).toMatch(/is also a script input/);
+    });
+  });
+
+  describe('withdrawals', () => {
+    const scriptHash = Script.fromCbor(SCRIPT).hash;
+    const scriptStake = new StakeAddress({ network: 'testnet', credentials: new StakeValidatorHash(scriptHash), type: 'script' }).toString();
+    const keyStake = new StakeAddress({ network: 'testnet', credentials: new StakeKeyHash('1b'.repeat(28)), type: 'stakeKey' }).toString();
+    // certified units for the withdrawal redeemer as well
+    const evaluate = async () => [
+      ...(await evaluateTransaction()),
+      { validator: { purpose: 'withdraw', index: 0 }, budget: { memory: 200_000, cpu: 100_000_000 } },
+    ];
+
+    it('withdraws zero under the staking script, by reference when a reference input carries it', async () => {
+      const req = request({ withdrawals: [{ rewardAddress: scriptStake, lovelace: '0', stakingScript: SCRIPT, redeemer: { constructor: 0, fields: [] } }] });
+      const result = await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: evaluate }));
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
+      const entries = tx.body.withdrawals!.map;
+      expect(entries).toHaveLength(1);
+      expect(entries[0].rewardAccount.toString()).toBe(scriptStake);
+      expect(entries[0].amount).toBe(0n);
+      const withdraws = (tx.witnesses.redeemers ?? []).filter((r: any) => r.tag === TxRedeemerTag.Withdraw);
+      expect(withdraws).toHaveLength(1);
+      expect(withdraws[0].index).toBe(0);
+      // the script is referenced, not witnessed a second time
+      expect(tx.witnesses.plutusV3Scripts ?? []).toHaveLength(0);
+      expect(result.redeemers!.filter(r => r.tag === 'Withdraw')).toHaveLength(1);
+    });
+
+    it('withdraws from a key reward account without a script and counts the amount as funding', async () => {
+      const req = request({ withdrawals: [{ rewardAddress: keyStake, lovelace: '5000000' }] });
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context())).unsignedTxCbor);
+      const entries = tx.body.withdrawals!.map;
+      expect(entries).toHaveLength(1);
+      expect(entries[0].rewardAccount.toString()).toBe(keyStake);
+      expect(entries[0].amount).toBe(5000000n);
+      expect((tx.witnesses.redeemers ?? []).filter((r: any) => r.tag === TxRedeemerTag.Withdraw)).toHaveLength(0);
+    });
+
+    it('rejects a staking reference script whose bytes are not available', async () => {
+      const req = request({ withdrawals: [{ rewardAddress: scriptStake, lovelace: '0', referenceScript: { txHash: REF, outputIndex: 0 }, redeemer: { int: 0 } }] });
+      req.scriptInputs = req.scriptInputs.slice(0, 2);
+      const hashOnly = { ...refScriptUtxo, scriptRefCbor: undefined };
+      const err = await builder.buildUnsignedPlutusTransaction(req, context({
+        utxos: [scriptUtxo(A), scriptUtxo(B), collateral, funding], referenceInputUtxos: [hashOnly],
+      })).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/withdrawals\[0\]\.referenceScript .* carries no reference script/);
+    });
+
+    describe('certificates', () => {
+      const evaluateWithCert = async () => [
+        ...(await evaluate()),
+        { validator: { purpose: 'publish', index: 0 }, budget: { memory: 200_000, cpu: 100_000_000 } },
+      ];
+      const certs = (tx: any) => (tx.body.certs ?? []) as any[];
+      const certRedeemers = (tx: any) => (tx.witnesses.redeemers ?? []).filter((r: any) => r.tag === TxRedeemerTag.Cert);
+
+      it('registers a script credential without a witness (legacy form) and withdraws from it in the same transaction', async () => {
+        const req = request({
+          certificates: [{ type: 'registerStake', stakeAddress: scriptStake }],
+          withdrawals: [{ rewardAddress: scriptStake, lovelace: '0', stakingScript: SCRIPT, redeemer: { constructor: 0, fields: [] } }],
+        });
+        const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: evaluate }))).unsignedTxCbor);
+        expect(certs(tx)).toHaveLength(1);
+        expect(certs(tx)[0].certType).toBe(CertificateType.StakeRegistration);
+        expect(certs(tx)[0].stakeCredential.hash.toString()).toBe(scriptHash.toString());
+        expect(certRedeemers(tx)).toHaveLength(0);
+        expect(tx.body.withdrawals!.map).toHaveLength(1);
+      });
+
+      it('registers with the staking script in the deposit form, the script runs under the Cert purpose', async () => {
+        const req = request({ certificates: [{ type: 'registerStake', stakeAddress: scriptStake, stakingScript: SCRIPT, redeemer: { int: 1 } }] });
+        const result = await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: evaluateWithCert }));
+        const tx = Tx.fromCbor(result.unsignedTxCbor);
+        expect(certs(tx)[0].certType).toBe(CertificateType.RegistrationDeposit);
+        expect(certs(tx)[0].deposit).toBe(2000000n);
+        expect(certRedeemers(tx)).toHaveLength(1);
+        expect(certRedeemers(tx)[0].index).toBe(0);
+        expect(result.redeemers!.filter(r => r.tag === 'Cert')).toHaveLength(1);
+      });
+
+      it('deregisters a key credential without a script and a script credential with an explicit deposit', async () => {
+        const req = request({ certificates: [
+          { type: 'deregisterStake', stakeAddress: keyStake },
+          { type: 'deregisterStake', stakeAddress: scriptStake, deposit: '2000000', stakingScript: SCRIPT, redeemer: { int: 2 } },
+        ] });
+        const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: async () => [
+          ...(await evaluate()), { validator: { purpose: 'publish', index: 1 }, budget: { memory: 200_000, cpu: 100_000_000 } },
+        ] }))).unsignedTxCbor);
+        expect(certs(tx).map((c: any) => c.certType)).toEqual([CertificateType.StakeDeRegistration, CertificateType.UnRegistrationDeposit]);
+        expect(certRedeemers(tx).map((r: any) => r.index)).toEqual([1]);
+      });
+
+      it.each([
+        ['a script whose hash is not the credential', { type: 'registerStake', stakeAddress: keyStake, stakingScript: SCRIPT, redeemer: { int: 0 } }, /is a key credential; it takes no staking script/],
+        ['a script credential deregistered without its script', { type: 'deregisterStake', stakeAddress: scriptStake }, /its staking script and redeemer are needed/],
+      ])('refuses %s', async (_name, certificate, message) => {
+        const err = await builder.buildUnsignedPlutusTransaction(request({ certificates: [certificate as any] }), context()).catch(e => e);
+        expect(err).toBeInstanceOf(TransactionValidationError);
+        expect(err.message).toMatch(message);
+      });
+
+      it('refuses a staking script that is not the credential of the stake address', async () => {
+        const otherStake = new StakeAddress({ network: 'testnet', credentials: new StakeValidatorHash('2c'.repeat(28)), type: 'script' }).toString();
+        const err = await builder.buildUnsignedPlutusTransaction(
+          request({ certificates: [{ type: 'registerStake', stakeAddress: otherStake, stakingScript: SCRIPT, redeemer: { int: 0 } }] }), context()).catch(e => e);
+        expect(err).toBeInstanceOf(TransactionValidationError);
+        expect(err.message).toMatch(/is not the credential of/);
+      });
+    });
   });
 });

@@ -8,8 +8,8 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
-import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput } from './utils/types';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions } from './utils/tx-request-parsers';
+import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates } from './utils/tx-request-parsers';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -47,6 +47,10 @@ module.exports = (srv: cds.Service) => {
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', forceInputsResult.error, 'forceInputsJson');
     cleanData.forceInputs = forceInputsResult.parsed;
     delete cleanData.forceInputsJson;
+    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
+    if (protectInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', protectInputsResult.error, 'protectInputsJson');
+    cleanData.protectInputs = protectInputsResult.parsed;
+    delete cleanData.protectInputsJson;
     if (outputDatumJson) {
       const jsonResult = validatePlutusJson(outputDatumJson, 'outputDatumJson');
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
@@ -308,6 +312,9 @@ module.exports = (srv: cds.Service) => {
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
+    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
+    if (protectInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', protectInputsResult.error, 'protectInputsJson');
+    const protectInputs = protectInputsResult.parsed;
 
     // CIP-31 reference inputs
     const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
@@ -341,6 +348,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.mintRedeemerJson;
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
+      delete cleanData.protectInputsJson;
       delete cleanData.referenceInputsJson;
       delete cleanData.extraOutputsJson;
       if (parsedMetadata) {
@@ -410,6 +418,7 @@ module.exports = (srv: cds.Service) => {
         inlineDatum,
         mintRedeemer,
         forceInputs,
+        protectInputs,
         referenceInputs,
         extraOutputs
       });
@@ -494,6 +503,9 @@ module.exports = (srv: cds.Service) => {
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
     const forceInputs = forceInputsResult.parsed;
+    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
+    if (protectInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', protectInputsResult.error, 'protectInputsJson');
+    const protectInputs = protectInputsResult.parsed;
 
     // CIP-31 reference inputs
     const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
@@ -655,6 +667,7 @@ module.exports = (srv: cds.Service) => {
         requiredSigners,
         inlineDatum,
         forceInputs,
+        protectInputs,
         referenceInputs,
         extraOutputs,
         mintActions: parsedMintActions,
@@ -669,6 +682,7 @@ module.exports = (srv: cds.Service) => {
       delete cleanData.inlineDatumJson;
       delete cleanData.lockOnScript;
       delete cleanData.forceInputsJson;
+      delete cleanData.protectInputsJson;
       delete cleanData.referenceInputsJson;
       delete cleanData.extraOutputsJson;
       delete cleanData.mintActionsJson;
@@ -705,7 +719,7 @@ module.exports = (srv: cds.Service) => {
 
   // BuildPlutusTransaction — several script UTxOs in one transaction, each with its own redeemer.
   srv.on('BuildPlutusTransaction', async (req: Request) => {
-    const { senderAddress, changeAddress, scriptInputsJson, outputsJson, referenceInputsJson, forceInputsJson, requiredSignersJson, mintActionsJson, validityStartMs, validityEndMs } = req.data;
+    const { senderAddress, changeAddress, scriptInputsJson, outputsJson, referenceInputsJson, forceInputsJson, protectInputsJson, withdrawalsJson, certificatesJson, requiredSignersJson, mintActionsJson, validityStartMs, validityEndMs } = req.data;
     const action = 'BuildPlutusTransaction';
 
     const errors = validateTransactionInputs({ senderAddress, validityStartMs, validityEndMs }, ['senderAddress']);
@@ -724,6 +738,12 @@ module.exports = (srv: cds.Service) => {
     if (refInputsResult.error) return rejectInvalid(req, action, refInputsResult.error, 'referenceInputsJson');
     const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
     if (forceInputsResult.error) return rejectInvalid(req, action, forceInputsResult.error, 'forceInputsJson');
+    const protectInputsResult = parseUtxoRefArray(protectInputsJson, 'protectInputsJson');
+    if (protectInputsResult.error) return rejectInvalid(req, action, protectInputsResult.error, 'protectInputsJson');
+    const withdrawalsResult = parseWithdrawals(withdrawalsJson);
+    if (withdrawalsResult.error) return rejectInvalid(req, action, withdrawalsResult.error, 'withdrawalsJson');
+    const certificatesResult = parseCertificates(certificatesJson);
+    if (certificatesResult.error) return rejectInvalid(req, action, certificatesResult.error, 'certificatesJson');
     const signersResult = parseRequiredSigners(requiredSignersJson);
     if (signersResult.error) return rejectInvalid(req, action, signersResult.error, 'requiredSignersJson');
     const mintResult = parsePolicyMintActions(mintActionsJson);
@@ -752,6 +772,39 @@ module.exports = (srv: cds.Service) => {
       });
     }
 
+    // Same for the staking scripts of withdrawals and certificates
+    const stakingWitness = (w: { stakingScript?: string; scriptParams?: JSONValue[]; referenceScript?: { txHash: string; outputIndex: number }; redeemer?: JSONValue; redeemerCbor?: string }, at: string, field: string) => {
+      let stakingScript = w.stakingScript;
+      if (stakingScript && w.scriptParams) {
+        try {
+          stakingScript = applyScriptParameters(stakingScript, w.scriptParams);
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          return { error: rejectInvalid(req, action, `${at}: failed to apply script parameters: ${errMsg}`, field) };
+        }
+      }
+      return {
+        parsed: {
+          ...(stakingScript ? { stakingScript } : {}),
+          ...(w.referenceScript ? { referenceScript: w.referenceScript } : {}),
+          ...(w.redeemer !== undefined ? { redeemer: w.redeemer } : {}),
+          ...(w.redeemerCbor ? { redeemerCbor: w.redeemerCbor } : {}),
+        },
+      };
+    };
+    const withdrawals: WithdrawalInput[] = [];
+    for (const [i, w] of (withdrawalsResult.parsed ?? []).entries()) {
+      const witness = stakingWitness(w, `withdrawals[${i}]`, 'withdrawalsJson');
+      if ('error' in witness) return witness.error;
+      withdrawals.push({ rewardAddress: w.rewardAddress, lovelace: w.lovelace, ...witness.parsed });
+    }
+    const certificates: CertificateInput[] = [];
+    for (const [i, c] of (certificatesResult.parsed ?? []).entries()) {
+      const witness = stakingWitness(c, `certificates[${i}]`, 'certificatesJson');
+      if ('error' in witness) return witness.error;
+      certificates.push({ type: c.type, stakeAddress: c.stakeAddress, ...(c.deposit ? { deposit: c.deposit } : {}), ...witness.parsed });
+    }
+
     const buildReq: TxBuildPlutusRequest = {
       network: getCardanoClient().network,
       senderAddress,
@@ -760,6 +813,9 @@ module.exports = (srv: cds.Service) => {
       outputs: outputsResult.parsed,
       referenceInputs: refInputsResult.parsed,
       forceInputs: forceInputsResult.parsed,
+      protectInputs: protectInputsResult.parsed,
+      ...(withdrawals.length > 0 ? { withdrawals } : {}),
+      ...(certificates.length > 0 ? { certificates } : {}),
       requiredSigners: signersResult.parsed,
       mintActions: mintResult.parsed,
       validityStartMs,

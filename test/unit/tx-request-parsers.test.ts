@@ -27,6 +27,10 @@ import {
   parsePolicyMintActions,
   MAX_EXTRA_OUTPUTS,
   MAX_SCRIPT_INPUTS,
+  parseWithdrawals,
+  MAX_WITHDRAWALS,
+  parseCertificates,
+  MAX_CERTIFICATES,
 } from '../../srv/utils/tx-request-parsers';
 import { TEST_FIXTURES } from '../integration/test-fixtures';
 import { setActiveNetwork } from '../../srv/utils/network-context';
@@ -330,5 +334,94 @@ describe('PlutusData as CBOR', () => {
       .toContain('only supported in outputsJson');
     expect(parseOutputList(JSON.stringify([{ address: ADDR, lovelaceAmount: '2000000', inlineDatumCbor: UNIT_CBOR, inlineDatumJson: '{"int":1}' }]), 'outputsJson').error)
       .toContain('not both');
+  });
+});
+
+describe('parseWithdrawals', () => {
+  const STAKE = TEST_FIXTURES.validStakeAddress;
+  const H1 = '1'.repeat(64);
+  const redeemerJson = JSON.stringify({ constructor: 0, fields: [] });
+
+  it('parses a script withdrawal (inline, by reference) and a key-witnessed one', () => {
+    const ok = parseWithdrawals(JSON.stringify([
+      { rewardAddress: STAKE, lovelace: 0, referenceScript: { txHash: H1, outputIndex: 2 }, redeemerCbor: 'd87980' },
+    ]));
+    expect(ok.error).toBeUndefined();
+    expect(ok.parsed).toEqual([{ rewardAddress: STAKE, lovelace: '0', referenceScript: { txHash: H1, outputIndex: 2 }, redeemerCbor: 'd87980' }]);
+    const inline = parseWithdrawals(JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, stakingScript: 'abcd', scriptParamsJson: '[{"int":1}]', redeemerJson }]));
+    expect(inline.parsed).toEqual([{ rewardAddress: STAKE, lovelace: '0', stakingScript: 'abcd', scriptParams: [{ int: 1 }], redeemer: { constructor: 0, fields: [] } }]);
+    const key = parseWithdrawals(JSON.stringify([{ rewardAddress: STAKE, lovelace: '5000000' }]));
+    expect(key.parsed).toEqual([{ rewardAddress: STAKE, lovelace: '5000000' }]);
+  });
+
+  it('returns undefined for an absent or empty list', () => {
+    expect(parseWithdrawals(undefined).parsed).toBeUndefined();
+    expect(parseWithdrawals('[]').parsed).toBeUndefined();
+  });
+
+  it.each([
+    [JSON.stringify({}), 'must be a JSON array'],
+    [JSON.stringify([{ rewardAddress: ADDR, lovelace: 0 }]), 'rewardAddress must be a Bech32 stake address'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: -1 }]), 'lovelace must be a non-negative integer'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: '1.5' }]), 'lovelace must be a non-negative integer'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, stakingScript: 'ab', referenceScript: { txHash: H1, outputIndex: 0 }, redeemerJson }]), 'stakingScript or referenceScript, not both'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, stakingScript: 'ab' }]), 'withdrawals[0] needs exactly one of redeemerJson or redeemerCbor'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, stakingScript: 'ab', redeemerJson, redeemerCbor: 'd87980' }]), 'exactly one of redeemerJson or redeemerCbor'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, stakingScript: 'abc', redeemerJson }]), 'stakingScript must be even-length CBOR hex'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, referenceScript: { txHash: H1 }, redeemerJson }]), 'referenceScript must be {txHash, outputIndex}'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, referenceScript: { txHash: H1, outputIndex: 0 }, scriptParamsJson: '[]', redeemerJson }]), 'inline stakingScript only'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, scriptParamsJson: '[]' }]), 'inline stakingScript only'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0, redeemerJson }]), 'has a redeemer but no staking script'],
+    [JSON.stringify([{ rewardAddress: STAKE, lovelace: 0 }, { rewardAddress: STAKE, lovelace: 1 }]), 'a second time'],
+  ])('rejects %s', (json, message) => {
+    expect(parseWithdrawals(json).error).toContain(message);
+  });
+
+  it('caps the number of withdrawals', () => {
+    const many = Array.from({ length: MAX_WITHDRAWALS + 1 }, () => ({ rewardAddress: STAKE, lovelace: 0 }));
+    expect(parseWithdrawals(JSON.stringify(many)).error).toContain('exceeds maximum');
+  });
+});
+
+describe('parseCertificates', () => {
+  const STAKE = TEST_FIXTURES.validStakeAddress;
+  const H1 = '1'.repeat(64);
+  const redeemerJson = JSON.stringify({ constructor: 0, fields: [] });
+
+  it('parses registrations and deregistrations with and without a staking script', () => {
+    const r = parseCertificates(JSON.stringify([
+      { type: 'registerStake', stakeAddress: STAKE },
+      { type: 'registerStake', stakeAddress: STAKE, deposit: 2000000, stakingScript: 'abcd', scriptParamsJson: '[{"int":1}]', redeemerJson },
+      { type: 'deregisterStake', stakeAddress: STAKE, deposit: '2000000', referenceScript: { txHash: H1, outputIndex: 2 }, redeemerCbor: 'd87980' },
+    ]));
+    expect(r.error).toBeUndefined();
+    expect(r.parsed).toEqual([
+      { type: 'registerStake', stakeAddress: STAKE },
+      { type: 'registerStake', stakeAddress: STAKE, deposit: '2000000', stakingScript: 'abcd', scriptParams: [{ int: 1 }], redeemer: { constructor: 0, fields: [] } },
+      { type: 'deregisterStake', stakeAddress: STAKE, deposit: '2000000', referenceScript: { txHash: H1, outputIndex: 2 }, redeemerCbor: 'd87980' },
+    ]);
+  });
+
+  it('returns undefined for an absent or empty list', () => {
+    expect(parseCertificates(undefined).parsed).toBeUndefined();
+    expect(parseCertificates('[]').parsed).toBeUndefined();
+  });
+
+  it.each([
+    [JSON.stringify({}), 'must be a JSON array'],
+    [JSON.stringify([{ type: 'delegate', stakeAddress: STAKE }]), 'type must be registerStake or deregisterStake'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: ADDR }]), 'stakeAddress must be a Bech32 stake address'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: STAKE, deposit: 0 }]), 'deposit must be a positive integer'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: STAKE, deposit: '-1' }]), 'deposit must be a positive integer'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: STAKE, stakingScript: 'ab' }]), 'certificates[0] needs exactly one of redeemerJson or redeemerCbor'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: STAKE, redeemerJson }]), 'has a redeemer but no staking script; a key-witnessed certificate takes none'],
+    [JSON.stringify([{ type: 'registerStake', stakeAddress: STAKE, referenceScript: { txHash: H1 }, redeemerJson }]), 'referenceScript must be {txHash, outputIndex}'],
+  ])('rejects %s', (json, message) => {
+    expect(parseCertificates(json).error).toContain(message);
+  });
+
+  it('caps the number of certificates', () => {
+    const many = Array.from({ length: MAX_CERTIFICATES + 1 }, () => ({ type: 'registerStake', stakeAddress: STAKE }));
+    expect(parseCertificates(JSON.stringify(many)).error).toContain('exceeds maximum');
   });
 });

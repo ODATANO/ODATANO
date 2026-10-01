@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.27] - mainnet slot times, withdrawals, inputs of other parties
+
+No schema change.
+
+### Added
+
+- `BuildPlutusTransaction`: `withdrawalsJson` (reward-account withdrawals with a staking script inline or by
+  reference, redeemer under the Reward purpose, `lovelace` 0 for withdraw-zero oracles; without a script the
+  stake key signs; unregistered reward accounts are refused before the build).
+- `BuildPlutusTransaction`: `certificatesJson` (stake registration and deregistration of key and script
+  credentials; witness-free legacy registration, deposit form with the staking script under the Certifying
+  purpose; a credential registered in the transaction is withdrawable in it; deposits balanced).
+- `BuildPlutusTransaction`: `forceInputsJson` takes UTxOs of other key addresses; the owner's payment key hash
+  must be in `requiredSignersJson`, every unit they bring must be spent by `outputsJson`, never collateral.
+- `protectInputsJson` on all four build actions: UTxOs left out of coin selection and collateral.
+
+### Fixed
+
+- Mainnet Shelley start in `GENESIS_INFOS_BY_NETWORK` was 2020-08-03 instead of 2020-07-29T21:44:51Z:
+  every mainnet value derived from a slot was five days late (`Blocks.time`, `Transactions.blockTime`,
+  `AssetHistory.blockTime` from the crawl, epoch `startTime`/`endTime`, `validityStartMs`/`validityEndMs`
+  of built transactions). Preprod and preview were correct.
+- Mainnet rows crawled before this release carry the offset: recompute `time`/`blockTime` from `slot`.
+
+### Security
+
+- `axios` 1.20.0, `fast-uri` 3.1.8 (lockfile).
+
 ## [v2.0.0-rc.26] - first address read returns the indexed rows
 
 No schema change.

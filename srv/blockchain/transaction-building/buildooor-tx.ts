@@ -1,6 +1,6 @@
 import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, PlutusTxOutput, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters, TxEvaluator, MintAction } from "../../utils/types";
-import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions } from "@harmoniclabs/buildooor";
+import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions, type ITxBuildWithdrawal, type ITxBuildCert } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, isCollateralCandidate, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
@@ -11,6 +11,13 @@ import {
   type ProtocolParameters,
   defaultProtocolParameters,
   Address,
+  StakeAddress,
+  Credential,
+  CredentialType,
+  CertStakeRegistration,
+  CertStakeDeRegistration,
+  CertRegistrationDeposit,
+  CertUnRegistrationDeposit,
   UTxO as LedgerUTxO,
   Value,
   TxOut,
@@ -244,7 +251,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const outputs = [this._buildTxOut(recipientAddress, outputValue, req.outputDatum, refScript)];
 
       // Partition: forced UTxOs become fixed inputs; rest is the coin-selection pool
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs));
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
       const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
@@ -290,7 +297,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Partition forced vs candidate UTxOs. Forced inputs are already committed;
       // collateral and coin selection operate on the remainder only.
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs));
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
@@ -410,7 +417,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const forceInputsFiltered = (req.forceInputs ?? []).filter(
         r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
       );
-      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs));
+      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
@@ -571,18 +578,56 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         return { si, utxo, refLedgerUtxo, scriptHash: refLedgerUtxo.resolved.refScript.hash.toString() };
       });
 
+      // Withdrawals: the staking script inline, by reference, or the one a reference input carries
+      const withdrawalEntries = (req.withdrawals ?? []).map((w, i) => ({
+        w, rewardAccount: StakeAddress.fromString(w.rewardAddress),
+        ...this._resolveStakingScript(w, `withdrawals[${i}]`, referencedByHash, refUtxoByKey),
+      }));
+
+      // Certificates: the credential from the stake address; a script runs under the Certifying purpose
+      const stakeDeposit = BigInt(String(this.txBuilder.protocolParamters.stakeAddressDeposit ?? defaultProtocolParameters.stakeAddressDeposit));
+      const certEntries = (req.certificates ?? []).map((c, i) => {
+        const at = `certificates[${i}]`;
+        const stake = StakeAddress.fromString(c.stakeAddress);
+        const credentialHash = stake.credentials.toString().toLowerCase();
+        const witness = this._resolveStakingScript(c, at, referencedByHash, refUtxoByKey);
+        const scripted = Boolean(witness.script || witness.refLedgerUtxo);
+        const witnessHash = (witness.script?.hash ?? witness.refLedgerUtxo?.resolved.refScript?.hash)?.toString().toLowerCase();
+        if (stake.type === 'script') {
+          if (scripted && witnessHash !== credentialHash) {
+            throw new TransactionValidationError(`${at} staking script hash ${witnessHash} is not the credential of ${c.stakeAddress} (${credentialHash})`);
+          }
+          if (!scripted && c.type === 'deregisterStake') {
+            throw new TransactionValidationError(`${at} deregisters the script credential ${c.stakeAddress}; its staking script and redeemer are needed`);
+          }
+        } else if (scripted) {
+          throw new TransactionValidationError(`${at} ${c.stakeAddress} is a key credential; it takes no staking script`);
+        }
+        const stakeCredential = stake.type === 'script' ? Credential.script(stake.credentials) : Credential.keyHash(stake.credentials);
+        const deposit = c.deposit ? BigInt(c.deposit) : stakeDeposit;
+        // Without a script the witness-free legacy registration; the deposit forms need the witness
+        const cert = c.type === 'registerStake'
+          ? (scripted ? new CertRegistrationDeposit({ stakeCredential, deposit }) : new CertStakeRegistration({ stakeCredential }))
+          : (c.deposit ? new CertUnRegistrationDeposit({ stakeCredential, deposit }) : new CertStakeDeRegistration({ stakeCredential }));
+        return { c, cert, deposit, ...witness };
+      });
+
       const senderUtxos = ctx.utxos.filter(u => !scriptKeys.has(keyOf(u)));
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
+      const scriptKeyClash = (req.protectInputs ?? []).map(keyOf).find(k => scriptKeys.has(k));
+      if (scriptKeyClash) throw new TransactionValidationError(`protectInputs ${scriptKeyClash} is also a script input`);
       const { forced, rest } = this._partitionForcedInputs(senderUtxos, (req.forceInputs ?? []).filter(r => !scriptKeys.has(keyOf(r))),
-        this._referencedKeys(ctx, req.referenceInputs, req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : []))));
+        this._referencedKeys(ctx, req.referenceInputs, req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : []))),
+        req.protectInputs);
+      this._checkForeignForcedInputs(forced, req);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
       coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
       const allFundingInputs = fundingUtxos.map(utxo => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(utxo) }));
 
-      // Funding covers only what the outputs need beyond the script inputs, forced inputs and mints
-      // (keepRelevant adds its own lovelace margin for fee and change).
+      // Funding covers only what the outputs need beyond the script inputs, forced inputs, mints and
+      // withdrawals (keepRelevant adds its own lovelace margin for fee and change).
       const need = new Map<string, bigint>();
       const add = (unit: string, qty: bigint) => need.set(unit, (need.get(unit) ?? 0n) + qty);
       for (const o of req.outputs) {
@@ -593,6 +638,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         for (const a of u.amount) add(a.unit.toLowerCase() === 'lovelace' ? 'lovelace' : a.unit, -BigInt(a.quantity));
       }
       for (const m of req.mintActions ?? []) add(m.assetUnit, -BigInt(m.quantity));
+      for (const { w } of withdrawalEntries) add('lovelace', -BigInt(w.lovelace));
+      // a registration locks the deposit, a deregistration refunds it
+      for (const { c, deposit } of certEntries) add('lovelace', c.type === 'registerStake' ? deposit : -deposit);
       let requiredFundingValue = Value.lovelaces(0n);
       for (const [unit, qty] of need) {
         if (qty <= 0n) continue;
@@ -626,8 +674,23 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         ? this._buildMintEntries(req.mintActions, this._parsePlutusV3Script(req.mintActions[0].mintingPolicyScript!, 'mintActions[0].mintingPolicyScript'), undefined, resolveCtx)
         : undefined;
 
+      // Withdrawals: Buildooor sorts them by reward account and runs each script under the Reward purpose
+      const withdrawals: ITxBuildWithdrawal[] = withdrawalEntries.map(({ w, script, refLedgerUtxo, rewardAccount }) => {
+        const withdrawal = { rewardAccount, amount: BigInt(w.lovelace) };
+        if (!script && !refLedgerUtxo) return { withdrawal };
+        const redeemer = w.redeemerCbor ? dataFromCbor(w.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(w.redeemer ?? null, resolveCtx));
+        return { withdrawal, script: script ? { inline: script, redeemer } : { ref: refLedgerUtxo!, redeemer } };
+      });
+
+      // Certificates in the given order; a scripted one carries its redeemer under the Cert purpose
+      const certificates: ITxBuildCert[] = certEntries.map(({ c, cert, script, refLedgerUtxo }) => {
+        if (!script && !refLedgerUtxo) return { cert };
+        const redeemer = c.redeemerCbor ? dataFromCbor(c.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(c.redeemer ?? null, resolveCtx));
+        return { cert, script: script ? { inline: script, redeemer } : { ref: refLedgerUtxo!, redeemer } };
+      });
+
       // Reference inputs: the caller's, minus the reference-script UTxOs Buildooor adds itself
-      const refScriptKeys = new Set(scriptEntries.filter(e => e.refLedgerUtxo).map(e =>
+      const refScriptKeys = new Set([...scriptEntries, ...withdrawalEntries, ...certEntries].filter(e => e.refLedgerUtxo).map(e =>
         keyOf({ txHash: e.refLedgerUtxo!.utxoRef.id.toString(), outputIndex: e.refLedgerUtxo!.utxoRef.index })));
       const readonlyRefInputs = this._mapReferenceInputs((ctx.referenceInputUtxos ?? []).filter(u =>
         !refScriptKeys.has(keyOf(u)) && (req.referenceInputs ?? []).some(r => keyOf(r) === keyOf(u))));
@@ -639,7 +702,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         collaterals: collateralUtxos, requiredSigners: req.requiredSigners,
         invalidBefore, invalidAfter,
         ...(collateralReturn && { collateralReturn }),
-        ...(readonlyRefInputs.length > 0 && { readonlyRefInputs })
+        ...(readonlyRefInputs.length > 0 && { readonlyRefInputs }),
+        ...(withdrawals.length > 0 && { withdrawals }),
+        ...(certificates.length > 0 && { certificates })
       };
       const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction);
 
@@ -982,24 +1047,108 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private _partitionForcedInputs(
     utxos: OdatanoUtxo[],
     forceInputs?: Array<{ txHash: string; outputIndex: number }>,
-    referenced: ReadonlySet<string> = new Set()
+    referenced: ReadonlySet<string> = new Set(),
+    protectInputs?: Array<{ txHash: string; outputIndex: number }>
   ): { forced: OdatanoUtxo[]; rest: OdatanoUtxo[] } {
     const hasRefScript = (u: OdatanoUtxo) => Boolean(u.scriptRef || u.scriptRefCbor);
-    if ((!forceInputs || forceInputs.length === 0) && referenced.size === 0 && !utxos.some(hasRefScript)) return { forced: [], rest: utxos };
     const key = (r: { txHash: string; outputIndex: number }) => `${r.txHash.toLowerCase()}#${r.outputIndex}`;
+    const protectedKeys = new Set((protectInputs ?? []).map(key));
+    if ((!forceInputs || forceInputs.length === 0) && referenced.size === 0 && protectedKeys.size === 0 && !utxos.some(hasRefScript)) {
+      return { forced: [], rest: utxos };
+    }
     const forcedKeys = new Set((forceInputs ?? []).map(key));
     // a UTxO cannot be spent and referenced in one transaction
     const clash = [...forcedKeys].find(k => referenced.has(k));
     if (clash) throw new TransactionValidationError(`forceInputs ${clash} is also a reference input — a UTxO cannot be spent and referenced in one transaction`);
+    const protectedClash = [...forcedKeys].find(k => protectedKeys.has(k));
+    if (protectedClash) throw new TransactionValidationError(`forceInputs ${protectedClash} is also in protectInputs`);
     const forced: OdatanoUtxo[] = [];
     const rest: OdatanoUtxo[] = [];
     for (const u of utxos) {
       if (forcedKeys.has(key(u))) forced.push(u);
-      // reference inputs and UTxOs carrying a reference script stay out of coin selection and
-      // collateral; a deployed script is spent only when forced
-      else if (!referenced.has(key(u)) && !hasRefScript(u)) rest.push(u);
+      // reference inputs, protected UTxOs and UTxOs carrying a reference script stay out of coin
+      // selection and collateral; a deployed script is spent only when forced
+      else if (!referenced.has(key(u)) && !protectedKeys.has(key(u)) && !hasRefScript(u)) rest.push(u);
     }
     return { forced, rest };
+  }
+
+  /**
+   * Staking script of a withdrawal or certificate: inline (swapped for a reference input that already
+   * carries the same hash), by reference, or none (key witness).
+   */
+  private _resolveStakingScript(
+    w: { stakingScript?: string; referenceScript?: { txHash: string; outputIndex: number } },
+    at: string,
+    referencedByHash: ReadonlyMap<string, LedgerUTxO>,
+    refUtxoByKey: ReadonlyMap<string, OdatanoUtxo>
+  ): { script?: Script; refLedgerUtxo?: LedgerUTxO } {
+    if (w.stakingScript) {
+      const script = this._parsePlutusV3Script(w.stakingScript, `${at}.stakingScript`);
+      const referenced = referencedByHash.get(script.hash.toString());
+      return referenced ? { refLedgerUtxo: referenced } : { script };
+    }
+    if (!w.referenceScript) return {};
+    const refKey = `${w.referenceScript.txHash.toLowerCase()}#${w.referenceScript.outputIndex}`;
+    const refUtxo = refUtxoByKey.get(refKey);
+    if (!refUtxo) throw new TransactionValidationError(`${at}.referenceScript ${refKey} not found on-chain or already spent`);
+    const refLedgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(refUtxo);
+    if (!refLedgerUtxo.resolved.refScript) {
+      throw new TransactionValidationError(
+        `${at}.referenceScript ${refKey} carries no reference script, or its bytes are not available ` +
+        `from the configured backends (Ogmios or Koios deliver them, Blockfrost only the hash)`
+      );
+    }
+    return { refLedgerUtxo };
+  }
+
+  /**
+   * Forced inputs of other key addresses: the owner's payment key hash must be a required signer,
+   * and every unit they bring must be spent by the outputs, so none of it lands in the sender's change.
+   * Script addresses are refused; those UTxOs are script inputs.
+   */
+  private _checkForeignForcedInputs(forced: OdatanoUtxo[], req: TxBuildPlutusRequest): void {
+    const sender = req.senderAddress.toLowerCase();
+    const foreign = forced.filter(u => u.address.toLowerCase() !== sender);
+    if (foreign.length === 0) return;
+    const signers = new Set((req.requiredSigners ?? []).map(s => s.toLowerCase()));
+    const keyOf = (u: OdatanoUtxo) => `${u.txHash}#${u.outputIndex}`;
+    const byAddress = new Map<string, OdatanoUtxo[]>();
+    for (const u of foreign) byAddress.set(u.address, [...(byAddress.get(u.address) ?? []), u]);
+    for (const [address, utxos] of byAddress) {
+      const creds = Address.fromString(address).paymentCreds;
+      const refs = utxos.map(keyOf).join(', ');
+      if (creds.type !== CredentialType.KeyHash) {
+        throw new TransactionValidationError(`forceInputs ${refs} are at the script address ${address}; spend script UTxOs via scriptInputs`);
+      }
+      const keyHash = creds.hash.toString().toLowerCase();
+      if (!signers.has(keyHash)) {
+        throw new TransactionValidationError(
+          `forceInputs ${refs} belong to ${address}; its payment key hash ${keyHash} must be in requiredSigners (the owner co-signs)`
+        );
+      }
+    }
+    const brought = new Map<string, bigint>();
+    for (const u of foreign) {
+      for (const a of u.amount) {
+        const unit = a.unit.toLowerCase() === 'lovelace' ? 'lovelace' : a.unit;
+        brought.set(unit, (brought.get(unit) ?? 0n) + BigInt(a.quantity));
+      }
+    }
+    const spent = new Map<string, bigint>();
+    for (const o of req.outputs) {
+      spent.set('lovelace', (spent.get('lovelace') ?? 0n) + BigInt(o.lovelaceAmount));
+      for (const a of o.assets ?? []) spent.set(a.unit, (spent.get(a.unit) ?? 0n) + BigInt(a.quantity));
+    }
+    for (const [unit, qty] of brought) {
+      const out = spent.get(unit) ?? 0n;
+      if (qty > out) {
+        throw new TransactionValidationError(
+          `forceInputs of other addresses bring ${qty} ${unit} but the outputs spend only ${out}; ` +
+          `the difference would go to the sender's change, return it to its owner in outputs`
+        );
+      }
+    }
   }
 
   /** Keys (`txhash#index`) of the reference inputs of a build, from the resolved UTxOs and the request refs. */

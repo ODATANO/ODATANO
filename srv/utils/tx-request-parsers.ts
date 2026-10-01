@@ -1,4 +1,4 @@
-import { validateJsonWithLimits, validatePlutusJson, isTxHash, isAssetUnit, isValidCbor, isValidBech32Address, validateRequiredSigners } from './validators';
+import { validateJsonWithLimits, validatePlutusJson, isTxHash, isAssetUnit, isValidCbor, isValidBech32Address, isValidBech32StakeAddress, validateRequiredSigners } from './validators';
 import type { JSONValue, MintAction } from './types';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { dataFromCbor } from '@harmoniclabs/plutus-data';
@@ -22,7 +22,7 @@ function parsePlutusCbor(value: unknown, field: string): { hex?: string; error?:
 
 export function parseUtxoRefArray(
   json: string | undefined,
-  fieldName: 'forceInputsJson' | 'referenceInputsJson'
+  fieldName: 'forceInputsJson' | 'referenceInputsJson' | 'protectInputsJson'
 ): { parsed?: Array<{ txHash: string; outputIndex: number }>; error?: string } {
   if (!json) return { parsed: undefined };
   const entryName = fieldName.replace(/Json$/, '');
@@ -345,6 +345,163 @@ export function parseScriptInputs(json: string | undefined): { parsed?: ParsedSc
       input.datum = datum.parsed;
     }
     out.push(input);
+  }
+  return { parsed: out };
+}
+
+/** Upper bound on withdrawals per BuildPlutusTransaction. */
+export const MAX_WITHDRAWALS = 16;
+
+/** One withdrawal of a BuildPlutusTransaction, validated; `stakingScript` still without params applied. */
+export interface ParsedWithdrawal {
+  rewardAddress: string;
+  lovelace: string;
+  stakingScript?: string;
+  scriptParams?: JSONValue[];
+  referenceScript?: { txHash: string; outputIndex: number };
+  redeemer?: JSONValue;
+  redeemerCbor?: string;
+}
+
+/**
+ * Parse and validate withdrawalsJson: distinct reward accounts, lovelace >= 0, optionally a staking
+ * script (inline or by reference) with exactly one redeemer form; without a script no redeemer.
+ */
+export function parseWithdrawals(json: string | undefined): { parsed?: ParsedWithdrawal[]; error?: string } {
+  if (!json) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(json, 'withdrawalsJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'withdrawalsJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  if (jsonResult.parsed.length > MAX_WITHDRAWALS) {
+    return { error: `withdrawalsJson exceeds maximum of ${MAX_WITHDRAWALS} entries` };
+  }
+
+  const out: ParsedWithdrawal[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < jsonResult.parsed.length; i++) {
+    const entry = jsonResult.parsed[i] as Record<string, unknown>;
+    const at = `withdrawals[${i}]`;
+    if (!entry || typeof entry !== 'object') return { error: `${at} must be an object` };
+    if (typeof entry.rewardAddress !== 'string' || !isValidBech32StakeAddress(entry.rewardAddress)) {
+      return { error: `${at}.rewardAddress must be a Bech32 stake address` };
+    }
+    const rewardAddress = entry.rewardAddress.toLowerCase();
+    if (seen.has(rewardAddress)) return { error: `${at} withdraws from ${rewardAddress} a second time` };
+    seen.add(rewardAddress);
+    const lovelace = typeof entry.lovelace === 'number' && Number.isInteger(entry.lovelace) && entry.lovelace >= 0
+      ? String(entry.lovelace)
+      : typeof entry.lovelace === 'string' && /^\d+$/.test(entry.lovelace) ? entry.lovelace : undefined;
+    if (lovelace === undefined) return { error: `${at}.lovelace must be a non-negative integer (0 for withdraw-zero)` };
+
+    const witness = parseStakingScriptWitness(entry, at, 'withdrawal');
+    if (witness.error) return { error: witness.error };
+    out.push({ rewardAddress, lovelace, ...witness.parsed });
+  }
+  return { parsed: out };
+}
+
+/** Optional staking script (inline with params, or by reference) plus its redeemer, shared by withdrawals and certificates. */
+type ParsedStakingScriptWitness = Pick<ParsedWithdrawal, 'stakingScript' | 'scriptParams' | 'referenceScript' | 'redeemer' | 'redeemerCbor'>;
+function parseStakingScriptWitness(
+  entry: Record<string, unknown>, at: string, kind: 'withdrawal' | 'certificate'
+): { parsed?: ParsedStakingScriptWitness; error?: string } {
+  const present = (v: unknown) => v !== undefined && v !== null;
+  const parseJsonField = (value: unknown, field: string): { parsed?: JSONValue; error?: string } => {
+    if (typeof value !== 'string') return { error: `${field} must be a JSON string` };
+    const r = validatePlutusJson(value, field);
+    return r.valid ? { parsed: r.parsed as JSONValue } : { error: r.error! };
+  };
+  const w: ParsedStakingScriptWitness = {};
+  const hasInline = present(entry.stakingScript);
+  const hasRef = present(entry.referenceScript);
+  if (hasInline && hasRef) return { error: `${at} takes stakingScript or referenceScript, not both` };
+  if (hasInline) {
+    if (typeof entry.stakingScript !== 'string' || !isValidCbor(entry.stakingScript)) {
+      return { error: `${at}.stakingScript must be even-length CBOR hex` };
+    }
+    w.stakingScript = entry.stakingScript;
+    if (present(entry.scriptParamsJson)) {
+      const params = parseJsonField(entry.scriptParamsJson, `${at}.scriptParamsJson`);
+      if (params.error) return { error: params.error };
+      if (!Array.isArray(params.parsed)) return { error: `${at}.scriptParamsJson must be a JSON array` };
+      if (params.parsed.length > 0) w.scriptParams = params.parsed;
+    }
+  } else if (hasRef) {
+    const ref = entry.referenceScript as Record<string, unknown>;
+    if (!ref || typeof ref !== 'object' || typeof ref.txHash !== 'string' || !isTxHash(ref.txHash)
+      || typeof ref.outputIndex !== 'number' || !Number.isInteger(ref.outputIndex) || ref.outputIndex < 0) {
+      return { error: `${at}.referenceScript must be {txHash, outputIndex} of the UTxO carrying the script` };
+    }
+    if (present(entry.scriptParamsJson)) return { error: `${at}.scriptParamsJson applies to an inline stakingScript only` };
+    w.referenceScript = { txHash: ref.txHash.toLowerCase(), outputIndex: ref.outputIndex };
+  } else if (present(entry.scriptParamsJson)) {
+    return { error: `${at}.scriptParamsJson applies to an inline stakingScript only` };
+  }
+
+  const hasRedeemerJson = present(entry.redeemerJson);
+  const hasRedeemerCbor = present(entry.redeemerCbor);
+  if (hasInline || hasRef) {
+    if (hasRedeemerJson === hasRedeemerCbor) return { error: `${at} needs exactly one of redeemerJson or redeemerCbor` };
+    if (hasRedeemerCbor) {
+      const cbor = parsePlutusCbor(entry.redeemerCbor, `${at}.redeemerCbor`);
+      if (cbor.error) return { error: cbor.error };
+      w.redeemerCbor = cbor.hex;
+    } else {
+      const redeemer = parseJsonField(entry.redeemerJson, `${at}.redeemerJson`);
+      if (redeemer.error) return { error: redeemer.error };
+      w.redeemer = redeemer.parsed;
+    }
+  } else if (hasRedeemerJson || hasRedeemerCbor) {
+    return { error: `${at} has a redeemer but no staking script; a key-witnessed ${kind} takes none` };
+  }
+  return { parsed: w };
+}
+
+/** Upper bound on certificates per BuildPlutusTransaction. */
+export const MAX_CERTIFICATES = 16;
+
+/** One certificate of a BuildPlutusTransaction, validated; `stakingScript` still without params applied. */
+export interface ParsedCertificate extends ParsedStakingScriptWitness {
+  type: 'registerStake' | 'deregisterStake';
+  stakeAddress: string;
+  deposit?: string;
+}
+
+/**
+ * Parse and validate certificatesJson: stake registrations and deregistrations, each with an
+ * optional staking script (inline or by reference) and exactly one redeemer form when scripted.
+ */
+export function parseCertificates(json: string | undefined): { parsed?: ParsedCertificate[]; error?: string } {
+  if (!json) return { parsed: undefined };
+  const jsonResult = validateJsonWithLimits(json, 'certificatesJson');
+  if (!jsonResult.valid) return { error: jsonResult.error! };
+  if (!Array.isArray(jsonResult.parsed)) return { error: 'certificatesJson must be a JSON array' };
+  if (jsonResult.parsed.length === 0) return { parsed: undefined };
+  if (jsonResult.parsed.length > MAX_CERTIFICATES) {
+    return { error: `certificatesJson exceeds maximum of ${MAX_CERTIFICATES} entries` };
+  }
+  const out: ParsedCertificate[] = [];
+  for (let i = 0; i < jsonResult.parsed.length; i++) {
+    const entry = jsonResult.parsed[i] as Record<string, unknown>;
+    const at = `certificates[${i}]`;
+    if (!entry || typeof entry !== 'object') return { error: `${at} must be an object` };
+    if (entry.type !== 'registerStake' && entry.type !== 'deregisterStake') {
+      return { error: `${at}.type must be registerStake or deregisterStake` };
+    }
+    if (typeof entry.stakeAddress !== 'string' || !isValidBech32StakeAddress(entry.stakeAddress)) {
+      return { error: `${at}.stakeAddress must be a Bech32 stake address` };
+    }
+    let deposit: string | undefined;
+    if (entry.deposit !== undefined && entry.deposit !== null) {
+      deposit = typeof entry.deposit === 'number' && Number.isInteger(entry.deposit) && entry.deposit > 0
+        ? String(entry.deposit)
+        : typeof entry.deposit === 'string' && /^\d+$/.test(entry.deposit) && entry.deposit !== '0' ? entry.deposit : undefined;
+      if (deposit === undefined) return { error: `${at}.deposit must be a positive integer (lovelace)` };
+    }
+    const witness = parseStakingScriptWitness(entry, at, 'certificate');
+    if (witness.error) return { error: witness.error };
+    out.push({ type: entry.type, stakeAddress: entry.stakeAddress.toLowerCase(), ...(deposit ? { deposit } : {}), ...witness.parsed });
   }
   return { parsed: out };
 }
