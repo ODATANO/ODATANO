@@ -1932,10 +1932,10 @@ export class CardanoIndexer {
   async updateSubmissionStatus(
     tx: CapTransaction,
     submissionId: string,
-    status: string,
+    status: TransactionSubmission['status'],
     errorMessage?: string
   ): Promise<void> {
-    const updateData: Record<string, any> = { status };
+    const updateData: Pick<TransactionSubmission, 'status' | 'errorMessage'> = { status };
     if (errorMessage) {
       updateData.errorMessage = errorMessage;
     }

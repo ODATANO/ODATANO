@@ -4,7 +4,8 @@ import tsParser from '@typescript-eslint/parser';
 import tseslint from '@typescript-eslint/eslint-plugin';
 
 export default [
-  
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
+
   cdsPlugin.configs.recommended,
   
   // Global ignores (generated / noise)
@@ -22,8 +23,9 @@ export default [
       'src/**/*.js',
       // compiled build artifacts emitted in-place (tsconfig.build.json outDir ".")
       '**/*.d.ts',
-      // local debugging repros (gitignored / npmignored)
+      // local debugging repros and working notes (gitignored / npmignored)
       'repro-*.js',
+      'local_docs/**',
     ],
   },
 
@@ -40,9 +42,7 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
-        // type-aware linting: auto-discover the nearest tsconfig per file so the
-        // typed rules below have real type information (previously absent — which
-        // also made the no-explicit-any disable-comments reference an inactive rule)
+        // type-aware linting: nearest tsconfig per file gives the typed rules below real type information
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
       },
@@ -62,8 +62,7 @@ export default [
 
       'no-undef': 'error',
 
-      // High-value type-aware rules — catch the bug classes surfaced during the
-      // review (unawaited promises, mis-used async, untyped any).
+      // Type-aware rules: unawaited promises, mis-used async, untyped any.
       '@typescript-eslint/no-floating-promises': 'warn',
       // arguments:false — async callbacks passed to event registrars like
       // cds.on('served'/'shutdown', async …) are an idiomatic, awaited CAP

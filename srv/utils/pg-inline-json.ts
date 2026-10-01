@@ -30,7 +30,6 @@ async function drain(stream: Readable): Promise<string> {
 export function installPostgresInlineJson(): boolean {
   let PostgresService: { prototype: Record<string | symbol, unknown> };
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     PostgresService = require('@cap-js/postgres/lib/PostgresService');
   } catch (err) {
     if (dbKind() === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, bulk writes keep the COPY buffer: ${String((err as Error)?.message ?? err)}`);

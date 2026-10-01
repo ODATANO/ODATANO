@@ -221,7 +221,7 @@ export function jsonToPlutusData(json: JSONValue): Data {
     throw new Error('PlutusData JSON cannot be null or undefined');
   }
   if (typeof json === 'object' && !Array.isArray(json)) {
-    const normalized = normalizeConstructorKey(json as Record<string, any>);
+    const normalized = normalizeConstructorKey(json);
     return dataFromJson(normalized);
   }
   throw new Error(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);

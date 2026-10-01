@@ -145,6 +145,73 @@ function nodeRejection(body: unknown): string {
   return text.slice(0, 1000);
 }
 
+/** Koios `/pool_info` row; stake and size figures may be null for a pool without delegation. */
+interface KoiosPoolInfoRow {
+  pool_id_bech32?: string | null;
+  pool_id_hex?: string | null;
+  vrf_key_hash?: string | null;
+  block_count?: number | null;
+  live_stake?: string | null;
+  live_size?: number | null;
+  live_delegators?: number | null;
+  live_saturation?: number | string | null;
+  active_stake?: string | null;
+  active_size?: number | null;
+  pledge?: string | null;
+  margin?: number | null;
+  fixed_cost?: string | null;
+  reward_addr?: string | null;
+}
+
+/** Koios `/drep_info` row across both schema generations (see _mapKoiosDrep). */
+interface KoiosDrepInfoRow {
+  drep_id: string;
+  hex: string;
+  amount: string;
+  has_script: boolean;
+  retired?: boolean | null;
+  expired?: boolean | null;
+  active?: boolean | null;
+  drep_status?: string | null;
+  last_active_epoch?: number | null;
+  expires_epoch_no?: number | null;
+}
+
+/** Koios `/tip` row. */
+interface KoiosTipRow {
+  hash: string;
+  epoch_no: number;
+  abs_slot: number | null;
+  block_height?: number | null;
+}
+
+/** Koios `/block_info` row. */
+interface KoiosBlockInfoRow {
+  block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
+  epoch_no: number | null; epoch_slot: number | null; pool?: string | null; block_size: number;
+  tx_count: number; total_fees?: string | null;
+}
+
+/** Koios `/block_txs` row; older instances return one `tx_hash` per row. */
+interface KoiosBlockTxsRow {
+  tx_hashes?: string[];
+  tx_hash?: string;
+}
+
+/** Koios `/epoch_info` row. */
+interface KoiosEpochInfoRow {
+  epoch_no: number;
+  start_time: number;
+  end_time: number;
+  first_block_time: number;
+  last_block_time: number;
+  block_count: number;
+  tx_count: number;
+  total_output: string;
+  total_fees: string;
+  active_stake: string | null;
+}
+
 /** CardanoBackend implementation on the Koios REST API (Axios). */
 export class KoiosBackend implements CardanoBackend, PaginatingBackend, EnumeratingBackend {
   public readonly name = 'koios';
@@ -197,12 +264,12 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
 
   /**
    * Retry (500 → 1000 → 2000 ms) when Koios transiently returns [] for a valid query.
-   * Element type is `any` on purpose: only non-emptiness is checked; rows are narrowed at use sites.
+   * Only non-emptiness is checked here; rows keep the caller's element type.
    */
-  private async fetchWithRetryOnEmpty(
-    fn: () => Promise<{ data: any[] }>, // eslint-disable-line @typescript-eslint/no-explicit-any
+  private async fetchWithRetryOnEmpty<T>(
+    fn: () => Promise<{ data: T[] }>,
     label: string
-  ): Promise<any[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  ): Promise<T[]> {
     const maxRetries = 3;
     const baseDelayMs = 500;
 
@@ -229,11 +296,11 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
    * version-skewed Koios instances behind the load balancer return it for a request that
    * healthy instances serve fine. Other 400s still fail fast.
    */
-  private async getWithRetryOn42804(
+  private async getWithRetryOn42804<T = unknown>(
     url: string,
     config: AxiosRequestConfig,
     label: string
-  ): Promise<{ data: any[] }> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  ): Promise<{ data: T[] }> {
     const maxRetries = 8;
     const baseDelayMs = 300;
     for (let attempt = 0; ; attempt++) {
@@ -294,7 +361,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
 
     return handleBackendRequest(
       async () => {
-        const results = await this.fetchWithRetryOnEmpty(
+        const results = await this.fetchWithRetryOnEmpty<KoiosBlockInfoRow>(
           () => this.api.post('/block_info', { _block_hashes: [blockHash] }),
           `getBlock(${blockHash})`
         );
@@ -319,7 +386,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       async () => {
 
         const results = await this.fetchWithRetryOnEmpty(
-          () => this.getWithRetryOn42804('/epoch_info', { params: { _epoch_no: epochNumber } }, `getEpoch(${epochNumber})`),
+          () => this.getWithRetryOn42804<KoiosEpochInfoRow>('/epoch_info', { params: { _epoch_no: epochNumber } }, `getEpoch(${epochNumber})`),
           `getEpoch(${epochNumber})`
         );
 
@@ -613,11 +680,11 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /** Map one Koios /pool_info row to the canonical PoolData. */
-  private _mapKoiosPool(poolData: Record<string, any>, fallbackId: string): PoolData { // eslint-disable-line @typescript-eslint/no-explicit-any
+  private _mapKoiosPool(poolData: KoiosPoolInfoRow, fallbackId: string): PoolData {
     return {
       poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || fallbackId,
-      vrfKeyHash: poolData.vrf_key_hash,
-      blocksMinted: poolData.block_count,
+      vrfKeyHash: poolData.vrf_key_hash || '',
+      blocksMinted: poolData.block_count || 0,
       // Koios pool_info has no blocks-in-current-epoch figure. null = not available;
       // a 0 would be indistinguishable from a real zero downstream.
       blocksEpoch: null,
@@ -632,7 +699,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       pledge: poolData.pledge || '0',
       margin: poolData.margin || 0,
       fixedCost: poolData.fixed_cost || '0',
-      rewardAccount: poolData.reward_addr,
+      rewardAccount: poolData.reward_addr || '',
     };
   }
 
@@ -779,7 +846,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   }
 
   /** Map one Koios /drep_info row to the canonical DrepData. */
-  private _mapKoiosDrep(drepData: Record<string, any>): DrepData { // eslint-disable-line @typescript-eslint/no-explicit-any
+  private _mapKoiosDrep(drepData: KoiosDrepInfoRow): DrepData {
     // Koios /drep_info exposes either `expired`/`retired`/`last_active_epoch` (older schema)
     // or `drep_status` ('registered' | 'retired'), `active` and `expires_epoch_no`; read both.
     const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
@@ -952,7 +1019,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
-        const tipData = await this.fetchWithRetryOnEmpty(
+        const tipData = await this.fetchWithRetryOnEmpty<KoiosTipRow>(
           () => this.api.get('/tip'),
           'getLatestBlock'
         );
@@ -974,7 +1041,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(
       async () => {
-        const tipData = await this.fetchWithRetryOnEmpty(
+        const tipData = await this.fetchWithRetryOnEmpty<KoiosTipRow>(
           () => this.api.get('/tip'),
           'getLatestEpoch'
         );
@@ -1002,7 +1069,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getCurrentSlot(): Promise<number> {
     return handleBackendRequest(
       async () => {
-        const tipData = await this.fetchWithRetryOnEmpty(
+        const tipData = await this.fetchWithRetryOnEmpty<KoiosTipRow>(
           () => this.api.get('/tip'),
           'getCurrentSlot'
         );
@@ -1120,11 +1187,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   // ---------------------------------------------------------------------------
 
   /** Map a Koios /block_info row to BlockData. */
-  private mapKoiosBlockInfo(data: {
-    block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
-    epoch_no: number | null; epoch_slot: number | null; pool?: string | null; block_size: number;
-    tx_count: number; total_fees?: string | null;
-  }): BlockData {
+  private mapKoiosBlockInfo(data: KoiosBlockInfoRow): BlockData {
     return {
       time: data.block_time,
       height: data.block_height,
@@ -1146,7 +1209,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getBlockByHeight(height: number): Promise<BlockData> {
     return handleBackendRequest(
       async () => {
-        const rows = await this.fetchWithRetryOnEmpty(
+        const rows = await this.fetchWithRetryOnEmpty<{ hash: string }>(
           () => this.api.get(`/blocks?block_height=eq.${height}&limit=1`),
           `getBlockByHeight(${height})`
         );
@@ -1170,7 +1233,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           // A height hint is not proof the cursor is still canonical: after a rollback Koios
           // keeps listing blocks above H while `afterHash` is orphaned. Validate the hash first
           // so the crawler enters reorg recovery.
-          const canonical = await this.fetchWithRetryOnEmpty(
+          const canonical = await this.fetchWithRetryOnEmpty<{ hash: string }>(
             () => this.api.get(`/blocks?block_height=eq.${anchorHeight}&limit=1`),
             `getNextBlocks/anchor(${anchorHeight})`
           );
@@ -1188,22 +1251,25 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             );
           }
         } else {
-          const info = await this.fetchWithRetryOnEmpty(
+          const info = await this.fetchWithRetryOnEmpty<KoiosBlockInfoRow>(
             () => this.api.post('/block_info', { _block_hashes: [afterHash] }),
             `getNextBlocks/height(${afterHash})`
           );
           if (!info.length) throw new NotFoundError('Block', this.name);
+          if (info[0].block_height == null) {
+            throw new ProviderUnavailableError(`Block ${afterHash} has no height on Koios and cannot anchor pagination`, this.name);
+          }
           anchorHeight = info[0].block_height;
         }
 
-        const rows = await this.fetchWithRetryOnEmpty(
+        const rows = await this.fetchWithRetryOnEmpty<{ hash: string }>(
           () => this.api.get(`/blocks?block_height=gt.${anchorHeight}&order=block_height.asc&limit=${count}`),
           `getNextBlocks(${afterHash})`
         );
         if (!rows.length) return [];
 
-        const requestedHashes: string[] = rows.map((r: { hash: string }) => r.hash);
-        const infos = await this.fetchWithRetryOnEmpty(
+        const requestedHashes = rows.map((r) => r.hash);
+        const infos = await this.fetchWithRetryOnEmpty<KoiosBlockInfoRow>(
           () => this.api.post('/block_info', { _block_hashes: requestedHashes }),
           `getNextBlocks/info(${afterHash})`
         );
@@ -1211,7 +1277,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         // would advance the cursor past the missing block and leave a permanent hole (crawled
         // entities are never re-fetched), so fail the round as transient instead.
         if (infos.length < requestedHashes.length) {
-          const returned = new Set(infos.map((d: { hash: string }) => d.hash));
+          const returned = new Set(infos.map((d) => d.hash));
           const missing = requestedHashes.filter((h) => !returned.has(h));
           throw new ProviderUnavailableError(
             `Incomplete /block_info batch: ${infos.length}/${requestedHashes.length} blocks returned (missing: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''})`,
@@ -1219,8 +1285,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           );
         }
         return infos
-          .map((d: Parameters<KoiosBackend['mapKoiosBlockInfo']>[0]) => this.mapKoiosBlockInfo(d))
-          .sort((a: BlockData, b: BlockData) => (a.height ?? 0) - (b.height ?? 0));
+          .map((d) => this.mapKoiosBlockInfo(d))
+          .sort((a, b) => (a.height ?? 0) - (b.height ?? 0));
       },
       this.name
     );
@@ -1324,7 +1390,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
-        const rows = await this.fetchWithRetryOnEmpty(
+        const rows = await this.fetchWithRetryOnEmpty<KoiosBlockTxsRow>(
           () => this.api.post('/block_txs', { _block_hashes: [blockHash] }),
           `getBlockTransactions(${blockHash})`
         );

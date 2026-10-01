@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.28] - typed configuration, Koios row types
+
+No schema change.
+
+### Changed
+
+- `cds.requires.odatano-core.backends` accepts a comma-separated string as well as an array
+  (same form as `BACKENDS`).
+- `cds.requires.odatano-core`: every section (`hsm`, `crawler`, `walletWorker`) is typed; a key the
+  loader does not know is a compile error.
+
+### Fixed
+
+- Koios `/pool_info` rows with null `vrf_key_hash`, `block_count` or `reward_addr` (retired pools)
+  map to `''` / `0` instead of null in `PoolData`.
+- Koios pagination: an anchor block without a height reports the hash and cause instead of a
+  generic not-found.
+
+### Internal
+
+- Lint runs at zero warnings; unused `eslint-disable` directives are errors; `local_docs/` is ignored.
+- Koios retry helpers are generic with row interfaces per endpoint; `@UI.Hidden` annotations
+  unescaped; test file counts in the docs corrected (87 = 69 unit + 18 integration).
+
 ## [v2.0.0-rc.27] - mainnet slot times, withdrawals, inputs of other parties
 
 No schema change.

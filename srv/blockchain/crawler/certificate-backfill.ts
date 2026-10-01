@@ -62,7 +62,7 @@ export async function intersectionBefore(db: CapTransaction, slot: number): Prom
   const floor = cursor?.startSlot ?? null;
   const range = floor != null ? { between: floor, and: slot - 1 } : { '<': slot };
   const row = floor != null && slot - 1 < floor ? null : (await db.run(
-    SELECT.one.from(Block).columns('hash', 'slot', 'height').where({ slot: range }).orderBy('slot desc') as any
+    SELECT.one.from(Block).columns('hash', 'slot', 'height').where({ slot: range }).orderBy('slot desc')
   )) as { hash?: string; slot?: number | string; height?: number | string } | null;
   if (row?.hash && row.slot != null) return { slot: Number(row.slot), hash: row.hash, height: row.height == null ? undefined : Number(row.height) };
   if (floor != null && cursor?.startBlockHash) return { slot: floor, hash: cursor.startBlockHash };
@@ -122,7 +122,7 @@ export async function streamCrawledBlocks<T>(
     const fromBatch = batch[0].slot, toBatch = batch[batch.length - 1].slot;
     await cds.tx(async (tx) => {
       const rows = (await tx.run(
-        SELECT.from(Block).columns('hash').where({ slot: { between: fromBatch, and: toBatch } }) as any
+        SELECT.from(Block).columns('hash').where({ slot: { between: fromBatch, and: toBatch } })
       )) as Array<{ hash: string }>;
       const known = new Set(rows.map((r) => r.hash));
       const held = batch.filter((b) => {

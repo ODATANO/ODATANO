@@ -26,7 +26,6 @@ export interface FinalizeParams {
 // Lazy require avoids the srv/server.ts <-> this-module import cycle; the app-context
 // getters are only needed at runtime.
 function server(): typeof import('../../server') {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   return require('../../server') as typeof import('../../server');
 }
 

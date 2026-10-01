@@ -22,6 +22,72 @@ import { env } from 'process';
 const logger = cds.log('ODATANO');
 
 const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
+
+/** `cds.requires.odatano-core` as the host app wrote it; nested sections stay raw and are coerced on read. */
+interface OdatanoCoreCdsConfig {
+  network?: string;
+  backends?: string[] | string;
+  blockfrostApiKey?: string;
+  blockfrostCustomBackend?: string;
+  koiosApiKey?: string;
+  ogmiosUrl?: string;
+  odatanoUrl?: string;
+  odatanoApiKey?: string;
+  primaryTimeoutMs?: number;
+  fallbackTimeoutMs?: number;
+  indexTtlMs?: number;
+  hsm?: HsmCdsSection;
+  crawler?: CrawlerCdsSection;
+  walletWorker?: WalletWorkerCdsSection;
+}
+
+/** Numbers and booleans may arrive as strings; the loaders coerce and validate them. */
+type CdsNumber = number | string;
+type CdsBoolean = boolean | string;
+
+interface CrawlerCdsSection {
+  enabled?: CdsBoolean;
+  startSlot?: CdsNumber;
+  startHeight?: CdsNumber;
+  startBlockHash?: string;
+  source?: string;
+  batchSize?: CdsNumber;
+  confirmationDepth?: CdsNumber;
+  pollIntervalMs?: CdsNumber;
+  assetHistory?: CdsBoolean;
+  assetCatalogue?: string;
+  assetEnrichRate?: CdsNumber;
+  epochSnapshots?: CdsBoolean;
+  certificates?: CdsBoolean;
+  utxoSet?: CdsBoolean;
+  authoritative?: CdsBoolean;
+}
+
+interface WalletWorkerCdsSection {
+  enabled?: CdsBoolean;
+  wallets?: unknown;
+  maxConcurrentWallets?: CdsNumber;
+  confirmationDepth?: CdsNumber;
+  confirmationTimeoutMs?: CdsNumber;
+  pollIntervalMs?: CdsNumber;
+  defaultMaxAttempts?: CdsNumber;
+  resubmitOnRollback?: CdsBoolean;
+}
+
+interface HsmCdsSection {
+  enabled?: boolean;
+  pkcs11Module?: string;
+  slot?: number;
+  pin?: string;
+  keyId?: string;
+  keyLabel?: string;
+  requiresRole?: string;
+}
+
+function coreCdsConfig(): OdatanoCoreCdsConfig {
+  const requires = cds.env?.requires as Record<string, OdatanoCoreCdsConfig | undefined> | undefined;
+  return requires?.['odatano-core'] ?? {};
+}
 const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios', 'odatano'];
 
 const CRAWLER_LIMITS = {
@@ -269,15 +335,16 @@ export async function shutdownAppContext(): Promise<void> {
  * @throws {ConfigError} if any value is invalid
  */
 export function loadConfigFromEnv(): CardanoClientConfig {
-  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
+  const cdsConfig = coreCdsConfig();
 
   const network = (cdsConfig.network || env.NETWORK || 'preview') as Network;
   if (!VALID_NETWORKS.includes(network)) {
     throw new ConfigError(`Invalid NETWORK "${cdsConfig.network || env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
   }
 
-  const backendStrings: string[] = cdsConfig.backends
-    || (env.BACKENDS ? env.BACKENDS.split(',').map(b => b.trim()) : ['koios']);
+  const backendsRaw = cdsConfig.backends ?? env.BACKENDS;
+  const backendStrings: string[] = Array.isArray(backendsRaw) ? backendsRaw
+    : backendsRaw ? String(backendsRaw).split(',').map(b => b.trim()) : ['koios'];
   const invalidBackends = backendStrings.filter(b => !(VALID_BACKENDS as readonly string[]).includes(b));
   if (invalidBackends.length > 0) {
     throw new ConfigError(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
@@ -356,8 +423,8 @@ export function loadConfigFromEnv(): CardanoClientConfig {
  * Returns undefined when HSM is not enabled.
  */
 export function loadHsmConfigFromEnv(): HsmConfig | undefined {
-  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
-  const hsmCds = cdsConfig.hsm ?? {};
+  const cdsConfig = coreCdsConfig();
+  const hsmCds: HsmCdsSection = cdsConfig.hsm ?? {};
 
   const hsmEnabled = hsmCds.enabled === true || env.HSM_ENABLED === 'true';
   if (!hsmEnabled) return undefined;
@@ -399,8 +466,8 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
  * Returns { enabled: false } when the crawler is off (the default).
  */
 export function loadCrawlerConfigFromEnv(): CrawlerConfig {
-  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
-  const c = cdsConfig.crawler ?? {};
+  const cdsConfig = coreCdsConfig();
+  const c: CrawlerCdsSection = cdsConfig.crawler ?? {};
 
   // A CDS value, including an explicit `false`, wins over the environment.
   const enabledRaw = c.enabled !== undefined ? c.enabled : env.CRAWLER_ENABLED;
@@ -540,8 +607,8 @@ const WALLET_WORKER_LIMITS = {
  * Returns { enabled: false } when the worker is off (the default).
  */
 export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
-  const cdsConfig = (cds.env?.requires as Record<string, any>)?.['odatano-core'] ?? {};
-  const w = cdsConfig.walletWorker ?? {};
+  const cdsConfig = coreCdsConfig();
+  const w: WalletWorkerCdsSection = cdsConfig.walletWorker ?? {};
 
   const enabledRaw = w.enabled !== undefined ? w.enabled : env.WALLET_WORKER_ENABLED;
   let enabled = false;

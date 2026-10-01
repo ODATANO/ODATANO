@@ -26,7 +26,6 @@ export function stripNullsForNotNull(orderBy: OrderTerm[], rendered: string[]): 
 export function installPostgresOrderNulls(): boolean {
   let PostgresService: { CQN2SQL?: { prototype: Record<string | symbol, unknown> } };
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     PostgresService = require('@cap-js/postgres/lib/PostgresService');
   } catch (err) {
     // No loadable Postgres driver: silent unless the database is Postgres.

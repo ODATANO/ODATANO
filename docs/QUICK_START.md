@@ -418,7 +418,7 @@ See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete ex
 ## Testing
 
 ```bash
-# All tests (69 files: 52 unit / 1479 tests + 17 integration, vitest)
+# All tests (87 files: 69 unit + 18 integration, vitest)
 npm test
 
 # Coverage report

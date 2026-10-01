@@ -25,7 +25,6 @@ function packageVersion(): string {
   if (cachedVersion !== null) return cachedVersion;
   try {
     // srv/utils → package root; the in-place build keeps this path in plugin mode too.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require(path.resolve(__dirname, '..', '..', 'package.json')) as { version?: unknown };
     cachedVersion = String(pkg.version ?? '');
   } catch {

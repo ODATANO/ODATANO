@@ -4,6 +4,18 @@ import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress,
 import { rejectInvalid, rejectMissing, AllBackendsFailedError } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
 import { parseTransaction } from './cbor';
+import type { AddressAsset, AddressUTxO } from '#cds-models/CardanoODataService';
+
+/** Newest temporal slice per key; child tables keep one row per validFrom. */
+function latestSlices<T extends { validFrom?: string | null }>(rows: T[], keyOf: (row: T) => string): T[] {
+  const seen = new Map<string, T>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const prev = seen.get(key);
+    if (!prev || (row.validFrom ?? '') > (prev.validFrom ?? '')) seen.set(key, row);
+  }
+  return Array.from(seen.values());
+}
 
 const { SELECT } = cds.ql;
 
@@ -251,16 +263,8 @@ module.exports = (srv: cds.Service) => {
       widenTemporalWindow(req); // before the first DB statement
       const existing = await db.run(SELECT.one.from(Addresses).where({ address }));
       if (!existing) await indexer().indexAddress(db, address);
-      const assets = await db.run(SELECT.from(AddressAssets).where({ address_address: address }));
-
-      // Keep the latest temporal slice per unit
-      const seen = new Map<string, any>();
-      for (const asset of assets) {
-        if (!seen.has(asset.unit) || asset.validFrom > seen.get(asset.unit).validFrom) {
-          seen.set(asset.unit, asset);
-        }
-      }
-      return Array.from(seen.values());
+      const assets: AddressAsset[] = await db.run(SELECT.from(AddressAssets).where({ address_address: address }));
+      return latestSlices(assets, (asset) => asset.unit ?? '');
     });
   });
 
@@ -272,7 +276,7 @@ module.exports = (srv: cds.Service) => {
 
     return handleRequest(req, async (db) => {
       widenTemporalWindow(req); // before the first DB statement
-      const existing = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+      const existing: AddressUTxO[] = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
 
       if (!existing || existing.length === 0) {
         // Prefer the full address index; when no configured backend supports getAddress
@@ -291,15 +295,7 @@ module.exports = (srv: cds.Service) => {
         return fresh;
       }
 
-      // Keep the latest temporal slice per hash#index
-      const seen = new Map<string, any>();
-      for (const utxo of existing) {
-        const key = `${utxo.hash}#${utxo.index}`;
-        if (!seen.has(key) || utxo.validFrom > seen.get(key).validFrom) {
-          seen.set(key, utxo);
-        }
-      }
-      return Array.from(seen.values());
+      return latestSlices(existing, (utxo) => `${utxo.hash}#${utxo.index}`);
     });
   });
 

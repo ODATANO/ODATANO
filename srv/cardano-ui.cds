@@ -891,13 +891,13 @@ annotate srv.Addresses with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'UTxOs',
       Target       : 'utxos/@UI.LineItem',
-      ![@UI.Hidden]: (not hasUTxOs)
+      @UI.Hidden: (not hasUTxOs)
     }
   ],
 
@@ -1075,7 +1075,7 @@ annotate srv.AddressUTxOs with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type : 'UI.ReferenceFacet',
@@ -1305,19 +1305,19 @@ annotate srv.Transactions with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Metadata',
       Target       : 'metadata/@UI.LineItem',
-      ![@UI.Hidden]: (not hasMetadata)
+      @UI.Hidden: (not hasMetadata)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Inputs',
       Target       : 'inputs/@UI.LineItem',
-      ![@UI.Hidden]: (not hasInputs)
+      @UI.Hidden: (not hasInputs)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Outputs',
       Target       : 'outputs/@UI.LineItem',
-      ![@UI.Hidden]: (not hasOutputs)
+      @UI.Hidden: (not hasOutputs)
     }
   ],
 
@@ -1451,7 +1451,7 @@ annotate srv.TransactionInputs with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type : 'UI.ReferenceFacet',
@@ -1625,7 +1625,7 @@ annotate srv.TransactionOutputs with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type : 'UI.ReferenceFacet',
@@ -1860,7 +1860,7 @@ annotate srv.Accounts with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Addresses',
       Target       : 'Address/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAddresses)
+      @UI.Hidden: (not hasAddresses)
     }
   ],
 
@@ -2301,19 +2301,19 @@ annotate txsrv.TransactionBuilds with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Inputs',
       Target       : 'inputs/@UI.LineItem',
-      ![@UI.Hidden]: (not hasInputs)
+      @UI.Hidden: (not hasInputs)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Outputs',
       Target       : 'outputs/@UI.LineItem',
-      ![@UI.Hidden]: (not hasOutputs)
+      @UI.Hidden: (not hasOutputs)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Submission',
       Target       : 'submission/@UI.FieldGroup#SubmissionDetails',
-      ![@UI.Hidden]: (not wasSubmitted)
+      @UI.Hidden: (not wasSubmitted)
     }
   ],
 
@@ -2439,7 +2439,7 @@ annotate txsrv.TransactionBuildInputs with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type : 'UI.ReferenceFacet',
@@ -2611,7 +2611,7 @@ annotate txsrv.TransactionBuildOutputs with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Assets',
       Target       : 'assets/@UI.LineItem',
-      ![@UI.Hidden]: (not hasAssets)
+      @UI.Hidden: (not hasAssets)
     },
     {
       $Type : 'UI.ReferenceFacet',
@@ -2796,13 +2796,13 @@ annotate txsrv.TransactionSubmissions with @(
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Error Details',
       Target       : '@UI.FieldGroup#ErrorDetails',
-      ![@UI.Hidden]: (not hasErrors)
+      @UI.Hidden: (not hasErrors)
     },
     {
       $Type        : 'UI.ReferenceFacet',
       Label        : 'Errors',
       Target       : 'errors/@UI.LineItem',
-      ![@UI.Hidden]: (not hasErrors)
+      @UI.Hidden: (not hasErrors)
     }
   ],
 

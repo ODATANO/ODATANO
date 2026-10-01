@@ -153,8 +153,7 @@ srv/
     backend-request-handler.ts  # DB transaction wrapper
 
 db/schema.cds                   # 47 entities with temporal support
-config/config.ts                # Timeouts, network, TTL, builders
-test/                           # 69 test files (52 unit / 1479 tests + 17 integration, vitest)
+test/                           # 87 test files (69 unit + 18 integration, vitest)
 ```
 ---
 
@@ -752,7 +751,7 @@ npm test           # Terminal 2 (wait 3s)
 ```
 
 **Slow responses:**
-- Check provider timeouts (config/config.ts)
+- Check provider timeouts (`primaryTimeoutMs` / `fallbackTimeoutMs` in `cds.requires.odatano-core`, or `PRIMARY_TIMEOUT_MS` / `FALLBACK_TIMEOUT_MS`)
 - Verify network connectivity
 - Check Blockfrost status: https://status.blockfrost.io
 
