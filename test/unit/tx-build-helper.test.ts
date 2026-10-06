@@ -2,7 +2,7 @@
  * Unit tests for tx-build-helper utilities
  */
 
-import { getLovelace, isCollateralCandidate, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex } from '../../srv/utils/tx-build-helper';
+import { getLovelace, isCollateralCandidate, assertAdaOnly, getTxHashFromCbor, extractTxCacheTargets, jsonToPlutusData, applyScriptParameters, mapBuilderError, inlineDatumToHex, plutusScriptHash } from '../../srv/utils/tx-build-helper';
 import type { UTxO as OdatanoUtxo, JSONValue } from '../../srv/utils/types';
 import { TransactionValidationError, InsufficientFundsError } from '../../srv/utils/errors';
 import { ERROR_CODES } from '../../srv/utils/error-codes';
@@ -343,6 +343,35 @@ describe('tx-build-helper utilities', () => {
       expect((outer.fields[0] as DataConstr).constr).toBe(1n);
       expect((outer.fields[0] as DataConstr).fields).toHaveLength(1);
       expect((outer.fields[0] as DataConstr).fields[0]).toBeInstanceOf(DataB);
+    });
+  });
+
+  describe('plutusScriptHash', () => {
+    const v3Script = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+    // Plutus V2 always-succeeds script, UPLC 1.0.0, CBOR-wrapped once
+    const v2Script = '4d01000033222220051200120011';
+    const { blake2b_224 } = require('@harmoniclabs/crypto');
+    const expected = (prefix: number, hex: string) =>
+      Buffer.from(blake2b_224(Buffer.concat([Buffer.from([prefix]), Buffer.from(hex, 'hex')]))).toString('hex');
+
+    it('hashes a V3 script with the 0x03 language byte', () => {
+      expect(plutusScriptHash(v3Script, 'plutusV3')).toBe(expected(3, v3Script));
+    });
+
+    it('hashes a V2 script with the 0x02 language byte', () => {
+      expect(plutusScriptHash(v2Script, 'plutusV2')).toBe(expected(2, v2Script));
+    });
+
+    it('gives the same hash for the doubly wrapped cardano-cli form', () => {
+      expect(plutusScriptHash('4e' + v2Script, 'plutusV2')).toBe(expected(2, v2Script));
+    });
+
+    it('rejects UPLC 1.1.0 code as plutusV2', () => {
+      expect(() => plutusScriptHash(v3Script, 'plutusV2')).toThrow('cannot be a Plutus V2 script');
+    });
+
+    it('rejects plutusV1 and other versions', () => {
+      expect(() => plutusScriptHash(v2Script, 'plutusV1' as any)).toThrow('version must be plutusV2 or plutusV3');
     });
   });
 

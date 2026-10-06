@@ -10,7 +10,7 @@ import { MIN_FULL_ASSET_UNIT_LENGTH } from './const';
  */
 
 /** PlutusData as CBOR hex, checked to decode; `field` names it in the error. */
-function parsePlutusCbor(value: unknown, field: string): { hex?: string; error?: string } {
+export function parsePlutusCbor(value: unknown, field: string): { hex?: string; error?: string } {
   if (typeof value !== 'string' || !isValidCbor(value)) return { error: `${field} must be even-length CBOR hex` };
   try {
     dataFromCbor(value);

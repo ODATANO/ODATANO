@@ -68,6 +68,9 @@ export type {
   ParsedWitnesses,
 } from '../srv/cbor';
 
+// Pure script helpers (no initialize() needed)
+export { applyScriptParameters, plutusScriptHash } from '../srv/utils/tx-build-helper';
+
 /**
  * Initialize the plugin: config from cds.env.requires["odatano-core"] or env vars,
  * then all blockchain components plus the optional crawler and wallet worker.

@@ -1,6 +1,7 @@
 import { Tx, Hash32, dataToCbor } from '@harmoniclabs/buildooor';
 import type { TxOut, TxWitnessSet, UTxO, Value } from '@harmoniclabs/buildooor';
 import type { Data } from '@harmoniclabs/plutus-data';
+import { Cbor, CborArray, CborBytes, CborMap, CborTag, CborUInt } from '@harmoniclabs/cbor';
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
 
@@ -133,7 +134,7 @@ function mapOutput(out: TxOut): ParsedOutput {
       datumHash = out.datum.toString();
     } else {
       // anything not a Hash32 is an inline `Data` (PlutusData) payload
-      inlineDatumHex = Buffer.from(dataToCbor(out.datum as Data)).toString('hex');
+      inlineDatumHex = Buffer.from(inlineDatumBytes(out) ?? dataToCbor(out.datum as Data)).toString('hex');
     }
   }
 
@@ -149,6 +150,16 @@ function mapOutput(out: TxOut): ParsedOutput {
     inlineDatumHex,
     referenceScriptHex,
   };
+}
+
+/** Inline datum bytes as they stand in the transaction; decoding and re-encoding may change them. */
+function inlineDatumBytes(out: TxOut): Uint8Array | undefined {
+  if (!out.cborRef) return undefined;
+  const parsed = Cbor.parse(out.toCborBytes());
+  if (!(parsed instanceof CborMap)) return undefined;
+  const option = parsed.map.find(e => e.k instanceof CborUInt && e.k.num === 2n)?.v;
+  const tagged = option instanceof CborArray ? option.array[1] : undefined;
+  return tagged instanceof CborTag && tagged.data instanceof CborBytes ? tagged.data.bytes : undefined;
 }
 
 function mapMint(mint: Value | undefined): ParsedAsset[] {

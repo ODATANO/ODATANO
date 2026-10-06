@@ -148,6 +148,22 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     expect(Buffer.from(dataToCbor(tx.body.outputs[0].datum)).toString('hex')).toBe(datumCbor);
   });
 
+  it('keeps an inline datum with a definite map byte for byte, and the fee covers it', async () => {
+    const { parseTransaction } = require('../../srv/cbor');
+    // Constr 0 [{1: 2}, chunked bytes 01]: Buildooor writes the map indefinite and the bytes unchunked
+    const datumCbor = 'd87982a101025f4101ff';
+    const req = request();
+    req.outputs = [{ address: SCRIPT_ADDRESS, lovelaceAmount: '2000000', inlineDatumCbor: datumCbor }];
+    const result = await builder.buildUnsignedPlutusTransaction(req, context());
+    const parsed = parseTransaction(result.unsignedTxCbor);
+    expect(parsed.outputs[0].inlineDatumHex).toBe(datumCbor);
+    expect(parsed.txHash).toBe(result.txBodyHash);
+    // stamped redeemers and scriptDataHash survive the datum write
+    expect(parsed.scriptDataHash).not.toBeNull();
+    expect(result.redeemers).toHaveLength(3);
+    expect(BigInt(result.feeLovelace)).toBeGreaterThanOrEqual(44n * BigInt(result.sizeBytes! + 106) + 155381n);
+  });
+
   it('builds with a redeemer twelve levels deep', async () => {
     let deep: any = { int: 7 };
     for (let i = 0; i < 6; i++) deep = { constructor: 0, fields: [deep] };

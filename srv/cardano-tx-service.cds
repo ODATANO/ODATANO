@@ -103,6 +103,12 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      @title: 'Output Datum JSON'
                                      @description: 'Optional inline datum to attach to the recipient output (JSON, cardano-cli DetailedSchema format). Required when sending to a script address.'
                                      outputDatumJson: String,
+                                     @title: 'Output Datum CBOR'
+                                     @description: 'Optional inline datum for the recipient output as PlutusData CBOR hex, written byte for byte. Use instead of outputDatumJson when the datum bytes must match exactly.'
+                                     outputDatumCbor: String,
+                                     @title: 'Ensure Min-ADA'
+                                     @description: 'Optional. When true, a lovelaceAmount below the recipient output min-ADA is raised to it; otherwise such a request is rejected with the required amount.'
+                                     ensureMinAda: Boolean,
                                      @title: 'Assets JSON'
                                      @description: 'Optional JSON array of native assets to include in the output ([{"unit":"policyId+assetName","quantity":"amount"}]). Use when locking tokens at a script address.'
                                      assetsJson: String,
@@ -171,6 +177,12 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                       @title: 'Output Datum JSON'
                                       @description: 'Optional inline datum to attach to the recipient output (JSON, DetailedSchema). Required when sending to a script address.'
                                       outputDatumJson: String,
+                                      @title: 'Output Datum CBOR'
+                                      @description: 'Optional inline datum for the recipient output as PlutusData CBOR hex, written byte for byte. Use instead of outputDatumJson when the datum bytes must match exactly.'
+                                      outputDatumCbor: String,
+                                      @title: 'Ensure Min-ADA'
+                                      @description: 'Optional. When true, a lovelaceAmount below the recipient output min-ADA is raised to it; otherwise such a request is rejected with the required amount.'
+                                      ensureMinAda: Boolean,
                                       @title: 'Reference Script Hex'
                                       @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA — lovelaceAmount must cover the inflated requirement.'
                                       referenceScriptHex: String,

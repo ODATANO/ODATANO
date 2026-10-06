@@ -168,13 +168,13 @@ For HSM security details, supported hardware, and SoftHSM dev setup, see [Securi
 ## Transaction Types
 
 ### Simple ADA Transfer
-**Action:** `BuildSimpleAdaTransaction` — Transfer lovelace between addresses. Supports `outputDatumJson` for sending to script addresses and `assetsJson` for including native tokens.
+**Action:** `BuildSimpleAdaTransaction` — Transfer lovelace between addresses. Supports `outputDatumJson` or `outputDatumCbor` for sending to script addresses and `assetsJson` for including native tokens.
 
 ### Transaction with Metadata
 **Action:** `BuildTransactionWithMetadata` — ADA transfer with attached CIP-20 metadata (invoices, receipts, on-chain records).
 
 ### Multi-Asset Transfer
-**Action:** `BuildMultiAssetTransaction` — Transfer ADA + native tokens. Supports `outputDatumJson` for script address outputs.
+**Action:** `BuildMultiAssetTransaction` — Transfer ADA + native tokens. Supports `outputDatumJson` or `outputDatumCbor` for script address outputs.
 
 ### Token Minting
 **Action:** `BuildMintTransaction` — Create native tokens. Supports `scriptParamsJson` for parameterized validators, `inlineDatumJson` for datum on minted output, `mintRedeemerJson` for custom redeemers, `lockOnScript` to route output to script address, and `requiredSignersJson` for Plutus `extra_signatories`.
@@ -223,6 +223,8 @@ selection and collateral on every build action.
 | lovelaceAmount | Integer | Yes | Amount in lovelace (1 ADA = 1,000,000) |
 | changeAddress | bech32 | No | Change address (defaults to sender) |
 | outputDatumJson | String | No | Inline datum for recipient output (PlutusData JSON) |
+| outputDatumCbor | String | No | Inline datum as PlutusData CBOR hex, written byte for byte; excludes `outputDatumJson` |
+| ensureMinAda | Boolean | No | Raise `lovelaceAmount` to the output min-ADA instead of rejecting it |
 | assetsJson | String | No | Native assets: `[{"unit":"policyId+name","quantity":"amt"}]` |
 
 ### BuildTransactionWithMetadata
@@ -245,6 +247,8 @@ selection and collateral on every build action.
 | assetsJson | String | Yes | Assets: `[{"unit":"policyId+name","quantity":"amt"}]` |
 | changeAddress | bech32 | No | Change address |
 | outputDatumJson | String | No | Inline datum for recipient output |
+| outputDatumCbor | String | No | Inline datum as PlutusData CBOR hex, written byte for byte; excludes `outputDatumJson` |
+| ensureMinAda | Boolean | No | Raise `lovelaceAmount` to the output min-ADA instead of rejecting it |
 
 ### BuildMintTransaction
 

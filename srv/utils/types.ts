@@ -412,6 +412,10 @@ export type TxBuildRequest = {
   plutusScriptExecution?: PlutusScriptExecution;
   /** Inline datum to attach to the recipient output (optional) - for locking at script addresses */
   outputDatum?: JSONValue;
+  /** PlutusData CBOR hex; optional; inline datum on the recipient output, written byte for byte. Excludes outputDatum. */
+  outputDatumCbor?: string;
+  /** Raise lovelaceAmount to the recipient output's min-ADA instead of rejecting the request. */
+  ensureMinAda?: boolean;
   /** Required signers - Ed25519 key hashes (hex, 28 bytes each) */
   requiredSigners?: string[];
   /** Script parameters (PlutusData JSON array) applied to the script before building */

@@ -6,7 +6,7 @@ import { ERROR_CODES } from './error-codes';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
 import { Cbor, CborArray, CborBytes, CborMap, CborUInt, CborTag, type CborObj } from '@harmoniclabs/cbor';
-import { Address } from '@harmoniclabs/cardano-ledger-ts';
+import { Address, Script, ScriptType } from '@harmoniclabs/cardano-ledger-ts';
 
 /** Lovelace amount of a UTxO. */
 export function getLovelace(u: OdatanoUtxo): bigint {
@@ -345,4 +345,27 @@ export function applyScriptParameters(scriptHex: string, params: JSONValue[]): s
   const appliedFlatBytes = compileUPLC(applied);
   const cborEncoded = Cbor.encode(new CborBytes(appliedFlatBytes));
   return toHex(cborEncoded);
+}
+
+/**
+ * Script hash of a Plutus script, CBOR-wrapped once or twice as cardano-cli writes it:
+ * blake2b-224 over the language byte and the once-wrapped CBOR. The version cannot be read
+ * from the script, so the caller names it.
+ */
+export function plutusScriptHash(scriptHex: string, version: 'plutusV2' | 'plutusV3'): string {
+  if (version !== 'plutusV2' && version !== 'plutusV3') {
+    throw new TransactionValidationError(`version must be plutusV2 or plutusV3, got ${String(version)}`);
+  }
+  let script: Script;
+  try {
+    script = new Script(version === 'plutusV2' ? ScriptType.PlutusV2 : ScriptType.PlutusV3, fromHex(scriptHex));
+  } catch (err: unknown) {
+    throw new TransactionValidationError(`scriptHex is not a CBOR-wrapped Plutus script: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Plutus V2 runs UPLC 1.0.0 only; the first three flat bytes hold the UPLC version
+  const b = script.bytes;
+  if (version === 'plutusV2' && !(b.length >= 3 && b[0] === 1 && b[1] === 0 && b[2] === 0)) {
+    throw new TransactionValidationError('scriptHex is not UPLC 1.0.0 code, so it cannot be a Plutus V2 script');
+  }
+  return script.hash.toString();
 }

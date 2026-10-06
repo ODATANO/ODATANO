@@ -218,6 +218,18 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(parsed.outputs[0].inlineDatumHex).toBe('182a');
   });
 
+  it('returns an inline datum with a definite map as it stands in the transaction', () => {
+    const tx = buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 2_000_000n, { datum: new DataI(42n) })],
+    });
+    // swap the datum #6.24(h'182a') for #6.24(h'a10102'), a definite map that re-encodes indefinite
+    const hex = cborHex(tx).replace('d81842182a', 'd81843a10102');
+
+    const parsed = parseTransaction(hex);
+
+    expect(parsed.outputs[0].inlineDatumHex).toBe('a10102');
+  });
+
   it('parses datum hash reference', () => {
     const datumHash = new Hash32('c'.repeat(64));
     const tx = buildTx({

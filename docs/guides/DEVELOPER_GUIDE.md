@@ -153,7 +153,7 @@ srv/
     backend-request-handler.ts  # DB transaction wrapper
 
 db/schema.cds                   # 47 entities with temporal support
-test/                           # 87 test files (69 unit + 18 integration, vitest)
+test/                           # 88 test files (70 unit + 18 integration, vitest)
 ```
 ---
 
@@ -299,6 +299,9 @@ import type { CardanoClientConfig, Network, BackendName } from '@odatano/core';
 | `CardanoIndexer` | Indexer class |
 | `CardanoTransactionBuilder` | Tx builder class |
 | `loadConfigFromEnv()` | Config loader (dual CDS/env) |
+| `parseTransaction(cborHex)` | Decode transaction CBOR; inline datums as they stand in the transaction |
+| `applyScriptParameters(scriptHex, params)` | Apply parameters to a parameterized Plutus script |
+| `plutusScriptHash(scriptHex, version)` | Script hash for `plutusV2` or `plutusV3` |
 
 ### Building & Publishing the Plugin
 

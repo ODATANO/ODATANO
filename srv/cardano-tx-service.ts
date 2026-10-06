@@ -9,7 +9,7 @@ import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/
 import { getCardanoIndexer, getCardanoClient } from './server';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
 import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates } from './utils/tx-request-parsers';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates, parsePlutusCbor } from './utils/tx-request-parsers';
 
 const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
 type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
@@ -56,6 +56,13 @@ module.exports = (srv: cds.Service) => {
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
       cleanData.outputDatum = jsonResult.parsed;
       delete cleanData.outputDatumJson;
+    }
+    delete cleanData.outputDatumCbor;
+    if (req.data.outputDatumCbor != null) {
+      if (outputDatumJson) return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'outputDatumJson and outputDatumCbor exclude each other; pass one', 'outputDatumCbor');
+      const cbor = parsePlutusCbor(req.data.outputDatumCbor, 'outputDatumCbor');
+      if (cbor.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', cbor.error, 'outputDatumCbor');
+      cleanData.outputDatumCbor = cbor.hex;
     }
 
     // Native assets to lock at a script address
@@ -181,6 +188,13 @@ module.exports = (srv: cds.Service) => {
       if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
       cleanData.outputDatum = jsonResult.parsed;
       delete cleanData.outputDatumJson;
+    }
+    delete cleanData.outputDatumCbor;
+    if (req.data.outputDatumCbor != null) {
+      if (outputDatumJson) return rejectInvalid(req, 'BuildMultiAssetTransaction', 'outputDatumJson and outputDatumCbor exclude each other; pass one', 'outputDatumCbor');
+      const cbor = parsePlutusCbor(req.data.outputDatumCbor, 'outputDatumCbor');
+      if (cbor.error) return rejectInvalid(req, 'BuildMultiAssetTransaction', cbor.error, 'outputDatumCbor');
+      cleanData.outputDatumCbor = cbor.hex;
     }
 
     if (referenceScriptHex) {

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.30] - datum CBOR on transfers, byte-exact inline datums, script helpers
+
+No schema change.
+
+### Added
+
+- `BuildSimpleAdaTransaction` / `BuildMultiAssetTransaction` (and `TxBuildRequest`): `outputDatumCbor`, the
+  recipient's inline datum as PlutusData CBOR hex, written byte for byte; excludes `outputDatumJson`.
+- `BuildSimpleAdaTransaction` / `BuildMultiAssetTransaction`: `ensureMinAda` raises `lovelaceAmount` to the
+  recipient output's min-ADA; without it a lower amount is a 400 with the amount needed.
+- `@odatano/core` exports `applyScriptParameters(scriptHex, params)` and
+  `plutusScriptHash(scriptHex, 'plutusV2' | 'plutusV3')`; pure functions, no `initialize()`.
+
+### Fixed
+
+- `BuildPlutusTransaction`: `inlineDatumCbor` reaches the output byte for byte; definite lists and maps were
+  re-encoded as indefinite, which changed the datum hash. The fee and min-ADA cover the given bytes.
+- `parseTransaction`: `inlineDatumHex` is the datum as it stands in the transaction, not a re-encoding.
+
 ## [v2.0.0-rc.29] - index placeholders, mints by reference script, script failures on evaluation
 
 No schema change.
