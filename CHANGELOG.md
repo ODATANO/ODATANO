@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.31] - witness datums byte for byte, quiet start without a database
+
+No schema change.
+
+### Fixed
+
+- `BuildPlutusTransaction`: `scriptInputs[].datumCbor` for a UTxO locked by datum hash reaches the witness
+  set byte for byte, and `scriptDataHash` covers those bytes; a re-encoded datum was missing to the ledger.
+- `BuildPlutusTransaction` / `BuildPlutusSpendTransaction`: a witness datum that does not hash to the UTxO's
+  datum hash is a 400 naming both hashes; for `datumJson` the message points to `datumCbor`.
+- `initialize()` without a database: the re-drive of interrupted submissions is skipped instead of logging
+  `db.begin is not a function`.
+- Transaction builds without a database ask the node for the sender's UTxOs without a "Local UTxO lookup
+  failed" warning.
+
 ## [v2.0.0-rc.30] - datum CBOR on transfers, byte-exact inline datums, script helpers
 
 No schema change.

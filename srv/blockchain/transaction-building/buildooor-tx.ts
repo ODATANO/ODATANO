@@ -44,9 +44,9 @@ import {
   TxMetadatumMap,
   TxMetadatumBytes
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
-import { DataI, dataFromCbor, dataToCbor } from "@harmoniclabs/plutus-data";
+import { DataI, dataFromCbor, dataToCbor, type Data } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
-import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums } from "./caller-datums";
+import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums, datumHashOf, witnessDatumsGrowth, writeWitnessDatums } from "./caller-datums";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
@@ -471,6 +471,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const datum = plutusScriptExecution.datum
         ? jsonToPlutusData(resolveIndexPlaceholders(plutusScriptExecution.datum, resolveCtx))
         : "inline" as const;
+      if (datum !== "inline") {
+        this._checkWitnessDatum(scriptOdatanoUtxo, dataToCbor(datum), 'datumJson',
+          '; BuildPlutusTransaction takes the datum as datumCbor with the bytes the UTxO was locked with');
+      }
       const resolvedPrimaryInlineDatum = req.inlineDatum
         ? resolveIndexPlaceholders(req.inlineDatum, resolveCtx)
         : undefined;
@@ -707,10 +711,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const sortedWithdrawals = this._ledgerWithdrawalOrder(withdrawalEntries);
       const resolveCtx = { sortedInputs, sortedReferenceInputs, sortedWithdrawals };
 
-      const scriptInputs = scriptEntries.map(({ si, utxo, script, refLedgerUtxo }) => {
+      const witnessDatums: Uint8Array[] = [];
+      const scriptInputs = scriptEntries.map(({ si, utxo, script, refLedgerUtxo }, i) => {
         const redeemer = si.redeemerCbor ? dataFromCbor(si.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(si.redeemer, resolveCtx));
-        const datum = si.datumCbor ? dataFromCbor(si.datumCbor)
-          : si.datum !== undefined ? jsonToPlutusData(resolveIndexPlaceholders(si.datum, resolveCtx)) : "inline" as const;
+        let datum: Data | "inline" = "inline";
+        if (si.datumCbor) {
+          const bytes = Buffer.from(si.datumCbor, 'hex');
+          this._checkWitnessDatum(utxo, bytes, `scriptInputs[${i}].datumCbor`, '');
+          witnessDatums.push(bytes);
+          datum = dataFromCbor(bytes);
+        } else if (si.datum !== undefined) {
+          datum = jsonToPlutusData(resolveIndexPlaceholders(si.datum, resolveCtx));
+          this._checkWitnessDatum(utxo, dataToCbor(datum), `scriptInputs[${i}].datumJson`,
+            '; pass datumCbor with the bytes the UTxO was locked with');
+        }
         const ledgerUtxo = this._mapMultiAssetUtxoToLedgerUtxo(utxo);
         return script
           ? { utxo: ledgerUtxo, inputScript: { script, datum, redeemer } }
@@ -754,7 +768,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         ...(withdrawals.length > 0 && { withdrawals }),
         ...(certificates.length > 0 && { certificates })
       };
-      const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction, callerDatums);
+      const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction, callerDatums, witnessDatums);
 
       const details = this._extractTxDetails(tx);
       const maxTxSize = Number(this.txBuilder.protocolParamters.maxTxSize);
@@ -899,7 +913,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * budgets and ignores caller-supplied units, so build once, evaluate via Ogmios when available,
    * rebuild with a fee floor for the target units, then stamp them and recompute scriptDataHash.
    */
-  private async _buildScriptTx(buildParams: ITxBuildArgs, evaluator?: TxEvaluator, callerDatums: CallerDatums = new Map()): Promise<LedgerTx> {
+  private async _buildScriptTx(
+    buildParams: ITxBuildArgs, evaluator?: TxEvaluator, callerDatums: CallerDatums = new Map(), witnessDatums: Uint8Array[] = []
+  ): Promise<LedgerTx> {
     const pass1Failures: LocalEvalFailure[] = [];
     const tx1 = await this.txBuilder.build(buildParams, makeScriptBuildOpts(pass1Failures));
     if (!tx1) {
@@ -926,14 +942,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const feeFloor = BigInt(tx1.body.fee.toString())
       + this._exUnitsPriceDelta(rdmrs1, targets1)
       + this._exUnitsSizeDelta(rdmrs1, targets1) * this._txFeePerByte()
-      + BigInt(callerDatumsGrowth(callerDatums)) * this._txFeePerByte()
+      + BigInt(callerDatumsGrowth(callerDatums) + witnessDatumsGrowth(witnessDatums)) * this._txFeePerByte()
       + 10n * this._txFeePerByte();
 
     const pass2Failures: LocalEvalFailure[] = [];
     const tx2 = await this.txBuilder.build({ ...buildParams, fee: feeFloor }, makeScriptBuildOpts(pass2Failures));
     const rdmrs2 = tx2.witnesses.redeemers ?? [];
     const targets2 = this._resolveTargetExUnits(rdmrs2, evaluatedUnits, pass2Failures);
-    return writeCallerDatums(this._stampExecUnits(tx2, targets2), callerDatums);
+    const tx = writeCallerDatums(this._stampExecUnits(tx2, targets2), callerDatums);
+    return writeWitnessDatums(tx, witnessDatums, this._languageViews(tx));
   }
 
   /**
@@ -1079,17 +1096,32 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       execUnits: new ExBudget({ mem: targets[i].mem, cpu: targets[i].cpu })
     }));
     const newWitnesses = new TxWitnessSet({ ...tx.witnesses, vkeyWitnesses: [], redeemers: stamped });
-    const languageViews = costModelsToLanguageViewCbor(
-      this._languageViewCostModels(),
-      this._usedLanguageViewOpts(tx)
-    );
-    const newBody = new TxBody({ ...tx.body, scriptDataHash: getScriptDataHash(newWitnesses, languageViews) });
+    const newBody = new TxBody({ ...tx.body, scriptDataHash: getScriptDataHash(newWitnesses, this._languageViews(tx)) });
     const finalTx = new LedgerTx({ ...tx, body: newBody, witnesses: newWitnesses });
     if (!unchanged) {
       logger.info(`Stamped execution units into ${stamped.length} redeemer(s): ` +
         stamped.map(s => `${txRedeemerTagToString(s.tag)}:${s.index} mem=${s.execUnits.mem} cpu=${s.execUnits.cpu}`).join('; '));
     }
     return finalTx;
+  }
+
+  /** Language views the scriptDataHash covers, from the chain's cost models. */
+  private _languageViews(tx: LedgerTx): Uint8Array {
+    return costModelsToLanguageViewCbor(this._languageViewCostModels(), this._usedLanguageViewOpts(tx));
+  }
+
+  /**
+   * Check a witness datum against the datum hash its script UTxO is locked with: the ledger
+   * finds the datum by the hash of its bytes. Inline-datum UTxOs need no witness datum.
+   */
+  private _checkWitnessDatum(utxo: OdatanoUtxo, datum: Uint8Array, field: string, hint: string): void {
+    if (!utxo.datumHash || utxo.inlineDatum) return;
+    const hash = datumHashOf(datum);
+    if (hash !== utxo.datumHash.toLowerCase()) {
+      throw new TransactionValidationError(
+        `${field} hashes to ${hash}, but ${utxo.txHash}#${utxo.outputIndex} is locked with datum hash ${utxo.datumHash}${hint}`
+      );
+    }
   }
 
   /**

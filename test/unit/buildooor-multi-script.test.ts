@@ -164,6 +164,54 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     expect(BigInt(result.feeLovelace)).toBeGreaterThanOrEqual(44n * BigInt(result.sizeBytes! + 106) + 155381n);
   });
 
+  describe('witness datums of datum-hash UTxOs', () => {
+    const { scriptDataHashOf } = require('../../srv/blockchain/transaction-building/caller-datums');
+    const { blake2b_256 } = require('@harmoniclabs/crypto');
+    const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
+    // Constr 0 [{1: 2}, 42] with a definite map and list; Buildooor writes it as d8799fbf0102ff182aff
+    const lockedDatum = 'd87982a10102182a';
+    const hashLocked = (datum: string): UTxO => ({
+      txHash: A, outputIndex: 0, address: SCRIPT_ADDRESS, amount: [{ unit: 'lovelace', quantity: '3000000' }],
+      datumHash: hex(blake2b_256(Buffer.from(datum, 'hex'))),
+    });
+    const spendA = (over: Record<string, unknown>) => {
+      const req = request();
+      req.scriptInputs[0] = { ...req.scriptInputs[0], ...over };
+      return req;
+    };
+    const ctx = () => context({ utxos: [hashLocked(lockedDatum), scriptUtxo(B), scriptUtxo(C), collateral, funding] });
+    const languageViews = (tx: any) => (builder as any)._languageViews(tx);
+
+    it('computes the same scriptDataHash as Buildooor for an unchanged transaction', async () => {
+      const { unsignedTxCbor } = await builder.buildUnsignedPlutusTransaction(request(), context());
+      const tx = Tx.fromCbor(unsignedTxCbor);
+      expect(hex(scriptDataHashOf(Buffer.from(unsignedTxCbor, 'hex'), languageViews(tx)))).toBe(tx.body.scriptDataHash.toString());
+    });
+
+    it('puts datumCbor into the witness set byte for byte and hashes the script data over it', async () => {
+      const result = await builder.buildUnsignedPlutusTransaction(spendA({ datumCbor: lockedDatum }), ctx());
+      expect(result.unsignedTxCbor).toContain(lockedDatum);
+      expect(result.unsignedTxCbor).not.toContain('d8799fbf0102ff182aff');
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
+      expect(hex(scriptDataHashOf(Buffer.from(result.unsignedTxCbor, 'hex'), languageViews(tx)))).toBe(tx.body.scriptDataHash.toString());
+      expect(tx.hash.toString()).toBe(result.txBodyHash);
+      expect(result.redeemers).toHaveLength(3);
+    });
+
+    it('rejects datumCbor that does not hash to the UTxO datum hash', async () => {
+      const err = await builder.buildUnsignedPlutusTransaction(spendA({ datumCbor: 'd87980' }), ctx()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/^scriptInputs\[0\]\.datumCbor hashes to [0-9a-f]{64}, but .* is locked with datum hash/);
+    });
+
+    it('rejects a JSON datum whose encoding differs from the locked bytes, pointing to datumCbor', async () => {
+      const datum = { constructor: 0, fields: [{ map: [{ k: { int: 1 }, v: { int: 2 } }] }, { int: 42 }] };
+      const err = await builder.buildUnsignedPlutusTransaction(spendA({ datum }), ctx()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/datumJson hashes to .*; pass datumCbor/);
+    });
+  });
+
   it('builds with a redeemer twelve levels deep', async () => {
     let deep: any = { int: 7 };
     for (let i = 0; i < 6; i++) deep = { constructor: 0, fields: [deep] };

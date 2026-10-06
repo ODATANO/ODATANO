@@ -895,3 +895,15 @@ describe('CardanoIndexer.indexPlutusBuildResult', () => {
     ]);
   });
 });
+
+describe('CardanoIndexer local address UTxOs for the builder', () => {
+  it('answers null without a database, so the builder asks the node without a warning', async () => {
+    let source: ((address: string) => Promise<unknown>) | undefined;
+    const txBuilder = createMockTxBuilder({ setAddressUtxoSource: vi.fn((fn) => { source = fn; }) });
+    new CardanoIndexer(createMockClient(), txBuilder);
+    mockRun.mockClear();
+
+    await expect(source!('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')).resolves.toBeNull();
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+});

@@ -741,6 +741,8 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
  */
 export async function redriveInterruptedSubmissionsIfConfigured(): Promise<void> {
   if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  // Without a database there are no signing requests to re-drive
+  if (!cds.db) return;
   try {
     const { redriveInterruptedSubmissions } = require('./blockchain/signing/submission-finalizer') as typeof import('./blockchain/signing/submission-finalizer');
     const attempted = await redriveInterruptedSubmissions();

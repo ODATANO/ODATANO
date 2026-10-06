@@ -707,6 +707,7 @@ export class CardanoIndexer {
    * cannot answer. Runs on `cds.db`, i.e. inside the caller's request transaction when there is one.
    */
   private async localAddressUtxos(address: string): Promise<OdatanoUtxo[] | null> {
+    if (!cds.db) return null;
     return (await this.localAddress(cds.db as unknown as CapTransaction, address))?.utxos ?? null;
   }
 

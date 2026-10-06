@@ -11,6 +11,7 @@ import {
   getCardanoTxBuilder,
   resetAppContext,
   shutdownAppContext,
+  redriveInterruptedSubmissionsIfConfigured,
 } from '../../srv/server';
 import { CardanoTransactionBuilder } from '../../srv/blockchain/cardano-tx-builder';
 import { HsmSigner, getHsmSigner, setHsmSigner } from '../../srv/blockchain/signing/hsm-signer';
@@ -598,6 +599,28 @@ describe('server.ts', () => {
 
       expect(hsmInitSpy).toHaveBeenCalled();
       expect(getHsmSigner()).toBeNull();
+    });
+  });
+
+  describe('redriveInterruptedSubmissionsIfConfigured', () => {
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await shutdownAppContext();
+      resetAppContext(null);
+    });
+
+    it('does nothing without a database, so no transaction is opened', async () => {
+      vi.spyOn(CardanoTransactionBuilder.prototype, 'init').mockResolvedValue(undefined);
+      await initializeFromConfig({
+        network: 'preview', backends: ['koios'], blockfrostApiKey: '', koiosApiKey: '', ogmiosUrl: '',
+        transactionBuilders: ['buildooor'], primaryTimeoutMs: 30000, fallbackTimeoutMs: 60000, indexTtlMs: 3600000,
+      } as any);
+      expect(cds.db).toBeUndefined();
+      const txSpy = vi.spyOn(cds, 'tx');
+
+      await redriveInterruptedSubmissionsIfConfigured();
+
+      expect(txSpy).not.toHaveBeenCalled();
     });
   });
 
