@@ -24,7 +24,7 @@
 
 **42 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (v2.0 crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (v2.0 wallet worker, exposed via CardanoWorkerService)
 
-**19 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor
+**20 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor
 
 **13 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
 
@@ -300,6 +300,9 @@ import type { CardanoClientConfig, Network, BackendName } from '@odatano/core';
 | `CardanoTransactionBuilder` | Tx builder class |
 | `loadConfigFromEnv()` | Config loader (dual CDS/env) |
 | `parseTransaction(cborHex)` | Decode transaction CBOR; inline datums as they stand in the transaction |
+| `verifyTxWitnesses(signedTxCbor)` | Check every vkey signature against the body hash; returns the signer key hashes |
+| `posixToSlot(network, posixMs)` / `slotToPosixMs(network, slot)` | Slot conversion, exact from the Shelley start on; `posixToSlot` throws a `RangeError` for an earlier time |
+| `getTransactionConfirmations(txHash)` | Blocks on top of a transaction, 0 while it is not on chain; needs `initialize()` |
 | `applyScriptParameters(scriptHex, params)` | Apply parameters to a parameterized Plutus script |
 | `plutusScriptHash(scriptHex, version)` | Script hash for `plutusV2` or `plutusV3` |
 

@@ -4,7 +4,7 @@ import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
 import { blake2b_256, blake2b_224, verifyEd25519Signature_sync } from '@harmoniclabs/crypto';
 import { BackendError, TransactionValidationError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
-import { SignatureVerificationResult, VerificationOptions } from '../../utils/types';
+import { SignatureVerificationResult, TxWitnessVerification, VerificationOptions } from '../../utils/types';
 
 const logger = cds.log('SignatureVerifier');
 
@@ -20,34 +20,73 @@ function computeBodyHash(txBytes: Uint8Array): string {
   return toHex(blake2b_256(tx.array[0].subCborRef.toBuffer()));
 }
 
+interface VkeyWitness { index: number; pubKey: Uint8Array; signature: Uint8Array }
+
 /**
- * Extract vkey witnesses (raw public key + signature bytes) from a transaction's
- * witness set (CBOR array index 1, map key 0). Conway wraps the witness array in CBOR
- * tag 258 (set) — unwrapped here. Returns [] when the tx has no vkey witnesses.
+ * Read vkey witnesses (raw public key + signature bytes) from a transaction's witness set
+ * (CBOR array index 1, map key 0). Conway wraps the witness array in CBOR tag 258 (set),
+ * which is unwrapped here. `malformed` counts entries that are not a [vkey, signature] byte pair.
  */
-function extractVkeyWitnesses(txBytes: Uint8Array): { pubKey: Uint8Array; signature: Uint8Array }[] {
+function readVkeyWitnesses(txBytes: Uint8Array): { witnesses: VkeyWitness[]; malformed: number } {
   const tx = Cbor.parse(txBytes);
-  if (!(tx instanceof CborArray) || !(tx.array[1] instanceof CborMap)) return [];
+  if (!(tx instanceof CborArray) || !(tx.array[1] instanceof CborMap)) return { witnesses: [], malformed: 0 };
   const entry = tx.array[1].map.find(e => e.k instanceof CborUInt && Number((e.k as CborUInt).num) === 0);
-  if (!entry) return [];
+  if (!entry) return { witnesses: [], malformed: 0 };
   let arr = entry.v;
   if (arr instanceof CborTag) arr = arr.data;
-  if (!(arr instanceof CborArray)) return [];
-  // Skip entries that are not a [vkey, signature] pair of byte strings instead of
-  // surfacing an opaque TypeError.
-  const witnesses: { pubKey: Uint8Array; signature: Uint8Array }[] = [];
-  let skipped = 0;
-  for (const pair of arr.array) {
-    if (!(pair instanceof CborArray) || pair.array.length !== 2) { skipped++; continue; }
+  if (!(arr instanceof CborArray)) return { witnesses: [], malformed: 0 };
+  const witnesses: VkeyWitness[] = [];
+  let malformed = 0;
+  arr.array.forEach((pair, index) => {
+    if (!(pair instanceof CborArray) || pair.array.length !== 2) { malformed++; return; }
     const [vk, sg] = pair.array;
-    if (!(vk instanceof CborBytes) || !(sg instanceof CborBytes)) { skipped++; continue; }
-    witnesses.push({ pubKey: vk.bytes, signature: sg.bytes });
-  }
-  if (skipped > 0) {
+    if (!(vk instanceof CborBytes) || !(sg instanceof CborBytes)) { malformed++; return; }
+    witnesses.push({ index, pubKey: vk.bytes, signature: sg.bytes });
+  });
+  return { witnesses, malformed };
+}
+
+/** Well-formed vkey witnesses; [] when the tx has none. Malformed entries are skipped with a warning. */
+function extractVkeyWitnesses(txBytes: Uint8Array): VkeyWitness[] {
+  const { witnesses, malformed } = readVkeyWitnesses(txBytes);
+  if (malformed > 0) {
     // not fatal, but a malformed witness in a signed tx is suspicious — surface it
-    logger.warn(`Skipped ${skipped} malformed vkey witness entr${skipped === 1 ? 'y' : 'ies'} while verifying (expected [vkey, signature] byte pairs)`);
+    logger.warn(`Skipped ${malformed} malformed vkey witness entr${malformed === 1 ? 'y' : 'ies'} while verifying (expected [vkey, signature] byte pairs)`);
   }
   return witnesses;
+}
+
+/** Ed25519 check of one witness over the body hash; false for a key or signature of the wrong length. */
+function signatureValid(w: VkeyWitness, bodyHashBytes: Uint8Array): boolean {
+  try {
+    return verifyEd25519Signature_sync(w.signature, bodyHashBytes, w.pubKey);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check every vkey witness of a signed tx against its body hash. Pure, needs no initialize().
+ * A tx without vkey witnesses is valid here; which keys had to sign is the caller's check.
+ */
+export function verifyTxWitnesses(signedTxCbor: string): TxWitnessVerification {
+  const errors: string[] = [];
+  const signerKeyHashes: string[] = [];
+  let txBodyHash: string | null = null;
+  try {
+    const txBytes = fromHex(signedTxCbor);
+    txBodyHash = computeBodyHash(txBytes);
+    const bodyHashBytes = fromHex(txBodyHash);
+    const { witnesses, malformed } = readVkeyWitnesses(txBytes);
+    if (malformed > 0) errors.push(`${malformed} vkey witness entr${malformed === 1 ? 'y is' : 'ies are'} not a [vkey, signature] byte pair`);
+    for (const w of witnesses) {
+      if (signatureValid(w, bodyHashBytes)) signerKeyHashes.push(toHex(blake2b_224(w.pubKey)));
+      else errors.push(`Invalid signature at witness index ${w.index}`);
+    }
+  } catch (error: unknown) {
+    errors.push(`Failed to read transaction: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { valid: errors.length === 0, txBodyHash, signerKeyHashes, errors };
 }
 
 /**
@@ -122,12 +161,9 @@ export class SignatureVerifier {
       if (vkeyWitnesses.length > 0) {
         const bodyHashBytes = fromHex(computedHash);
 
-        for (let i = 0; i < vkeyWitnesses.length; i++) {
-          const { pubKey, signature } = vkeyWitnesses[i];
-          const isValidSig = verifyEd25519Signature_sync(signature, bodyHashBytes, pubKey);
-
-          if (!isValidSig) {
-            result.errorMessage = `Invalid signature at witness index ${i}. The signature does not match the transaction body.`;
+        for (const w of vkeyWitnesses) {
+          if (!signatureValid(w, bodyHashBytes)) {
+            result.errorMessage = `Invalid signature at witness index ${w.index}. The signature does not match the transaction body.`;
             logger.warn(result.errorMessage);
             return result;
           }

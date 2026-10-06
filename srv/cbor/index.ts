@@ -5,4 +5,6 @@ export {
   type ParsedOutput,
   type ParsedAsset,
   type ParsedWitnesses,
+  type ParsedWithdrawal,
+  type ParsedCertificate,
 } from './parse';

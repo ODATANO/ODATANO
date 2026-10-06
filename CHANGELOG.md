@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.32] - transaction checks for payment verifiers, confirmations
+
+No schema change.
+
+### Added
+
+- `parseTransaction` / `ParseTransactionCbor`: `withdrawals`, `certificates` (index + ledger type),
+  `referenceInputs`, `votingProcedures` (vote count), `proposalProcedures`, `treasuryDonation`,
+  `currentTreasuryValue`, `networkId`, and `cborSize` per output (bytes as they stand in the transaction).
+- `@odatano/core` exports `verifyTxWitnesses(signedTxCbor)`: every vkey signature checked against the body
+  hash, returns `valid`, `txBodyHash`, `signerKeyHashes`, `errors`; pure, no `initialize()`.
+- `@odatano/core` exports `posixToSlot(network, posixMs)` and `slotToPosixMs(network, slot)`; exact from the
+  Shelley start on, `posixToSlot` throws a `RangeError` for an earlier time.
+- `GetTransactionConfirmations(txHash)` and `getTransactionConfirmations(txHash)`: blocks on top of a
+  transaction, its own block included, 0 while it is not on chain. A transaction in a crawled block counts
+  against the synced crawler's tip; any other is looked up at the backends together with their tip.
+
+### Fixed
+
+- `parseTransaction`: voting procedures, proposals, treasury donation and treasury value are read from the
+  transaction bytes; the ledger decoder drops body fields 19 to 22.
+
 ## [v2.0.0-rc.31] - witness datums byte for byte, quiet start without a database
 
 No schema change.

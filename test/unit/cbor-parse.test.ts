@@ -16,13 +16,17 @@ import {
   AuxiliaryData,
   Script,
   DataI,
+  CertStakeRegistration,
+  Credential,
+  StakeAddress,
+  Hash28,
 } from '@harmoniclabs/buildooor';
 // AuxiliaryData/TxMetadata check `instanceof` against the classes at the dist/tx/metadata
 // paths; the buildooor barrel re-exports the eras/common variants, which fail that check.
 // Import from the paths the library uses internally.
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
-import { Cbor, CborArray } from '@harmoniclabs/cbor';
+import { Cbor, CborArray, CborMap, CborTag, CborUInt, CborBytes } from '@harmoniclabs/cbor';
 
 import { parseTransaction } from '../../srv/cbor';
 import { isValidTxCborHex } from '../../srv/utils/validators';
@@ -60,6 +64,7 @@ function buildTx(opts: {
   auxiliaryData?: AuxiliaryData | null;
   witnesses?: TxWitnessSet;
   collateralInputs?: UTxO[];
+  extraBody?: Partial<ConstructorParameters<typeof TxBody>[0]>;
 }): Tx {
   const defaultInput = makeUtxo(TX_HASH_A, 0, TEST_ADDRESS_TESTNET, 10_000_000n);
   const body = new TxBody({
@@ -71,6 +76,7 @@ function buildTx(opts: {
     mint: opts.mint,
     requiredSigners: opts.requiredSigners,
     collateralInputs: opts.collateralInputs,
+    ...opts.extraBody,
   });
   return new Tx({
     body,
@@ -346,6 +352,78 @@ describe('parseTransaction — round-trip from built CBOR', () => {
 // ---------------------------------------------------------------------------
 // Error paths
 // ---------------------------------------------------------------------------
+
+describe('parseTransaction — value-moving body fields', () => {
+  const stakeAddress = new StakeAddress({ network: 'testnet', credentials: new Hash28(KEY_HASH_28), type: 'stakeKey' });
+
+  it('reports withdrawals, certificates, donation, treasury value and reference inputs', () => {
+    const tx = buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)],
+      extraBody: {
+        withdrawals: [{ rewardAccount: stakeAddress, amount: 1_500_000n }],
+        certs: [new CertStakeRegistration({ stakeCredential: Credential.keyHash(KEY_HASH_28) })],
+        refInputs: [makeUtxo(TX_HASH_B, 3, TEST_ADDRESS_TESTNET, 2_000_000n)],
+        donation: 1_000_000n,
+        currentTreasuryValue: 9_000_000n,
+        network: 'testnet',
+      },
+    });
+
+    const parsed = parseTransaction(cborHex(tx));
+
+    expect(parsed.withdrawals).toEqual([{ rewardAddress: stakeAddress.toString(), lovelace: '1500000' }]);
+    expect(parsed.certificates).toEqual([{ index: 0, type: 'StakeRegistration' }]);
+    expect(parsed.referenceInputs).toEqual([{ txHash: TX_HASH_B, outputIndex: 3 }]);
+    expect(parsed.treasuryDonation).toBe('1000000');
+    expect(parsed.currentTreasuryValue).toBe('9000000');
+    expect(parsed.networkId).toBe(0);
+    expect(parsed.votingProcedures).toBe(0);
+    expect(parsed.proposalProcedures).toBe(0);
+  });
+
+  it('counts votes and proposals the library decoder drops and keeps the raw network byte', () => {
+    const raw = Cbor.parse(cborHex(buildTx({ outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)] }))) as CborArray;
+    const body = raw.array[0] as CborMap;
+    const voter = new CborArray([new CborUInt(0), new CborBytes(Buffer.from(KEY_HASH_28, 'hex'))]);
+    const vote = (i: number) => ({ k: new CborArray([new CborBytes(Buffer.from(TX_HASH_A, 'hex')), new CborUInt(i)]), v: new CborArray([new CborUInt(1)]) });
+    body.map.push(
+      { k: new CborUInt(19), v: new CborMap([{ k: voter, v: new CborMap([vote(0), vote(1)]) }]) },
+      { k: new CborUInt(20), v: new CborTag(258, new CborArray([new CborUInt(0)])) },
+      { k: new CborUInt(15), v: new CborUInt(2) },
+    );
+    const hex = Buffer.from(Cbor.encode(new CborArray(raw.array))).toString('hex');
+
+    const parsed = parseTransaction(hex);
+
+    expect(parsed.votingProcedures).toBe(2);
+    expect(parsed.proposalProcedures).toBe(1);
+    expect(parsed.networkId).toBe(2);
+  });
+
+  it('reports empty fields when the body has none of them', () => {
+    const parsed = parseTransaction(cborHex(buildTx({ outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)] })));
+
+    expect(parsed.withdrawals).toEqual([]);
+    expect(parsed.certificates).toEqual([]);
+    expect(parsed.referenceInputs).toEqual([]);
+    expect(parsed.treasuryDonation).toBeNull();
+    expect(parsed.currentTreasuryValue).toBeNull();
+    expect(parsed.networkId).toBeNull();
+  });
+
+  it('reports each output size as the length of its bytes in the transaction', () => {
+    const hex = cborHex(buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n), makeOutput(TEST_ADDRESS_TESTNET, 7_000_000n, { datum: new DataI(42) })],
+    }));
+
+    const raw = Cbor.parse(hex) as CborArray;
+    const body = raw.array[0] as unknown as { map: Array<{ k: { num: bigint }; v: CborArray }> };
+    const outputs = body.map.find((e) => e.k.num === 1n)!.v;
+    const expected = outputs.array.map((o) => o.subCborRef!.toBuffer().length);
+
+    expect(parseTransaction(hex).outputs.map((o) => o.cborSize)).toEqual(expected);
+  });
+});
 
 describe('parseTransaction — error handling', () => {
   it('throws TransactionValidationError with TX_PARSE_FAILED on malformed CBOR', () => {

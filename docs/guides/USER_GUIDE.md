@@ -92,7 +92,15 @@ POST /GetTransactionByHash
 
 POST /GetMetadataByTxHash
 {"txHash": "95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1"}
+
+POST /GetTransactionConfirmations
+{"txHash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"}
 ```
+
+`GetTransactionConfirmations` returns `blockHeight`, `tipHeight` and `confirmations` (tip height minus block
+height plus one; 0 while the transaction is not on chain). With a synced crawler, a transaction in a crawled
+block counts against the crawler's tip without a provider call. Any other transaction, for example one in the
+newest `confirmationDepth` blocks, is looked up at the backends together with their tip.
 
 **Response Example (Transaction):**
 

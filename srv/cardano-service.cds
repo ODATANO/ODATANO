@@ -1,5 +1,5 @@
 using {odatano.cardano as db} from '../db/schema';
-using { Blake2b256, Bech32, AssetUnit, ParsedTransaction } from '../db/types';
+using { Blake2b256, Bech32, AssetUnit, ParsedTransaction, TransactionConfirmations } from '../db/types';
 
 /**
  * Cardano OData Service
@@ -257,6 +257,13 @@ service CardanoODataService @(impl: './cardano-service') {
                                 @title: 'Transaction Hash'
                                 @description: 'The unique identifier of the transaction'
                                 hash: Blake2b256)         returns Transactions;
+
+    @title      : 'Get Transaction Confirmations'
+    @description: 'Number of blocks on top of a transaction, its own block included; 0 while it is not on chain. Uses the crawled chain when the crawler is synced, else the backends.'
+    action GetTransactionConfirmations(
+                                       @title: 'Transaction Hash'
+                                       @description: 'The unique identifier of the transaction'
+                                       txHash: Blake2b256) returns TransactionConfirmations;
 
     @title      : 'Get Transaction Metadata by Tx Hash'
     @description: 'Retrieve transaction metadata using the Transaction Hash'

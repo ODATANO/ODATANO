@@ -1,4 +1,8 @@
 import cds from '@sap/cds';
+import type { TransactionConfirmations } from '../srv/utils/types';
+import { isTxHash } from '../srv/utils/validators';
+import { TransactionValidationError } from '../srv/utils/errors';
+import { ERROR_CODES } from '../srv/utils/error-codes';
 
 const logger = cds.log('ODATANO');
 
@@ -66,7 +70,12 @@ export type {
   ParsedOutput,
   ParsedAsset,
   ParsedWitnesses,
+  ParsedWithdrawal,
+  ParsedCertificate,
 } from '../srv/cbor';
+export { verifyTxWitnesses } from '../srv/blockchain/signing/signature-verifier';
+export { posixToSlot, slotToPosixMs } from '../srv/utils/epoch-slots';
+export type { TxWitnessVerification, TransactionConfirmations } from '../srv/utils/types';
 
 // Pure script helpers (no initialize() needed)
 export { applyScriptParameters, plutusScriptHash } from '../srv/utils/tx-build-helper';
@@ -103,6 +112,13 @@ export async function shutdown(): Promise<void> {
   const { shutdownAppContext } = await import('../srv/server');
   await shutdownAppContext();
   logger.info('ODATANO core shutdown');
+}
+
+/** Confirmations of a transaction; needs initialize(). See CardanoIndexer.resolveTransactionConfirmations. */
+export async function getTransactionConfirmations(txHash: string): Promise<TransactionConfirmations> {
+  if (!isTxHash(txHash)) throw new TransactionValidationError(`Invalid transaction hash: ${txHash}`, undefined, ERROR_CODES.INVALID_INPUT);
+  const { getCardanoIndexer } = await import('../srv/server');
+  return cds.tx((tx) => getCardanoIndexer().resolveTransactionConfirmations(tx, txHash));
 }
 
 /** Current plugin status. */

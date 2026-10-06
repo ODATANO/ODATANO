@@ -702,6 +702,26 @@ export interface SigningWorkflowState {
   };
 }
 
+/** Depth of a transaction in the chain. Depth 1 means it sits in the tip block. */
+export interface TransactionConfirmations {
+  txHash: string;
+  /** null while the tx is not on chain. */
+  blockHeight: number | null;
+  tipHeight: number | null;
+  /** 0 while the tx is not on chain. */
+  confirmations: number;
+}
+
+/** Result of verifyTxWitnesses: every vkey signature checked against the body hash. */
+export interface TxWitnessVerification {
+  valid: boolean;
+  /** null when the CBOR could not be read. */
+  txBodyHash: string | null;
+  /** blake2b-224 of each vkey whose signature verifies. */
+  signerKeyHashes: string[];
+  errors: string[];
+}
+
 /** Result of signature verification */
 export interface SignatureVerificationResult {
   /** Whether the signature is valid */

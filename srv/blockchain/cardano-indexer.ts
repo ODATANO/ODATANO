@@ -102,8 +102,8 @@ import {
   mapAddressTransactionBuild
 } from '../utils/mappers';
 
-import { ProviderUnavailableError, AllBackendsFailedError, NotFoundError } from '../utils/errors';
-import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData } from '../utils/types';
+import { ProviderUnavailableError, AllBackendsFailedError, NotFoundError, isNotFoundOnAllBackends } from '../utils/errors';
+import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData, TransactionConfirmations } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
 import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
 import {
@@ -246,10 +246,10 @@ export class CardanoIndexer {
    * What the crawled data answers authoritatively: only while a live crawler is at the tip.
    * Every block after `fromSlot` is held; `ledger` = the crawled UTxO set is active.
    */
-  private async localCoverage(tx: CapTransaction): Promise<{ fromSlot: number; lastSlot: number; ledger: boolean } | null> {
+  private async localCoverage(tx: CapTransaction): Promise<{ fromSlot: number; lastSlot: number; tipHeight: number | null; ledger: boolean } | null> {
     const cursor = await readCursor(tx);
     if (!cursor || cursor.syncStatus !== 'synced' || cursor.startSlot == null || !isCrawlerLeaseActive(cursor)) return null;
-    return { fromSlot: cursor.startSlot, lastSlot: cursor.lastSlot, ledger: cursor.utxoSet.status === 'active' };
+    return { fromSlot: cursor.startSlot, lastSlot: cursor.lastSlot, tipHeight: cursor.tipHeight, ledger: cursor.utxoSet.status === 'active' };
   }
 
   /**
@@ -2161,11 +2161,51 @@ export class CardanoIndexer {
   async findIndexedTransaction(
     tx: CapTransaction,
     txHash: string
-  ): Promise<{ slot: number | null; blockHeight: number | null } | null> {
+  ): Promise<{ slot: number | null; blockHeight: number | null; blockHash: string | null } | null> {
     const row = await tx.run(
-      SELECT.one.from(Transactions).columns('slot', 'blockHeight').where({ hash: txHash })
-    ) as { slot: number | null; blockHeight: number | null } | undefined;
+      SELECT.one.from(Transactions).columns('slot', 'blockHeight', 'blockHash').where({ hash: txHash })
+    ) as { slot: number | null; blockHeight: number | null; blockHash: string | null } | undefined;
     return row ?? null;
+  }
+
+  /**
+   * Blocks on top of a transaction, its own block included; 0 while it is not on chain.
+   * A stored row counts only when its block lies in the crawled chain, because the crawler
+   * removes those rows on a rollback. Otherwise height and tip come from the backends.
+   */
+  async resolveTransactionConfirmations(tx: CapTransaction, txHash: string): Promise<TransactionConfirmations> {
+    const crawled = await this.crawledTransactionDepth(tx, txHash);
+    if (crawled) return { txHash, ...crawled, confirmations: crawled.tipHeight - crawled.blockHeight + 1 };
+
+    let blockHeight: number | null;
+    try {
+      const indexed = await this.indexTransaction(tx, txHash);
+      blockHeight = indexed.blockHeight == null ? null : Number(indexed.blockHeight);
+    } catch (err) {
+      if (!isNotFoundOnAllBackends(err)) throw err;
+      blockHeight = null;
+    }
+    if (blockHeight == null) return { txHash, blockHeight: null, tipHeight: null, confirmations: 0 };
+
+    const tip = await this.client.getLatestBlock();
+    if (tip.height == null) throw new ProviderUnavailableError('Chain tip height unknown');
+    // a tip from a backend that lags the one that found the tx counts the tx block only
+    const tipHeight = Math.max(tip.height, blockHeight);
+    return { txHash, blockHeight, tipHeight, confirmations: tipHeight - blockHeight + 1 };
+  }
+
+  /** Height of a transaction in a crawled block and the crawler's tip; null when the crawl does not hold it. */
+  private async crawledTransactionDepth(tx: CapTransaction, txHash: string): Promise<{ blockHeight: number; tipHeight: number } | null> {
+    const coverage = await this.localCoverage(tx);
+    if (coverage?.tipHeight == null) return null;
+    const stored = await this.findIndexedTransaction(tx, txHash);
+    if (stored?.blockHeight == null || stored.slot == null || !stored.blockHash) return null;
+    const slot = Number(stored.slot);
+    if (slot < coverage.fromSlot || slot > coverage.lastSlot) return null;
+    const block = await tx.run(SELECT.one.from(Blocks).columns('hash').where({ hash: stored.blockHash }));
+    if (!block) return null;
+    const blockHeight = Number(stored.blockHeight);
+    return { blockHeight, tipHeight: Math.max(coverage.tipHeight, blockHeight) };
   }
 
   /**

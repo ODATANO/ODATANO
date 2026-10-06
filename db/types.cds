@@ -187,6 +187,29 @@ type WorkerSignerType : String(10) enum {
 }
 
 // -----------------------------------------------------
+// Transaction confirmations (GetTransactionConfirmations action result)
+// -----------------------------------------------------
+@title      : 'Transaction Confirmations'
+@description: 'Depth of a transaction in the chain. Depth 1 means it sits in the tip block.'
+type TransactionConfirmations {
+    @title      : 'Transaction Hash'
+    @description: 'The transaction asked for'
+    txHash        : Blake2b256;
+
+    @title      : 'Block Height'
+    @description: 'Height of the block holding the transaction; null while it is not on chain'
+    blockHeight   : Integer64;
+
+    @title      : 'Tip Height'
+    @description: 'Height of the chain tip used for the count; null while the transaction is not on chain'
+    tipHeight     : Integer64;
+
+    @title      : 'Confirmations'
+    @description: 'Tip height minus block height plus one; 0 while the transaction is not on chain'
+    confirmations : Integer;
+}
+
+// -----------------------------------------------------
 // Parsed Transaction (ParseTransactionCbor action result)
 // -----------------------------------------------------
 @title      : 'Parsed Transaction Input'
@@ -239,6 +262,34 @@ type ParsedOutput {
     @title      : 'Reference Script CBOR'
     @description: 'Hex-encoded CIP-33 reference script CBOR when present; null otherwise'
     referenceScriptHex : LargeString;
+
+    @title      : 'Output CBOR Size'
+    @description: 'Byte length of the output as it stands in the transaction (input for the min-UTxO check)'
+    cborSize           : Integer;
+}
+
+@title      : 'Parsed Withdrawal'
+@description: 'A reward withdrawal of a parsed transaction'
+type ParsedWithdrawal {
+    @title      : 'Reward Address'
+    @description: 'Bech32 reward address the lovelace is withdrawn from'
+    rewardAddress : Bech32;
+
+    @title      : 'Withdrawn Lovelace'
+    @description: 'Withdrawn amount in lovelace (decimal string)'
+    lovelace      : Lovelace;
+}
+
+@title      : 'Parsed Certificate'
+@description: 'A certificate of a parsed transaction'
+type ParsedCertificate {
+    @title      : 'Certificate Index'
+    @description: 'Position in the body certificate list'
+    index : Integer;
+
+    @title      : 'Certificate Type'
+    @description: 'Ledger certificate name, e.g. StakeDelegation or RegistrationDrep'
+    type  : String(40);
 }
 
 @title      : 'Parsed Witness Counts'
@@ -276,6 +327,10 @@ type ParsedTransaction {
     @description: '"mainnet" or "testnet" from the tx body network ID byte; null if absent. preview vs preprod cannot be distinguished from CBOR alone.'
     network         : String(10);
 
+    @title      : 'Network ID'
+    @description: 'Body field 15: 1 = mainnet, 0 = testnet; null if absent'
+    networkId       : Integer;
+
     @title      : 'Inputs'
     @description: 'UTxOs consumed by the transaction'
     inputs          : many ParsedInput;
@@ -307,6 +362,34 @@ type ParsedTransaction {
     @title      : 'Collateral Inputs'
     @description: 'Collateral UTxOs for phase-2 validation (empty when no Plutus scripts run)'
     collateral      : many ParsedInput;
+
+    @title      : 'Reference Inputs'
+    @description: 'UTxOs the transaction reads without spending them'
+    referenceInputs : many ParsedInput;
+
+    @title      : 'Withdrawals'
+    @description: 'Reward withdrawals; empty array if none'
+    withdrawals     : many ParsedWithdrawal;
+
+    @title      : 'Certificates'
+    @description: 'Certificates in body order; empty array if none'
+    certificates    : many ParsedCertificate;
+
+    @title      : 'Vote Count'
+    @description: 'Number of votes over all voters; 0 if the body has no voting procedures'
+    votingProcedures : Integer;
+
+    @title      : 'Proposal Count'
+    @description: 'Number of governance proposals'
+    proposalProcedures : Integer;
+
+    @title      : 'Treasury Donation'
+    @description: 'Lovelace donated to the treasury; null if absent'
+    treasuryDonation : Lovelace;
+
+    @title      : 'Current Treasury Value'
+    @description: 'Treasury value the transaction asserts; null if absent'
+    currentTreasuryValue : Lovelace;
 
     @title      : 'Required Signers'
     @description: '28-byte Ed25519 key hashes listed in the tx body required_signers field'

@@ -320,6 +320,13 @@ module.exports = (srv: cds.Service) => {
   srv.on('READ', Transactions, indexOnMissRead(Transactions, 'hash', isTxHash, (db, h) => indexer().indexTransaction(db, h), { errorMessage: 'Invalid transaction hash format' }));
   srv.on('GetTransactionByHash', indexOnMissAction('GetTransactionByHash', Transactions, 'hash', isTxHash, (db, h) => indexer().indexTransaction(db, h), { errorMessage: 'Invalid transaction hash format' }));
 
+  srv.on('GetTransactionConfirmations', async (req: Request) => {
+    const { txHash } = req.data as { txHash?: string };
+    if (!txHash) rejectMissing(req, 'GetTransactionConfirmations', 'txHash');
+    if (!isTxHash(txHash)) rejectInvalid(req, 'GetTransactionConfirmations', 'Invalid transaction hash format', 'txHash');
+    return handleRequest(req, (db) => indexer().resolveTransactionConfirmations(db, txHash));
+  });
+
   // ---------------------------------------------------------------------------
   // Transaction Metadata
   // ---------------------------------------------------------------------------

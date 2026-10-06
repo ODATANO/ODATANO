@@ -119,6 +119,7 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 }));
 
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
+import { NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
 const POOL = 'pool1p0mrcmu9qn0x6nk4eunj0p8qy3tryv370a96u9su2l6jwkytnru';
 // preview: 86 400 slots per epoch, so slot 123 744 027 lies in epoch 1432 starting at 123 724 800
@@ -610,5 +611,93 @@ describe('crawled chain as the authority (crawler.authoritative)', () => {
     expect(getAssetHistory).not.toHaveBeenCalled();
     const q = runs.find(r => r.entity === 'AssetHistory') as Q & { orderBy?: string; limit?: number };
     expect(q).toMatchObject({ orderBy: 'blockHeight desc', limit: 5 });
+  });
+});
+
+describe('transaction confirmations', () => {
+  const TX = 'c'.repeat(64);
+  const BLOCK = 'd'.repeat(64);
+  /** A stored Transactions row; `crawledBlock` = its block is in Blocks. */
+  const stored = (blockHeight: number, slot = TIP_SLOT - 100, crawledBlock = true) => {
+    answer = (q) => {
+      if (q._op !== 'SELECT.one') return undefined;
+      if (q.entity === 'Transactions') return { slot, blockHeight, blockHash: BLOCK };
+      if (q.entity === 'Blocks') return crawledBlock ? { hash: BLOCK } : null;
+      return undefined;
+    };
+  };
+  const withTip = (height: number | null) => {
+    const made = makeIndexer();
+    const getLatestBlock = vi.fn(async () => ({ height }));
+    Object.assign(made.client, { getLatestBlock });
+    const indexTransaction = vi.spyOn(made.indexer, 'indexTransaction');
+    return { ...made, getLatestBlock, indexTransaction };
+  };
+
+  it('counts a crawled transaction against the crawler tip without a provider call', async () => {
+    stored(100);
+    cursor = synced({ tipHeight: 104 });
+    const { indexer, getLatestBlock, indexTransaction } = withTip(999);
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toEqual({ txHash: TX, blockHeight: 100, tipHeight: 104, confirmations: 5 });
+    expect(getLatestBlock).not.toHaveBeenCalled();
+    expect(indexTransaction).not.toHaveBeenCalled();
+  });
+
+  it('asks the backends for a stored row whose block the crawler does not hold', async () => {
+    stored(100, TIP_SLOT - 100, false);
+    cursor = synced({ tipHeight: 104 });
+    const { indexer, indexTransaction } = withTip(103);
+    indexTransaction.mockResolvedValue({ blockHeight: 102 } as never);
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toEqual({ txHash: TX, blockHeight: 102, tipHeight: 103, confirmations: 2 });
+  });
+
+  it('answers 0 when a stored row was rolled back and no backend knows the tx any more', async () => {
+    stored(100, TIP_SLOT - 100, false);
+    cursor = null;
+    const { indexer, indexTransaction } = withTip(110);
+    indexTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toEqual({ txHash: TX, blockHeight: null, tipHeight: null, confirmations: 0 });
+  });
+
+  it('takes height and tip from the backends for a tx newer than the crawled range', async () => {
+    stored(104, TIP_SLOT + 60);
+    cursor = synced({ tipHeight: 103 });
+    const { indexer, indexTransaction } = withTip(106);
+    indexTransaction.mockResolvedValue({ blockHeight: 104 } as never);
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toMatchObject({ tipHeight: 106, confirmations: 3 });
+  });
+
+  it('takes height and tip from the backends while the crawler is not synced', async () => {
+    stored(100);
+    cursor = synced({ syncStatus: 'syncing', tipHeight: 104 });
+    const { indexer, indexTransaction } = withTip(101);
+    indexTransaction.mockResolvedValue({ blockHeight: 100 } as never);
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toMatchObject({ tipHeight: 101, confirmations: 2 });
+  });
+
+  it('answers 0 for a transaction no source knows', async () => {
+    const { indexer, getLatestBlock, indexTransaction } = withTip(100);
+    indexTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
+      .resolves.toEqual({ txHash: TX, blockHeight: null, tipHeight: null, confirmations: 0 });
+    expect(getLatestBlock).not.toHaveBeenCalled();
+  });
+
+  it('passes a provider failure on instead of answering 0', async () => {
+    const { indexer, indexTransaction } = withTip(100);
+    indexTransaction.mockRejectedValue(new ProviderUnavailableError('down'));
+
+    await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX)).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 });

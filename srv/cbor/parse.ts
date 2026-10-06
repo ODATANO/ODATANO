@@ -1,7 +1,10 @@
 import { Tx, Hash32, dataToCbor } from '@harmoniclabs/buildooor';
 import type { TxOut, TxWitnessSet, UTxO, Value } from '@harmoniclabs/buildooor';
 import type { Data } from '@harmoniclabs/plutus-data';
+import { certTypeToString } from '@harmoniclabs/cardano-ledger-ts';
+import type { Certificate } from '@harmoniclabs/cardano-ledger-ts';
 import { Cbor, CborArray, CborBytes, CborMap, CborTag, CborUInt } from '@harmoniclabs/cbor';
+import type { CborObj } from '@harmoniclabs/cbor';
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
 
@@ -24,6 +27,21 @@ export interface ParsedOutput {
   datumHash: string | null;
   inlineDatumHex: string | null;
   referenceScriptHex: string | null;
+  /** Byte length of the output as it stands in the transaction. */
+  cborSize: number;
+}
+
+export interface ParsedWithdrawal {
+  /** Bech32 reward address. */
+  rewardAddress: string;
+  lovelace: string;
+}
+
+export interface ParsedCertificate {
+  /** Position in the body's certificate list. */
+  index: number;
+  /** Ledger certificate name, e.g. `StakeDelegation` or `RegistrationDrep`. */
+  type: string;
 }
 
 export interface ParsedWitnesses {
@@ -46,6 +64,8 @@ export interface ParsedTransaction {
    * consumer needing that split must compare against the service network.
    */
   network: 'mainnet' | 'testnet' | null;
+  /** Body field 15: 1 = mainnet, 0 = testnet, null if absent. */
+  networkId: number | null;
   inputs: ParsedInput[];
   outputs: ParsedOutput[];
   /** Validity-interval start slot (decimal string) or `null` if absent. */
@@ -59,6 +79,16 @@ export interface ParsedTransaction {
   /** Metadata labels present (uint64 → decimal string); full payload via GetMetadataByTxHash for submitted txs. */
   metadataLabels: string[];
   collateral: ParsedInput[];
+  referenceInputs: ParsedInput[];
+  withdrawals: ParsedWithdrawal[];
+  certificates: ParsedCertificate[];
+  /** Number of votes over all voters; 0 if the body has no voting procedures. */
+  votingProcedures: number;
+  proposalProcedures: number;
+  /** Lovelace (decimal string) or `null` if absent. */
+  treasuryDonation: string | null;
+  /** Lovelace (decimal string) or `null` if absent. */
+  currentTreasuryValue: string | null;
   /** 28-byte Ed25519 key hashes listed in the tx body's required_signers field. */
   requiredSigners: string[];
   scriptDataHash: string | null;
@@ -74,8 +104,12 @@ export interface ParsedTransaction {
  */
 export function parseTransaction(cborHex: string): ParsedTransaction {
   let tx: Tx;
+  let raw: BodyFields;
   try {
-    tx = Tx.fromCbor(Buffer.from(cborHex, 'hex'));
+    // one decode for both readers; keepRef keeps the original bytes for the body hash and datums
+    const parsed = Cbor.parse(Buffer.from(cborHex, 'hex'), { keepRef: true });
+    tx = Tx.fromCborObj(parsed);
+    raw = readBodyFields(parsed);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new TransactionValidationError(
@@ -90,6 +124,7 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
   return {
     txHash: body.hash.toString(),
     network: normalizeNetwork(body.network),
+    networkId: raw.networkId,
     inputs: body.inputs.map(mapInput),
     outputs: body.outputs.map(mapOutput),
     validityStart: body.validityIntervalStart != null ? body.validityIntervalStart.toString() : null,
@@ -98,6 +133,16 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
     mint: mapMint(body.mint),
     metadataLabels: extractMetadataLabels(tx.auxiliaryData),
     collateral: (body.collateralInputs ?? []).map(mapInput),
+    referenceInputs: (body.refInputs ?? []).map(mapInput),
+    withdrawals: (body.withdrawals?.map ?? []).map((w) => ({
+      rewardAddress: w.rewardAccount.toString(),
+      lovelace: w.amount.toString(),
+    })),
+    certificates: (body.certs ?? []).map(mapCertificate),
+    votingProcedures: raw.votingProcedures,
+    proposalProcedures: raw.proposalProcedures,
+    treasuryDonation: raw.treasuryDonation,
+    currentTreasuryValue: raw.currentTreasuryValue,
     requiredSigners: (body.requiredSigners ?? []).map((s) => s.toString()),
     scriptDataHash: body.scriptDataHash ? body.scriptDataHash.toString() : null,
     witnesses: countWitnesses(tx.witnesses),
@@ -149,7 +194,45 @@ function mapOutput(out: TxOut): ParsedOutput {
     datumHash,
     inlineDatumHex,
     referenceScriptHex,
+    cborSize: out.toCborBytes().length,
   };
+}
+
+function mapCertificate(cert: Certificate, index: number): ParsedCertificate {
+  return { index, type: certTypeToString(cert.certType) };
+}
+
+type BodyFields = Pick<ParsedTransaction, 'networkId' | 'votingProcedures' | 'proposalProcedures' | 'treasuryDonation' | 'currentTreasuryValue'>;
+
+/** Body fields 15 and 19 to 22 as they stand in the bytes. `Tx.fromCbor` drops 19 to 22 and maps any network byte other than 0 to mainnet. */
+function readBodyFields(parsed: CborObj): BodyFields {
+  const body = parsed instanceof CborArray ? parsed.array[0] : undefined;
+  const field = (key: number): CborObj | undefined =>
+    body instanceof CborMap ? body.map.find(e => e.k instanceof CborUInt && e.k.num === BigInt(key))?.v : undefined;
+  const uint = (key: number): bigint | null => {
+    const v = field(key);
+    return v instanceof CborUInt ? v.num : null;
+  };
+
+  // voting_procedures = { voter => { gov_action_id => voting_procedure } }
+  const voting = field(19);
+  const votes = voting instanceof CborMap
+    ? voting.map.reduce((n, e) => n + (e.v instanceof CborMap ? e.v.map.length : 0), 0)
+    : 0;
+  const networkId = uint(15);
+  return {
+    networkId: networkId == null ? null : Number(networkId),
+    votingProcedures: votes,
+    proposalProcedures: setItems(field(20)).length,
+    treasuryDonation: uint(22)?.toString() ?? null,
+    currentTreasuryValue: uint(21)?.toString() ?? null,
+  };
+}
+
+/** Items of a CBOR set, with or without the Conway set tag 258. */
+function setItems(obj: CborObj | undefined): CborObj[] {
+  const inner = obj instanceof CborTag ? obj.data : obj;
+  return inner instanceof CborArray ? inner.array : [];
 }
 
 /** Inline datum bytes as they stand in the transaction; decoding and re-encoding may change them. */

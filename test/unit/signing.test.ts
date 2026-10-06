@@ -12,7 +12,9 @@ import {
 import {
   SignatureVerifier,
   getSignatureVerifier,
+  verifyTxWitnesses,
 } from '../../srv/blockchain/signing/signature-verifier';
+import { blake2b_224 } from '@harmoniclabs/crypto';
 
 import {
   combineTransactionWithWitnesses,
@@ -263,6 +265,48 @@ describe('SignatureVerifier', () => {
       expect(instance1).toBe(instance2);
       expect(instance1).toBeInstanceOf(SignatureVerifier);
     });
+  });
+});
+
+describe('verifyTxWitnesses()', () => {
+  const VKEY_HEX = 'e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f';
+
+  it('accepts a correctly signed tx and returns the signer key hash', () => {
+    const result = verifyTxWitnesses(VALID_SIGNED_TX_CBOR);
+
+    expect(result).toEqual({
+      valid: true,
+      txBodyHash: getSignatureVerifier().extractTxBodyHash(VALID_SIGNED_TX_CBOR),
+      signerKeyHashes: [Buffer.from(blake2b_224(Buffer.from(VKEY_HEX, 'hex'))).toString('hex')],
+      errors: [],
+    });
+  });
+
+  it('rejects a signature over a changed body', () => {
+    // fee 0x000294c1 -> 0x000294c2, witness set unchanged
+    const tampered = VALID_SIGNED_TX_CBOR.replace('021a000294c1', '021a000294c2');
+    expect(tampered).not.toBe(VALID_SIGNED_TX_CBOR);
+
+    const result = verifyTxWitnesses(tampered);
+
+    expect(result.valid).toBe(false);
+    expect(result.signerKeyHashes).toEqual([]);
+    expect(result.errors).toEqual(['Invalid signature at witness index 0']);
+  });
+
+  it('reports no signer for a tx without witnesses', () => {
+    const result = verifyTxWitnesses(VALID_UNSIGNED_TX_CBOR);
+
+    expect(result.valid).toBe(true);
+    expect(result.signerKeyHashes).toEqual([]);
+  });
+
+  it('reports unreadable CBOR as an error instead of throwing', () => {
+    const result = verifyTxWitnesses('zz');
+
+    expect(result.valid).toBe(false);
+    expect(result.txBodyHash).toBeNull();
+    expect(result.errors).toHaveLength(1);
   });
 });
 
