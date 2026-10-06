@@ -343,8 +343,9 @@ describe('CardanoTransactionService Handler Validations', () => {
     ]);
     const outputsJson = JSON.stringify([{ address: TEST_FIXTURES.addressWithAssets, lovelaceAmount: '2000000' }]);
 
-    it('rejects a missing scriptInputsJson', async () => {
-      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, outputsJson });
+    // scriptInputsJson is optional (a mint or withdrawal alone); a value that is not an array is still refused
+    it('rejects a scriptInputsJson that is not an array', async () => {
+      const { status } = await post({ senderAddress: TEST_FIXTURES.addressWithAssets, scriptInputsJson: '{}', outputsJson });
       expect(status).toBe(400);
     });
 

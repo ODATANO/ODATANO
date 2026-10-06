@@ -567,4 +567,72 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
       expect(err.message).toMatch(/mintActions\[0\]\.assetUnit .* is not under the policy/);
     });
   });
+  describe('without script inputs', () => {
+    const scriptHash = Script.fromCbor(SCRIPT).hash.toString();
+    const scriptStake = new StakeAddress({ network: 'testnet', credentials: new StakeValidatorHash(scriptHash), type: 'script' }).toString();
+    const keyStake = new StakeAddress({ network: 'testnet', credentials: new StakeKeyHash('1b'.repeat(28)), type: 'stakeKey' }).toString();
+    const budget = { memory: 200_000, cpu: 100_000_000 };
+    const evaluate = async () => [
+      { validator: { purpose: 'mint', index: 0 }, budget },
+      { validator: { purpose: 'withdraw', index: 0 }, budget },
+    ];
+    const keyOnly = () => context({ utxos: [collateral, funding], evaluateTransaction: evaluate });
+    const collateralIns = (tx: any) => (tx.body.collateralInputs ?? []).map((i: any) => i.utxoRef.id.toString());
+
+    it('mints by reference script and locks the NFT with an inline datum, spending only key UTxOs', async () => {
+      const nft = `${scriptHash}abcd`;
+      const req = request({
+        scriptInputs: [],
+        mintActions: [{ assetUnit: nft, quantity: 1n, referenceScript: { txHash: REF, outputIndex: 0 }, redeemerJson: { constructor: 0, fields: [] } }],
+        outputs: [{ address: SCRIPT_ADDRESS, lovelaceAmount: '10000000', assets: [{ unit: nft, quantity: '1' }], inlineDatum: { constructor: 0, fields: [] } }],
+      });
+      const result = await builder.buildUnsignedPlutusTransaction(req, keyOnly());
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
+
+      expect(tx.body.inputs.every((i: any) => [collateral.txHash, funding.txHash].includes(i.utxoRef.id.toString()))).toBe(true);
+      const redeemers = tx.witnesses.redeemers ?? [];
+      expect(redeemers.map((r: any) => r.tag)).toEqual([TxRedeemerTag.Mint]);
+      expect(tx.witnesses.plutusV3Scripts ?? []).toHaveLength(0);
+      expect(collateralIns(tx)).toEqual([collateral.txHash]);
+      expect(tx.body.outputs[0].address.toString()).toBe(SCRIPT_ADDRESS);
+      expect(result.scriptHash).toBe(scriptHash);
+    });
+
+    it('withdraws zero under a staking script alone', async () => {
+      const req = request({ scriptInputs: [], withdrawals: [{ rewardAddress: scriptStake, lovelace: '0', stakingScript: SCRIPT, redeemer: { constructor: 0, fields: [] } }] });
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, keyOnly())).unsignedTxCbor);
+
+      expect((tx.witnesses.redeemers ?? []).map((r: any) => r.tag)).toEqual([TxRedeemerTag.Withdraw]);
+      expect(collateralIns(tx)).toEqual([collateral.txHash]);
+    });
+
+    it('leaves collateral out when no script runs', async () => {
+      const req = request({ scriptInputs: [], withdrawals: [{ rewardAddress: keyStake, lovelace: '0' }] });
+      const result = await builder.buildUnsignedPlutusTransaction(req, keyOnly());
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
+
+      expect(tx.witnesses.redeemers ?? []).toHaveLength(0);
+      expect(collateralIns(tx)).toEqual([]);
+      expect(tx.body.collateralReturn).toBeUndefined();
+      expect(result.scriptHash).toBeUndefined();
+    });
+  });
+
+  describe('collateral when the rest cannot pay fee and change', () => {
+    const big: UTxO = { txHash: 'f1'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '20000000' }] };
+    const small: UTxO = { txHash: 'f2'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '1231961' }] };
+
+    it('also spends the collateral UTxO as an input', async () => {
+      // the outputs take the whole value of the three script inputs; fee and change must come from the wallet
+      const req = request({ outputs: [{ address: SCRIPT_ADDRESS, lovelaceAmount: '4500000' }, { address: OTHER, lovelaceAmount: '4500000' }] });
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context({
+        utxos: [scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), big, small],
+      }))).unsignedTxCbor);
+
+      const inputs = tx.body.inputs.map((i: any) => i.utxoRef.id.toString());
+      expect(inputs).toContain(big.txHash);
+      expect((tx.body.collateralInputs ?? []).map((i: any) => i.utxoRef.id.toString())).toEqual([big.txHash]);
+    });
+  });
 });
+

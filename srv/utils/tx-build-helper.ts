@@ -123,8 +123,9 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
 /**
  * Maps Buildooor errors to typed BackendErrors. Asset unit is parsed from "not enough <unit>" when not given;
  * `context` (e.g. the collateral partition) is appended to the consumer-facing message.
+ * `requestedOutputs` is the number of outputs the caller asked for; Buildooor appends the change after them.
  */
-export function mapBuilderError(err: unknown, assetUnit?: string, context?: string): never {
+export function mapBuilderError(err: unknown, assetUnit?: string, context?: string, requestedOutputs?: number): never {
   // Typed errors keep their own status and payload
   if (err instanceof BackendError) {
     throw err;
@@ -138,6 +139,12 @@ export function mapBuilderError(err: unknown, assetUnit?: string, context?: stri
   const minAda = rawMsg.match(/tx output at index (\d+) did not have enough lovelaces[\s\S]*?minimum lovelaces required:\s*(\d+)[\s\S]*?output lovelaces\s*:\s*(\d+)/);
   if (minAda) {
     const [, index, minimum, actual] = minAda;
+    if (requestedOutputs !== undefined && Number(index) >= requestedOutputs) {
+      // the change output: the caller cannot raise it. The shortfall is unknown here, so no amounts
+      throw new InsufficientFundsError('lovelace', 0n, 0n, err,
+        `the change output needs at least ${minimum} lovelace (has ${actual}); the funding UTxOs cannot pay the fee and the change` +
+        (context ? ` (${context})` : ''));
+    }
     const withAssets = /tx output:[\s\S]*"[0-9a-f]{56}"\s*:/i.test(rawMsg) ? ', it carries native assets' : '';
     throw new TransactionValidationError(
       `output ${index} needs at least ${minimum} lovelace (has ${actual}${withAssets}); raise its lovelace amount`, err);

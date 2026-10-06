@@ -853,7 +853,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         // not in the ledger state; null = unavailable, as on Koios
         blocksEpoch: null,
         liveStake: pool.stake?.ada?.lovelace ? String(pool.stake.ada.lovelace) : '0',
-        liveSize: 0,
+        // no total live stake to divide by; null = unavailable
+        liveSize: null,
         // not in the ledger state; null = unavailable
         liveDelegators: null,
         liveSaturation: 0,

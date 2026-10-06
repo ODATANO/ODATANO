@@ -261,13 +261,13 @@ export interface ParsedScriptInput {
   datumCbor?: string;
 }
 
-/** Parse and validate scriptInputsJson: 1..MAX_SCRIPT_INPUTS distinct script UTxOs, each with its own redeemer. */
+/** Parse and validate scriptInputsJson: 0..MAX_SCRIPT_INPUTS distinct script UTxOs, each with its own redeemer. */
 export function parseScriptInputs(json: string | undefined): { parsed?: ParsedScriptInput[]; error?: string } {
-  if (!json) return { error: 'scriptInputsJson is required' };
+  if (!json) return { parsed: [] };
   const jsonResult = validateJsonWithLimits(json, 'scriptInputsJson');
   if (!jsonResult.valid) return { error: jsonResult.error! };
-  if (!Array.isArray(jsonResult.parsed) || jsonResult.parsed.length === 0) {
-    return { error: 'scriptInputsJson must be a non-empty JSON array' };
+  if (!Array.isArray(jsonResult.parsed)) {
+    return { error: 'scriptInputsJson must be a JSON array' };
   }
   if (jsonResult.parsed.length > MAX_SCRIPT_INPUTS) {
     return { error: `scriptInputsJson exceeds maximum of ${MAX_SCRIPT_INPUTS} entries` };

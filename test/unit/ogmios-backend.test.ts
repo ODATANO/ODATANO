@@ -857,6 +857,8 @@ describe('OgmiosBackend', () => {
       expect(result.margin).toBe(0.05);
       expect(result.fixedCost).toBe('340000000');
       expect(result.rewardAccount).toBe('stake1u8reward');
+      // one pool's stake gives no live share; unavailable, not 0
+      expect(result.liveSize).toBeNull();
     });
 
     it('should map Ogmios v6 value shapes (ValueAdaOnly pledge/cost, Ratio margin) without fabricating activeStake', async () => {

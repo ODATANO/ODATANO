@@ -7,6 +7,7 @@ import { getTxHashFromCbor, getLovelace, isCollateralCandidate, applyScriptParam
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
+import { toSignedTransaction } from './utils/signing-helper';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
 import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
 import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates, parsePlutusCbor } from './utils/tx-request-parsers';
@@ -912,9 +913,9 @@ module.exports = (srv: cds.Service) => {
   // SubmitTransaction — submit the signed CBOR of a previous build.
   srv.on('SubmitTransaction', async (req: Request) => {
     logger.debug('SubmitTransaction Action handler called');
-    const { buildId, signedTxCbor } = req.data;
+    const { buildId, signedTxCbor: signedInput } = req.data as { buildId: string; signedTxCbor: string };
 
-    const errors = validateTransactionInputs({ buildId, signedTxCbor }, ['buildId', 'signedTxCbor']);
+    const errors = validateTransactionInputs({ buildId, signedTxCbor: signedInput }, ['buildId', 'signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitTransaction', errors);
 
     return handleRequest(req, async (db) => {
@@ -922,6 +923,9 @@ module.exports = (srv: cds.Service) => {
 
       const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
       if (!existing) throw new NotFoundError(`Build '${buildId}'`);
+
+      // A CIP-30 wallet returns only the witness set; cardano-cli a full signed tx.
+      const signedTxCbor = toSignedTransaction(existing.unsignedTxCbor, signedInput);
 
       // The signed CBOR must belong to this build (audit-trail integrity)
       const signedTxHash = getTxHashFromCbor(signedTxCbor);

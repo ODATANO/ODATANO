@@ -247,6 +247,21 @@ describe('BlockfrostBackend getAddressUtxos', () => {
     expect(result[1].amount).toHaveLength(2);
   });
 
+  it('reports the CIP-19 address kind instead of the shelley | byron Blockfrost reports', async () => {
+    const address = 'addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae';
+    BlockFrostAPI.mockImplementation(function () { return {
+      addresses: vi.fn().mockResolvedValue({ address, stake_address: null, type: 'shelley', script: false, amount: [] }),
+      addressesUtxosAll: vi.fn().mockResolvedValue([]),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }; });
+
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    await backend.init();
+
+    expect((await backend.getAddress(address)).type).toBe('base');
+  });
+
   it('should throw NotFoundError when address has no UTxOs', async () => {
     BlockFrostAPI.mockImplementation(function () { return {
       addressesUtxosAll: vi.fn().mockRejectedValue({

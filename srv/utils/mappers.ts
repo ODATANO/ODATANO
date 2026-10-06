@@ -589,7 +589,7 @@ export function mapPoolSnapshot(
     blocksMinted: providerPoolData.blocksMinted,
     blocksEpoch: providerPoolData.blocksEpoch,
     liveStake: providerPoolData.liveStake,
-    liveSize: Number(providerPoolData.liveSize),
+    liveSize: providerPoolData.liveSize == null ? null : Number(providerPoolData.liveSize),
     liveSaturation: Number(providerPoolData.liveSaturation),
     liveDelegators: providerPoolData.liveDelegators,
     activeStake: providerPoolData.activeStake,

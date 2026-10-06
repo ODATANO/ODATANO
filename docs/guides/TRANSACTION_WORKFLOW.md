@@ -73,8 +73,12 @@ cat signed.tx | jq -r '.cborHex'
 
 ```javascript
 const api = await window.cardano.nami.enable();
-const witnesses = await api.signTx(unsignedTxCbor, true);
+// CIP-30 returns only the witness set, not the signed transaction
+const witnessSetCbor = await api.signTx(unsignedTxCbor, true);
 ```
+
+Pass `witnessSetCbor` as `signedTxCbor` in Step 3. ODATANO adds the witness set to the build's transaction
+before it submits. `VerifySignature` and `SubmitVerifiedTransaction` accept it the same way.
 
 #### Hardware Wallet (Ledger/Trezor)
 
@@ -83,6 +87,8 @@ Via browser extension integration (same CIP-30 API as above).
 ### Step 3: Submit Signed Transaction
 
 **POST** `/odata/v4/cardano-transaction/SubmitTransaction`
+
+`signedTxCbor` is either the full signed transaction (cardano-cli, HSM) or the witness set from a CIP-30 wallet.
 
 ```json
 {
@@ -299,7 +305,7 @@ Returns `scriptHash`, `scriptAddress` when applicable.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | senderAddress | bech32 | Yes | Pays the fee, funds the rest, provides the ADA-only collateral |
-| scriptInputsJson | String | Yes | 1..16 script UTxOs, see below |
+| scriptInputsJson | String | No | 0..16 script UTxOs, see below; without them a mint, a withdrawal or a certificate alone is built |
 | outputsJson | String | Yes | Outputs in order: `{address, lovelaceAmount, assets?, inlineDatumJson? \| inlineDatumCbor? \| datumHash?, referenceScriptHex?}` |
 | changeAddress | bech32 | No | Change address (defaults to senderAddress) |
 | referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only inputs; reference-script UTxOs are added automatically |
@@ -339,7 +345,12 @@ or Koios; with Blockfrost alone a reference script cannot be used.
 
 The response lists `redeemers` (`tag`, `index`, `mem`, `steps`); they are stored as `TransactionBuildRedeemers` (`tag`, `redeemerIndex`, `mem`, `steps`).
 400 errors name the cause: the output below min-ADA, the redeemer whose evaluation failed, a missing collateral
-(create one with `SetCollateral`), or a transaction above `maxTxSize`.
+(create one with `SetCollateral`), or a transaction above `maxTxSize`. A change output below min-ADA is reported as
+too little funding, not as an output to raise.
+
+Collateral is added only when a script runs. A build whose withdrawals and certificates all use key credentials
+carries none. When the other sender UTxOs cannot pay the outputs, the fee and the change, the collateral UTxO is
+also spent as an input; the ledger allows one UTxO as input and as collateral.
 
 ### SetCollateral
 

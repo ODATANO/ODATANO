@@ -23,37 +23,28 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
     // txObj.array[0] = body, [1] = witness_set, [2] = is_valid, [3] = auxiliary_data
     const origWs = txObj.array[1];
 
-    let witnessCount = 0;
-
-    if (origWs instanceof CborMap && walletWsObj instanceof CborMap) {
-      // Wallet's VKey witnesses (map key 0)
-      const walletVkeyEntry = walletWsObj.map.find(
-        e => e.k instanceof CborUInt && Number(e.k.num) === 0
-      );
-
-      if (walletVkeyEntry) {
-        // Keep original entries (redeemers, datums, scripts at keys 3-7), replace key 0 with the wallet's
-        const mergedEntries = origWs.map
-          .filter(e => !(e.k instanceof CborUInt && Number(e.k.num) === 0))
-          .concat([walletVkeyEntry]);
-
-        // New witness set map preserving the original's encoding style
-        txObj.array[1] = new CborMap(mergedEntries, {
-          indefinite: origWs.indefinite,
-        });
-        // VKey witnesses: CborArray, or CborTag(258, CborArray) in Conway
-        const vkeyValue = walletVkeyEntry.v;
-        if (vkeyValue instanceof CborArray) {
-          witnessCount = vkeyValue.array.length;
-        } else if (vkeyValue instanceof CborTag && vkeyValue.data instanceof CborArray) {
-          witnessCount = vkeyValue.data.array.length;
-        } else {
-          throw new TransactionValidationError('Unexpected VKey witness format in witness set');
-        }
-      }
-    } else {
+    if (!(origWs instanceof CborMap) || !(walletWsObj instanceof CborMap)) {
       throw new TransactionValidationError('Witness set must be CBOR map per Cardano spec');
     }
+
+    // The wallet signs with vkey witnesses (map key 0) or, for Byron addresses, bootstrap witnesses (key 2)
+    const isSignatureKey = (k: unknown) => k instanceof CborUInt && (Number(k.num) === 0 || Number(k.num) === 2);
+    const walletSignatures = walletWsObj.map.filter(e => isSignatureKey(e.k));
+    let witnessCount = 0;
+    for (const { v } of walletSignatures) {
+      // CborArray, or CborTag(258, CborArray) in Conway
+      const items = v instanceof CborArray ? v.array : v instanceof CborTag && v.data instanceof CborArray ? v.data.array : undefined;
+      if (!items) throw new TransactionValidationError('Unexpected witness format in witness set');
+      witnessCount += items.length;
+    }
+    if (witnessCount === 0) {
+      throw new TransactionValidationError('Witness set carries no vkey or bootstrap witness; the wallet did not sign');
+    }
+
+    // Keep original entries (redeemers, datums, scripts at keys 3-7), take the signatures from the wallet
+    const mergedEntries = origWs.map.filter(e => !isSignatureKey(e.k)).concat(walletSignatures);
+    // New witness set map preserving the original's encoding style
+    txObj.array[1] = new CborMap(mergedEntries, { indefinite: origWs.indefinite });
 
     // New outer CborArray so the encoder cannot reuse the stale outer subCborRef; the inner
     // subCborRefs are kept so the body bytes (and thus the signed body hash) stay identical.
@@ -78,13 +69,18 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
   }
 }
 
-/** True when the CBOR is a CIP-30 witness set (map) rather than a full transaction (array). */
+/**
+ * True when the CBOR is a CIP-30 witness set (map) rather than a full transaction (array).
+ * Reads the major type of the first byte only; a malformed map fails later in the combine step.
+ */
 export function isWitnessSetCbor(cborHex: string): boolean {
-  try {
-    const obj = Cbor.parse(fromHex(cborHex));
-    if (obj instanceof CborArray) return false;
-    return obj instanceof CborMap;
-  } catch {
-    return false;
-  }
+  if (!/^[0-9a-f]{2}/i.test(cborHex)) return false;
+  return parseInt(cborHex.slice(0, 2), 16) >> 5 === 5;
+}
+
+/** The signed transaction: as given, or the unsigned one plus a CIP-30 witness set. */
+export function toSignedTransaction(unsignedTxCbor: string | null | undefined, signedTxOrWitnessSet: string): string {
+  if (!isWitnessSetCbor(signedTxOrWitnessSet)) return signedTxOrWitnessSet;
+  if (!unsignedTxCbor) throw new TransactionValidationError('No unsigned transaction to add the witness set to');
+  return combineTransactionWithWitnesses(unsignedTxCbor, signedTxOrWitnessSet);
 }

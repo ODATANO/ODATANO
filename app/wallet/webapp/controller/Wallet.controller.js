@@ -1101,14 +1101,14 @@ sap.ui.define([
                 unsignedTxCbor: oSelectedRequest.cip30TxCbor || oSelectedRequest.unsignedTxCbor,
                 txBodyHash: oSelectedRequest.txBodyHash
             }, true).then(function (oResult) {
-                if (!oResult.success || !oResult.signedTxCbor) throw new Error(oResult.error || "Signing failed");
+                if (!oResult.success || !oResult.witnessSetCbor) throw new Error(oResult.error || "Signing failed");
 
-                that._flowModel.setProperty("/signedTxCbor", oResult.signedTxCbor);
+                that._flowModel.setProperty("/signedTxCbor", oResult.witnessSetCbor);
                 that._flowModel.setProperty("/signMessage", "Signed! Verifying...");
                 that._flowModel.setProperty("/signMessageType", "Success");
 
                 that._performVerificationForSelected(
-                    oResult.signedTxCbor, "browser-wallet",
+                    oResult.witnessSetCbor, "browser-wallet",
                     that._walletService.getModel().getProperty("/walletName") || ""
                 );
             }).catch(function (oError) {

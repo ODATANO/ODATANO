@@ -423,6 +423,18 @@ describe('parseTransaction — value-moving body fields', () => {
 
     expect(parseTransaction(hex).outputs.map((o) => o.cborSize)).toEqual(expected);
   });
+
+  it('counts the bytes as received, not a shorter re-encoding', () => {
+    const canonical = cborHex(buildTx({ outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)] }));
+    // 5 000 000 lovelace as an 8-byte uint instead of the minimal 4-byte form: 4 bytes longer
+    const wide = canonical.replace('1a004c4b40', '1b00000000004c4b40');
+    expect(wide).not.toBe(canonical);
+
+    const [canonicalSize] = parseTransaction(canonical).outputs.map((o) => o.cborSize);
+    const [wideSize] = parseTransaction(wide).outputs.map((o) => o.cborSize);
+
+    expect(wideSize).toBe(canonicalSize + 4);
+  });
 });
 
 describe('parseTransaction — error handling', () => {

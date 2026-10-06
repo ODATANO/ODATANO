@@ -562,6 +562,22 @@ describe('tx-build-helper utilities', () => {
       expect(() => mapBuilderError(new Error(builderMsg))).toThrow('output 2 needs at least 857690 lovelace (has 500000); raise its lovelace amount');
     });
 
+    it('names the change output and the funding instead of asking to raise it', () => {
+      const builderMsg = [
+        'tx output at index 2 did not have enough lovelaces to meet the minimum allowed by protocol parameters.',
+        'minimum lovelaces required: 978370',
+        'output lovelaces          : 548461',
+        'tx output: { "value": { "lovelaces": "548461" } }',
+      ].join('\n');
+      let thrown: unknown;
+      try { mapBuilderError(new Error(builderMsg), undefined, '1 UTxO(s) reserved as collateral', 2); } catch (e) { thrown = e; }
+      expect(thrown).toBeInstanceOf(InsufficientFundsError);
+      expect((thrown as Error).message).toBe('Insufficient lovelace: the change output needs at least 978370 lovelace (has 548461); ' +
+        'the funding UTxOs cannot pay the fee and the change (1 UTxO(s) reserved as collateral)');
+      // a requested output keeps the old message
+      expect(() => mapBuilderError(new Error(builderMsg), undefined, undefined, 3)).toThrow('raise its lovelace amount');
+    });
+
     it('should throw InsufficientFundsError for "insufficient" messages', () => {
       expect(() => mapBuilderError(new Error('insufficient funds for transaction'))).toThrow('Insufficient');
     });

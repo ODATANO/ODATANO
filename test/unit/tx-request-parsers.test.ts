@@ -239,9 +239,12 @@ describe('parseScriptInputs', () => {
     ]);
   });
 
+  it.each([undefined, '', '[]'])('accepts %s as no script inputs', (json) => {
+    expect(parseScriptInputs(json)).toEqual({ parsed: [] });
+  });
+
   it.each([
-    [undefined, 'scriptInputsJson is required'],
-    ['[]', 'must be a non-empty JSON array'],
+    ['{}', 'must be a JSON array'],
     [JSON.stringify([{ txHash: H1, outputIndex: 0, redeemerJson }]), 'exactly one of validatorScript or referenceScript'],
     [JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab', referenceScript: { txHash: H2, outputIndex: 0 }, redeemerJson }]), 'exactly one of'],
     [JSON.stringify([{ txHash: H1, outputIndex: 0, validatorScript: 'ab' }]), 'scriptInputs[0] needs exactly one of redeemerJson or redeemerCbor'],

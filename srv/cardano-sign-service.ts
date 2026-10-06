@@ -8,7 +8,7 @@ import { getCardanoIndexer, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
 import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { verifyDataSignature } from './blockchain/signing/cose-verifier';
-import { combineTransactionWithWitnesses, isWitnessSetCbor } from './utils/signing-helper';
+import { toSignedTransaction } from './utils/signing-helper';
 import { detachedTx } from './utils/tx-utils';
 import { submitAndFinalize, scheduleDeferredSubmit } from './blockchain/signing/submission-finalizer';
 const { SELECT, UPDATE } = cds.ql;
@@ -225,13 +225,7 @@ module.exports = (srv: cds.Service) => {
       }
 
       // A CIP-30 wallet returns only the witness set; cardano-cli a full signed tx.
-      let fullSignedTxCbor: string;
-      if (isWitnessSetCbor(signedTxCbor)) {
-        fullSignedTxCbor = combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor);
-        logger.debug({ signingRequestId }, 'Combined witness set with unsigned transaction for verification');
-      } else {
-        fullSignedTxCbor = signedTxCbor;
-      }
+      const fullSignedTxCbor = toSignedTransaction(signingRequest.unsignedTxCbor, signedTxCbor);
 
       // Verification is bound to the keys that must witness this tx.
       const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);
@@ -296,9 +290,7 @@ module.exports = (srv: cds.Service) => {
         }
 
         // CIP-30 witness set or full signed tx
-        const fullSignedTxCbor = isWitnessSetCbor(signedTxCbor)
-          ? combineTransactionWithWitnesses(signingRequest.unsignedTxCbor, signedTxCbor)
-          : signedTxCbor;
+        const fullSignedTxCbor = toSignedTransaction(signingRequest.unsignedTxCbor, signedTxCbor);
 
         // Throws on failure; bound to the keys that must witness this tx.
         const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);

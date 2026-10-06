@@ -3,7 +3,7 @@ import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequ
 import { CardanoBackend, PaginatingBackend, EnumeratingBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError, ScriptValidationError, normalizeBackendError, isPostgrestServerErrorCode } from '../../utils/errors';
-import { normalizeCostModels, decodeAssetName, ledgerView } from '../../utils/mappers';
+import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 
@@ -97,7 +97,6 @@ interface KoiosUtxoRow {
   tx_index: number;
   address?: string;
   value: string;
-  block_hash?: string;
   datum_hash?: string | null;
   reference_script?: unknown;
   inline_datum?: unknown;
@@ -152,11 +151,11 @@ interface KoiosPoolInfoRow {
   vrf_key_hash?: string | null;
   block_count?: number | null;
   live_stake?: string | null;
-  live_size?: number | null;
   live_delegators?: number | null;
   live_saturation?: number | string | null;
   active_stake?: string | null;
-  active_size?: number | null;
+  /** Share of the total active stake, as a fraction. */
+  sigma?: number | string | null;
   pledge?: string | null;
   margin?: number | null;
   fixed_cost?: string | null;
@@ -177,12 +176,26 @@ interface KoiosDrepInfoRow {
   expires_epoch_no?: number | null;
 }
 
+/** Koios `/account_info` row. */
+interface KoiosAccountInfoRow {
+  stake_address: string;
+  status: 'registered' | 'not registered';
+  delegated_drep?: string | null;
+  delegated_pool?: string | null;
+  total_balance: string;
+  rewards: string;
+  withdrawals: string;
+  rewards_available: string;
+  reserves: string;
+  treasury: string;
+}
+
 /** Koios `/tip` row. */
 interface KoiosTipRow {
   hash: string;
   epoch_no: number;
   abs_slot: number | null;
-  block_height?: number | null;
+  block_no?: number | null;
 }
 
 /** Koios `/block_info` row. */
@@ -205,11 +218,19 @@ interface KoiosEpochInfoRow {
   end_time: number;
   first_block_time: number;
   last_block_time: number;
-  block_count: number;
+  blk_count: number;
   tx_count: number;
-  total_output: string;
-  total_fees: string;
+  out_sum: string;
+  fees: string;
   active_stake: string | null;
+}
+
+/** Koios `/address_info` row. */
+interface KoiosAddressInfoRow {
+  address: string;
+  balance: string;
+  stake_address?: string | null;
+  script_address: boolean;
 }
 
 /** CardanoBackend implementation on the Koios REST API (Axios). */
@@ -402,10 +423,10 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           end_time: data.end_time,
           first_block_time: data.first_block_time,
           last_block_time: data.last_block_time,
-          block_count: data.block_count,
+          block_count: data.blk_count,
           tx_count: data.tx_count,
-          output: data.total_output,
-          fees: data.total_fees,
+          output: data.out_sum,
+          fees: data.fees,
           active_stake: data.active_stake,
         };
       },
@@ -427,7 +448,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           throw new NotFoundError('Address', this.name);
         }
 
-        const addressData = data[0];
+        const addressData = data[0] as KoiosAddressInfoRow;
         const addressUtxos = await this.getAddressUtxos(address);
 
         // Sum balances from the mapped UTxOs; address_info's utxo_set may carry a null asset_list.
@@ -448,8 +469,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         return {
           address: address,
           stakeAddress: addressData.stake_address || null,
-          type: addressData.address_type,
-          isScript: addressData.is_script,
+          // /address_info has no address type; it follows from the address itself
+          type: decodeShelleyAddress(address).type,
+          isScript: addressData.script_address,
           amount: amount,
           utxos: addressUtxos,
         };
@@ -512,7 +534,6 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             outputIndex: utxo.tx_index,
             address: address,
             amount: amount,
-            blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
             scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
@@ -553,7 +574,6 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             outputIndex: utxo.tx_index,
             address: utxo.address ?? '',
             amount: amount,
-            blockHash: utxo.block_hash,
             datumHash: utxo.datum_hash || null,
             scriptRef: koiosRefScriptBytes(utxo.reference_script),
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
@@ -689,13 +709,14 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       // a 0 would be indistinguishable from a real zero downstream.
       blocksEpoch: null,
       liveStake: poolData.live_stake || '0',
-      liveSize: poolData.live_size || 0,
+      // /pool_info has no live share
+      liveSize: null,
       liveDelegators: poolData.live_delegators || 0,
       // Koios reports saturation in PERCENT (75.42); PoolData holds a fraction (0.7542)
       // stored in Decimal(9, 4) — the percent value would overflow the column.
       liveSaturation: (Number(poolData.live_saturation) || 0) / 100,
       activeStake: poolData.active_stake || '0',
-      activeSize: poolData.active_size || 0,
+      activeSize: Number(poolData.sigma) || 0,
       pledge: poolData.pledge || '0',
       margin: poolData.margin || 0,
       fixedCost: poolData.fixed_cost || '0',
@@ -800,7 +821,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         if (!Array.isArray(data) || data.length === 0) return [];
 
         const minting_txs = Array.isArray(data[0]?.minting_txs) ? data[0].minting_txs : [];
-        const events: AssetHistoryEntry[] = minting_txs.map((entry: { quantity?: string | number; tx_hash?: string; block_time?: number; block_height?: number }) => {
+        const events: AssetHistoryEntry[] = minting_txs.map((entry: { quantity?: string | number; tx_hash?: string; block_time?: number }) => {
           const rawQty = String(entry.quantity ?? '0');
           const isNegative = rawQty.startsWith('-');
           return {
@@ -809,7 +830,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             action: isNegative ? 'burn' : 'mint',
             quantity: isNegative ? rawQty.slice(1) : rawQty,
             blockTime: typeof entry.block_time === 'number' ? entry.block_time : null,
-            blockHeight: typeof entry.block_height === 'number' ? entry.block_height : null,
+            // minting_txs carry no block height
+            blockHeight: null,
           } as AssetHistoryEntry;
         });
 
@@ -892,19 +914,20 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           addresses.push(...chunkResults);
         }
 
-        const accountData = data[0];
+        const accountData = data[0] as KoiosAccountInfoRow;
         return {
           stakeaddress: accountData.stake_address,
-          active: accountData.active ?? false,
-          activeEpoch: accountData.active_epoch ?? 0,
-          controlledAmount: accountData.controlled_amount,
-          rewardsSum: accountData.rewards_sum,
-          withdrawalsSum: accountData.withdrawals_sum,
-          reservesSum: accountData.reserves_sum,
-          treasurySum: accountData.treasury_sum,
-          withdrawableAmount: accountData.withdrawable_amount,
-          poolId: accountData.pool_id || null,
-          drepId: accountData.drep_id || null,
+          active: accountData.status === 'registered',
+          // /account_info has no registration epoch
+          activeEpoch: 0,
+          controlledAmount: accountData.total_balance,
+          rewardsSum: accountData.rewards,
+          withdrawalsSum: accountData.withdrawals,
+          reservesSum: accountData.reserves,
+          treasurySum: accountData.treasury,
+          withdrawableAmount: accountData.rewards_available,
+          poolId: accountData.delegated_pool || null,
+          drepId: accountData.delegated_drep || null,
           addresses: addresses,
         };
       },

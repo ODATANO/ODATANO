@@ -194,7 +194,8 @@ function mapOutput(out: TxOut): ParsedOutput {
     datumHash,
     inlineDatumHex,
     referenceScriptHex,
-    cborSize: out.toCborBytes().length,
+    // the bytes as received; a re-encoding can be shorter
+    cborSize: out.cborRef ? out.cborRef.toBuffer().length : out.toCborBytes().length,
   };
 }
 

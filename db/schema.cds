@@ -542,7 +542,7 @@ entity Addresses : temporal {
         stakeAddress  : Bech32;
 
         @title      : 'Address Type'
-        @description: 'The type of address (base | enterprise | pointer | reward | script | unknown)'
+        @description: 'The CIP-19 kind of address (base | pointer | enterprise | reward | byron | unknown); a script payment credential shows in isScript'
         type          : String(20);
 
         @title      : 'Is Script Address'

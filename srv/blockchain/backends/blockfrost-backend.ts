@@ -2,7 +2,7 @@ import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
-import { normalizeCostModels, decodeAssetName, ledgerView } from '../../utils/mappers';
+import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
   Transaction,
@@ -194,7 +194,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         return {
           address: address_data.address,
           stakeAddress: address_data.stake_address,
-          type: address_data.type,
+          // Blockfrost says shelley | byron; the other sources and the model use the CIP-19 kind
+          type: decodeShelleyAddress(address_data.address).type,
           isScript: address_data.script,
           amount: address_data.amount,
           utxos: address_utxos.map(utxo => ({

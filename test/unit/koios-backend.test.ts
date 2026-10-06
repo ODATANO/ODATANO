@@ -348,6 +348,72 @@ describe('KoiosBackend', () => {
     });
   });
 
+  describe('getAddress', () => {
+    it('takes the script flag from /address_info and the type from the address', async () => {
+      // an /address_info row as the Koios OpenAPI schema defines it
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_info', { _addresses: [TEST_ADDR] })
+        .reply(200, [{ address: TEST_ADDR, balance: '0', stake_address: null, script_address: false, utxo_set: [] }]);
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/address_utxos', { _addresses: [TEST_ADDR], _extended: true })
+        .reply(200, []);
+
+      const result = await backend.getAddress(TEST_ADDR);
+
+      expect(result.isScript).toBe(false);
+      expect(result.type).toBe('base');
+    });
+  });
+
+  describe('getAccount', () => {
+    const STAKE = 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrh8z8j6p5y0x3m5qcz0gqtq';
+    // an /account_info row as the Koios OpenAPI schema defines it: no active, no *_sum fields
+    const row = (status: string) => ({
+      stake_address: STAKE,
+      status,
+      delegated_drep: 'drep_always_abstain',
+      delegated_pool: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
+      total_balance: '12000000',
+      utxo: '10000000',
+      rewards: '3000000',
+      withdrawals: '1000000',
+      rewards_available: '2000000',
+      deposit: '2000000',
+      reserves: '0',
+      treasury: '0',
+      'proposal-refund': '0',
+    });
+    const reply = (status: string) => {
+      nock(KOIOS_BASE_URL).post('/api/v1/account_info', { _stake_addresses: [STAKE] }).reply(200, [row(status)]);
+      nock(KOIOS_BASE_URL).post('/api/v1/account_addresses', { _stake_addresses: [STAKE] }).reply(200, [{ stake_address: STAKE, addresses: [] }]);
+    };
+
+    it('maps a registered account from the Koios schema', async () => {
+      reply('registered');
+
+      expect(await backend.getAccount(STAKE)).toEqual({
+        stakeaddress: STAKE,
+        active: true,
+        activeEpoch: 0,
+        controlledAmount: '12000000',
+        rewardsSum: '3000000',
+        withdrawalsSum: '1000000',
+        reservesSum: '0',
+        treasurySum: '0',
+        withdrawableAmount: '2000000',
+        poolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
+        drepId: 'drep_always_abstain',
+        addresses: [],
+      });
+    });
+
+    it('reports a not registered account as inactive', async () => {
+      reply('not registered');
+
+      expect((await backend.getAccount(STAKE)).active).toBe(false);
+    });
+  });
+
   describe('getDrep', () => {
     const DREP_ID = 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0';
     const DREP_HEX = 'bed9febc46ee63fa370bbc65446c067d61adcc46d8094e372694666b';
@@ -477,11 +543,10 @@ describe('KoiosBackend', () => {
           vrf_key_hash: 'vrf',
           block_count: 11,
           live_stake: '1000000',
-          live_size: 0.0012,
           live_delegators: 4,
           live_saturation: 75.42,
           active_stake: '900000',
-          active_size: 0.0011,
+          sigma: 0.0011,
           pledge: '5000000',
           margin: 0.02,
           fixed_cost: '340000000',
@@ -493,8 +558,10 @@ describe('KoiosBackend', () => {
       expect(result.liveSaturation).toBeCloseTo(0.7542, 10);
       expect(result.liveSaturation).toBeLessThan(10);
       // fractions the provider already reports as fractions stay untouched
-      expect(result.liveSize).toBe(0.0012);
+      expect(result.activeSize).toBe(0.0011);
       expect(result.margin).toBe(0.02);
+      // /pool_info has no live share
+      expect(result.liveSize).toBeNull();
     });
 
     it('reports blocksEpoch as null — Koios has no per-epoch figure, and a 0 would read as a real zero', async () => {
@@ -527,10 +594,10 @@ describe('KoiosBackend', () => {
         end_time: 1700086400,
         first_block_time: 1700000010,
         last_block_time: 1700086390,
-        block_count: 21600,
+        blk_count: 21600,
         tx_count: 5000,
-        total_output: '50000000000000',
-        total_fees: '25000000',
+        out_sum: '50000000000000',
+        fees: '25000000',
         active_stake: '15000000000000000',
       }];
 
@@ -1111,8 +1178,9 @@ describe('KoiosBackend', () => {
           policy_id: POLICY,
           asset_name: ASSET_NAME_HEX,
           minting_txs: [
-            { tx_hash: 'a'.repeat(64), block_time: 1700000200, block_height: 200, quantity: '1000' },
-            { tx_hash: 'b'.repeat(64), block_time: 1700000100, block_height: 199, quantity: '-50' },
+            // minting_txs as the schema defines them: no block height
+            { tx_hash: 'a'.repeat(64), block_time: 1700000200, quantity: '1000' },
+            { tx_hash: 'b'.repeat(64), block_time: 1700000100, quantity: '-50' },
           ],
         }]);
 
@@ -1120,8 +1188,8 @@ describe('KoiosBackend', () => {
 
       expect(captured).toEqual({ _asset_policy: POLICY, _asset_name: ASSET_NAME_HEX });
       expect(result).toEqual([
-        { unit: UNIT, txHash: 'a'.repeat(64), action: 'mint', quantity: '1000', blockTime: 1700000200, blockHeight: 200 },
-        { unit: UNIT, txHash: 'b'.repeat(64), action: 'burn', quantity: '50',   blockTime: 1700000100, blockHeight: 199 },
+        { unit: UNIT, txHash: 'a'.repeat(64), action: 'mint', quantity: '1000', blockTime: 1700000200, blockHeight: null },
+        { unit: UNIT, txHash: 'b'.repeat(64), action: 'burn', quantity: '50',   blockTime: 1700000100, blockHeight: null },
       ]);
     });
 

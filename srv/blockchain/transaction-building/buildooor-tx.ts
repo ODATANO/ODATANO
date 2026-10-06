@@ -47,7 +47,7 @@ import {
 import { DataI, dataFromCbor, dataToCbor, type Data } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
 import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums, datumHashOf, witnessDatumsGrowth, writeWitnessDatums } from "./caller-datums";
-import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
+import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
 type MintScriptSource = { inline: Script } | { ref: LedgerUTxO };
@@ -291,7 +291,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       logger.debug(`Built unsigned transaction successfully.`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
     } catch (err: unknown) {
-      mapBuilderError(err);
+      // one requested output; Buildooor appends the change after it
+      mapBuilderError(err, undefined, undefined, 1);
     }
   }
 
@@ -299,6 +300,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     // Set once the collateral partition is known: it explains insufficient-funds rejections
     // that the builder's own message cannot attribute.
     let coinSelectionContext: string | undefined;
+    let requestedOutputs: number | undefined;
     try {
       this._ensureCurrentProtocolParameters(ctx);
       const recipientAddress = Address.fromString(req.recipientAddress);
@@ -322,12 +324,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
-      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
-      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
-      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
-
       // Funding must cover the lovelace plus, for extra outputs, their lovelace and any asset
       // demand the mint itself does not cover.
       let requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount));
@@ -338,6 +334,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           this._buildLedgerValue(lovelace, assets)
         );
       }
+
+      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
+      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, requiredFundingValue.lovelaces);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
+      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       const inputs = [...forcedInputs, ...selectedFunding];
       logger.debug(`Coin selection: ${selectedFunding.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for mint`);
@@ -367,6 +369,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Append extra outputs, each independently min-ADA checked.
       this._appendExtraOutputs(outputs, resolvedExtraOutputs);
+      requestedOutputs = outputs.length;
 
       // Mint entries; Buildooor ignores caller-supplied execution units, the real ones are
       // stamped post-build by _buildScriptTx.
@@ -399,13 +402,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       logger.debug(`Built unsigned minting transaction successfully with fee: ${tx.body.fee.toString()}`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { scriptHash: script.hash.toString(), forcedInputsUsed: forcedInputs.length, referenceInputsUsed: readonlyRefInputs.length });
     } catch (err: unknown) {
-      mapBuilderError(err, undefined, coinSelectionContext);
+      mapBuilderError(err, undefined, coinSelectionContext, requestedOutputs);
     }
   }
 
   public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     // See buildUnsignedMintTransaction — same collateral-partition context for rejections.
     let coinSelectionContext: string | undefined;
+    let requestedOutputs: number | undefined;
     try {
       this._ensureCurrentProtocolParameters(ctx);
       const { plutusScriptExecution } = req;
@@ -442,14 +446,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
-      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
-      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
-      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
-
       // Funding covers fee + min change (the script UTxO covers the output) plus extra outputs;
       // assets the script UTxO already provides net out, so over-requesting is harmless.
-      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       let requiredFundingValue = Value.lovelaces(BigInt(req.lovelaceAmount || MIN_CHANGE_LOVELACE));
       if (req.extraOutputs && req.extraOutputs.length > 0) {
         for (const extra of req.extraOutputs) {
@@ -459,6 +457,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           );
         }
       }
+
+      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral).
+      // The script UTxO pays its part of the outputs, so the collateral check counts only the rest.
+      const fundingGap = requiredFundingValue.lovelaces - getLovelace(scriptOdatanoUtxo);
+      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, fundingGap > 0n ? fundingGap : 0n);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
+      const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for Plutus spend`);
 
@@ -516,6 +522,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Append extra outputs, each independently min-ADA checked.
       this._appendExtraOutputs(outputs, resolvedExtraOutputs);
+      requestedOutputs = outputs.length;
 
       // Mint entries for the combined spend+mint; Buildooor ignores caller-supplied execution
       // units, the real ones are stamped post-build by _buildScriptTx.
@@ -555,7 +562,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         referenceInputsUsed: readonlyRefInputs.length
       });
     } catch (err: unknown) {
-      mapBuilderError(err, undefined, coinSelectionContext);
+      mapBuilderError(err, undefined, coinSelectionContext, requestedOutputs);
     }
   }
 
@@ -565,6 +572,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    */
   public async buildUnsignedPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     let coinSelectionContext: string | undefined;
+    let requestedOutputs: number | undefined;
     try {
       this._ensureCurrentProtocolParameters(ctx);
       const keyOf = (r: { txHash: string; outputIndex: number }) => `${r.txHash.toLowerCase()}#${r.outputIndex}`;
@@ -667,10 +675,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       this._checkForeignForcedInputs(forced, req);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
-      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest);
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
-      const allFundingInputs = fundingUtxos.map(utxo => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(utxo) }));
-
       // Funding covers only what the outputs need beyond the script inputs, forced inputs, mints and
       // withdrawals (keepRelevant adds its own lovelace margin for fee and change).
       const need = new Map<string, bigint>();
@@ -693,6 +697,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           ? Value.lovelaces(qty)
           : this._buildLedgerValue(0n, [{ unit, quantity: qty.toString() }]));
       }
+
+      // Collateral only when a Plutus script runs; Buildooor writes given collaterals into any body.
+      const runsScript = scriptEntries.length > 0 || mintEntries.length > 0 ||
+        [...withdrawalEntries, ...certEntries].some(e => e.script || e.refLedgerUtxo);
+      const { collateralUtxos, fundingUtxos, collateralReturn } = runsScript
+        ? this._setupCollateral(rest, requiredFundingValue.lovelaces)
+        : { collateralUtxos: [], fundingUtxos: rest, collateralReturn: undefined };
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      const allFundingInputs = fundingUtxos.map(utxo => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(utxo) }));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
 
       // Reference inputs: the caller's, minus the reference-script UTxOs Buildooor adds itself
@@ -736,6 +749,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         ...o,
         inlineDatum: o.inlineDatum !== undefined ? resolveIndexPlaceholders(o.inlineDatum, resolveCtx) : undefined,
       })));
+      requestedOutputs = outputs.length;
 
       const mints = mintEntries.length > 0
         ? this._buildMintEntries(mintEntries.map(e => e.m),
@@ -779,7 +793,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           (inline > 0 ? `; ${inline} script input(s) carry their validator inline, a referenceScript would move it out of the transaction` : '')
         );
       }
-      const scriptHashes = scriptEntries.map(e => e.script ? e.script.hash.toString() : e.scriptHash!);
+      // the first script that runs: a spend, else a mint policy, else a withdrawal or certificate script
+      const scriptHashes = [
+        ...scriptEntries.map(e => e.script ? e.script.hash.toString() : e.scriptHash!),
+        ...mintEntries.map(e => e.policyId),
+        ...[...withdrawalEntries, ...certEntries].flatMap(e => {
+          const hash = e.script?.hash ?? e.refLedgerUtxo?.resolved.refScript?.hash;
+          return hash ? [hash.toString()] : [];
+        }),
+      ];
       logger.debug(`Built unsigned Plutus transaction with ${scriptInputs.length} script input(s), fee ${details.feeLovelace}`);
       return this._buildResult(req, ctx, details, {
         scriptHash: scriptHashes[0],
@@ -787,7 +809,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         referenceInputsUsed: readonlyRefInputs.length + refScriptKeys.size
       });
     } catch (err: unknown) {
-      mapBuilderError(err, undefined, coinSelectionContext);
+      mapBuilderError(err, undefined, coinSelectionContext, requestedOutputs);
     }
   }
 
@@ -1390,18 +1412,26 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * message counts only the funding pool, so the reservation would otherwise be invisible.
    */
   private _collateralPartitionContext(collateralUtxos: LedgerUTxO[], fundingUtxos: OdatanoUtxo[]): string {
-    const collateralLovelace = collateralUtxos.reduce((s, u) => s + u.resolved.value.lovelaces, 0n);
     const fundingLovelace = fundingUtxos.reduce((s, u) => s + getLovelace(u), 0n);
-    return `${collateralUtxos.length} UTxO(s) with ${collateralLovelace} lovelace reserved as collateral; ` +
-      `${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace remained for coin selection`;
+    if (collateralUtxos.length === 0) {
+      return `no script runs, so no collateral; ${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace for coin selection`;
+    }
+    const collateralLovelace = collateralUtxos.reduce((s, u) => s + u.resolved.value.lovelaces, 0n);
+    const collateralKeys = new Set(collateralUtxos.map(u => `${u.utxoRef.id.toString()}#${u.utxoRef.index}`));
+    const alsoFunding = fundingUtxos.some(u => collateralKeys.has(`${u.txHash}#${u.outputIndex}`));
+    return `${collateralUtxos.length} UTxO(s) with ${collateralLovelace} lovelace reserved as collateral` +
+      `${alsoFunding ? ' and also offered as funding' : ''}; ` +
+      `${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace for coin selection`;
   }
 
   /**
    * Pick the smallest ADA-only UTxO covering COLLATERAL_LOVELACE as collateral and return the
    * rest as funding; excess above the floor goes back via collateralReturn when it meets min-ADA
    * (Buildooor sets no collateralReturn for ADA-only collateral). Throws without an ADA-only UTxO.
+   * When the rest cannot pay `requiredLovelace` plus fee and change, the collateral UTxO is
+   * funding too. The ledger allows one UTxO as input and as collateral.
    */
-  private _setupCollateral(utxos: OdatanoUtxo[]): {
+  private _setupCollateral(utxos: OdatanoUtxo[], requiredLovelace: bigint): {
     collateralUtxos: LedgerUTxO[]; fundingUtxos: OdatanoUtxo[];
     collateralReturn?: { address: Address; value: Value };
   } {
@@ -1425,9 +1455,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
 
     const collateralUtxos = [this._mapOdatanoUtxoToLedgerUtxo(chosen)];
-    const fundingUtxos = utxos.filter(
+    const rest = utxos.filter(
       u => !(u.txHash === chosen.txHash && u.outputIndex === chosen.outputIndex)
     );
+    const restLovelace = rest.reduce((sum, u) => sum + getLovelace(u), 0n);
+    const fundingUtxos = restLovelace >= requiredLovelace + FEE_BUFFER_LOVELACE + BigInt(MIN_CHANGE_LOVELACE)
+      ? rest
+      : [...rest, chosen];
 
     // Cap the at-risk amount at the floor: return the excess to the owner.
     let collateralReturn: { address: Address; value: Value } | undefined;

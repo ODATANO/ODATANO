@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.33] - Plutus builds without script inputs, collateral fallback, Koios accounts, witness sets on submit
+
+No schema change.
+
+### Added
+
+- `BuildPlutusTransaction`: `scriptInputsJson` is optional (0..16 entries), so a mint by reference script, a
+  withdraw-zero or a certificate builds alone. Collateral is added only when a script runs.
+
+### Changed
+
+- `SubmitTransaction`: `signedTxCbor` may be the witness set a CIP-30 wallet returns from `signTx`; it is
+  added to the build's transaction before submitting, as `VerifySignature` and `SubmitVerifiedTransaction`
+  already do.
+- Wallet app: the CIP-30 sign result is named `witnessSetCbor`.
+- Plutus builds: when the other sender UTxOs cannot pay the outputs, fee and change, the collateral UTxO is spent
+  as an input as well instead of the build failing on the change output.
+- A change output below min-ADA is reported as `Insufficient lovelace` naming the funding, not as an output the
+  caller should raise; this covers all build actions.
+- Witness sets from CIP-30 wallets: bootstrap witnesses (Byron addresses) are taken over as well, and a witness
+  set without any signature is a 400 before submit.
+
+### Fixed
+
+- Koios `getAccount`: maps the `/account_info` schema (`status`, `total_balance`, `rewards`, `withdrawals`,
+  `rewards_available`, `delegated_pool`, `delegated_drep`). A registered account was reported inactive, so every
+  withdrawal build over Koios was refused, and balance, rewards and delegation were empty.
+- Koios `getEpoch`: block count, output and fees come from `blk_count`, `out_sum` and `fees`; they were empty.
+- Koios `getPool`: `activeSize` comes from `sigma`; `liveSize` is null, since `/pool_info` has no live share
+  (`PoolData.liveSize` is `number | null`).
+- Koios `getAddress`: `isScript` from `script_address`, the type decoded from the address; both were empty.
+- `Addresses.type` is the CIP-19 kind (`base`, `pointer`, `enterprise`, `reward`, `byron`, `unknown`) on every
+  backend; Blockfrost wrote `shelley`. Stored rows take the new value on their next refresh.
+- Ogmios `getPool`: `liveSize` is null instead of 0; one pool's stake gives no live share.
+
+- `parseTransaction`: `cborSize` reads the output bytes as received instead of relying on the library to
+  return them; a re-encoding can be shorter.
+- Transaction workflow guide: the CIP-30 example names the witness set and shows how to submit it.
+
 ## [v2.0.0-rc.32] - transaction checks for payment verifiers, confirmations
 
 No schema change.

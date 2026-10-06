@@ -252,7 +252,8 @@ export interface PoolData {
   /** Blocks minted in the current epoch; null when the backend has no such figure (Koios). */
   blocksEpoch: number | null;
   liveStake: string;
-  liveSize: number;
+  /** Share of the total live stake; null when the backend has no such figure (Koios). */
+  liveSize: number | null;
   /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. */
   liveSaturation: number;
   /** Null when the source cannot count delegators (Ogmios ledger state). */

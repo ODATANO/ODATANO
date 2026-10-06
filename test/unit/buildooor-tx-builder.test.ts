@@ -1296,10 +1296,10 @@ describe('BuildooorTxBuilder', () => {
       expect(BigInt(parsed.body.collateralReturn!.value.lovelaces)).toBe(45_000_000n);
     });
 
-    it('names the collateral partition when funding is insufficient after the reservation', async () => {
+    it('names the collateral partition when the wallet cannot pay the outputs', async () => {
       await initBuilder();
-      // 6 ADA UTxO becomes collateral (smallest ≥ 5 ADA floor); only 4.4 ADA remains
-      // for funding a 4.4 ADA mint output + fee → insufficient.
+      // 6 ADA UTxO becomes collateral and is offered as funding too; 10.4 ADA in all
+      // cannot pay an 11 ADA mint output + fee.
       const smallFunding: UTxO = {
         txHash: 'ee'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
         amount: [{ unit: 'lovelace', quantity: '4400000' }],
@@ -1313,8 +1313,8 @@ describe('BuildooorTxBuilder', () => {
         protocolParameters: PROTOCOL_PARAMS,
       };
 
-      await expect(builder.buildUnsignedMintTransaction({ ...mintReq(), lovelaceAmount: '4400000' }, ctx))
-        .rejects.toThrow(/reserved as collateral/);
+      await expect(builder.buildUnsignedMintTransaction({ ...mintReq(), lovelaceAmount: '11000000' }, ctx))
+        .rejects.toThrow(/reserved as collateral and also offered as funding/);
     });
 
     it('hashes the language views from the raw chain cost-model array (protocol-11: 350 V3 entries)', async () => {
@@ -1406,7 +1406,7 @@ describe('BuildooorTxBuilder', () => {
       amount: [{ unit: 'lovelace', quantity: '2000000' }, { unit: ASSET_UNIT, quantity: '1' }],
     };
 
-    const setup = (utxos: UTxO[]) => (builder as any)._setupCollateral(utxos);
+    const setup = (utxos: UTxO[], requiredLovelace = 0n) => (builder as any)._setupCollateral(utxos, requiredLovelace);
 
     beforeEach(async () => {
       // _setupCollateral needs an initialized TxBuilder for min-ADA computation
@@ -1454,6 +1454,22 @@ describe('BuildooorTxBuilder', () => {
 
     it('still throws when no ADA-only UTxO exists', () => {
       expect(() => setup([assetUtxo])).toThrow('No ADA-only UTxO available for collateral');
+    });
+
+    it('offers the collateral UTxO as funding too when the rest cannot pay fee and change', () => {
+      const big = adaUtxo('aa', '20000000');
+      const small = adaUtxo('bb', '1231961');
+      const { collateralUtxos, fundingUtxos } = setup([big, small]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(big.txHash);
+      expect(fundingUtxos.map((u: UTxO) => u.txHash)).toEqual([small.txHash, big.txHash]);
+    });
+
+    it('keeps the collateral UTxO out of funding when the rest pays the required amount, fee and change', () => {
+      const collateralUtxo = adaUtxo('aa', '5000000');
+      const fundingUtxo = adaUtxo('bb', '13000000');
+      expect(setup([collateralUtxo, fundingUtxo], 10_000_000n).fundingUtxos.map((u: UTxO) => u.txHash)).toEqual([fundingUtxo.txHash]);
+      expect(setup([collateralUtxo, fundingUtxo], 10_000_001n).fundingUtxos.map((u: UTxO) => u.txHash)).toEqual([fundingUtxo.txHash, collateralUtxo.txHash]);
     });
   });
 
@@ -1558,6 +1574,37 @@ describe('BuildooorTxBuilder', () => {
       // An empty witness datum set would mean MissingRequiredDatums on submit.
       expect(datums.length).toBe(1);
       expect(Buffer.from(hashData(datums[0])).toString('hex')).toBe(DATUM_HASH);
+    });
+
+    it('spends the collateral UTxO as well when the other wallet UTxO cannot pay fee and change', async () => {
+      await builder.init({ network: 'preview' } as any, PARAMS);
+      const big: UTxO = { txHash: 'f1'.repeat(32), outputIndex: 0, address: TEST_ADDRESS, amount: [{ unit: 'lovelace', quantity: '20000000' }] };
+      const small: UTxO = { txHash: 'f2'.repeat(32), outputIndex: 0, address: TEST_ADDRESS, amount: [{ unit: 'lovelace', quantity: '1231961' }] };
+
+      // the script UTxO (5 ADA) goes fully into the two outputs
+      const req: TxBuildPlutusSpendRequest = {
+        network: 'preview',
+        senderAddress: TEST_ADDRESS,
+        recipientAddress: TEST_ADDRESS,
+        lovelaceAmount: '2500000',
+        extraOutputs: [{ address: TEST_ADDRESS, lovelaceAmount: '2500000' }],
+        plutusScriptExecution: {
+          validatorScript: VALID_SPENDING_SCRIPT,
+          scriptUtxo: { txHash: scriptUtxo.txHash, outputIndex: 0 },
+          redeemer: { constructor: 0, fields: [] },
+          datum: { constructor: 0, fields: [] },
+        },
+      };
+      const ctx: TxBuildContext = {
+        utxos: [scriptUtxo, big, small],
+        protocolParameters: PARAMS,
+        evaluateTransaction: async () => [0, 1, 2].map(index => ({ validator: { purpose: 'spend', index }, budget: { memory: 200_000, cpu: 100_000_000 } })),
+      };
+
+      const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusSpendTransaction(req, ctx)).unsignedTxCbor!);
+      expect(tx.body.inputs.map((i: any) => i.utxoRef.id.toString())).toContain(big.txHash);
+      expect((tx.body.collateralInputs ?? []).map((i: any) => i.utxoRef.id.toString())).toEqual([big.txHash]);
     });
   });
 

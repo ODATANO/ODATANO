@@ -110,6 +110,45 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       expect(scope.isDone()).to.be.true;
     });
 
+    it('SubmitTransaction - adds a CIP-30 witness set to the build before submitting', async () => {
+      const buildId = 'test-build-witness-set';
+      const now = Date.now();
+      await cds.run(
+        cds.ql.INSERT.into('CardanoTransactionService.TransactionBuilds').entries({
+          id: buildId,
+          network: TEST_FIXTURES.network,
+          senderAddress: TEST_FIXTURES.addressWithFunds,
+          recipientAddress: TEST_FIXTURES.emptyAddress,
+          lovelaceAmount: TEST_FIXTURES.lovelaceAmount,
+          changeAddress: TEST_FIXTURES.addressWithFunds,
+          status: 'BUILT',
+          unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
+          txBodyHash: TEST_FIXTURES.txBodyHash,
+          createdAt: now,
+          validFrom: new Date(now).toISOString(),
+          validTo: new Date(now + 300000).toISOString(),
+        })
+      );
+
+      // nock hands a binary request body to the matcher as hex
+      let posted = '';
+      const scope = nock('https://preview.koios.rest')
+        .post('/api/v1/submittx', (body: string) => { posted = String(body); return true; })
+        .reply(200, TEST_FIXTURES.txBodyHash);
+
+      const submitResponse = await test.post('/odata/v4/cardano-transaction/SubmitTransaction', {
+        buildId,
+        signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+      });
+
+      expect(submitResponse.status).to.equal(200);
+      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.txBodyHash);
+      expect(scope.isDone()).to.be.true;
+      // a full transaction (4-element array) that carries the wallet's witness
+      expect(posted.startsWith('84')).to.be.true;
+      expect(posted).to.include(TEST_FIXTURES.witnessSetCbor.slice(-128));
+    });
+
     // ============================================================================
     // Error Scenario Tests
     // ============================================================================

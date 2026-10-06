@@ -473,9 +473,10 @@ sap.ui.define([
                 signingRequest.unsignedTxCbor,
                 !!partialSign
             ).then(function (witnessSetCbor) {
+                // CIP-30 signTx returns only the witness set; the server adds it to the transaction
                 return {
                     success: true,
-                    signedTxCbor: witnessSetCbor,
+                    witnessSetCbor: witnessSetCbor,
                     txHash: signingRequest.txBodyHash
                 };
             }).catch(function (error) {

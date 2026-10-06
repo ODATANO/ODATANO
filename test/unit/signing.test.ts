@@ -19,6 +19,7 @@ import { blake2b_224 } from '@harmoniclabs/crypto';
 import {
   combineTransactionWithWitnesses,
   isWitnessSetCbor,
+  toSignedTransaction,
 } from '../../srv/utils/signing-helper';
 
 import {
@@ -697,6 +698,32 @@ describe('ExternalSignerModule', () => {
 
 describe('Utility Functions', () => {
   describe('combineTransactionWithWitnesses()', () => {
+    const { Cbor, CborArray, CborMap, CborUInt, CborBytes } = require('@harmoniclabs/cbor');
+    const encode = (obj: unknown) => Buffer.from(Cbor.encode(obj)).toString('hex');
+    const witnessSetOf = (entries: Array<{ k: unknown; v: unknown }>) => encode(new CborMap(entries));
+    const bootstrap = new CborArray([new CborArray([
+      new CborBytes(Buffer.alloc(32, 1)), new CborBytes(Buffer.alloc(64, 2)),
+      new CborBytes(Buffer.alloc(32, 3)), new CborBytes(Buffer.from('a0', 'hex')),
+    ])]);
+
+    it('takes bootstrap witnesses (key 2) from the wallet as well', () => {
+      const signed = combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessSetOf([{ k: new CborUInt(2), v: bootstrap }]));
+      const ws = (Cbor.parse(signed) as InstanceType<typeof CborArray>).array[1] as InstanceType<typeof CborMap>;
+      expect(ws.map.map((e: { k: { num: bigint } }) => Number(e.k.num))).toContain(2);
+    });
+
+    it('rejects a witness set without any signature', () => {
+      expect(() => combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessSetOf([])))
+        .toThrow(/carries no vkey or bootstrap witness/);
+    });
+
+    it('toSignedTransaction passes a full transaction through and combines a witness set', () => {
+      expect(toSignedTransaction(VALID_UNSIGNED_TX_CBOR, VALID_SIGNED_TX_CBOR)).toBe(VALID_SIGNED_TX_CBOR);
+      expect(getSignatureVerifier().extractTxBodyHash(toSignedTransaction(VALID_UNSIGNED_TX_CBOR, VALID_WITNESS_SET_CBOR)))
+        .toBe(getSignatureVerifier().extractTxBodyHash(VALID_UNSIGNED_TX_CBOR));
+      expect(() => toSignedTransaction(null, VALID_WITNESS_SET_CBOR)).toThrow(TransactionValidationError);
+    });
+
     it('should successfully combine unsigned transaction with witness set', () => {
       const result = combineTransactionWithWitnesses(
         VALID_UNSIGNED_TX_CBOR,
@@ -849,7 +876,7 @@ describe('Utility Functions', () => {
       }).toThrow(TransactionValidationError);
       expect(() => {
         combineTransactionWithWitnesses(VALID_UNSIGNED_TX_CBOR, witnessCbor);
-      }).toThrow('Unexpected VKey witness format');
+      }).toThrow('Unexpected witness format');
     });
   });
 

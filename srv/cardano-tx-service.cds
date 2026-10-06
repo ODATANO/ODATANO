@@ -268,7 +268,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                              @description: 'The unique identifier of the transaction build'
                              buildId: UUID,
                              @title: 'Signed Transaction CBOR'
-                             @description: 'The CBOR of the signed transaction'
+                             @description: 'The signed transaction, or the witness set a CIP-30 wallet returns from signTx; a witness set is added to the build transaction'
                              signedTxCbor: String)            returns TransactionSubmissions;
 
     @title      : 'Submit Signed Transaction'
@@ -355,7 +355,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Build Plutus Transaction'
-    @description: 'Spend several script UTxOs in one transaction, each with its own redeemer (inline validator or a reference-script UTxO). The outputs are built exactly in the given order, change comes after them. The execution units of every redeemer are returned under redeemers.'
+    @description: 'Spend script UTxOs, each with its own redeemer (inline validator or a reference-script UTxO), mint, withdraw and certify in one transaction; script inputs are optional, so a mint or a withdraw-zero alone works. Collateral is added only when a script runs. The outputs are built exactly in the given order, change comes after them. The execution units of every redeemer are returned under redeemers.'
     action BuildPlutusTransaction(
                                   @title: 'Sender Address'
                                   @description: 'Pays the fee, funds the rest and provides the ADA-only collateral'
@@ -364,7 +364,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   @description: 'Receives the change; defaults to senderAddress'
                                   changeAddress: Bech32,
                                   @title: 'Script Inputs JSON'
-                                  @description: 'Required JSON array, 1..16 entries: {txHash, outputIndex, validatorScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor, datumJson | datumCbor (hash datums only)}. The *Cbor forms take PlutusData CBOR hex byte for byte. In any redeemer or datum JSON, __INPUT_IDX:<txHash>#<n>__ resolves to the index in the final sorted inputs, __REF_IDX:<txHash>#<n>__ to the index in the sorted reference inputs (reference-script UTxOs included) and __WDRL_IDX:<credential hash>__ to the index in the withdrawals in ledger order.'
+                                  @description: 'Optional JSON array, 0..16 entries: {txHash, outputIndex, validatorScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor, datumJson | datumCbor (hash datums only)}. The *Cbor forms take PlutusData CBOR hex byte for byte. In any redeemer or datum JSON, __INPUT_IDX:<txHash>#<n>__ resolves to the index in the final sorted inputs, __REF_IDX:<txHash>#<n>__ to the index in the sorted reference inputs (reference-script UTxOs included) and __WDRL_IDX:<credential hash>__ to the index in the withdrawals in ledger order.'
                                   scriptInputsJson: String,
                                   @title: 'Outputs JSON'
                                   @description: 'Required JSON array of outputs in this order: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson? | inlineDatumCbor? | datumHash?, referenceScriptHex?}. Each is min-ADA checked; change is appended after them and never merged into one.'
