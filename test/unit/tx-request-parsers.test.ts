@@ -292,9 +292,25 @@ describe('parsePolicyMintActions', () => {
   });
 
   it('requires a script per action and a matching policy id', () => {
-    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '1' }])).error).toContain('mintingPolicyScript is required');
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '1' }])).error).toContain('needs exactly one of mintingPolicyScript or referenceScript');
     expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: 'ab'.repeat(28) + '746f6b', quantity: '1', mintingPolicyScript: SCRIPT }])).error).toContain('does not start with its policy id');
     expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '0', mintingPolicyScript: SCRIPT }])).error).toContain('non-zero');
+  });
+
+  it('takes the policy as referenceScript with a full asset unit and a redeemer', () => {
+    const ref = { txHash: 'ab'.repeat(32), outputIndex: 2 };
+    const r = parsePolicyMintActions(JSON.stringify([{ assetUnit: POLICY + '746f6b', quantity: '1', referenceScript: ref, redeemerJson: '{"int":0}' }]));
+    expect(r.parsed).toEqual([{ assetUnit: POLICY + '746f6b', quantity: 1n, referenceScript: { txHash: 'ab'.repeat(32), outputIndex: 2 }, redeemerJson: { int: 0 } }]);
+  });
+
+  it('rejects a referenceScript next to a mintingPolicyScript, a bare asset name or a malformed ref', () => {
+    const ref = { txHash: 'ab'.repeat(32), outputIndex: 0 };
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: POLICY + '746f6b', quantity: '1', mintingPolicyScript: SCRIPT, referenceScript: ref }])).error)
+      .toContain('needs exactly one of mintingPolicyScript or referenceScript');
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: '746f6b', quantity: '1', referenceScript: ref }])).error)
+      .toContain('must be policyId+assetName when the policy is a referenceScript');
+    expect(parsePolicyMintActions(JSON.stringify([{ assetUnit: POLICY + '746f6b', quantity: '1', referenceScript: { txHash: 'zz', outputIndex: 0 } }])).error)
+      .toContain('referenceScript must be {txHash, outputIndex}');
   });
 });
 

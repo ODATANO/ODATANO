@@ -7,7 +7,8 @@ import {
   PaginatingBackend,
   EnumeratingBackend,
 } from './cardano-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, TransactionValidationError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionValidationError } from '../../utils/errors';
+import { ERROR_CODES } from '../../utils/error-codes';
 import type {
   Transaction,
   Address,
@@ -179,7 +180,11 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
       const retryAfter = Number(ax.response?.headers?.['retry-after']);
       return new RateLimitError(message, this.name, Number.isFinite(retryAfter) ? retryAfter : undefined);
     }
-    if (status === 400) return new TransactionValidationError(message);
+    if (status === 400) {
+      return message.includes(ERROR_CODES.SCRIPT_VALIDATION_FAILURE)
+        ? new ScriptValidationError(message)
+        : new TransactionValidationError(message);
+    }
     if (status === 401 || status === 402 || status === 403) {
       logger.error(`${operation}: the remote ODATANO refused the key (${status}): ${message}`);
     }

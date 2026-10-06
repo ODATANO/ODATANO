@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.29] - index placeholders, mints by reference script, script failures on evaluation
+
+No schema change.
+
+### Added
+
+- `BuildPlutusTransaction`: `__REF_IDX:<txHash>#<n>__` in any redeemer or datum JSON resolves to the index of
+  that reference input in the sorted reference inputs (reference-script UTxOs added by the builder included).
+- `BuildPlutusTransaction`: `__WDRL_IDX:<credential hash>__` resolves to the index of that credential's
+  withdrawal in ledger order (script credentials first, then by hash).
+- `BuildPlutusTransaction`: a `mintActionsJson` entry takes `referenceScript: {txHash, outputIndex}` instead of
+  `mintingPolicyScript`; the asset unit must be under the policy of that script.
+
+### Fixed
+
+- `BuildPlutusTransaction`: a key-credential withdrawal that sorts before a scripted one by hash is refused
+  with 400; the scripted withdrawal would otherwise run with the wrong redeemer index.
+- `BuildPlutusTransaction`: an inline minting policy that a reference input already carries runs from the
+  reference input.
+
+- `EvaluateTransaction`: an Ogmios script failure (code 3010) is a 400 `ODATANO_SCRIPT_VALIDATION_FAILURE`
+  with each failing validator (purpose, index, `validationError`, `traces`) instead of a 503; it no longer
+  opens the Ogmios circuit breaker.
+- Plutus builds: an Ogmios script failure is reported to the caller instead of falling back to local
+  execution units ("no Ogmios evaluation is available").
+- `EvaluateTransaction`: other Ogmios evaluation failures (3000-3099) are a 400 with their reason; 3003 (node
+  still syncing) stays 503.
+- `odatano` backend: a remote script failure stays a script validation error.
+
+### Security
+
+- `proxy-addr` 2.0.8 and `http-cache-semantics` 4.3.0 (lockfile).
+
 ## [v2.0.0-rc.28] - typed configuration, Koios row types
 
 No schema change.

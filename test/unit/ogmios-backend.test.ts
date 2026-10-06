@@ -20,7 +20,7 @@ vi.mock('@cardano-ogmios/client', () => ({
 import { Method } from '@cardano-ogmios/client';
 import { blake2b_224 } from '@harmoniclabs/crypto';
 import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId, mapOgmiosEpochState } from '../../srv/blockchain/backends/ogmios-backend';
-import { BackendInitError, NotFoundError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, ScriptValidationError, TransactionValidationError } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
   const NETWORK = 'preview' as const;
@@ -587,6 +587,35 @@ describe('OgmiosBackend', () => {
 
       await expect(backend.evaluateTransaction('84a400818258201234567890abcdef'))
         .rejects.toThrow('Script execution failed');
+    });
+
+    const rpcError = (code: number, message: string, data?: unknown) => Object.assign(new Error(message), { code, data });
+    const rejectingBackend = (err: Error) => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).txSubmissionClient = { evaluateTransaction: vi.fn().mockRejectedValue(err) };
+      (backend as any).isShutdown = false;
+      return backend;
+    };
+
+    it('maps a 3010 script failure to a ScriptValidationError naming the validator', async () => {
+      const backend = rejectingBackend(rpcError(3010, 'Some scripts of the transactions terminated with error(s).',
+        [{ validator: { index: 0, purpose: 'withdraw' }, error: { code: 3012, message: 'failed', data: { validationError: 'Caused by: (error)', traces: [] } } }]));
+
+      await expect(backend.evaluateTransaction('84a0')).rejects.toSatisfy((e: unknown) =>
+        e instanceof ScriptValidationError && (e as Error).message.includes('"purpose":"withdraw"'));
+    });
+
+    it('maps other evaluation failures to a TransactionValidationError with the reason', async () => {
+      const backend = rejectingBackend(rpcError(3004, 'Unable to create the evaluation context.', { reason: 'unknown input' }));
+
+      await expect(backend.evaluateTransaction('84a0')).rejects.toSatisfy((e: unknown) =>
+        e instanceof TransactionValidationError && (e as Error).message.includes('unknown input'));
+    });
+
+    it('keeps a 3003 node-tip-too-old failure retryable', async () => {
+      const backend = rejectingBackend(rpcError(3003, 'The node is still synchronizing.'));
+
+      await expect(backend.evaluateTransaction('84a0')).rejects.toBeInstanceOf(ProviderUnavailableError);
     });
   });
 

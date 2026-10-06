@@ -231,6 +231,7 @@ export class CardanoTransactionBuilder {
             ...req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : [])),
             ...(req.withdrawals ?? []).flatMap(w => (w.referenceScript ? [w.referenceScript] : [])),
             ...(req.certificates ?? []).flatMap(c => (c.referenceScript ? [c.referenceScript] : [])),
+            ...(req.mintActions ?? []).flatMap(m => (m.referenceScript ? [m.referenceScript] : [])),
         ], [], 'referenceScript');
         const callerRefUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], allUtxos);
         const referenceInputUtxos = mergeUtxosUnique(callerRefUtxos, refScriptUtxos);

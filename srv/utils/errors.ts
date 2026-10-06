@@ -242,8 +242,14 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
   return 'Unknown error';
 }
 
+/** Ogmios JSON-RPC code of a failed script evaluation. */
+const OGMIOS_SCRIPT_EXECUTION_FAILURE = 3010;
+/** Characters of Ogmios error data kept in a message. */
+const OGMIOS_DETAIL_MAX = 2000;
+
 /**
- * Normalizes any backend error into a typed BackendError. Message hints are checked in priority
+ * Normalizes any backend error into a typed BackendError. An Ogmios script failure is recognised
+ * by its JSON-RPC code. Message hints are then checked in priority
  * order (already submitted, script failure, validation, not found, rate limit) before the HTTP status.
  */
 export function normalizeBackendError(
@@ -262,6 +268,13 @@ export function normalizeBackendError(
       backendName || 'unknown',
       new Error('Backend client not initialized - call init() first')
     );
+  }
+
+  // Ogmios evaluateTransaction 3010: a script failed. Its data names each failing validator.
+  const rpc = err as { code?: unknown; message?: unknown; data?: unknown } | null;
+  if (rpc?.code === OGMIOS_SCRIPT_EXECUTION_FAILURE) {
+    const detail = rpc.data === undefined ? '' : ` ${JSON.stringify(rpc.data).slice(0, OGMIOS_DETAIL_MAX)}`;
+    return new ScriptValidationError(`Script validation failed (${rpc.code}): ${String(rpc.message ?? '')}${detail}`, err);
   }
 
   const message = getErrorMessage(err);

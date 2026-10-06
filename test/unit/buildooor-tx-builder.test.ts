@@ -295,7 +295,8 @@ describe('BuildooorTxBuilder', () => {
   describe('_buildMintEntries — per-action mint policy', () => {
     const parseScript = (hex: string) => (builder as any)._parsePlutusV3Script(hex, 'test');
     const entriesOf = (actions: unknown[], defaultRedeemer?: unknown) =>
-      (builder as any)._buildMintEntries(actions, parseScript(VALID_PLUTUS_SCRIPT), defaultRedeemer);
+      (builder as any)._buildMintEntries(actions,
+        (a: unknown, i: number) => ({ inline: (builder as any)._mintActionScript(a, parseScript(VALID_PLUTUS_SCRIPT), i) }), defaultRedeemer);
     const spendingHash = () => parseScript(VALID_SPENDING_SCRIPT).hash.toString();
 
     it('per-action script and redeemer override the top-level ones', () => {

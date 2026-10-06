@@ -946,8 +946,21 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return handleBackendRequest(async () => {
       await this.ensureConnected();
 
-      const results = await this.txSubmissionClient!.evaluateTransaction(unsignedTxCbor);
-      return results as ScriptEvaluationResult[];
+      try {
+        const results = await this.txSubmissionClient!.evaluateTransaction(unsignedTxCbor);
+        return results as ScriptEvaluationResult[];
+      } catch (err: unknown) {
+        // JSON-RPC 3000-3099 except 3003: the transaction cannot be evaluated as given, a 400 with its reason.
+        // 3003 means the node is still syncing, so it stays retryable.
+        const known = normalizeBackendError(err, this.name);
+        if (known.statusCode >= 400 && known.statusCode < 500) throw known;
+        const e = err as { code?: unknown; message?: unknown; data?: unknown };
+        if (typeof e?.code === 'number' && e.code >= 3000 && e.code < 3100 && e.code !== 3003) {
+          const detail = e.data === undefined ? '' : ` ${JSON.stringify(e.data).slice(0, 800)}`;
+          throw new TransactionValidationError(`transaction cannot be evaluated (${e.code}): ${String(e.message ?? '')}${detail}`, err);
+        }
+        throw err;
+      }
     }, this.name);
   }
 

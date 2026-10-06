@@ -369,8 +369,10 @@ export type MintAction = {
    * top-level mintingPolicyScript. The assetUnit must carry this script's policyId.
    */
   mintingPolicyScript?: string;
+  /** BuildPlutusTransaction only: UTxO that carries the policy as reference script; exclusive with mintingPolicyScript. */
+  referenceScript?: { txHash: string; outputIndex: number };
   /**
-   * Per-action redeemer (parsed PlutusData JSON), only with mintingPolicyScript; falls back to mintRedeemer.
+   * Per-action redeemer (parsed PlutusData JSON), only with mintingPolicyScript or referenceScript; falls back to mintRedeemer.
    * Actions on the same policy must agree (one redeemer per policy in the ledger).
    */
   redeemerJson?: JSONValue;

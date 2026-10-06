@@ -9,6 +9,7 @@ import {
   AllBackendsInitFailedError,
   TransactionAlreadySubmittedError,
   TransactionValidationError,
+  ScriptValidationError,
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError,
@@ -285,6 +286,21 @@ describe('Error Classes', () => {
       const result = normalizeBackendError(originalError);
 
       expect(result).toBe(originalError);
+    });
+
+    it('should map an Ogmios 3010 script failure to a 400 ScriptValidationError with the validator detail', () => {
+      const error = Object.assign(new Error('Some scripts of the transactions terminated with error(s).'), {
+        code: 3010,
+        data: [{ validator: { index: 0, purpose: 'withdraw' }, error: { code: 3012, message: 'failed', data: { validationError: 'Caused by: (error)', traces: ['t1'] } } }],
+      });
+      const result = normalizeBackendError(error, 'ogmios');
+
+      expect(result).toBeInstanceOf(ScriptValidationError);
+      expect(result.statusCode).toBe(400);
+      expect(result.message).toContain('(3010)');
+      expect(result.message).toContain('"purpose":"withdraw"');
+      expect(result.message).toContain('Caused by: (error)');
+      expect(result.message).toContain('"traces":["t1"]');
     });
 
     it('should convert message "not found" to 404 NotFoundError (even with 5xx status)', () => {

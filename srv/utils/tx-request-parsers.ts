@@ -218,7 +218,8 @@ export function parseOutputList(
  */
 export function parseMintActionPolicyFields(
   entry: Record<string, unknown>,
-  i: number
+  i: number,
+  byReference = false
 ): { script?: string; redeemer?: JSONValue; error?: string } {
   let script: string | undefined;
   if (entry.mintingPolicyScript !== undefined && entry.mintingPolicyScript !== null) {
@@ -236,7 +237,7 @@ export function parseMintActionPolicyFields(
     if (!jsonResult.valid) return { error: jsonResult.error! };
     redeemer = jsonResult.parsed as JSONValue;
   }
-  if (redeemer !== undefined && script === undefined) {
+  if (redeemer !== undefined && script === undefined && !byReference) {
     return { error: `mintActions[${i}].redeemerJson requires mintActions[${i}].mintingPolicyScript` };
   }
   return { script, redeemer };
@@ -508,8 +509,8 @@ export function parseCertificates(json: string | undefined): { parsed?: ParsedCe
 
 /**
  * Parse mintActionsJson for BuildPlutusTransaction: every action carries its own `mintingPolicyScript`
- * (no request-level default) and optional `redeemerJson`; `assetUnit` is policyId+assetName, or a bare
- * assetName that is prefixed with the policy id of the action's script.
+ * or `referenceScript` (no request-level default) and optional `redeemerJson`; `assetUnit` is
+ * policyId+assetName, or with an inline script a bare assetName prefixed with the script's policy id.
  */
 export function parsePolicyMintActions(json: string | undefined): { parsed?: MintAction[]; error?: string } {
   if (!json) return { parsed: undefined };
@@ -524,31 +525,47 @@ export function parsePolicyMintActions(json: string | undefined): { parsed?: Min
     if (typeof entry.quantity !== 'string' || !/^-?\d+$/.test(entry.quantity) || BigInt(entry.quantity) === 0n) {
       return { error: `mintActions[${i}].quantity must be a non-zero integer string` };
     }
-    if (entry.mintingPolicyScript === undefined || entry.mintingPolicyScript === null) {
-      return { error: `mintActions[${i}].mintingPolicyScript is required` };
+    const present = (v: unknown) => v !== undefined && v !== null;
+    const hasRef = present(entry.referenceScript);
+    if (present(entry.mintingPolicyScript) === hasRef) {
+      return { error: `mintActions[${i}] needs exactly one of mintingPolicyScript or referenceScript` };
     }
-    const policy = parseMintActionPolicyFields(entry, i);
+    const policy = parseMintActionPolicyFields(entry, i, hasRef);
     if (policy.error) return { error: policy.error };
-    let policyId: string;
-    try {
-      policyId = Script.fromCbor(Buffer.from(policy.script!, 'hex')).hash.toString();
-    } catch (err: unknown) {
-      return { error: `mintActions[${i}].mintingPolicyScript is not a valid Plutus script: ${err instanceof Error ? err.message : String(err)}` };
-    }
     if (typeof entry.assetUnit !== 'string' || !/^[0-9a-fA-F]*$/.test(entry.assetUnit) || entry.assetUnit.length % 2 !== 0) {
       return { error: `mintActions[${i}].assetUnit must be hex (policyId+assetName, or a bare assetName)` };
     }
     let assetUnit = entry.assetUnit.toLowerCase();
-    if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-      assetUnit = policyId + assetUnit;
-    } else if (!assetUnit.startsWith(policyId)) {
-      return { error: `mintActions[${i}].assetUnit does not start with its policy id ${policyId}` };
+    let referenceScript: { txHash: string; outputIndex: number } | undefined;
+    if (hasRef) {
+      const ref = entry.referenceScript as Record<string, unknown>;
+      if (!ref || typeof ref !== 'object' || typeof ref.txHash !== 'string' || !isTxHash(ref.txHash)
+        || typeof ref.outputIndex !== 'number' || !Number.isInteger(ref.outputIndex) || ref.outputIndex < 0) {
+        return { error: `mintActions[${i}].referenceScript must be {txHash, outputIndex} of the UTxO carrying the policy` };
+      }
+      referenceScript = { txHash: ref.txHash.toLowerCase(), outputIndex: ref.outputIndex };
+      // the policy id is known only once the builder has read the reference script
+      if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+        return { error: `mintActions[${i}].assetUnit must be policyId+assetName when the policy is a referenceScript` };
+      }
+    } else {
+      let policyId: string;
+      try {
+        policyId = Script.fromCbor(Buffer.from(policy.script!, 'hex')).hash.toString();
+      } catch (err: unknown) {
+        return { error: `mintActions[${i}].mintingPolicyScript is not a valid Plutus script: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
+        assetUnit = policyId + assetUnit;
+      } else if (!assetUnit.startsWith(policyId)) {
+        return { error: `mintActions[${i}].assetUnit does not start with its policy id ${policyId}` };
+      }
     }
     if (!isAssetUnit(assetUnit)) return { error: `mintActions[${i}].assetUnit is not a valid asset unit` };
     out.push({
       assetUnit,
       quantity: BigInt(entry.quantity),
-      mintingPolicyScript: policy.script,
+      ...(policy.script ? { mintingPolicyScript: policy.script } : { referenceScript }),
       ...(policy.redeemer !== undefined ? { redeemerJson: policy.redeemer } : {}),
     });
   }

@@ -352,7 +352,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   @description: 'Receives the change; defaults to senderAddress'
                                   changeAddress: Bech32,
                                   @title: 'Script Inputs JSON'
-                                  @description: 'Required JSON array, 1..16 entries: {txHash, outputIndex, validatorScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor, datumJson | datumCbor (hash datums only)}. The *Cbor forms take PlutusData CBOR hex byte for byte. __INPUT_IDX:<txHash>#<n>__ placeholders in any redeemer resolve against the final sorted inputs.'
+                                  @description: 'Required JSON array, 1..16 entries: {txHash, outputIndex, validatorScript (CBOR hex) | referenceScript: {txHash, outputIndex}, scriptParamsJson?, redeemerJson | redeemerCbor, datumJson | datumCbor (hash datums only)}. The *Cbor forms take PlutusData CBOR hex byte for byte. In any redeemer or datum JSON, __INPUT_IDX:<txHash>#<n>__ resolves to the index in the final sorted inputs, __REF_IDX:<txHash>#<n>__ to the index in the sorted reference inputs (reference-script UTxOs included) and __WDRL_IDX:<credential hash>__ to the index in the withdrawals in ledger order.'
                                   scriptInputsJson: String,
                                   @title: 'Outputs JSON'
                                   @description: 'Required JSON array of outputs in this order: {address, lovelaceAmount, assets?: [{unit, quantity}], inlineDatumJson? | inlineDatumCbor? | datumHash?, referenceScriptHex?}. Each is min-ADA checked; change is appended after them and never merged into one.'
@@ -376,7 +376,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   @description: 'Optional JSON array of Ed25519 key hashes (hex, 28 bytes each) that must sign the transaction.'
                                   requiredSignersJson: String,
                                   @title: 'Mint Actions JSON'
-                                  @description: 'Optional JSON array of [{assetUnit, quantity, mintingPolicyScript, redeemerJson?}]; every action names its own policy script. Minted assets go where outputsJson puts them.'
+                                  @description: 'Optional JSON array of [{assetUnit, quantity, mintingPolicyScript | referenceScript: {txHash, outputIndex}, redeemerJson?}]; every action names its own policy. With referenceScript the assetUnit is policyId+assetName and the policy id must be the hash of that script. Minted assets go where outputsJson puts them.'
                                   mintActionsJson: String,
                                   @title: 'Validity Start (Posix ms)'
                                   @description: 'Optional validity-interval start in Posix milliseconds; defaults to now - 120 000 ms.'

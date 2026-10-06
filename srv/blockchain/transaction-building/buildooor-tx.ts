@@ -4,7 +4,7 @@ import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, i
 import { toHex } from "@harmoniclabs/uint8array-utils";
 import { assertAdaOnly, getLovelace, isCollateralCandidate, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
-import { resolveIndexPlaceholders, sortInputsLikeBuildooor, type InputRef } from "../../utils/plutus-placeholders";
+import { resolveIndexPlaceholders, sortInputsLikeBuildooor, sortWithdrawalsLikeLedger, type InputRef } from "../../utils/plutus-placeholders";
 import { LedgerProtocolParameter } from "#cds-models/CardanoODataService";
 import cds from "@sap/cds";
 import {
@@ -47,6 +47,9 @@ import {
 import { DataI, dataFromCbor, dataToCbor } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
+
+/** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
+type MintScriptSource = { inline: Script } | { ref: LedgerUTxO };
 
 const logger = cds.log('BuildooorTxBuilder');
 
@@ -348,7 +351,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Mint entries; Buildooor ignores caller-supplied execution units, the real ones are
       // stamped post-build by _buildScriptTx.
-      const mints = this._buildMintEntries(req.mintActions, script, resolvedMintRedeemer, resolveCtx);
+      const mints = this._buildMintEntries(req.mintActions, (a, i) => ({ inline: this._mintActionScript(a, script, i) }), resolvedMintRedeemer, resolveCtx);
 
       // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
       const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
@@ -494,7 +497,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Mint entries for the combined spend+mint; Buildooor ignores caller-supplied execution
       // units, the real ones are stamped post-build by _buildScriptTx.
       const mints = hasMint
-        ? this._buildMintEntries(req.mintActions!, mintScript!, resolvedMintRedeemer, resolveCtx)
+        ? this._buildMintEntries(req.mintActions!, (a, i) => ({ inline: this._mintActionScript(a, mintScript!, i) }), resolvedMintRedeemer, resolveCtx)
         : undefined;
 
       const scriptInput = {
@@ -581,7 +584,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // Withdrawals: the staking script inline, by reference, or the one a reference input carries
       const withdrawalEntries = (req.withdrawals ?? []).map((w, i) => ({
         w, rewardAccount: StakeAddress.fromString(w.rewardAddress),
-        ...this._resolveStakingScript(w, `withdrawals[${i}]`, referencedByHash, refUtxoByKey),
+        ...this._resolveScriptWitness({ script: w.stakingScript, referenceScript: w.referenceScript }, `withdrawals[${i}]`, referencedByHash, refUtxoByKey),
       }));
 
       // Certificates: the credential from the stake address; a script runs under the Certifying purpose
@@ -590,7 +593,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         const at = `certificates[${i}]`;
         const stake = StakeAddress.fromString(c.stakeAddress);
         const credentialHash = stake.credentials.toString().toLowerCase();
-        const witness = this._resolveStakingScript(c, at, referencedByHash, refUtxoByKey);
+        const witness = this._resolveScriptWitness({ script: c.stakingScript, referenceScript: c.referenceScript }, at, referencedByHash, refUtxoByKey);
         const scripted = Boolean(witness.script || witness.refLedgerUtxo);
         const witnessHash = (witness.script?.hash ?? witness.refLedgerUtxo?.resolved.refScript?.hash)?.toString().toLowerCase();
         if (stake.type === 'script') {
@@ -611,6 +614,25 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           : (c.deposit ? new CertUnRegistrationDeposit({ stakeCredential, deposit }) : new CertStakeDeRegistration({ stakeCredential }));
         return { c, cert, deposit, ...witness };
       });
+
+      // Mints: each policy inline, by reference, or the one a reference input carries
+      const mintEntries = (req.mintActions ?? []).map((m, i) => {
+        const at = `mintActions[${i}]`;
+        const witness = this._resolveScriptWitness({ script: m.mintingPolicyScript, referenceScript: m.referenceScript },
+          at, referencedByHash, refUtxoByKey, 'mintingPolicyScript');
+        const policyId = (witness.script?.hash ?? witness.refLedgerUtxo!.resolved.refScript!.hash).toString().toLowerCase();
+        if (!m.assetUnit.toLowerCase().startsWith(policyId)) {
+          throw new TransactionValidationError(`${at}.assetUnit ${m.assetUnit} is not under the policy ${policyId} of its script`);
+        }
+        return { m, policyId, ...witness };
+      });
+      // one policy runs from one place: once any action of it uses a reference script, all do
+      const mintRefByPolicy = new Map<string, LedgerUTxO>();
+      for (const e of mintEntries) if (e.refLedgerUtxo && !mintRefByPolicy.has(e.policyId)) mintRefByPolicy.set(e.policyId, e.refLedgerUtxo);
+      for (const e of mintEntries) {
+        const ref = mintRefByPolicy.get(e.policyId);
+        if (ref) { e.refLedgerUtxo = ref; e.script = undefined; }
+      }
 
       const senderUtxos = ctx.utxos.filter(u => !scriptKeys.has(keyOf(u)));
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
@@ -650,9 +672,21 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
 
-      // Placeholders resolve against the final input order, over all script inputs at once
+      // Reference inputs: the caller's, minus the reference-script UTxOs Buildooor adds itself
+      const refScriptKeys = new Set([...scriptEntries, ...withdrawalEntries, ...certEntries, ...mintEntries].filter(e => e.refLedgerUtxo).map(e =>
+        keyOf({ txHash: e.refLedgerUtxo!.utxoRef.id.toString(), outputIndex: e.refLedgerUtxo!.utxoRef.index })));
+      const callerRefUtxos = (ctx.referenceInputUtxos ?? []).filter(u =>
+        !refScriptKeys.has(keyOf(u)) && (req.referenceInputs ?? []).some(r => keyOf(r) === keyOf(u)));
+      const readonlyRefInputs = this._mapReferenceInputs(callerRefUtxos);
+      const sortedReferenceInputs = sortInputsLikeBuildooor([
+        ...callerRefUtxos.map(u => ({ txHash: u.txHash.toLowerCase(), outputIndex: u.outputIndex })),
+        ...[...refScriptKeys].map(k => { const [txHash, idx] = k.split('#'); return { txHash, outputIndex: Number(idx) }; }),
+      ]);
+
+      // Placeholders resolve against the final input, reference-input and withdrawal order
       const sortedInputs = this._computeSortedInputs(req.scriptInputs, forced, this._extractFundingRefs(selectedFundingInputs));
-      const resolveCtx = { sortedInputs };
+      const sortedWithdrawals = this._ledgerWithdrawalOrder(withdrawalEntries);
+      const resolveCtx = { sortedInputs, sortedReferenceInputs, sortedWithdrawals };
 
       const scriptInputs = scriptEntries.map(({ si, utxo, script, refLedgerUtxo }) => {
         const redeemer = si.redeemerCbor ? dataFromCbor(si.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(si.redeemer, resolveCtx));
@@ -670,8 +704,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         inlineDatum: o.inlineDatum !== undefined ? resolveIndexPlaceholders(o.inlineDatum, resolveCtx) : undefined,
       })));
 
-      const mints = req.mintActions && req.mintActions.length > 0
-        ? this._buildMintEntries(req.mintActions, this._parsePlutusV3Script(req.mintActions[0].mintingPolicyScript!, 'mintActions[0].mintingPolicyScript'), undefined, resolveCtx)
+      const mints = mintEntries.length > 0
+        ? this._buildMintEntries(mintEntries.map(e => e.m),
+          (_a, i) => (mintEntries[i].script ? { inline: mintEntries[i].script! } : { ref: mintEntries[i].refLedgerUtxo! }), undefined, resolveCtx)
         : undefined;
 
       // Withdrawals: Buildooor sorts them by reward account and runs each script under the Reward purpose
@@ -688,12 +723,6 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         const redeemer = c.redeemerCbor ? dataFromCbor(c.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(c.redeemer ?? null, resolveCtx));
         return { cert, script: script ? { inline: script, redeemer } : { ref: refLedgerUtxo!, redeemer } };
       });
-
-      // Reference inputs: the caller's, minus the reference-script UTxOs Buildooor adds itself
-      const refScriptKeys = new Set([...scriptEntries, ...withdrawalEntries, ...certEntries].filter(e => e.refLedgerUtxo).map(e =>
-        keyOf({ txHash: e.refLedgerUtxo!.utxoRef.id.toString(), outputIndex: e.refLedgerUtxo!.utxoRef.index })));
-      const readonlyRefInputs = this._mapReferenceInputs((ctx.referenceInputUtxos ?? []).filter(u =>
-        !refScriptKeys.has(keyOf(u)) && (req.referenceInputs ?? []).some(r => keyOf(r) === keyOf(u))));
 
       const { invalidBefore, invalidAfter } = this._resolveValiditySlots(req, 'script');
       const buildParams: ITxBuildArgs = {
@@ -1074,17 +1103,18 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /**
-   * Staking script of a withdrawal or certificate: inline (swapped for a reference input that already
+   * Script of a withdrawal, certificate or mint: inline (swapped for a reference input that already
    * carries the same hash), by reference, or none (key witness).
    */
-  private _resolveStakingScript(
-    w: { stakingScript?: string; referenceScript?: { txHash: string; outputIndex: number } },
+  private _resolveScriptWitness(
+    w: { script?: string; referenceScript?: { txHash: string; outputIndex: number } },
     at: string,
     referencedByHash: ReadonlyMap<string, LedgerUTxO>,
-    refUtxoByKey: ReadonlyMap<string, OdatanoUtxo>
+    refUtxoByKey: ReadonlyMap<string, OdatanoUtxo>,
+    scriptField = 'stakingScript'
   ): { script?: Script; refLedgerUtxo?: LedgerUTxO } {
-    if (w.stakingScript) {
-      const script = this._parsePlutusV3Script(w.stakingScript, `${at}.stakingScript`);
+    if (w.script) {
+      const script = this._parsePlutusV3Script(w.script, `${at}.${scriptField}`);
       const referenced = referencedByHash.get(script.hash.toString());
       return referenced ? { refLedgerUtxo: referenced } : { script };
     }
@@ -1100,6 +1130,31 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       );
     }
     return { refLedgerUtxo };
+  }
+
+  /**
+   * Withdrawal credential hashes in ledger order, which `__WDRL_IDX__` resolves against. Buildooor
+   * numbers withdrawal redeemers by hash alone, so a scripted withdrawal whose position differs
+   * between the two orders would get the wrong redeemer; such a build is refused.
+   */
+  private _ledgerWithdrawalOrder(
+    entries: ReadonlyArray<{ rewardAccount: StakeAddress; script?: Script; refLedgerUtxo?: LedgerUTxO }>
+  ): string[] {
+    const withHash = entries.map(e => ({
+      credentialHash: e.rewardAccount.credentials.toString().toLowerCase(),
+      isScript: e.rewardAccount.type === 'script',
+      scripted: Boolean(e.script || e.refLedgerUtxo),
+    }));
+    const ledger = sortWithdrawalsLikeLedger(withHash).map(e => e.credentialHash);
+    const buildooor = withHash.map(e => e.credentialHash).sort((a, b) => Buffer.compare(Buffer.from(a, 'hex'), Buffer.from(b, 'hex')));
+    const misplaced = withHash.find(e => e.scripted && ledger.indexOf(e.credentialHash) !== buildooor.indexOf(e.credentialHash));
+    if (misplaced) {
+      throw new TransactionValidationError(
+        `withdrawals: the scripted withdrawal of credential ${misplaced.credentialHash} cannot be indexed correctly, ` +
+        'because a key-credential withdrawal sorts before it by hash; move that key withdrawal into a separate transaction'
+      );
+    }
+    return ledger;
   }
 
   /**
@@ -1208,26 +1263,27 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /**
-   * Buildooor mint entries shared by the mint-only and combined spend+mint flows. Each action may
-   * carry its own policy script and redeemer (falling back to the request-level ones); the ledger
-   * holds ONE redeemer per policy, so actions on the same policy must agree, checked here.
+   * Buildooor mint entries shared by all mint flows. `scriptFor` gives each action's policy, inline
+   * or as a reference-script UTxO. Each action may carry its own redeemer (falling back to the
+   * request-level one); the ledger holds ONE redeemer per policy, so actions on the same policy must agree.
    */
   private _buildMintEntries(
     mintActions: MintAction[],
-    mintScript: Script,
+    scriptFor: (action: MintAction, index: number) => MintScriptSource,
     resolvedMintRedeemer: JSONValue | undefined,
     resolveCtx?: Parameters<typeof resolveIndexPlaceholders>[1]
   ) {
     const redeemerByPolicy = new Map<string, string>();
     return mintActions.map((action, index) => {
-      const script = this._mintActionScript(action, mintScript, index);
+      const source = scriptFor(action, index);
+      const policyHash = 'inline' in source ? source.inline.hash : source.ref.resolved.refScript!.hash;
       const actionRedeemer = action.redeemerJson !== undefined
         ? (resolveCtx ? resolveIndexPlaceholders(action.redeemerJson, resolveCtx) : action.redeemerJson)
         : resolvedMintRedeemer;
       const redeemerData = actionRedeemer !== undefined
         ? jsonToPlutusData(actionRedeemer)
         : new DataI(action.redeemer ?? 0);
-      const policyId = script.hash.toString();
+      const policyId = policyHash.toString();
       // Canonical comparison over the encoded PlutusData: JSON key order must
       // not matter, and a JSON {int:0} equals the DataI(0) fallback.
       const redeemerFingerprint = dataToCbor(redeemerData).toString();
@@ -1241,11 +1297,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       redeemerByPolicy.set(policyId, redeemerFingerprint);
       const { assetName } = parseAssetUnit(action.assetUnit);
       return {
-        value: Value.singleAsset(script.hash, Buffer.from(assetName, 'hex'), BigInt(action.quantity)),
-        script: {
-          inline: script,
-          redeemer: redeemerData
-        }
+        value: Value.singleAsset(policyHash, Buffer.from(assetName, 'hex'), BigInt(action.quantity)),
+        script: { ...source, redeemer: redeemerData }
       };
     });
   }

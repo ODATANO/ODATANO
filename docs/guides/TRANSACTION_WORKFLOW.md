@@ -304,7 +304,7 @@ Returns `scriptHash`, `scriptAddress` when applicable.
 | withdrawalsJson | String | No | 1..16 withdrawals: `{rewardAddress, lovelace, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
 | certificatesJson | String | No | 1..16 certificates: `{type: registerStake | deregisterStake, stakeAddress, deposit?, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
 | requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
-| mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript, redeemerJson?}]`, a policy script per action |
+| mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript? | referenceScript?, redeemerJson?}]`, a policy per action; with `referenceScript` the `assetUnit` is policyId+assetName |
 | validityStartMs / validityEndMs | String | No | Validity interval in Posix ms |
 
 A `scriptInputsJson` entry:
@@ -319,8 +319,18 @@ or with `"referenceScript": {"txHash": "…", "outputIndex": 0}` instead of `val
 only for hash datums; inline datums are read from the UTxO. `redeemerCbor`, `datumCbor` and an output's
 `inlineDatumCbor` take PlutusData as CBOR hex instead of JSON and put those bytes into the transaction
 unchanged (no `__INPUT_IDX__` placeholders there). PlutusData JSON may nest up to 64 levels, every other
-JSON parameter up to 10; the size limit is 1 MB for both. `__INPUT_IDX:<txHash>#<n>__` in any redeemer or
-output datum resolves to the input's index in the final sorted inputs. Reference-script bytes come from Ogmios
+JSON parameter up to 10; the size limit is 1 MB for both. Index placeholders in any redeemer or output datum
+(as the whole value of an `int` field):
+
+| Placeholder | Resolves to |
+|-------------|-------------|
+| `__INPUT_IDX:<txHash>#<n>__` | index of the input in the final sorted inputs |
+| `__REF_IDX:<txHash>#<n>__` | index of the reference input in the sorted reference inputs, reference-script UTxOs included |
+| `__WDRL_IDX:<credential hash>__` | index of the withdrawal of that stake credential, script credentials first, then by hash |
+
+A placeholder naming a UTxO or credential the transaction does not carry is a 400. Buildooor numbers withdrawal
+redeemers by hash only, so a key-credential withdrawal that sorts before a scripted one by hash is refused with
+400. Reference-script bytes come from Ogmios
 or Koios; with Blockfrost alone a reference script cannot be used.
 
 The response lists `redeemers` (`tag`, `index`, `mem`, `steps`); they are stored as `TransactionBuildRedeemers` (`tag`, `redeemerIndex`, `mem`, `steps`).

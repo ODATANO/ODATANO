@@ -415,4 +415,92 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
       });
     });
   });
+
+  describe('reference-input and withdrawal placeholders, mints by reference', () => {
+    const P = '01'.repeat(32);
+    const paramsUtxo: UTxO = { txHash: P, outputIndex: 0, address: OTHER, amount: [{ unit: 'lovelace', quantity: '2000000' }], inlineDatum: 'd87980' };
+    const scriptHash = Script.fromCbor(SCRIPT).hash.toString();
+    const scriptStake = new StakeAddress({ network: 'testnet', credentials: new StakeValidatorHash(scriptHash), type: 'script' }).toString();
+    const keyStakeOf = (hash: string) => new StakeAddress({ network: 'testnet', credentials: new StakeKeyHash(hash), type: 'stakeKey' }).toString();
+    const budget = { memory: 200_000, cpu: 100_000_000 };
+    const evaluate = async () => [
+      ...(await evaluateTransaction()),
+      { validator: { purpose: 'withdraw', index: 0 }, budget },
+      { validator: { purpose: 'mint', index: 0 }, budget },
+    ];
+    const redeemerOfA = (tx: any) => {
+      const inputs = tx.body.inputs.map((i: any) => i.utxoRef.id.toString());
+      return (tx.witnesses.redeemers ?? []).find((r: any) => r.tag === 0 && inputs[r.index] === A);
+    };
+    const withParams = (over: Partial<TxBuildPlutusRequest> = {}) => request({ referenceInputs: [{ txHash: P, outputIndex: 0 }], ...over });
+    const paramsContext = () => context({ referenceInputUtxos: [refScriptUtxo, paramsUtxo], evaluateTransaction: evaluate });
+
+    it('resolves __REF_IDX__ against the sorted reference inputs, reference-script UTxOs included', async () => {
+      const req = withParams();
+      req.scriptInputs[0].redeemer = { constructor: 0, fields: [{ int: `__REF_IDX:${P}#0__` }, { int: `__REF_IDX:${REF.toUpperCase()}#0__` }] };
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, paramsContext())).unsignedTxCbor);
+      const sortedRefs = (tx.body.refInputs ?? []).map((i: any) => i.utxoRef.id.toString()).sort();
+      expect(sortedRefs).toEqual([P, REF]);
+      expect(redeemerOfA(tx).data.fields.map((f: any) => Number(f.int))).toEqual([0, 1]);
+    });
+
+    it('rejects __REF_IDX__ on a UTxO that is not a reference input', async () => {
+      const req = withParams();
+      req.scriptInputs[0].redeemer = { constructor: 0, fields: [{ int: `__REF_IDX:${A}#0__` }] };
+      const err = await builder.buildUnsignedPlutusTransaction(req, paramsContext()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/is not a reference input of the transaction/);
+    });
+
+    it('resolves __WDRL_IDX__ with script credentials before key credentials', async () => {
+      const keyHash = 'ff'.repeat(28);
+      const req = request({ withdrawals: [
+        { rewardAddress: keyStakeOf(keyHash), lovelace: '0' },
+        { rewardAddress: scriptStake, lovelace: '0', stakingScript: SCRIPT, redeemer: { int: 0 } },
+      ] });
+      req.scriptInputs[0].redeemer = { constructor: 0, fields: [{ int: `__WDRL_IDX:${scriptHash}__` }, { int: `__WDRL_IDX:${keyHash}__` }] };
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: evaluate }))).unsignedTxCbor);
+      expect(redeemerOfA(tx).data.fields.map((f: any) => Number(f.int))).toEqual([0, 1]);
+    });
+
+    it('rejects __WDRL_IDX__ on a credential without a withdrawal', async () => {
+      const req = request();
+      req.scriptInputs[0].redeemer = { constructor: 0, fields: [{ int: `__WDRL_IDX:${scriptHash}__` }] };
+      const err = await builder.buildUnsignedPlutusTransaction(req, context()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/has no withdrawal in the transaction/);
+    });
+
+    it('refuses a key withdrawal that sorts before a scripted one by hash', async () => {
+      const req = request({ withdrawals: [
+        { rewardAddress: keyStakeOf('00'.repeat(28)), lovelace: '0' },
+        { rewardAddress: scriptStake, lovelace: '0', stakingScript: SCRIPT, redeemer: { int: 0 } },
+      ] });
+      const err = await builder.buildUnsignedPlutusTransaction(req, context({ evaluateTransaction: evaluate })).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/cannot be indexed correctly/);
+    });
+
+    it('mints under a policy given as reference script, redeemer with __REF_IDX__', async () => {
+      const req = withParams({ mintActions: [{
+        assetUnit: `${scriptHash}abcd`, quantity: 5n,
+        referenceScript: { txHash: REF, outputIndex: 0 }, redeemerJson: { int: `__REF_IDX:${REF}#0__` },
+      }] });
+      req.outputs[1].assets = [{ unit: `${scriptHash}abcd`, quantity: '5' }];
+      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, paramsContext())).unsignedTxCbor);
+      expect(tx.body.mint!.map.find((e: any) => e.policy.toString() === scriptHash)).toBeDefined();
+      expect(tx.witnesses.plutusV3Scripts ?? []).toHaveLength(0);
+      const mintRedeemers = (tx.witnesses.redeemers ?? []).filter((r: any) => r.tag === TxRedeemerTag.Mint);
+      expect(mintRedeemers).toHaveLength(1);
+      expect(Number(mintRedeemers[0].data.int)).toBe(1);
+      expect((tx.body.refInputs ?? []).map((i: any) => i.utxoRef.id.toString()).filter((h: string) => h === REF)).toHaveLength(1);
+    });
+
+    it('rejects a mint whose asset is not under the policy of its reference script', async () => {
+      const req = request({ mintActions: [{ assetUnit: `${'ab'.repeat(28)}abcd`, quantity: 5n, referenceScript: { txHash: REF, outputIndex: 0 } }] });
+      const err = await builder.buildUnsignedPlutusTransaction(req, context()).catch(e => e);
+      expect(err).toBeInstanceOf(TransactionValidationError);
+      expect(err.message).toMatch(/mintActions\[0\]\.assetUnit .* is not under the policy/);
+    });
+  });
 });

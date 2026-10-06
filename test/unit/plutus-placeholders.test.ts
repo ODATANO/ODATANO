@@ -5,8 +5,11 @@
 
 import {
   INPUT_IDX_REGEX,
+  REF_IDX_REGEX,
+  WDRL_IDX_REGEX,
   resolveIndexPlaceholders,
   sortInputsLikeBuildooor,
+  sortWithdrawalsLikeLedger,
   type InputRef,
 } from '../../srv/utils/plutus-placeholders';
 import { TransactionValidationError } from '../../srv/utils/errors';
@@ -152,3 +155,51 @@ describe('resolveIndexPlaceholders', () => {
   });
 });
 
+
+describe('__REF_IDX__ and __WDRL_IDX__', () => {
+  const KEY = '0a'.repeat(28);
+  const SCRIPT_CRED = 'f0'.repeat(28);
+  const ctx = {
+    sortedInputs: [mkRef(AA_HASH, 0)],
+    sortedReferenceInputs: [mkRef(ZERO_HASH, 1), mkRef(BB_HASH, 0)],
+    sortedWithdrawals: [SCRIPT_CRED, KEY],
+  };
+
+  it('match only their own shape', () => {
+    expect(REF_IDX_REGEX.test(`__REF_IDX:${AA_HASH}#3__`)).toBe(true);
+    expect(REF_IDX_REGEX.test(`__INPUT_IDX:${AA_HASH}#3__`)).toBe(false);
+    expect(WDRL_IDX_REGEX.test(`__WDRL_IDX:${KEY}__`)).toBe(true);
+    expect(WDRL_IDX_REGEX.test(`__WDRL_IDX:${AA_HASH}__`)).toBe(false);
+  });
+
+  it('resolve to the position in the reference inputs and the withdrawals', () => {
+    const tree = { fields: [
+      { int: `__REF_IDX:${BB_HASH.toUpperCase()}#0__` },
+      { int: `__WDRL_IDX:${KEY}__` },
+      { int: `__INPUT_IDX:${AA_HASH}#0__` },
+    ] };
+    expect(resolveIndexPlaceholders(tree, ctx)).toEqual({ fields: [{ int: 1 }, { int: 1 }, { int: 0 }] });
+  });
+
+  it('reject a ref that is not a reference input and a credential without a withdrawal', () => {
+    expect(() => resolveIndexPlaceholders({ int: `__REF_IDX:${AA_HASH}#0__` }, ctx)).toThrow(/is not a reference input/);
+    expect(() => resolveIndexPlaceholders({ int: `__WDRL_IDX:${'0b'.repeat(28)}__` }, ctx)).toThrow(/has no withdrawal/);
+  });
+
+  it('are refused by builds that do not provide those lists', () => {
+    const inputsOnly = { sortedInputs: [mkRef(AA_HASH, 0)] };
+    expect(() => resolveIndexPlaceholders({ int: `__REF_IDX:${ZERO_HASH}#1__` }, inputsOnly)).toThrow(/BuildPlutusTransaction only/);
+    expect(() => resolveIndexPlaceholders({ int: `__WDRL_IDX:${KEY}__` }, inputsOnly)).toThrow(/BuildPlutusTransaction only/);
+  });
+});
+
+describe('sortWithdrawalsLikeLedger', () => {
+  it('puts script credentials before key credentials, each group by hash', () => {
+    const sorted = sortWithdrawalsLikeLedger([
+      { credentialHash: '01'.repeat(28), isScript: false },
+      { credentialHash: 'ff'.repeat(28), isScript: true },
+      { credentialHash: '02'.repeat(28), isScript: true },
+    ]);
+    expect(sorted.map(e => e.credentialHash)).toEqual(['02'.repeat(28), 'ff'.repeat(28), '01'.repeat(28)]);
+  });
+});

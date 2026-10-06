@@ -16,7 +16,7 @@ vi.mock('@sap/cds', () => {
 });
 
 import { OdatanoBackend } from '../../srv/blockchain/backends/odatano-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionValidationError } from '../../srv/utils/errors';
 
 const ok = (value: string, headers: Record<string, string> = {}) => ({ data: { value }, headers });
 const httpError = (status: number, message: string, headers: Record<string, string> = {}) =>
@@ -79,6 +79,14 @@ describe('OdatanoBackend', () => {
     await expect(b.getLatestBlock()).rejects.toBeInstanceOf(RateLimitError);
     post.mockRejectedValueOnce(httpError(503, 'backend down'));
     await expect(b.getLatestBlock()).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  it('keeps a remote script failure a ScriptValidationError and other 400s a TransactionValidationError', async () => {
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    post.mockRejectedValueOnce(httpError(400, '[ODATANO_SCRIPT_VALIDATION_FAILURE] EvaluateTransaction: Script validation failed (3010): x'));
+    await expect(b.evaluateTransaction('84a0')).rejects.toBeInstanceOf(ScriptValidationError);
+    post.mockRejectedValueOnce(httpError(400, '[ODATANO_TX_VALIDATION_FAILED] EvaluateTransaction: bad cbor'));
+    await expect(b.evaluateTransaction('84a0')).rejects.toBeInstanceOf(TransactionValidationError);
   });
 
   it('passes the chain-point mismatch marker through verbatim, so the crawler recovers', async () => {
