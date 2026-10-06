@@ -64,6 +64,7 @@ function buildTx(opts: {
   auxiliaryData?: AuxiliaryData | null;
   witnesses?: TxWitnessSet;
   collateralInputs?: UTxO[];
+  isScriptValid?: boolean;
   extraBody?: Partial<ConstructorParameters<typeof TxBody>[0]>;
 }): Tx {
   const defaultInput = makeUtxo(TX_HASH_A, 0, TEST_ADDRESS_TESTNET, 10_000_000n);
@@ -81,6 +82,7 @@ function buildTx(opts: {
   return new Tx({
     body,
     witnesses: opts.witnesses ?? new TxWitnessSet({}),
+    isScriptValid: opts.isScriptValid,
     auxiliaryData: opts.auxiliaryData,
   });
 }
@@ -134,6 +136,7 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     expect(parsed.mint).toHaveLength(0);
     expect(parsed.requiredSigners).toHaveLength(0);
     expect(parsed.scriptDataHash).toBeNull();
+    expect(parsed.isValid).toBe(true);
     expect(parsed.collateral).toHaveLength(0);
     expect(parsed.metadataLabels).toHaveLength(0);
     expect(parsed.witnesses).toEqual({
@@ -210,6 +213,14 @@ describe('parseTransaction — round-trip from built CBOR', () => {
     const parsed = parseTransaction(cborHex(tx));
 
     expect(parsed.collateral).toEqual([{ txHash: TX_HASH_B, outputIndex: 1 }]);
+  });
+
+  it('reports the validity flag of a transaction flagged as failing its scripts', () => {
+    const outputs = [makeOutput(TEST_ADDRESS_TESTNET, 2_000_000n)];
+    const collateralInputs = [makeUtxo(TX_HASH_B, 1, TEST_ADDRESS_TESTNET, 5_000_000n)];
+
+    expect(parseTransaction(cborHex(buildTx({ outputs, collateralInputs, isScriptValid: false }))).isValid).toBe(false);
+    expect(parseTransaction(cborHex(buildTx({ outputs, collateralInputs, isScriptValid: true }))).isValid).toBe(true);
   });
 
   it('parses inline datum into hex CBOR', () => {

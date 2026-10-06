@@ -399,6 +399,10 @@ type ParsedTransaction {
     @description: 'Blake2b-256 hash over datum/redeemer/costmodels section; null if no Plutus data is present'
     scriptDataHash  : Blake2b256;
 
+    @title      : 'Validity Flag'
+    @description: 'false when the transaction is flagged as failing its scripts; on chain it then spends only the collateral and creates no outputs'
+    isValid         : Boolean;
+
     @title      : 'Witness Counts'
     @description: 'Shape summary of the witness set (no secret material exposed)'
     witnesses       : ParsedWitnesses;

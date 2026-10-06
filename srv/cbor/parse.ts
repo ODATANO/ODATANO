@@ -92,6 +92,8 @@ export interface ParsedTransaction {
   /** 28-byte Ed25519 key hashes listed in the tx body's required_signers field. */
   requiredSigners: string[];
   scriptDataHash: string | null;
+  /** `false` when the transaction is flagged as failing its scripts. On chain it then spends only the collateral and creates no outputs. */
+  isValid: boolean;
   witnesses: ParsedWitnesses;
 }
 
@@ -145,6 +147,7 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
     currentTreasuryValue: raw.currentTreasuryValue,
     requiredSigners: (body.requiredSigners ?? []).map((s) => s.toString()),
     scriptDataHash: body.scriptDataHash ? body.scriptDataHash.toString() : null,
+    isValid: tx.isScriptValid,
     witnesses: countWitnesses(tx.witnesses),
   };
 }

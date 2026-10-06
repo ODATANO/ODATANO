@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.34] - validity flag in parsed transactions
+
+No schema change.
+
+### Added
+
+- `parseTransaction` / `ParseTransactionCbor`: `isValid`, the validity flag of the transaction. `false` means
+  the transaction is flagged as failing its scripts; on chain it spends only the collateral and creates no
+  outputs.
+
 ## [v2.0.0-rc.33] - Plutus builds without script inputs, collateral fallback, Koios accounts, witness sets on submit
 
 No schema change.
