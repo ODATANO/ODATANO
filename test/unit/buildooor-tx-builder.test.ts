@@ -1317,6 +1317,36 @@ describe('BuildooorTxBuilder', () => {
         .rejects.toThrow(/reserved as collateral and also offered as funding/);
     });
 
+    it('takes the only UTxO as collateral when it is a forced input', async () => {
+      await initBuilder();
+      const seed: UTxO = {
+        txHash: 'cc'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '300000000' }],
+      };
+      const ctx: TxBuildContext = { utxos: [seed], protocolParameters: PROTOCOL_PARAMS };
+
+      const result = await builder.buildUnsignedMintTransaction(
+        { ...mintReq(), forceInputs: [{ txHash: seed.txHash, outputIndex: 0 }] }, ctx);
+      const parsed = assertScriptDataHashConsistent(result.unsignedTxCbor!);
+
+      expect(parsed.body.inputs.map((i: any) => i.utxoRef.id.toString())).toEqual([seed.txHash]);
+      expect((parsed.body.collateralInputs ?? []).map((i: any) => i.utxoRef.id.toString())).toEqual([seed.txHash]);
+      expect(BigInt(parsed.body.collateralReturn!.value.lovelaces)).toBe(295_000_000n);
+    });
+
+    it('names the forced input when it is the collateral and the wallet cannot pay the outputs', async () => {
+      await initBuilder();
+      const seed: UTxO = {
+        txHash: 'cc'.repeat(32), outputIndex: 0, address: TEST_ADDRESS,
+        amount: [{ unit: 'lovelace', quantity: '6000000' }],
+      };
+      const ctx: TxBuildContext = { utxos: [seed], protocolParameters: PROTOCOL_PARAMS };
+
+      await expect(builder.buildUnsignedMintTransaction(
+        { ...mintReq(), lovelaceAmount: '11000000', forceInputs: [{ txHash: seed.txHash, outputIndex: 0 }] }, ctx))
+        .rejects.toThrow(/reserved as collateral and also spent as a forced input/);
+    });
+
     it('hashes the language views from the raw chain cost-model array (protocol-11: 350 V3 entries)', async () => {
       const { Tx } = require('@harmoniclabs/cardano-ledger-ts');
       const { getScriptDataHash, costModelsToLanguageViewCbor, defaultProtocolParameters } =
@@ -1406,7 +1436,8 @@ describe('BuildooorTxBuilder', () => {
       amount: [{ unit: 'lovelace', quantity: '2000000' }, { unit: ASSET_UNIT, quantity: '1' }],
     };
 
-    const setup = (utxos: UTxO[], requiredLovelace = 0n) => (builder as any)._setupCollateral(utxos, requiredLovelace);
+    const setup = (utxos: UTxO[], requiredLovelace = 0n, forced: UTxO[] = []) =>
+      (builder as any)._setupCollateral(utxos, requiredLovelace, forced, TEST_ADDRESS);
 
     beforeEach(async () => {
       // _setupCollateral needs an initialized TxBuilder for min-ADA computation
@@ -1454,6 +1485,42 @@ describe('BuildooorTxBuilder', () => {
 
     it('still throws when no ADA-only UTxO exists', () => {
       expect(() => setup([assetUtxo])).toThrow('No ADA-only UTxO available for collateral');
+    });
+
+    it('takes a forced input of the sender as collateral when no other UTxO covers the floor', () => {
+      const forced = adaUtxo('cc', '300000000');
+      const dust = adaUtxo('aa', '2000000');
+      const { collateralUtxos, fundingUtxos, collateralReturn } = setup([dust, assetUtxo], 0n, [forced]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(forced.txHash);
+      // the forced input is spent already, so it is not offered to coin selection
+      expect(fundingUtxos.map((u: UTxO) => u.txHash)).toEqual([dust.txHash, assetUtxo.txHash]);
+      expect(collateralReturn!.value.lovelaces).toBe(295_000_000n);
+    });
+
+    it('takes a forced input as collateral when it is the only UTxO', () => {
+      const forced = adaUtxo('cc', '300000000');
+      const { collateralUtxos, fundingUtxos } = setup([], 0n, [forced]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(forced.txHash);
+      expect(fundingUtxos).toEqual([]);
+    });
+
+    it('prefers a UTxO that is not forced when one covers the floor', () => {
+      const forced = adaUtxo('cc', '300000000');
+      const other = adaUtxo('aa', '6000000');
+      const { collateralUtxos } = setup([other], 0n, [forced]);
+
+      expect(collateralUtxos[0].utxoRef.id.toString()).toBe(other.txHash);
+    });
+
+    it('never takes a forced input of another address, with assets or below the floor', () => {
+      const otherAddress = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+      const foreign = { ...adaUtxo('cc', '300000000'), address: otherAddress };
+      const withAssets = { ...assetUtxo, amount: [{ unit: 'lovelace', quantity: '300000000' }, { unit: ASSET_UNIT, quantity: '1' }] };
+      const small = adaUtxo('dd', '4000000');
+
+      expect(() => setup([], 0n, [foreign, withAssets, small])).toThrow('No ADA-only UTxO available for collateral');
     });
 
     it('offers the collateral UTxO as funding too when the rest cannot pay fee and change', () => {

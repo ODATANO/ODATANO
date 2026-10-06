@@ -320,7 +320,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       }
 
       // Partition forced vs candidate UTxOs. Forced inputs are already committed;
-      // collateral and coin selection operate on the remainder only.
+      // coin selection operates on the remainder only.
       const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
@@ -335,9 +335,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         );
       }
 
-      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral)
-      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, requiredFundingValue.lovelaces);
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      // Collateral + funding separation from the candidates; a forced input is collateral only as a fallback
+      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, requiredFundingValue.lovelaces, forced, req.senderAddress);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos, forced);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       const selectedFunding = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
@@ -458,11 +458,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         }
       }
 
-      // Collateral + funding separation (from candidates only — forced inputs cannot double as collateral).
+      // Collateral + funding separation from the candidates; a forced input is collateral only as a fallback.
       // The script UTxO pays its part of the outputs, so the collateral check counts only the rest.
       const fundingGap = requiredFundingValue.lovelaces - getLovelace(scriptOdatanoUtxo);
-      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, fundingGap > 0n ? fundingGap : 0n);
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      const { collateralUtxos, fundingUtxos, collateralReturn } = this._setupCollateral(rest, fundingGap > 0n ? fundingGap : 0n, forced, req.senderAddress);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos, forced);
       const fundingLedgerUtxos: LedgerUTxO[] = fundingUtxos.map(utxo => this._mapMultiAssetUtxoToLedgerUtxo(utxo));
       const allFundingInputs = fundingLedgerUtxos.map(utxo => ({ utxo }));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
@@ -702,9 +702,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const runsScript = scriptEntries.length > 0 || mintEntries.length > 0 ||
         [...withdrawalEntries, ...certEntries].some(e => e.script || e.refLedgerUtxo);
       const { collateralUtxos, fundingUtxos, collateralReturn } = runsScript
-        ? this._setupCollateral(rest, requiredFundingValue.lovelaces)
+        ? this._setupCollateral(rest, requiredFundingValue.lovelaces, forced, req.senderAddress)
         : { collateralUtxos: [], fundingUtxos: rest, collateralReturn: undefined };
-      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos);
+      coinSelectionContext = this._collateralPartitionContext(collateralUtxos, fundingUtxos, forced);
       const allFundingInputs = fundingUtxos.map(utxo => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(utxo) }));
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
 
@@ -1411,16 +1411,18 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Context for insufficient-funds rejections after the collateral partition: the builder's
    * message counts only the funding pool, so the reservation would otherwise be invisible.
    */
-  private _collateralPartitionContext(collateralUtxos: LedgerUTxO[], fundingUtxos: OdatanoUtxo[]): string {
+  private _collateralPartitionContext(collateralUtxos: LedgerUTxO[], fundingUtxos: OdatanoUtxo[], forced: OdatanoUtxo[] = []): string {
     const fundingLovelace = fundingUtxos.reduce((s, u) => s + getLovelace(u), 0n);
     if (collateralUtxos.length === 0) {
       return `no script runs, so no collateral; ${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace for coin selection`;
     }
     const collateralLovelace = collateralUtxos.reduce((s, u) => s + u.resolved.value.lovelaces, 0n);
     const collateralKeys = new Set(collateralUtxos.map(u => `${u.utxoRef.id.toString()}#${u.utxoRef.index}`));
-    const alsoFunding = fundingUtxos.some(u => collateralKeys.has(`${u.txHash}#${u.outputIndex}`));
+    const isCollateral = (u: OdatanoUtxo) => collateralKeys.has(`${u.txHash}#${u.outputIndex}`);
+    const alsoFunding = fundingUtxos.some(isCollateral);
+    const alsoForced = forced.some(isCollateral);
     return `${collateralUtxos.length} UTxO(s) with ${collateralLovelace} lovelace reserved as collateral` +
-      `${alsoFunding ? ' and also offered as funding' : ''}; ` +
+      `${alsoFunding ? ' and also offered as funding' : alsoForced ? ' and also spent as a forced input' : ''}; ` +
       `${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace for coin selection`;
   }
 
@@ -1430,23 +1432,29 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * (Buildooor sets no collateralReturn for ADA-only collateral). Throws without an ADA-only UTxO.
    * When the rest cannot pay `requiredLovelace` plus fee and change, the collateral UTxO is
    * funding too. The ledger allows one UTxO as input and as collateral.
+   * When no UTxO in `utxos` covers the floor, a forced input of the sender that does is the collateral.
    */
-  private _setupCollateral(utxos: OdatanoUtxo[], requiredLovelace: bigint): {
+  private _setupCollateral(utxos: OdatanoUtxo[], requiredLovelace: bigint, forced: OdatanoUtxo[] = [], senderAddress = ''): {
     collateralUtxos: LedgerUTxO[]; fundingUtxos: OdatanoUtxo[];
     collateralReturn?: { address: Address; value: Value };
   } {
+    const byLovelace = (a: OdatanoUtxo, b: OdatanoUtxo) => {
+      const diff = getLovelace(a) - getLovelace(b);
+      return diff < 0n ? -1 : diff > 0n ? 1 : 0;
+    };
+    const coversFloor = (u: OdatanoUtxo) => getLovelace(u) >= COLLATERAL_LOVELACE;
     // ADA-only and without a reference script (a deployed script is not collateral); SetCollateral uses the same rule
-    const adaOnly = utxos.filter(isCollateralCandidate);
-    if (adaOnly.length === 0) {
+    const sorted = utxos.filter(isCollateralCandidate).sort(byLovelace);
+    const sender = senderAddress.toLowerCase();
+    const forcedChoice = sorted.some(coversFloor)
+      ? undefined
+      : forced.filter(u => u.address.toLowerCase() === sender && isCollateralCandidate(u) && coversFloor(u)).sort(byLovelace)[0];
+    if (sorted.length === 0 && !forcedChoice) {
       throw new TransactionValidationError('No ADA-only UTxO available for collateral. Plutus scripts require ADA-only collateral; create one with SetCollateral.');
     }
 
-    const sorted = [...adaOnly].sort((a, b) => {
-      const diff = getLovelace(a) - getLovelace(b);
-      return diff < 0n ? -1 : diff > 0n ? 1 : 0;
-    });
     // smallest sufficient; if none reaches the floor, the largest available is the best bet
-    const chosen = sorted.find(u => getLovelace(u) >= COLLATERAL_LOVELACE) ?? sorted[sorted.length - 1];
+    const chosen = forcedChoice ?? sorted.find(coversFloor) ?? sorted[sorted.length - 1];
     if (getLovelace(chosen) < COLLATERAL_LOVELACE) {
       logger.warn(
         `Largest ADA-only UTxO (${getLovelace(chosen)} lovelace) is below the ${COLLATERAL_LOVELACE} lovelace ` +
@@ -1459,7 +1467,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       u => !(u.txHash === chosen.txHash && u.outputIndex === chosen.outputIndex)
     );
     const restLovelace = rest.reduce((sum, u) => sum + getLovelace(u), 0n);
-    const fundingUtxos = restLovelace >= requiredLovelace + FEE_BUFFER_LOVELACE + BigInt(MIN_CHANGE_LOVELACE)
+    // a forced input is already spent, so it is never offered to coin selection as well
+    const fundingUtxos = forcedChoice || restLovelace >= requiredLovelace + FEE_BUFFER_LOVELACE + BigInt(MIN_CHANGE_LOVELACE)
       ? rest
       : [...rest, chosen];
 

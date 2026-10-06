@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.35] - forced input as collateral, transaction confirmations for agent tokens
+
+No schema change.
+
+### Changed
+
+- `BuildPlutusTransaction`, `BuildMintTransaction`, `BuildPlutusSpendTransaction`: a UTxO named in
+  `forceInputsJson` is the collateral when no other sender UTxO of at least 5 ADA qualifies. It must belong to
+  the sender, be ADA-only, carry no reference script and hold at least 5 ADA; the excess above 5 ADA comes back
+  through the collateral return. A wallet with a single UTxO builds without a `SetCollateral` transaction first.
+  Forced UTxOs of other addresses and forced UTxOs with assets are never collateral.
+
+### Fixed
+
+- Agent tokens: `GetTransactionConfirmations` is always allowed like the other chain reads; it answered 403
+  "not allowed for this agent grant". A unit test now fails when an action or function of the service
+  models is neither always allowed, allow-listable nor operator only.
+
 ## [v2.0.0-rc.34] - validity flag in parsed transactions
 
 No schema change.

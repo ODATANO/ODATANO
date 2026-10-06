@@ -350,7 +350,10 @@ too little funding, not as an output to raise.
 
 Collateral is added only when a script runs. A build whose withdrawals and certificates all use key credentials
 carries none. When the other sender UTxOs cannot pay the outputs, the fee and the change, the collateral UTxO is
-also spent as an input; the ledger allows one UTxO as input and as collateral.
+also spent as an input; the ledger allows one UTxO as input and as collateral. For the same reason a UTxO named
+in `forceInputsJson` is the collateral when no other sender UTxO qualifies: it must belong to the sender, be
+ADA-only, carry no reference script and hold at least 5 ADA. A wallet with a single UTxO can then build a mint
+whose redeemer names that UTxO. This holds for `BuildMintTransaction` and `BuildPlutusSpendTransaction` as well.
 
 ### SetCollateral
 
@@ -405,7 +408,7 @@ they are on chain; wait 1-2 minutes for confirmations.
 Wrong signing key or unsigned TX was modified. Verify key matches sender address, check `--testnet-magic` matches network. Re-build if needed.
 
 ### "No ADA-only UTxO available for collateral"
-Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has an ADA-only UTxO of >= 5 ADA without a reference script plus another UTxO — that is the condition under which `SetCollateral` reports `collateralAvailable: true`, the same rule the builders apply.
+Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has an ADA-only UTxO of >= 5 ADA without a reference script plus another UTxO — that is the condition under which `SetCollateral` reports `collateralAvailable: true`, the same rule the builders apply. A sender UTxO named in `forceInputsJson` also serves as collateral when it is ADA-only, has no reference script and holds at least 5 ADA.
 
 ---
 

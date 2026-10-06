@@ -5,7 +5,11 @@
  */
 
 import cds from '@sap/cds';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
+  AGENT_ALLOWLISTABLE_ACTIONS,
+  AGENT_ALWAYS_ALLOWED_EVENTS,
   AGENT_ROLE,
   AGENT_TOKEN_PREFIX,
   GRANTS_ENTITY,
@@ -1126,5 +1130,29 @@ describe('usage counters and GetGrantUsage', () => {
       expect(own.total).toBe(2);
       expect((await rejection(h.GetGrantUsage!(makeReq('GetGrantUsage', { grantId: OTHER_ID }) as never))).status).toBe(404);
     });
+  });
+});
+
+describe('every operation in the service models is classified for agent tokens', () => {
+  // Operator only: an agent token gets 403 for these on purpose.
+  const OPERATOR_ONLY = new Set([
+    'CreateAgentGrant', 'RevokeAgentGrant', 'RotateAgentGrantToken', 'UpdateAgentGrant',
+    'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions',
+    'SignWithHsm', 'SignAndSubmitWithHsm', 'PauseWorker', 'ResumeWorker',
+  ]);
+
+  it('lists each action and function as always allowed, allow-listable or operator only', () => {
+    const srvDir = path.join(__dirname, '..', '..', 'srv');
+    const unclassified: string[] = [];
+    for (const file of fs.readdirSync(srvDir).filter((f) => f.endsWith('.cds'))) {
+      const src = fs.readFileSync(path.join(srvDir, file), 'utf8');
+      for (const m of src.matchAll(/^\s*(?:action|function)\s+(\w+)\s*\(/gm)) {
+        const name = m[1];
+        if (!AGENT_ALWAYS_ALLOWED_EVENTS.has(name) && !AGENT_ALLOWLISTABLE_ACTIONS.includes(name) && !OPERATOR_ONLY.has(name)) {
+          unclassified.push(`${file}: ${name}`);
+        }
+      }
+    }
+    expect(unclassified).toEqual([]);
   });
 });

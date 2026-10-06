@@ -76,7 +76,7 @@ export const AGENT_ALWAYS_ALLOWED_EVENTS: ReadonlySet<string> = new Set([
   // CardanoODataService: chain reads through the backends
   'GetNetworkInformation', 'GetBlockByHash', 'GetEpochByNumber', 'GetPoolById', 'GetDrepById',
   'GetAssetInfo', 'GetAssetHistory', 'GetAccountByStakeAddress', 'GetTransactionByHash',
-  'GetMetadataByTxHash', 'GetAddressByBech32', 'GetUTxOsByAddress', 'GetUTxOsByCredential',
+  'GetTransactionConfirmations', 'GetMetadataByTxHash', 'GetAddressByBech32', 'GetUTxOsByAddress', 'GetUTxOsByCredential',
   'GetAssetsByAddress', 'GetLatestTransactionsByAddress', 'GetLatestBlock', 'GetLatestEpoch',
   'GetLedgerProtocolParameters', 'ParseTransactionCbor',
   // CardanoTransactionService: compute-only
