@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.38] - script stake addresses in the Ogmios reward-account lookup
+
+No schema change.
+
+### Fixed
+
+- Ogmios `getAccount` for a script stake address (`stake17…`, `stake_test17…`) asks
+  `rewardAccountSummaries` under `scripts`; under `keys` a script credential is never found. Before,
+  `BuildPlutusTransaction` with `withdrawalsJson` from a script rejected every withdrawal as
+  "not registered" (since rc.37), and `GetAccountByStakeAddress` answered 404 when Ogmios was the
+  only backend.
+
 ## [v2.0.0-rc.37] - reward-account check answered by the node, secrets masked in the request log
 
 No schema change.

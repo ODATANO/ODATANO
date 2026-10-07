@@ -880,7 +880,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return handleBackendRequest(async () => {
       await this.ensureConnected();
 
-      const rawResult = await this.stateQueryClient!.rewardAccountSummaries({ keys: [stakeAddress] });
+      // Ogmios keeps key-hash and script-hash credentials in separate lists. A script stake address
+      // asked under `keys` is never found.
+      const rawResult = await this.stateQueryClient!.rewardAccountSummaries(
+        decodeShelleyAddress(stakeAddress).isScript ? { scripts: [stakeAddress] } : { keys: [stakeAddress] });
       // Ogmios returns a record keyed by stake address; normalize to array
       const summaries: OgmiosRewardAccountSummary[] = Array.isArray(rawResult)
         ? rawResult

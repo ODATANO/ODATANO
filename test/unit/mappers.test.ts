@@ -375,6 +375,8 @@ describe('mappers', () => {
     it('treats a reward address as its own stake address', () => {
       const stake = 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh';
       expect(decodeShelleyAddress(stake)).toEqual({ type: 'reward', isScript: false, stakeAddress: stake, paymentCredential: null, networkId: 0 });
+      const script = 'stake_test17q3mtzuc29qluhla96unchhylg8pr4r2jdxzsd7qyvq8rlgjag3dz';
+      expect(decodeShelleyAddress(script)).toEqual({ type: 'reward', isScript: true, stakeAddress: script, paymentCredential: null, networkId: 0 });
     });
   });
 

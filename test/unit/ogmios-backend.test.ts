@@ -228,6 +228,20 @@ describe('OgmiosBackend', () => {
       });
     });
 
+    it('asks under scripts for a script stake address', async () => {
+      const mockStateQueryClient = {
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{ rewards: 0, deposit: 2000000 }])
+      };
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = mockStateQueryClient;
+
+      const script = 'stake_test17q3mtzuc29qluhla96unchhylg8pr4r2jdxzsd7qyvq8rlgjag3dz';
+      const result = await backend.getAccount(script);
+
+      expect(mockStateQueryClient.rewardAccountSummaries).toHaveBeenCalledWith({ scripts: [script] });
+      expect(result.active).toBe(true);
+    });
+
     it('should throw NotFoundError when account does not exist', async () => {
       const mockStateQueryClient = {
         rewardAccountSummaries: vi.fn().mockResolvedValue([])
