@@ -27,7 +27,7 @@ Mutable blockchain state that can change over time. Uses CAP's `temporal` aspect
 - **NetworkInformation**: Supply, stake amounts
 - **Addresses**: Balance, UTxOs
 - **Accounts**: Stake delegation, rewards
-- **AddressAssets / AddressUTxOs**: Asset holdings, available UTxOs
+- **AddressAssets / AddressUTxOs**: Asset holdings, available UTxOs. Filled with the address; a collection read that names the address (`$filter` on `address_address` or navigation from `Addresses`) indexes it on a miss
 - **TransactionBuilds** (M2): Unsigned transaction builds
 - **TransactionSubmissions** (M2): Submission records with status tracking
 - **SigningRequests** (M3): External signing requests (custom 30-min TTL)

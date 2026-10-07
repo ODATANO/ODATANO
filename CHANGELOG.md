@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.36] - address child sets fill on read
+
+No schema change.
+
+### Fixed
+
+- `AddressUTxOs`, `AddressAssets`: a collection read that names the address, as `$filter` term
+  `address_address eq '…'` (also `address/address`, `address_address in (…)`) or as navigation
+  `Addresses('…')/utxos`, indexes the address on a cache miss before the query runs. It returned `[]`
+  for every address no keyed read or action had indexed on that instance, or whose rows had expired.
+  A read without an address still returns only what is cached. An invalid address in the filter, or
+  more than 10 addresses in one read, is a 400.
+- `GetUTxOsByAddress`: an address whose row is valid but holds no UTxO is no longer fetched again on
+  every call; each call wrote a new `Addresses` slice.
+
+### Documentation
+
+- `AddressUTxOs` / `AddressAssets`: how the child sets fill and expire; `contains` on an inline datum
+  matches byte strings only up to 64 bytes (Plutus data CBOR chunks longer ones).
+
 ## [v2.0.0-rc.35] - forced input as collateral, transaction confirmations for agent tokens
 
 No schema change.

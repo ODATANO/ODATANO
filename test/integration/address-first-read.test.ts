@@ -1,6 +1,7 @@
 /**
- * First read of an address the index does not hold yet: GetUTxOsByAddress and GetAssetsByAddress
- * return what the same request indexed, from the backend and from the crawled UTxO set.
+ * First read of an address the index does not hold yet: GetUTxOsByAddress, GetAssetsByAddress and
+ * the collection reads of AddressUTxOs / AddressAssets that name the address return what the same
+ * request indexed, from the backend and from the crawled UTxO set.
  *
  * SQLite evaluates the temporal window per statement, so it shows the fresh slices either way;
  * a database that fixes the window when the transaction begins hides them. The request's own
@@ -31,7 +32,7 @@ const MIN_WINDOW_MS = 60_000;
 
 describe('First read of an unindexed address', () => {
   const test = cds.test(__dirname + '/../../');
-  /** Upper bound of the temporal window the last address action ran with. */
+  /** Upper bound of the temporal window the last address action or child-set read ran with. */
   let windowEnd: string | undefined;
 
   beforeAll(async () => {
@@ -41,9 +42,11 @@ describe('First read of an unindexed address', () => {
     resetAppContext(testContext);
 
     const srv = await cds.connect.to('CardanoODataService');
-    srv.after(['GetUTxOsByAddress', 'GetAssetsByAddress'], (_result: unknown, req: any) => {
+    const captureWindow = (_result: unknown, req: any) => {
       windowEnd = req._?.['VALID-TO'] ?? req.context?._?.['VALID-TO'];
-    });
+    };
+    srv.after(['GetUTxOsByAddress', 'GetAssetsByAddress'], captureWindow);
+    srv.after('READ', ['AddressUTxOs', 'AddressAssets'], captureWindow);
   });
 
   /** The request widened its temporal window past the moment it started. */
@@ -92,6 +95,64 @@ describe('First read of an unindexed address', () => {
 
       const second = await test.post(`${SVC}/GetUTxOsByAddress`, { address: ADDR });
       expect(second.data.value).toHaveLength(first.data.value.length);
+    });
+
+    it('AddressUTxOs filtered on the address fills on the first read', async () => {
+      expect(await cds.run(SELECT.from(UTXOS).where({ address_address: ADDR }))).toHaveLength(0);
+
+      const startedAt = Date.now();
+      const first = await test.get(`${SVC}/AddressUTxOs?$filter=address_address eq '${ADDR}'&$top=50`);
+      expect(first.status).toBe(200);
+      expectWidenedWindow(startedAt);
+      expect(first.data.value).toHaveLength(mockUtxosAdaOnly.length);
+      expect(await cds.run(SELECT.from(UTXOS).where({ address_address: ADDR }))).toHaveLength(mockUtxosAdaOnly.length);
+    });
+
+    it('AddressUTxOs filtered on the association path with further terms fills too', async () => {
+      const r = await test.get(`${SVC}/AddressUTxOs?$filter=address/address eq '${ADDR}' and lovelace gt 0`);
+      expect(r.status).toBe(200);
+      expect(r.data.value).toHaveLength(mockUtxosAdaOnly.length);
+    });
+
+    it('Addresses(…)/utxos fills the parent and its UTxOs on the first read', async () => {
+      expect(await cds.run(SELECT.from(UTXOS).where({ address_address: ADDR }))).toHaveLength(0);
+
+      const r = await test.get(`${SVC}/Addresses('${ADDR}')/utxos`);
+      expect(r.status).toBe(200);
+      expect(r.data.value).toHaveLength(mockUtxosAdaOnly.length);
+      expect(await cds.run(SELECT.one.from('odatano.cardano.Addresses').where({ address: ADDR }))).toBeTruthy();
+    });
+
+    it('AddressAssets filtered on the address indexes the address once', async () => {
+      const r = await test.get(`${SVC}/AddressAssets?$filter=address_address eq '${ADDR}'`);
+      expect(r.status).toBe(200);
+      expect(r.data.value).toEqual([]); // ADA-only UTxOs
+      expect(await cds.run(SELECT.one.from('odatano.cardano.Addresses').where({ address: ADDR }))).toBeTruthy();
+    });
+
+    it('AddressUTxOs without an address in the read passes through', async () => {
+      const r = await test.get(`${SVC}/AddressUTxOs?$top=5`);
+      expect(r.status).toBe(200);
+      expect(r.data.value).toEqual([]);
+      expect(await cds.run(SELECT.one.from('odatano.cardano.Addresses').where({ address: ADDR }))).toBeFalsy();
+    });
+
+    it('AddressUTxOs filtered with an in-list fills on the first read', async () => {
+      const r = await test.get(`${SVC}/AddressUTxOs?$filter=address_address in ('${ADDR}')`);
+      expect(r.status).toBe(200);
+      expect(r.data.value).toHaveLength(mockUtxosAdaOnly.length);
+    });
+
+    it('AddressUTxOs rejects a read naming more than ten addresses', async () => {
+      const filter = Array.from({ length: 11 }, (_, i) => `address_address eq 'addr_test1${'q'.repeat(10)}${String(i).padStart(2, '0')}'`).join(' or ');
+      const r = await test.get(`${SVC}/AddressUTxOs?$filter=${filter}`).catch((e: any) => e.response);
+      expect(r.status).toBe(400);
+      expect(r.data.error.message).toMatch(/at most 10 addresses/);
+    });
+
+    it('AddressUTxOs rejects an invalid address in the filter', async () => {
+      const r = await test.get(`${SVC}/AddressUTxOs?$filter=address_address eq 'addr_test1nonsense'`).catch((e: any) => e.response);
+      expect(r.status).toBe(400);
     });
   });
 
@@ -167,6 +228,15 @@ describe('First read of an unindexed address', () => {
 
       const second = await test.post(`${SVC}/GetAssetsByAddress`, { address: ADDR });
       expect(second.data.value).toHaveLength(2);
+    });
+
+    it('AddressUTxOs filtered on the address returns the unspent outputs of the set', async () => {
+      expect(await cds.run(SELECT.from(UTXOS).where({ address_address: ADDR }))).toHaveLength(0);
+
+      const r = await test.get(`${SVC}/AddressUTxOs?$filter=address_address eq '${ADDR}'`);
+      expect(r.status).toBe(200);
+      expect(r.data.value.map((u: any) => `${u.hash}#${u.index}`).sort())
+        .toEqual([`${TX(1)}#0`, `${TX(2)}#1`, `${TX(3)}#0`]);
     });
   });
 });

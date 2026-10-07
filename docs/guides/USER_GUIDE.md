@@ -129,7 +129,23 @@ POST /GetUTxOsByAddress
 
 POST /GetAssetsByAddress
 {"address": "addr_test1..."}
+
+GET /Addresses('addr_test1...')/utxos
+GET /AddressUTxOs?$filter=address_address eq 'addr_test1...'&$top=100
+GET /AddressAssets?$filter=address_address eq 'addr_test1...'
 ```
+
+`AddressUTxOs` and `AddressAssets` fill like `Addresses`: a read that names the address, as the
+navigation parent or in the `$filter` (`address_address eq '…'`, `address/address eq '…'`,
+`address_address in (…)`), fetches the address on a cache miss and then runs the query. One read
+may name up to 10 addresses. A read without an address returns only what is cached. The rows expire
+with the address after `INDEX_TTL_MS`; the next read that names the address fetches again. With
+Ogmios as the only backend and no crawled UTxO set, the UTxOs are fetched without an address row,
+so an address holding no UTxO is asked at the node on every read.
+
+`contains(utxodata_inlineDatum, '<hex>')` matches a byte string only up to 64 bytes: Plutus data CBOR
+splits longer byte strings into 64-byte chunks, so the hex of a longer field is not contiguous. The
+same holds for `utxo_inlineDatum` on `LedgerUTxOs`.
 
 **Response Example (Address):**
 

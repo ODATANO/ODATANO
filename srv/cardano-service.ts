@@ -1,4 +1,5 @@
 import cds, { Request } from '@sap/cds';
+import type { expr, predicate, ref, val, list, xpr } from '@sap/cds';
 import { getCardanoIndexer } from './server';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber, isValidTxCborHex, isValidCredential, isAssetUnit } from './utils/validators';
 import { rejectInvalid, rejectMissing, AllBackendsFailedError } from './utils/errors';
@@ -107,6 +108,89 @@ function indexOnMissAction<K = string>(
       const existing = await db.run(SELECT.one.from(entity as never).where({ [dbKey]: key }));
       if (!existing) return await indexFn(db, key as K);
       return existing;
+    });
+  };
+}
+
+/** Addresses one collection read may index on a miss; more is a 400. */
+const MAX_ADDRESSES_PER_READ = 10;
+
+const isRef = (t: expr | string): t is ref => typeof t === 'object' && 'ref' in t;
+const isVal = (t: expr | string): t is val => typeof t === 'object' && 'val' in t;
+const isList = (t: expr | string): t is list => typeof t === 'object' && 'list' in t;
+const isXpr = (t: expr | string): t is xpr => typeof t === 'object' && 'xpr' in t;
+
+/** `address_address` or the association path `address/address`. */
+function isAddressRef(t: expr | string): boolean {
+  if (!isRef(t)) return false;
+  const path = t.ref;
+  return (path.length === 1 && path[0] === 'address_address') || (path.length === 2 && path[0] === 'address' && path[1] === 'address');
+}
+
+const stringVal = (t: expr | string | undefined): string | undefined =>
+  t !== undefined && isVal(t) && typeof t.val === 'string' ? t.val : undefined;
+
+/**
+ * Addresses a read of an address child set names: the parent of a navigation
+ * (`Addresses('…')/utxos`) or the `$filter` terms `address_address eq '…'` (either operand
+ * order) and `address_address in ('…', …)`.
+ */
+function addressesInReadQuery(req: Request): string[] {
+  const found = new Set<string>();
+  const parent = (req.data as Record<string, unknown>)?.address_address;
+  if (typeof parent === 'string') found.add(parent);
+  const walk = (tokens: predicate) => {
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (typeof token === 'string') continue;
+      if (isXpr(token)) { walk(token.xpr); continue; }
+      const op = tokens[i + 1];
+      const right = tokens[i + 2];
+      if (isAddressRef(token) && op === '=') {
+        const value = stringVal(right);
+        if (value) found.add(value);
+      } else if (isAddressRef(token) && op === 'in' && right !== undefined && isList(right)) {
+        for (const item of right.list as (expr | string)[]) {
+          const value = stringVal(item);
+          if (value) found.add(value);
+        }
+      } else if (right !== undefined && isAddressRef(right) && op === '=') {
+        const value = stringVal(token);
+        if (value) found.add(value);
+      }
+    }
+  };
+  const query: cds.ql.Query = req.query;
+  walk(('SELECT' in query && query.SELECT?.where) || []);
+  return Array.from(found);
+}
+
+/**
+ * Factory: READ handler for a child set of Addresses with index-on-miss. The address is taken
+ * from the navigation parent or the `$filter`; without one the read passes through.
+ * `isIndexed` says whether the address needs no fetch, `indexFn` fetches it.
+ */
+function addressChildRead(
+  isIndexed: (db: cds.Transaction, address: string) => Promise<boolean>,
+  indexFn: IndexFn<string>
+) {
+  return async (req: Request) => {
+    const addresses = addressesInReadQuery(req);
+    if (addresses.length > MAX_ADDRESSES_PER_READ) {
+      rejectInvalid(req, 'address_address', `A read may name at most ${MAX_ADDRESSES_PER_READ} addresses`, 'address_address');
+    }
+    for (const address of addresses) {
+      if (!isValidBech32Address(address)) rejectInvalid(req, 'address_address', 'Invalid bech32 address format', 'address_address');
+    }
+
+    return handleRequest(req, async (db) => {
+      if (addresses.length) {
+        widenTemporalWindow(req); // before the first DB statement
+        for (const address of addresses) {
+          if (!(await isIndexed(db, address))) await indexFn(db, address);
+        }
+      }
+      return db.run(req.query);
     });
   };
 }
@@ -268,7 +352,30 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // GetUTxOsByAddress — indexes the parent address if needed, then queries child UTxOs.
+  // Prefer the full address index; when no configured backend supports getAddress
+  // (AllBackendsFailedError with zero collected errors, e.g. Ogmios only), fall back to a
+  // UTxO-only index. getAddress is indexAddress's first call, so nothing is persisted before.
+  const indexAddressOrUtxos = async (db: cds.Transaction, address: string) => {
+    try {
+      await indexer().indexAddress(db, address);
+    } catch (err: unknown) {
+      if (err instanceof AllBackendsFailedError && err.errors.length === 0) {
+        await indexer().indexAddressUtxos(db, address);
+      } else {
+        throw err;
+      }
+    }
+  };
+
+  // An address is indexed when its Addresses row is valid. The UTxO-only fallback writes no
+  // Addresses row, so for UTxOs a valid AddressUTxOs row counts as well.
+  const addressIndexed = async (db: cds.Transaction, address: string) =>
+    !!(await db.run(SELECT.one.from(Addresses).where({ address })));
+  const addressUtxosIndexed = async (db: cds.Transaction, address: string) =>
+    (await addressIndexed(db, address))
+    || !!(await db.run(SELECT.one.from(AddressUTxOs).where({ address_address: address })));
+
+  // GetUTxOsByAddress — indexes the address if needed, then queries child UTxOs.
   srv.on('GetUTxOsByAddress', async (req: Request) => {
     const { address } = req.data as { address?: string };
     if (!address) rejectMissing(req, 'GetUTxOsByAddress', 'address');
@@ -276,28 +383,16 @@ module.exports = (srv: cds.Service) => {
 
     return handleRequest(req, async (db) => {
       widenTemporalWindow(req); // before the first DB statement
-      const existing: AddressUTxO[] = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
-
-      if (!existing || existing.length === 0) {
-        // Prefer the full address index; when no configured backend supports getAddress
-        // (AllBackendsFailedError with zero collected errors, e.g. Ogmios only), fall back to a
-        // UTxO-only index. getAddress is indexAddress's first call, so nothing is persisted before.
-        try {
-          await indexer().indexAddress(db, address);
-        } catch (err: unknown) {
-          if (err instanceof AllBackendsFailedError && err.errors.length === 0) {
-            await indexer().indexAddressUtxos(db, address);
-          } else {
-            throw err;
-          }
-        }
-        const fresh = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
-        return fresh;
-      }
-
-      return latestSlices(existing, (utxo) => `${utxo.hash}#${utxo.index}`);
+      if (!(await addressUtxosIndexed(db, address))) await indexAddressOrUtxos(db, address);
+      const utxos: AddressUTxO[] = await db.run(SELECT.from(AddressUTxOs).where({ address_address: address }));
+      return latestSlices(utxos, (utxo) => `${utxo.hash}#${utxo.index}`);
     });
   });
+
+  // Collection reads of the address child sets fill like the parent: an address named in the
+  // navigation or the $filter is indexed on a miss, then the client's own query runs.
+  srv.on('READ', AddressUTxOs, addressChildRead(addressUtxosIndexed, indexAddressOrUtxos));
+  srv.on('READ', AddressAssets, addressChildRead(addressIndexed, (db, address) => indexer().indexAddress(db, address)));
 
   // GetUTxOsByCredential — always-fresh credential-keyed UTxO query (dApp state reads need current
   // data). Crawled UTxO set + node first, else Koios; ProviderUnavailableError without either.
