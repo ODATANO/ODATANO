@@ -4,7 +4,6 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import { CardanoTxBuilder } from '../../srv/blockchain/transaction-building/cardano-tx';
 import type { CardanoClient } from '../../srv/blockchain/cardano-client';
 import type { TxBuildRequest, TxBuildContext, TxBuildResult, UTxO, TxBuildPlutusRequest } from '../../srv/utils/types';
-import { NotFoundError } from '../../srv/utils/errors';
 
 // Mock the Buildooor builder (the coordinator constructs it directly via `new BuildooorTxBuilder()`)
 vi.mock('../../srv/blockchain/transaction-building/buildooor-tx');
@@ -692,41 +691,35 @@ describe('CardanoTransactionBuilder', () => {
       });
 
       it('resolves the staking reference script from the ledger and checks the reward account is registered', async () => {
-        mockCardanoClient.getAccount = vi.fn().mockResolvedValue({ stakeaddress: STAKE, active: true });
+        mockCardanoClient.isRewardAccountRegistered = vi.fn().mockResolvedValue(true);
 
         await builder.buildPlutusTransaction(withRequest(), mockProtocolParameters);
 
-        expect(mockCardanoClient.getAccount).toHaveBeenCalledWith(STAKE);
+        expect(mockCardanoClient.isRewardAccountRegistered).toHaveBeenCalledWith(STAKE);
         expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refScript, stakingRef]);
         expect(captured!.referenceInputUtxos!.find(u => u.txHash === stakingRef.txHash)!.scriptRefCbor).toBe('4e4d01000033222220051200120011');
       });
 
-      it('rejects a withdrawal from a reward account the backend does not know', async () => {
-        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new NotFoundError('Account', 'mock'));
-        await expect(builder.buildPlutusTransaction(withRequest(), mockProtocolParameters))
+      it('rejects a withdrawal from a reward account that is not registered', async () => {
+        mockCardanoClient.isRewardAccountRegistered = vi.fn().mockResolvedValue(false);
+        await expect(builder.buildPlutusTransaction(withRequest('5000000'), mockProtocolParameters))
           .rejects.toThrow(`withdrawals[0] reward account ${STAKE} is not registered on chain`);
         expect(mockTxBuilder.buildUnsignedPlutusTransaction).not.toHaveBeenCalled();
       });
 
-      it('rejects a withdrawal from a deregistered reward account', async () => {
-        mockCardanoClient.getAccount = vi.fn().mockResolvedValue({ stakeaddress: STAKE, active: false });
-        await expect(builder.buildPlutusTransaction(withRequest('5000000'), mockProtocolParameters))
-          .rejects.toThrow('is not registered on chain');
-      });
-
       it('passes a provider failure of the account lookup on as it is', async () => {
-        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new Error('koios down'));
+        mockCardanoClient.isRewardAccountRegistered = vi.fn().mockRejectedValue(new Error('koios down'));
         await expect(builder.buildPlutusTransaction(withRequest(), mockProtocolParameters)).rejects.toThrow('koios down');
       });
 
       it('skips the registration check for a credential the same transaction registers, and resolves the certificate\'s reference script', async () => {
-        mockCardanoClient.getAccount = vi.fn().mockRejectedValue(new NotFoundError('Account', 'mock'));
+        mockCardanoClient.isRewardAccountRegistered = vi.fn().mockResolvedValue(false);
         const certRef = { txHash: 'd8'.repeat(32), outputIndex: 1 };
         await builder.buildPlutusTransaction({
           ...withRequest(),
           certificates: [{ type: 'registerStake', stakeAddress: STAKE, referenceScript: certRef, redeemer: { int: 0 } }],
         }, mockProtocolParameters);
-        expect(mockCardanoClient.getAccount).not.toHaveBeenCalled();
+        expect(mockCardanoClient.isRewardAccountRegistered).not.toHaveBeenCalled();
         expect(mockCardanoClient.getUnspentOutputs).toHaveBeenCalledWith([refScript, stakingRef, certRef]);
         expect(captured!.referenceInputUtxos!.map(u => u.txHash)).toContain(certRef.txHash);
       });

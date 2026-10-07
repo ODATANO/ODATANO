@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.36",
+  "version": "2.0.0-rc.37",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -77,6 +77,18 @@
     "vitest": "^4.1.10"
   },
   "cds": {
+    "log": {
+      "mask_headers": [
+        "/authorization/i",
+        "/cookie/i",
+        "/cert/i",
+        "/ssl/i",
+        "/token/i",
+        "/key/i",
+        "/secret/i",
+        "/project_id/i"
+      ]
+    },
     "typer": {
       "ieee754compatible": true
     },

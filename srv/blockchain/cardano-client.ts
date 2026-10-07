@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
-import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, NotFoundError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
 import { PendingSpends } from './pending-spends';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -460,6 +460,21 @@ export class CardanoClient {
 
   getAccount(stakeAddress: string): Promise<AccountData> {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
+  }
+
+  /**
+   * Whether the reward account is registered in the ledger. Node first; the first backend that
+   * answers decides, its "not found" means not registered. Only a backend failure falls through.
+   */
+  isRewardAccountRegistered(stakeAddress: string): Promise<boolean> {
+    return this.executeWithPriority(async b => {
+      try {
+        return (await b.getAccount(stakeAddress)).active;
+      } catch (err: unknown) {
+        if (err instanceof NotFoundError) return false;
+        throw err;
+      }
+    }, true, 'getAccount');
   }
 
   /** Asset info (supply, mint history, CIP-25/CIP-26 metadata); Blockfrost and Koios only. */

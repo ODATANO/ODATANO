@@ -710,6 +710,11 @@ FALLBACK_TIMEOUT_MS=10000
 PORT=4004
 ```
 
+**Request log.** In production CAP writes one JSON line per request, with the request headers as fields.
+Headers whose name contains `authorization`, `cookie`, `cert`, `ssl`, `token`, `key`, `secret` or
+`project_id` are written as `***` (`cds.log.mask_headers` in the package of `@odatano/core`). A consumer
+that sets its own `cds.log.mask_headers` replaces that list, so it has to carry these patterns itself.
+
 ### Production Build
 
 ```bash

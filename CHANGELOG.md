@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.37] - reward-account check answered by the node, secrets masked in the request log
+
+No schema change.
+
+### Fixed
+
+- `BuildPlutusTransaction` with `withdrawalsJson`: the reward-account registration check asks the node
+  first and takes the first answer; "not found" from Ogmios is "not registered" (400). Before, that
+  "not found" fell through to the providers, and a Koios timeout there failed the build with 503.
+- Request log (JSON format): `x-agent-token` and every header whose name contains `token`, `key`,
+  `secret` or `project_id` is written as `***`, in addition to CAP's defaults (`authorization`,
+  `cookie`, `cert`, `ssl`). Set via `cds.log.mask_headers`; a consumer's own list replaces it.
+
 ## [v2.0.0-rc.36] - address child sets fill on read
 
 No schema change.

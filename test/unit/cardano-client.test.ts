@@ -1,6 +1,6 @@
 import { CardanoClient, CardanoClientConfig, Network } from '../../srv/blockchain/cardano-client';
 import { isEvaluatingBackend } from '../../srv/blockchain/backends/cardano-backend';
-import { ConfigError, AllBackendsInitFailedError, AllBackendsFailedError, ProviderUnavailableError } from '../../srv/utils/errors';
+import { ConfigError, AllBackendsInitFailedError, AllBackendsFailedError, ProviderUnavailableError, NotFoundError } from '../../srv/utils/errors';
 import nock from 'nock';
 
 const NETWORK: Network = 'preview';
@@ -1076,6 +1076,47 @@ describe('CardanoClient Configuration', () => {
 
       expect(await client.isUtxoUnspent(TX, 0)).toBe(true);
       expect(histCheck).toHaveBeenCalledWith(TX, 0);
+    });
+  });
+
+  describe('isRewardAccountRegistered', () => {
+    const STAKE = 'stake_test1uqevw2xnsc0pvn9tm0tynp3nqfvxalykdzhcm8c3gkvsjyqsdmzpc';
+    type Internals = { liveBackend: unknown; historicalBackends: unknown[]; initialized: boolean };
+    const clientWith = (live: unknown, hist: unknown): CardanoClient => {
+      const client = new CardanoClient(createTestConfig({ backends: ['koios'] }));
+      Object.assign(client as unknown as Internals, {
+        liveBackend: { name: 'ogmios', getAccount: live },
+        historicalBackends: [{ name: 'koios', getAccount: hist }],
+        initialized: true,
+      });
+      return client;
+    };
+
+    it('takes the node\'s "not found" as not registered without asking a provider', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      const hist = vi.fn().mockResolvedValue({ active: true });
+      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(false);
+      expect(live).toHaveBeenCalledWith(STAKE);
+      expect(hist).not.toHaveBeenCalled();
+    });
+
+    it('returns the node\'s registration state', async () => {
+      const hist = vi.fn();
+      expect(await clientWith(vi.fn().mockResolvedValue({ active: true }), hist).isRewardAccountRegistered(STAKE)).toBe(true);
+      expect(hist).not.toHaveBeenCalled();
+    });
+
+    it('asks a provider only when the node fails', async () => {
+      const live = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'ogmios'));
+      const hist = vi.fn().mockResolvedValue({ active: true });
+      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(true);
+      expect(hist).toHaveBeenCalledWith(STAKE);
+    });
+
+    it('passes on the failure of every backend', async () => {
+      const live = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'ogmios'));
+      const hist = vi.fn().mockRejectedValue(new Error('timeout of 30000ms exceeded'));
+      await expect(clientWith(live, hist).isRewardAccountRegistered(STAKE)).rejects.toThrow(AllBackendsFailedError);
     });
   });
 });

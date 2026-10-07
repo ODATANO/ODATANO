@@ -5,7 +5,7 @@ import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxB
 import { BuildooorTxBuilder } from './transaction-building/buildooor-tx';
 import type { CardanoTxBuilder } from './transaction-building/cardano-tx';
 import { LedgerProtocolParameter } from '#cds-models/CardanoODataService';
-import { InsufficientFundsError, NotFoundError, TransactionValidationError } from '../utils/errors';
+import { InsufficientFundsError, TransactionValidationError } from '../utils/errors';
 
 const logger = cds.log('CardanoTransactionBuilder');
 
@@ -261,14 +261,7 @@ export class CardanoTransactionBuilder {
     ): Promise<void> {
         for (const [i, w] of withdrawals.entries()) {
             if (registeredHere.has(w.rewardAddress.toLowerCase())) continue;
-            let active: boolean;
-            try {
-                active = (await this.client.getAccount(w.rewardAddress)).active;
-            } catch (err: unknown) {
-                if (!(err instanceof NotFoundError)) throw err;
-                active = false;
-            }
-            if (!active) {
+            if (!(await this.client.isRewardAccountRegistered(w.rewardAddress))) {
                 throw new TransactionValidationError(
                     `withdrawals[${i}] reward account ${w.rewardAddress} is not registered on chain; register the stake credential first`
                 );
