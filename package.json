@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.38",
+  "version": "2.0.0-rc.39",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -26,7 +26,7 @@
     "@sap/cds": ">=10"
   },
   "dependencies": {
-    "@blockfrost/blockfrost-js": "~6.0.0",
+    "@blockfrost/blockfrost-js": "~6.2.0",
     "@cap-js/hana": "^3",
     "@cardano-ogmios/client": "^7.0.0",
     "@harmoniclabs/buildooor": "0.2.9",

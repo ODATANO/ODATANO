@@ -57,6 +57,19 @@ export const TEST_FIXTURES = {
   validSpendingScript: '587601010029800aba2aba1aab9eaab9dab9a48888966002646465300130053754003300700398038012444b30013370e9000001c4c9289bae300a3009375400915980099b874800800e2646644944c02c004c02cc030004c024dd5002459007200e18031803800980300098019baa0068a4d13656400401',
   // blake2b_224(0x03 || validSpendingScript bytes) — the policyId when validSpendingScript mints
   spendingScriptPolicyId: '61e32e15ca8e4b37687f007d13467d1ee84327d02aac9168d7e42a2c',
+  // stake credential of validPlutusScript: registered on preview, never delegated
+  scriptStakeAddress: 'stake_test17r00dqehse7tfu0etd4cz8ldhlxaw7qdzz54esrjqacg36spa24um',
+  // stake credential of validSpendingScript: never registered on preview
+  unregisteredScriptStakeAddress: 'stake_test17ps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5tqmtxkl3',
+  // PlutusV3 `\param -> \ctx -> ()`: applied to one parameter it succeeds under every purpose
+  unitScript: '46010100224981',
+  // unitScript applied to withdrawScriptParams: stake credential registered on preview, never
+  // delegated (the withdraw-zero case)
+  withdrawScriptParams: [{ int: 0 }],
+  withdrawScriptStakeAddress: 'stake_test17zwzlt6p59ny7dsr973rn9vmn0ga72twa9m737xsptffrsse7yncn',
+  // unitScript applied to unregisteredWithdrawScriptParams: never registered on preview
+  unregisteredWithdrawScriptParams: [{ int: 1 }],
+  unregisteredWithdrawScriptStakeAddress: 'stake_test17p8zcmfzkp5p8gy5n2nu03mlh7z9nn08wl7vx9jt0g52sccp4eld2',
 };
 
 export const MOCK_EVALUATED_BUDGET = {

@@ -1082,22 +1082,58 @@ describe('CardanoClient Configuration', () => {
   describe('isRewardAccountRegistered', () => {
     const STAKE = 'stake_test1uqevw2xnsc0pvn9tm0tynp3nqfvxalykdzhcm8c3gkvsjyqsdmzpc';
     type Internals = { liveBackend: unknown; historicalBackends: unknown[]; initialized: boolean };
-    const clientWith = (live: unknown, hist: unknown): CardanoClient => {
+    const clientWith = (live: unknown, hist?: unknown, hist2?: unknown): CardanoClient => {
       const client = new CardanoClient(createTestConfig({ backends: ['koios'] }));
       Object.assign(client as unknown as Internals, {
         liveBackend: { name: 'ogmios', getAccount: live },
-        historicalBackends: [{ name: 'koios', getAccount: hist }],
+        historicalBackends: [
+          ...(hist ? [{ name: 'blockfrost', getAccount: hist }] : []),
+          ...(hist2 ? [{ name: 'koios', getAccount: hist2 }] : []),
+        ],
         initialized: true,
       });
       return client;
     };
 
-    it('takes the node\'s "not found" as not registered without asking a provider', async () => {
+    // the node's summary lists only credentials delegated to a pool or a DRep
+    it('asks a provider when the node has no summary and takes its answer', async () => {
       const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
       const hist = vi.fn().mockResolvedValue({ active: true });
-      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(false);
+      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(true);
       expect(live).toHaveBeenCalledWith(STAKE);
-      expect(hist).not.toHaveBeenCalled();
+      expect(hist).toHaveBeenCalledWith(STAKE);
+    });
+
+    it('a provider that knows no such account means not registered', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      const hist = vi.fn().mockRejectedValue(new NotFoundError('Account', 'koios'));
+      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(false);
+    });
+
+    it('asks the next provider when the first knows no such account yet', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      const hist = vi.fn().mockRejectedValue(new NotFoundError('Account', 'blockfrost'));
+      const hist2 = vi.fn().mockResolvedValue({ active: true });
+      expect(await clientWith(live, hist, hist2).isRewardAccountRegistered(STAKE)).toBe(true);
+      expect(hist2).toHaveBeenCalledWith(STAKE);
+    });
+
+    it('a provider failure does not hide another provider\'s "no such account"', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      const hist = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'blockfrost'));
+      const hist2 = vi.fn().mockRejectedValue(new NotFoundError('Account', 'koios'));
+      expect(await clientWith(live, hist, hist2).isRewardAccountRegistered(STAKE)).toBe(false);
+    });
+
+    it('returns null when the node has no summary and no provider is configured', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      expect(await clientWith(live).isRewardAccountRegistered(STAKE)).toBe(null);
+    });
+
+    it('passes a provider failure on when the node has no summary', async () => {
+      const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
+      const hist = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'koios'));
+      await expect(clientWith(live, hist).isRewardAccountRegistered(STAKE)).rejects.toThrow(AllBackendsFailedError);
     });
 
     it('returns the node\'s registration state', async () => {

@@ -890,15 +890,16 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         : Object.values(rawResult as Record<string, OgmiosRewardAccountSummary>);
 
       const account = summaries && summaries.length > 0 ? summaries[0] : null;
-      
+
+      // The summary lists only credentials delegated to a pool or a DRep. A registered credential without
+      // delegation is absent here, so "not found" does not mean "not registered".
       if (!account) {
         throw new NotFoundError('Account', this.name);
       }
 
       return {
         stakeaddress: stakeAddress,
-        // Ogmios only returns reward-account summaries for REGISTERED stake keys —
-        // reaching this point (summary found) therefore implies the account is active.
+        // a summary exists only for a registered credential
         active: true,
         activeEpoch: 0,
         // reward-account summaries carry no controlled amount and no withdrawal totals

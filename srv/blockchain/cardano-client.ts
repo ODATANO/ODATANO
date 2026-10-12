@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
-import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, NotFoundError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
 import { PendingSpends } from './pending-spends';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
@@ -466,15 +466,24 @@ export class CardanoClient {
    * Whether the reward account is registered in the ledger. Node first; the first backend that
    * answers decides, its "not found" means not registered. Only a backend failure falls through.
    */
-  isRewardAccountRegistered(stakeAddress: string): Promise<boolean> {
-    return this.executeWithPriority(async b => {
-      try {
-        return (await b.getAccount(stakeAddress)).active;
-      } catch (err: unknown) {
-        if (err instanceof NotFoundError) return false;
-        throw err;
+  /**
+   * Whether the stake credential is registered. The node's reward-account summary proves it, but
+   * the summary lists only credentials delegated to a pool or a DRep, so its absence proves nothing and the
+   * providers answer from the certificate history; one that knows the account decides, one that
+   * knows no such account means not registered. `null`: nobody could tell (no summary on the
+   * node, no provider configured or reachable).
+   */
+  async isRewardAccountRegistered(stakeAddress: string): Promise<boolean | null> {
+    try {
+      return await this.executeWithPriority(async b => (await b.getAccount(stakeAddress)).active, true, 'getAccount');
+    } catch (err: unknown) {
+      if (err instanceof AllBackendsFailedError) {
+        const providers = err.errors.filter(e => e.backendName !== this.liveBackend?.name);
+        if (providers.some(e => e.statusCode === 404)) return false;
+        if (err.errors.length > 0 && err.errors.every(e => e.statusCode === 404)) return null;
       }
-    }, true, 'getAccount');
+      throw err;
+    }
   }
 
   /** Asset info (supply, mint history, CIP-25/CIP-26 metadata); Blockfrost and Koios only. */

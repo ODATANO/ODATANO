@@ -712,6 +712,12 @@ describe('CardanoTransactionBuilder', () => {
         await expect(builder.buildPlutusTransaction(withRequest(), mockProtocolParameters)).rejects.toThrow('koios down');
       });
 
+      it('builds when no backend can tell whether the account is registered', async () => {
+        mockCardanoClient.isRewardAccountRegistered = vi.fn().mockResolvedValue(null);
+        await builder.buildPlutusTransaction(withRequest(), mockProtocolParameters);
+        expect(mockTxBuilder.buildUnsignedPlutusTransaction).toHaveBeenCalled();
+      });
+
       it('skips the registration check for a credential the same transaction registers, and resolves the certificate\'s reference script', async () => {
         mockCardanoClient.isRewardAccountRegistered = vi.fn().mockResolvedValue(false);
         const certRef = { txHash: 'd8'.repeat(32), outputIndex: 1 };

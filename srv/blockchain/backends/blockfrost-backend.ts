@@ -411,7 +411,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         }
         return {
           stakeaddress: accountData.stake_address,
-          active: accountData.active,
+          // `active` is the delegation state; registration lives in `registered`
+          active: accountData.registered,
           activeEpoch: accountData.active_epoch ?? 0,
           controlledAmount: accountData.controlled_amount,
           rewardsSum: accountData.rewards_sum,

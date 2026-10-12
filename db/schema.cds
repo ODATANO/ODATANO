@@ -666,8 +666,8 @@ entity Accounts : temporal {
         @description: 'The Bech32 encoded stake address string'
     key stakeAddress       : Bech32;
 
-        @title      : 'Active Status'
-        @description: 'Indicates if the account is active'
+        @title      : 'Registered'
+        @description: 'True while the stake credential is registered on chain'
         active             : Boolean;
 
         @title      : 'Last Active Epoch'

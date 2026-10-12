@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.39] - reward-account registration answered by the certificate history
+
+No schema change.
+
+### Fixed
+
+- Reward-account registration check (`BuildPlutusTransaction` with `withdrawalsJson`): the node's
+  `rewardAccountSummaries` lists only credentials delegated to a pool or a DRep, so a registered credential
+  that never delegated (a withdraw-zero validator) was "not found" there and rejected as not
+  registered since rc.37. "Not found" on the node now passes the question to Blockfrost and Koios,
+  which answer from the certificate history; the first provider that knows the account decides, and
+  the account is not registered when no provider knows it. With Ogmios alone the build goes on and
+  the node decides at submit.
+- Blockfrost `getAccount`: `active` is Blockfrost's delegation state, the registration state is
+  `registered`. A registered account without delegation reported `Accounts.active = false` and
+  failed the registration check. `@blockfrost/blockfrost-js` 6.2 carries the field.
+
+### Added
+
+- `test/integration/reward-accounts.test.ts`: registered key, registered undelegated script and
+  never registered script credentials on Ogmios, Blockfrost and Koios, alone and together, with
+  `BuildPlutusTransaction` withdraw-zero builds. `scripts/testing/withdraw-zero-preview.ts`:
+  registers a script credential and withdraws zero from it end to end on preview.
+
 ## [v2.0.0-rc.38] - script stake addresses in the Ogmios reward-account lookup
 
 No schema change.

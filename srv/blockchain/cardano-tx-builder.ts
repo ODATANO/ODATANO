@@ -254,17 +254,22 @@ export class CardanoTransactionBuilder {
 
     /**
      * The ledger rejects a withdrawal from an unregistered reward account (also a zero one), so the
-     * build fails here with the account named. A provider failure is passed on as it is.
+     * build fails here with the account named. A provider failure is passed on as it is. When no
+     * backend can tell, the build goes on and the node decides at submit.
      */
     private async _assertRewardAccountsRegistered(
         withdrawals: ReadonlyArray<{ rewardAddress: string }>, registeredHere: ReadonlySet<string> = new Set()
     ): Promise<void> {
         for (const [i, w] of withdrawals.entries()) {
             if (registeredHere.has(w.rewardAddress.toLowerCase())) continue;
-            if (!(await this.client.isRewardAccountRegistered(w.rewardAddress))) {
+            const registered = await this.client.isRewardAccountRegistered(w.rewardAddress);
+            if (registered === false) {
                 throw new TransactionValidationError(
                     `withdrawals[${i}] reward account ${w.rewardAddress} is not registered on chain; register the stake credential first`
                 );
+            }
+            if (registered === null) {
+                logger.warn(`withdrawals[${i}] reward account ${w.rewardAddress}: registration not verifiable (the node lists delegated accounts only, no provider answered); the node checks it at submit`);
             }
         }
     }

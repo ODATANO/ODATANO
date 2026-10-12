@@ -981,3 +981,59 @@ describe('BlockfrostBackend getTransaction — input flags and phase-2 validity'
     expect((await backend.getTransaction(TX)).mint).toBeUndefined();
   });
 });
+
+describe('BlockfrostBackend getAccount', () => {
+  const STAKE = 'stake_test17p3v5m0cqs65duu0hh3uuulvpc0y0w55a6dx62c5g63xazqkhej9l';
+  // an /accounts/{stake_address} row as the Blockfrost OpenAPI schema defines it:
+  // `active` is the delegation state, `registered` the registration state
+  const row = (registered: boolean, active: boolean) => ({
+    stake_address: STAKE,
+    active,
+    registered,
+    active_epoch: registered ? 13 : null,
+    controlled_amount: '999978',
+    rewards_sum: '0',
+    withdrawals_sum: '0',
+    reserves_sum: '0',
+    treasury_sum: '0',
+    withdrawable_amount: '0',
+    pool_id: null,
+    drep_id: null,
+  });
+  const backendFor = (account: ReturnType<typeof row>) => {
+    BlockFrostAPI.mockImplementation(function () { return {
+      accounts: vi.fn().mockResolvedValue(account),
+      accountsAddressesAll: vi.fn().mockResolvedValue([]),
+      blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
+      options: { requestTimeout: 0 },
+    }; });
+    return new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+  };
+
+  it('reports a registered account that never delegated as active', async () => {
+    const backend = backendFor(row(true, false));
+    await backend.init();
+
+    expect(await backend.getAccount(STAKE)).toEqual({
+      stakeaddress: STAKE,
+      active: true,
+      activeEpoch: 13,
+      controlledAmount: '999978',
+      rewardsSum: '0',
+      withdrawalsSum: '0',
+      reservesSum: '0',
+      treasurySum: '0',
+      withdrawableAmount: '0',
+      poolId: null,
+      drepId: null,
+      addresses: [],
+    });
+  });
+
+  it('reports a deregistered account as inactive even while Blockfrost still lists a delegation', async () => {
+    const backend = backendFor(row(false, true));
+    await backend.init();
+
+    expect((await backend.getAccount(STAKE)).active).toBe(false);
+  });
+});

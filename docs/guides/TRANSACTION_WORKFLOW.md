@@ -202,8 +202,10 @@ change comes after them. Every redeemer's execution units come back under `redee
 
 `withdrawalsJson` adds reward-account withdrawals: with a staking script (inline or by reference) the script runs
 under the Reward purpose, which is how withdraw-zero oracles and shared validators are consumed; without a script
-the stake key signs. The reward account must be registered on chain, otherwise the build is refused (the node
-answers when Ogmios is configured, a provider only when the node fails);
+the stake key signs. The reward account must be registered on chain, otherwise the build is refused. The node
+confirms a registration only for a credential delegated to a pool or a DRep; for any other credential Blockfrost and Koios
+answer from the certificate history (the first that knows the account decides), and with Ogmios alone the build
+goes on and the node decides at submit;
 `certificatesJson` registers (or deregisters) the credential, in the same transaction if needed. A registration
 without a script is the witness-free legacy certificate, also for a script credential; with a script it is the
 Conway deposit certificate and the script runs under the Certifying purpose. The deposit is balanced by the builder.
