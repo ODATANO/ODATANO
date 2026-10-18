@@ -37,7 +37,7 @@ docker compose logs -f cardano-node
 
 # once Ogmios reports healthy:
 curl http://localhost:1337/health
-curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
+curl http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
 ### Backends only

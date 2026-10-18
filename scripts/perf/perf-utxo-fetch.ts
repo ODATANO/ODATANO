@@ -80,7 +80,7 @@ const CONFIGS: BackendConfig[] = [
 
 async function waitForServer(maxWaitMs: number = 120_000): Promise<number> {
   const start = Date.now();
-  const healthUrl = `${BASE}/odata/v4/cardano-odata/NetworkInformation`;
+  const healthUrl = `${BASE}/odata/v4/cardano/NetworkInformation`;
   while (Date.now() - start < maxWaitMs) {
     try {
       const res = await axios.get(healthUrl, {
@@ -138,7 +138,7 @@ async function killServer(proc: ChildProcess): Promise<void> {
 // --- UTxO-only benchmark ---
 
 function buildUtxoEndpoints(base: string) {
-  const ODATA = `${base}/odata/v4/cardano-odata`;
+  const ODATA = `${base}/odata/v4/cardano`;
   return [
     { name: "GetUTxOsByAddress(regular)", method: "POST" as const, url: `${ODATA}/GetUTxOsByAddress`, data: { address: ADDR }, category: "address" as const },
     { name: "GetUTxOsByAddress(funds)", method: "POST" as const, url: `${ODATA}/GetUTxOsByAddress`, data: { address: ADDR_WITH_FUNDS }, category: "address" as const },

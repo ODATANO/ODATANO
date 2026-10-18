@@ -31,6 +31,7 @@ using { Blake2b256, Bech32, AssetUnit, ParsedTransaction, TransactionConfirmatio
  *    middleware) that maps JWT claims to allowed wallet addresses if needed.
  */
 @requires: 'authenticated-user'
+@path: '/odata/v4/cardano'
 service CardanoODataService @(impl: './cardano-service') {
 
     // ---------------------------------------------------------------------------

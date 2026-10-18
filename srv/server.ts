@@ -16,6 +16,7 @@ import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker'
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 import type { WorkerWalletConfig } from './blockchain/wallet-worker/signers';
 import { activateAgentGrants } from './utils/agent-grants-config';
+import { registerLegacyServicePaths } from './utils/legacy-service-paths';
 
 import { env } from 'process';
 
@@ -203,6 +204,7 @@ export { loadAgentGrantsConfig, activateAgentGrants } from './utils/agent-grants
 // Standalone mode never loads src/plugin.ts, so swap the auth impl here as well
 // (bin/serve.js imports this file before the middlewares exist). Idempotent.
 activateAgentGrants();
+registerLegacyServicePaths();
 
 /**
  * The application context.

@@ -664,7 +664,7 @@ describe('CardanoODataService', () => {
     });
 
     test('GetTransactionByHash - valid tx', async () => {
-        const { data } = await POST('/odata/v4/cardano-odata/GetTransactionByHash', {
+        const { data } = await POST('/odata/v4/cardano/GetTransactionByHash', {
             hash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83'
         });
 
@@ -676,7 +676,7 @@ describe('CardanoODataService', () => {
     // the rejection instead, which also keeps the failure message useful.
     test('GetTransactionByHash - invalid hash', async () => {
         await expect(
-            POST('/odata/v4/cardano-odata/GetTransactionByHash', { hash: 'invalid' })
+            POST('/odata/v4/cardano/GetTransactionByHash', { hash: 'invalid' })
         ).rejects.toMatchObject({
             response: { status: 400, data: { error: { message: expect.stringContaining('Invalid') } } },
         });

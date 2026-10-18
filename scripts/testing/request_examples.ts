@@ -2,7 +2,7 @@ import axios, { AxiosError } from 'axios';
 
 const COMPONENT_NAME = 'RequestExamples';
 
-const BASE_URL = 'http://localhost:4004/odata/v4/cardano-odata';
+const BASE_URL = 'http://localhost:4004/odata/v4/cardano';
 const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
 
 interface ExampleRequest {

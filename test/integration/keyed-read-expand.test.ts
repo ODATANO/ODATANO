@@ -20,7 +20,7 @@ process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 process.env.TX_BUILDERS = 'buildooor';
 
-const SVC = '/odata/v4/cardano-odata';
+const SVC = '/odata/v4/cardano';
 
 /** Seeded (cache-hit) transaction — never touches the backend. */
 const SEEDED_TX_HASH = '1111222233334444555566667777888899990000111122223333444455556666';

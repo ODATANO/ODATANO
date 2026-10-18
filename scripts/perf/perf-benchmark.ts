@@ -99,7 +99,7 @@ const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
 // --- Shared helpers (exported for perf-compare.ts) ---
 
 export function buildEndpoints(base: string): Endpoint[] {
-  const ODATA = `${base}/odata/v4/cardano-odata`;
+  const ODATA = `${base}/odata/v4/cardano`;
   const TX = `${base}/odata/v4/cardano-transaction`;
   const SIGN = `${base}/odata/v4/cardano-sign`;
 

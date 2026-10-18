@@ -138,7 +138,7 @@ describe('reward-account registration (integration: live preview backends)', () 
 
     it('GetAccountByStakeAddress answers the undelegated script credential', async (ctx: Ctx) => {
       if (!ready) return ctx.skip();
-      const { status, data } = await test.post('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: REGISTERED_SCRIPT });
+      const { status, data } = await test.post('/odata/v4/cardano/GetAccountByStakeAddress', { stakeAddress: REGISTERED_SCRIPT });
       expect(status).to.equal(200);
       expect(data.active).to.equal(true);
     });

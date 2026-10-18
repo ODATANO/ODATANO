@@ -149,7 +149,7 @@ CLASS zcl_odatano_client DEFINITION
 
   PRIVATE SECTION.
 
-    DATA mv_read_path     TYPE string VALUE '/odata/v4/cardano-odata'.
+    DATA mv_read_path     TYPE string VALUE '/odata/v4/cardano'.
     DATA mv_tx_path       TYPE string VALUE '/odata/v4/cardano-transaction'.
     DATA mv_token_url     TYPE string.
     DATA mv_client_id     TYPE string.

@@ -37,14 +37,14 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('READ NetworkInformation Entity', () => {
 
           it('GET /NetworkInformation – read NetworkInformation collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
+            const { status, data } = await test.get(`/odata/v4/cardano/NetworkInformation`);
             expect(data.value[0]).to.have.property('maxSupply');
             expect(data.value[0]).to.have.property('circulatingSupply');
             expect(status).to.equal(200);
           });
 
           it('POST /GetNetworkInformation – read current NetworkInformation via action', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+            const { status, data } = await test.post('/odata/v4/cardano/GetNetworkInformation', {});
             expect(data).to.have.property('maxSupply');
             expect(data).to.have.property('circulatingSupply');
             expect(status).to.equal(200);
@@ -58,7 +58,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { NetworkInformation } = CardanoService.entities
             const before = await cds.run(SELECT.from(NetworkInformation));
             expect(before.length).to.equal(0);
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
+            const { status, data } = await test.get(`/odata/v4/cardano/NetworkInformation`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(NetworkInformation));
             expect(after.length).to.be.equal(1);
@@ -70,7 +70,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { NetworkInformation } = CardanoService.entities
             const before = await cds.run(SELECT.from(NetworkInformation));
             expect(before.length).to.equal(0);
-            const { status } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+            const { status } = await test.post('/odata/v4/cardano/GetNetworkInformation', {});
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(NetworkInformation));
             expect(after.length).to.be.equal(1);
@@ -96,7 +96,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               activeStake: 5000000000000000,
             }));
 
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/NetworkInformation`);
+            const { status, data } = await test.get(`/odata/v4/cardano/NetworkInformation`);
             // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
             expect(Number(data.value[0].maxSupply)).to.equal(4500000000000000);
             expect(Number(data.value[0].circulatingSupply)).to.equal(4500000000000000);
@@ -122,7 +122,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               activeStake: 5000000000000000,
             }));
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetNetworkInformation', {});
+            const { status, data } = await test.post('/odata/v4/cardano/GetNetworkInformation', {});
             // CAP 10: Decimal(20,0) (Lovelace) serializes as string — normalize before compare
             expect(Number(data.maxSupply)).to.equal(4500000000000000);
             expect(Number(data.circulatingSupply)).to.equal(4500000000000000);
@@ -137,13 +137,13 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         describe('READ Blocks Entity', () => {
           it('GET /Blocks – read Blocks collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Blocks`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Blocks`);
             expect(Array.isArray(data.value)).to.be.true;
             expect(status).to.equal(200);
           });
 
           it('POST /GetBlockByHash – read Block by hash', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
+            const { status, data } = await test.post('/odata/v4/cardano/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
             expect(data).to.have.property('height');
             expect(data).to.have.property('hash');
             expect(status).to.equal(200);
@@ -156,7 +156,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Blocks } = CardanoService.entities;
             const before = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(before.length).to.equal(0);
-            const { status } = await test.get(`/odata/v4/cardano-odata/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
+            const { status } = await test.get(`/odata/v4/cardano/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(after.length).to.be.equal(1);
@@ -167,7 +167,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Blocks } = CardanoService.entities;
             const before = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
+            const { status } = await test.post('/odata/v4/cardano/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Blocks).where({ hash: TEST_FIXTURES.validBlockHash }));
             expect(after.length).to.be.equal(1);
@@ -189,7 +189,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               size: 123456,
               txCount: 10,
             }));
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Blocks(hash='${TEST_FIXTURES.validBlockHash}')`);
             expect(data.hash).to.equal(TEST_FIXTURES.validBlockHash);
             expect(data.height).to.equal(123456);
             expect(status).to.equal(200);
@@ -209,7 +209,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               size: 123456,
               txCount: 10,
             }));
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
+            const { status, data } = await test.post('/odata/v4/cardano/GetBlockByHash', { hash: TEST_FIXTURES.validBlockHash });
             expect(data.hash).to.equal(TEST_FIXTURES.validBlockHash);
             expect(data.height).to.equal(123456);
             expect(status).to.equal(200);
@@ -233,7 +233,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           for (let epoch = start; epoch > start - EPOCH_PROBE_WINDOW && epoch >= 0; epoch--) {
             if (exclude.includes(epoch)) continue;
             try {
-              const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: epoch });
+              const { status } = await test.post('/odata/v4/cardano/GetEpochByNumber', { epochNumber: epoch });
               if (status === 200) return epoch;
               failures.push(`${epoch}: HTTP ${status}`);
             } catch (err) {
@@ -244,21 +244,21 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         }
 
         beforeAll(async () => {
-          const { data: latest } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
+          const { data: latest } = await test.post('/odata/v4/cardano/GetLatestEpoch', {});
           recentEpoch = await findAvailableEpoch(latest.epoch - 5);
           coldEpoch = await findAvailableEpoch(latest.epoch - 10, [recentEpoch]);
         });
 
         describe('READ Epochs Entity', () => {
           it('GET /Epochs – read Epochs collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Epochs`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Epochs`);
 
             expect(Array.isArray(data.value)).to.be.true;
             expect(status).to.equal(200);
           });
 
           it('POST /GetEpochByNumber – read Epoch by number', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: recentEpoch });
+            const { status, data } = await test.post('/odata/v4/cardano/GetEpochByNumber', { epochNumber: recentEpoch });
             expect(data).to.have.property('epoch');
             expect(status).to.equal(200);
           });
@@ -270,7 +270,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Epochs } = CardanoService.entities;
             const before = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(before.length).to.equal(0);
-            const { status } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=${recentEpoch})`);
+            const { status } = await test.get(`/odata/v4/cardano/Epochs(epoch=${recentEpoch})`);
             const after = await cds.run(SELECT.from(Epochs).where({ epoch: recentEpoch }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
@@ -281,7 +281,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Epochs } = CardanoService.entities;
             const before = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: coldEpoch });
+            const { status } = await test.post('/odata/v4/cardano/GetEpochByNumber', { epochNumber: coldEpoch });
             const after = await cds.run(SELECT.from(Epochs).where({ epoch: coldEpoch }));
             expect(after.length).to.equal(1);
             expect(status).to.equal(200);
@@ -307,7 +307,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               activeStake: 0,
             }));
 
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Epochs(epoch=1)`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Epochs(epoch=1)`);
 
             expect(data.epoch).to.equal(1);
             expect(status).to.equal(200);
@@ -329,7 +329,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               fees: 0,
               activeStake: 0,
             }));
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetEpochByNumber', { epochNumber: 2 });
+            const { status, data } = await test.post('/odata/v4/cardano/GetEpochByNumber', { epochNumber: 2 });
             expect(data.epoch).to.equal(2);
             expect(status).to.equal(200);
           });
@@ -341,14 +341,14 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       describe('Transactions Entity Tests', () => {
         describe('READ Transactions Entity', () => {
           it('GET /Transactions – read Transactions collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Transactions`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Transactions`);
             expect(Array.isArray(data.value)).to.be.true;
             expect(status).to.equal(200);
           });
 
           it('POST /GetTransactionByHash – read Transaction by hash', async () => {
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
+            const { status, data } = await test.post('/odata/v4/cardano/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
 
             expect(data).to.have.property('hash');
             expect(data.hash).to.equal(TEST_FIXTURES.validTxHash);
@@ -356,7 +356,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect(status).to.equal(200);
           });
           it('POST /GetTransactionByHash – transaction with metadata', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.txWithMetadata });
+            const { status, data } = await test.post('/odata/v4/cardano/GetTransactionByHash', { hash: TEST_FIXTURES.txWithMetadata });
             expect(data).to.have.property('hash');
             expect(data.hash).to.equal(TEST_FIXTURES.txWithMetadata);
             expect(data).to.have.property('blockHeight');
@@ -372,7 +372,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
             const before = await cds.run(SELECT.from(Transactions).where({ hash: TEST_FIXTURES.validTxHash }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
+            const { status } = await test.post('/odata/v4/cardano/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Transactions).where({ hash: TEST_FIXTURES.validTxHash }));
             expect(after.length).to.equal(1);
@@ -384,7 +384,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
             const before = await cds.run(SELECT.from(Transactions).where({ hash: TEST_FIXTURES.validTxHash }));
             expect(before.length).to.equal(0);
-            const { status } = await test.get(`/odata/v4/cardano-odata/Transactions(hash='${TEST_FIXTURES.validTxHash}')`);
+            const { status } = await test.get(`/odata/v4/cardano/Transactions(hash='${TEST_FIXTURES.validTxHash}')`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Transactions).where({ hash: TEST_FIXTURES.validTxHash }));
             expect(after.length).to.equal(1);
@@ -405,7 +405,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               }),
             );
 
-            const { data, status } = await test.post('/odata/v4/cardano-odata/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
+            const { data, status } = await test.post('/odata/v4/cardano/GetTransactionByHash', { hash: TEST_FIXTURES.validTxHash });
 
             expect(data).to.have.property('hash');
             expect(data.hash).to.equal(TEST_FIXTURES.validTxHash);
@@ -422,7 +422,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               blockHeight: 1,
             }));
 
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Transactions(hash='${TEST_FIXTURES.validTxHash}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Transactions(hash='${TEST_FIXTURES.validTxHash}')`);
 
             expect(data).to.have.property('hash');
             expect(data.hash).to.equal(TEST_FIXTURES.validTxHash);
@@ -433,25 +433,25 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('Transactions Sub-Entities Reads', () => {
 
           it('GET /TransactionInputs – read TransactionInputs collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionInputs`);
+            const { status, data } = await test.get(`/odata/v4/cardano/TransactionInputs`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('GET /TransactionOutputs – read TransactionOutputs collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionOutputs`);
+            const { status, data } = await test.get(`/odata/v4/cardano/TransactionOutputs`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('GET /TransactionInputAssets – read TransactionInputAssets collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionInputAssets`);
+            const { status, data } = await test.get(`/odata/v4/cardano/TransactionInputAssets`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('GET /TransactionOutputAssets – read TransactionOutputAssets collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionOutputAssets`);
+            const { status, data } = await test.get(`/odata/v4/cardano/TransactionOutputAssets`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
@@ -466,19 +466,19 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('READ TransactionMetadata Entity', () => {
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata by transaction hash', async () => {
-            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const { status } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             expect(status).to.equal(200);
           });
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata (transaction with metadata)', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const { status, data } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
 
             expect(data.value[0]).to.have.property('label');
             expect(status).to.equal(200);
           });
 
           it('GET /TransactionMetadata – read TransactionMetadata collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/TransactionMetadata`);
+            const { status, data } = await test.get(`/odata/v4/cardano/TransactionMetadata`);
 
             expect(Array.isArray(data.value)).to.be.true;
             expect(status).to.equal(200);
@@ -487,11 +487,11 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           it('GET /TransactionMetadata(key) – read TransactionMetadata by composite key', async () => {
             // The composite key is (tx_hash, id) where `id` is the numeric metadata label, so
             // it has to come from the data; a label the tx does not carry yields 404.
-            const { data: metadata } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const { data: metadata } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             const id = metadata.value[0].id;
 
             const { status, data } = await test.get(
-              `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${TEST_FIXTURES.txWithMetadata}',id=${id})`
+              `/odata/v4/cardano/TransactionMetadata(tx_hash='${TEST_FIXTURES.txWithMetadata}',id=${id})`
             );
 
             expect(data).to.have.property('label');
@@ -501,7 +501,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
           it('POST /GetMetadataByTxHash – read TransactionMetadata via indexing path', async () => {
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const { status, data } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
 
             expect(data.value[0]).to.have.property('label');
             expect(data.value[0]).to.have.property('payload');
@@ -517,7 +517,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(TransactionMetadata).where({ tx_hash: TEST_FIXTURES.txWithMetadata }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
+            const { status } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.txWithMetadata });
             expect(status).to.equal(200);
           });
         });
@@ -543,7 +543,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               }),
             );
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetMetadataByTxHash', { txHash: TEST_FIXTURES.validTxHash });
+            const { status, data } = await test.post('/odata/v4/cardano/GetMetadataByTxHash', { txHash: TEST_FIXTURES.validTxHash });
             const firstrow = data.value[0];
 
             expect(status).to.equal(200);
@@ -572,7 +572,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               }),
             );
             const { status, data } = await test.get(
-              `/odata/v4/cardano-odata/TransactionMetadata(tx_hash='${TEST_FIXTURES.validTxHash}',id=1)`
+              `/odata/v4/cardano/TransactionMetadata(tx_hash='${TEST_FIXTURES.validTxHash}',id=1)`
             );
             expect(status).to.equal(200);
             expect(data).to.have.property('tx_hash');
@@ -591,7 +591,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         describe('READ Addresses Entity', () => {
 
           it('GET /Addresses – read Addresses collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Addresses`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Addresses`);
 
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
@@ -599,13 +599,13 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('POST /GetAddressByBech32 – read Address by bech32', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
             expect([200]).to.include(status);
             expect(data).to.have.property('address');
           });
 
           it('POST /GetUTxOsByAddress – read UTxOs by Address', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
             expect(status).to.be.equal(200);
@@ -613,7 +613,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
           it('POST /GetAddressByBech32 – read Address with indexing', async () => {
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
 
             expect(data).to.have.property('address');
             expect(data.address).to.equal(TEST_FIXTURES.addressWithFunds);
@@ -630,7 +630,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { AddressUTxOs } = CardanoService.entities as any;
             const before = await cds.run(SELECT.from(AddressUTxOs).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(before.length).to.equal(0);
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
             const after = await cds.run(SELECT.from(AddressUTxOs).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(after.length).to.be.greaterThan(0);
             expect(status).to.equal(200);
@@ -645,7 +645,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(before.length).to.equal(0);
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             const after = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(after.length).to.be.greaterThan(0);
@@ -662,7 +662,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(Addresses).where({ address: TEST_FIXTURES.addressWithFunds }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+            const { status } = await test.post('/odata/v4/cardano/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
             expect(status).to.equal(200);
 
             const after = await cds.run(SELECT.from(Addresses).where({ address: TEST_FIXTURES.addressWithFunds }));
@@ -699,7 +699,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const seeded = await cds.run(SELECT.from(AddressUTxOs).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(seeded.length).to.be.greaterThan(0);
 
-            const { data, status } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { data, status } = await test.post('/odata/v4/cardano/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             expect(Array.isArray(data.value)).to.be.true;
             expect(status).to.equal(200);
@@ -737,7 +737,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const seeded = await cds.run(SELECT.from(AddressAssets).where({ address_address: TEST_FIXTURES.addressWithFunds }));
             expect(seeded.length).to.be.greaterThan(0);
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value[0]).to.have.property('unit');
@@ -759,7 +759,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               }),
             );
 
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
             expect(data).to.have.property('address');
             expect(data.address).to.equal(TEST_FIXTURES.addressWithFunds);
             expect(status).to.equal(200);
@@ -778,7 +778,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
                 validTo: new Date(Date.now() + 60000).toISOString(),
               }),
             );
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Addresses(address='${TEST_FIXTURES.addressWithFunds}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Addresses(address='${TEST_FIXTURES.addressWithFunds}')`);
             expect(data).to.have.property('address');
             expect(data.address).to.equal(TEST_FIXTURES.addressWithFunds);
             expect(status).to.equal(200);
@@ -787,20 +787,20 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         describe('Addresses Sub-Entities Reads', () => {
           it('GET /AddressAssets – read AddressAssets collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressAssets`);
+            const { status, data } = await test.get(`/odata/v4/cardano/AddressAssets`);
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
           });
 
           it('POST /GetAddressByBech32 – read Address with assets', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAddressByBech32', { address: TEST_FIXTURES.addressWithFunds });
 
             expect(data.address).to.equal(TEST_FIXTURES.addressWithFunds);
             expect(data).to.have.property('totalLovelace');
             expect(status).to.equal(200);
 
-            const { status: utxoStatus, data: utxoData } = await test.post('/odata/v4/cardano-odata/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status: utxoStatus, data: utxoData } = await test.post('/odata/v4/cardano/GetUTxOsByAddress', { address: TEST_FIXTURES.addressWithFunds });
 
             const utxos = Array.isArray(utxoData.value) ? utxoData.value : utxoData;
 
@@ -811,21 +811,21 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
           });
 
           it('GET /AddressUTxOs – read AddressUTxOs collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressUTxOs`);
+            const { status, data } = await test.get(`/odata/v4/cardano/AddressUTxOs`);
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
           });
 
           it('GET /UTxOAssets – read UTxOAssets collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/UTxOAssets`);
+            const { status, data } = await test.get(`/odata/v4/cardano/UTxOAssets`);
             expect(Array.isArray(data.value)).to.be.true;
             expect(data.value.length).to.be.equal(0);
             expect(status).to.equal(200);
           });
 
           it('POST /GetAssetsByAddress – read Assets by Address', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAssetsByAddress', { address: TEST_FIXTURES.addressWithFunds });
             expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
             expect(status).to.be.equal(200);
           });
@@ -839,13 +839,13 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         describe('READ Accounts Entity', () => {
           it('GET /Accounts – read Accounts collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Accounts`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Accounts`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('POST /GetAccountByStakeAddress – read Account by stake address', async () => {
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
 
             expect(data).to.have.property('stakeAddress');
             expect(data.stakeAddress).to.equal(TEST_FIXTURES.validStakeAddress);
@@ -860,7 +860,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Accounts } = CardanoService.entities as any;
             const before = await cds.run(SELECT.from(Accounts).where({ stakeAddress: TEST_FIXTURES.validStakeAddress }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
+            const { status } = await test.post('/odata/v4/cardano/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Accounts).where({ stakeAddress: TEST_FIXTURES.validStakeAddress }));
             expect(after.length).to.equal(1);
@@ -872,7 +872,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(Accounts).where({ stakeAddress: TEST_FIXTURES.validStakeAddress }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.get(`/odata/v4/cardano-odata/Accounts(stakeAddress='${TEST_FIXTURES.validStakeAddress}')`);
+            const { status } = await test.get(`/odata/v4/cardano/Accounts(stakeAddress='${TEST_FIXTURES.validStakeAddress}')`);
 
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Accounts).where({ stakeAddress: TEST_FIXTURES.validStakeAddress }));
@@ -893,7 +893,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               controlledAmount: 1000000,
               rewardsSum: 500000,
             }));
-            const { status, data } = await test.post('/odata/v4/cardano-odata/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
+            const { status, data } = await test.post('/odata/v4/cardano/GetAccountByStakeAddress', { stakeAddress: TEST_FIXTURES.validStakeAddress });
 
             expect(data).to.have.property('stakeAddress');
             expect(data.stakeAddress).to.equal(TEST_FIXTURES.validStakeAddress);
@@ -920,7 +920,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               rewardsSum: '500000',
             }));
 
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Accounts(stakeAddress='${TEST_FIXTURES.validStakeAddress}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Accounts(stakeAddress='${TEST_FIXTURES.validStakeAddress}')`);
 
             expect(data).to.have.property('stakeAddress');
             expect(data.stakeAddress).to.equal(TEST_FIXTURES.validStakeAddress);
@@ -940,20 +940,20 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         describe('READ Pools Entity', () => {
           it('GET /Pools – read Pools collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Pools`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Pools`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('GET /Pools(poolId=…) – read Pool by poolId', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
             expect(status).to.equal(200);
             expect(data).to.have.property('poolId');
             expect(data.poolId).to.equal(TEST_FIXTURES.validPoolId);
           });
 
           it('POST /GetPoolById – read Pool by poolId via action', async () => {
-            const { status, data } = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
+            const { status, data } = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
             expect(status).to.equal(200);
             expect(data).to.have.property('poolId');
             expect(data.poolId).to.equal(TEST_FIXTURES.validPoolId);
@@ -967,7 +967,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const before = await cds.run(SELECT.from(Pools).where({ poolId: TEST_FIXTURES.validPoolId }));
             expect(before.length).to.equal(0);
 
-            const { status } = await test.get(`/odata/v4/cardano-odata/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
+            const { status } = await test.get(`/odata/v4/cardano/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Pools).where({ poolId: TEST_FIXTURES.validPoolId }));
             expect(after.length).to.equal(1);
@@ -978,7 +978,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Pools } = CardanoService.entities as any;
             const before = await cds.run(SELECT.from(Pools).where({ poolId: TEST_FIXTURES.validPoolId }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
+            const { status } = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Pools).where({ poolId: TEST_FIXTURES.validPoolId }));
             expect(after.length).to.equal(1);
@@ -996,7 +996,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Pools(poolId='${TEST_FIXTURES.validPoolId}')`);
             expect(status).to.equal(200);
             expect(data).to.have.property('poolId');
             expect(data.poolId).to.equal(TEST_FIXTURES.validPoolId);
@@ -1013,7 +1013,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
-            const { status, data } = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
+            const { status, data } = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: TEST_FIXTURES.validPoolId });
 
             expect(status).to.equal(200);
             expect(data).to.have.property('poolId');
@@ -1028,20 +1028,20 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       describe('Dreps Entity Tests', () => {
         describe('Dreps Entity', () => {
           it('GET /Dreps – read Dreps collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Dreps`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('GET /Dreps(drepId=…) – read Drep by drepId', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
             expect(status).to.equal(200);
             expect(data).to.have.property('drepId');
             expect(data.drepId).to.equal(TEST_FIXTURES.validDrepId);
           });
 
           it('POST /GetDrepById – read Drep by drepId via action', async () => {
-            const { status, data } = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
+            const { status, data } = await test.post(`/odata/v4/cardano/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
             expect(status).to.equal(200);
             expect(data).to.have.property('drepId');
             expect(data.drepId).to.equal(TEST_FIXTURES.validDrepId);
@@ -1054,7 +1054,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Dreps } = CardanoService.entities as any;
             const before = await cds.run(SELECT.from(Dreps).where({ drepId: TEST_FIXTURES.validDrepId }));
             expect(before.length).to.equal(0);
-            const { status } = await test.get(`/odata/v4/cardano-odata/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
+            const { status } = await test.get(`/odata/v4/cardano/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Dreps).where({ drepId: TEST_FIXTURES.validDrepId }));
             expect(after.length).to.equal(1);
@@ -1064,7 +1064,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { Dreps } = CardanoService.entities as any;
             const before = await cds.run(SELECT.from(Dreps).where({ drepId: TEST_FIXTURES.validDrepId }));
             expect(before.length).to.equal(0);
-            const { status } = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
+            const { status } = await test.post(`/odata/v4/cardano/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Dreps).where({ drepId: TEST_FIXTURES.validDrepId }));
             expect(after.length).to.equal(1);
@@ -1082,7 +1082,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               validFrom: new Date().toISOString(),
               validTo: new Date(Date.now() + 60000).toISOString(),
             }));
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
+            const { status, data } = await test.get(`/odata/v4/cardano/Dreps(drepId='${TEST_FIXTURES.validDrepId}')`);
             expect(status).to.equal(200);
             expect(data).to.have.property('drepId');
             expect(data.drepId).to.equal(TEST_FIXTURES.validDrepId);
@@ -1098,7 +1098,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               validTo: new Date(Date.now() + 60000).toISOString(),
             }));
 
-            const { status, data } = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
+            const { status, data } = await test.post(`/odata/v4/cardano/GetDrepById`, { drepId: TEST_FIXTURES.validDrepId });
             expect(status).to.equal(200);
             expect(data).to.have.property('drepId');
             expect(data.drepId).to.equal(TEST_FIXTURES.validDrepId);
@@ -1113,13 +1113,13 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
 
         describe('LedgerProtocolParameters Entity', () => {
           it('GET /LedgerProtocolParameters – read ProtocolParameter collection', async () => {
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+            const { status, data } = await test.get(`/odata/v4/cardano/LedgerProtocolParameters`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
           });
 
           it('POST /LedgerProtocolParameters– get ProtocolParameter data', async () => {
-            const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`, {});
+            const { status } = await test.post(`/odata/v4/cardano/GetLedgerProtocolParameters`, {});
             expect(status).to.equal(200);
           });
         });
@@ -1130,7 +1130,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { LedgerProtocolParameters } = CardanoService.entities as any;
             const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
             expect(before).to.be.undefined;
-            const { status } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+            const { status } = await test.get(`/odata/v4/cardano/LedgerProtocolParameters`);
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
             expect(after).to.not.be.undefined;
@@ -1141,7 +1141,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { LedgerProtocolParameters } = CardanoService.entities as any;
             const before = await cds.run(SELECT.one.from(LedgerProtocolParameters));
             expect(before).to.be.undefined;
-            const { status } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`, {});
+            const { status } = await test.post(`/odata/v4/cardano/GetLedgerProtocolParameters`, {});
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.one.from(LedgerProtocolParameters));
             expect(after).to.not.be.undefined;
@@ -1158,7 +1158,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               minFeeA: 44,
               minFeeB: 155381,
             }));
-            const { status, data } = await test.get(`/odata/v4/cardano-odata/LedgerProtocolParameters`);
+            const { status, data } = await test.get(`/odata/v4/cardano/LedgerProtocolParameters`);
             expect(status).to.equal(200);
             expect(data.value).to.be.an('array');
             expect(data.value[0]).to.have.property('epoch');
@@ -1173,7 +1173,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
               minFeeA: 44,
               minFeeB: 155381,
             }));
-            const { status, data } = await test.post(`/odata/v4/cardano-odata/GetLedgerProtocolParameters`, {});
+            const { status, data } = await test.post(`/odata/v4/cardano/GetLedgerProtocolParameters`, {});
             expect(status).to.equal(200);
             expect(data).to.have.property('epoch');
             expect(data.epoch).to.equal(200);
@@ -1185,7 +1185,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       describe('LatestBlock and LatestEpoch Actions Tests', () => {
 
         it('POST /GetLatestBlock – get latest Block data', async () => {
-          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestBlock', {});
+          const { status, data } = await test.post('/odata/v4/cardano/GetLatestBlock', {});
           expect(data).to.have.property('hash');
           expect(data).to.have.property('height');
           expect(data).to.have.property('size');
@@ -1193,7 +1193,7 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
         });
 
         it('POST /GetLatestEpoch – get latest Epoch data', async () => {
-          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestEpoch', {});
+          const { status, data } = await test.post('/odata/v4/cardano/GetLatestEpoch', {});
           expect(data).to.have.property('epoch');
           expect(status).to.equal(200);
         });
@@ -1204,27 +1204,27 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
       describe('Address Transactions Tests', () => {
 
         it('GET /AddressTransactions – read AddressTransactions collection', async () => {
-          const { status, data } = await test.get(`/odata/v4/cardano-odata/AddressTransactions`);
+          const { status, data } = await test.get(`/odata/v4/cardano/AddressTransactions`);
           expect(Array.isArray(data.value)).to.be.true;
           expect(data.value.length).to.be.equal(0);
           expect(status).to.equal(200);
         });
 
         it('POST /GetLatestTransactionsByAddress – read Transactions by Address', async () => {
-          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+          const { status, data } = await test.post('/odata/v4/cardano/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
           expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
           expect(status).to.be.equal(200);
         });
 
         it('POST /GetLatestTransactionsByAddress – with custom limit', async () => {
-          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds, limit: 5 });
+          const { status, data } = await test.post('/odata/v4/cardano/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds, limit: 5 });
           expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
           expect(status).to.be.equal(200);
         });
 
         it('POST /GetLatestTransactionsByAddress – return existing from cache', async () => {
-          await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
-          const { status, data } = await test.post('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+          await test.post('/odata/v4/cardano/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
+          const { status, data } = await test.post('/odata/v4/cardano/GetLatestTransactionsByAddress', { address: TEST_FIXTURES.addressWithFunds });
           expect(Array.isArray(data.value) || Array.isArray(data)).to.be.true;
           expect(status).to.be.equal(200);
         });

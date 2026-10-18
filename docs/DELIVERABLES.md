@@ -37,7 +37,7 @@ A fully functional OData V4 service using SAP Cloud Application Programming Mode
 ### Acceptance criteria
 
 - OData V4 service deployable locally with `cds watch` or `npm run dev`  
-- Service accessible via standard OData V4 endpoint (`http://localhost:4004/odata/v4/cardano-odata`)  
+- Service accessible via standard OData V4 endpoint (`http://localhost:4004/odata/v4/cardano`)  
 - Metadata document (`$metadata`) reachable confirming service is operational  
 - Six main entities defined: Transactions, Addresses, Blocks, Epochs, Accounts, NetworkInformation  
 - Full OData query support: `$filter`, `$select`, `$expand`, `$top`, `$skip`, `$count`, `$orderby`  

@@ -58,7 +58,7 @@ cds watch
 ```
 
 All five services auto-register:
-- **CardanoODataService** at `/odata/v4/cardano-odata/` — read blockchain data
+- **CardanoODataService** at `/odata/v4/cardano/` — read blockchain data
 - **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
 - **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
 - **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (v2.0, off by default)
@@ -79,7 +79,7 @@ in-process, so no message broker is involved:
 ### 4) Verify
 
 ```bash
-curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
+curl http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
 ### Programmatic Access (optional)
@@ -211,7 +211,7 @@ npm start
 
 Server runs at: http://localhost:4004
 
-Base service path: http://localhost:4004/odata/v4/cardano-odata
+Base service path: http://localhost:4004/odata/v4/cardano
 
 ## Local Ogmios + cardano-node (Docker)
 
@@ -263,20 +263,20 @@ docker compose down -v     # also wipe the DB volume → full re-sync next time
 - Network information
 
 ```bash
-curl http://localhost:4004/odata/v4/cardano-odata/NetworkInformation
+curl http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
 - Latest block / epoch via OData queries:
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/Blocks?$orderby=height desc&$top=1"
-curl "http://localhost:4004/odata/v4/cardano-odata/Epochs?$orderby=epoch desc&$top=1"
+curl "http://localhost:4004/odata/v4/cardano/Blocks?$orderby=height desc&$top=1"
+curl "http://localhost:4004/odata/v4/cardano/Epochs?$orderby=epoch desc&$top=1"
 ```
 
 - Transaction by hash
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetTransactionByHash \
   -H "Content-Type: application/json" \
   -d '{"hash":"<64-hex-hash>"}'
 ```
@@ -284,7 +284,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
 - Address details
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32 \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetAddressByBech32 \
   -H "Content-Type: application/json" \
   -d '{"address":"addr_test1..."}'
 ```
@@ -292,15 +292,15 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32 \
 - Pool / account / drep lookups
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetPoolById \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetPoolById \
   -H "Content-Type: application/json" \
   -d '{"poolId":"pool1..."}'
 
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAccountByStakeAddress \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetAccountByStakeAddress \
   -H "Content-Type: application/json" \
   -d '{"stakeAddress":"stake_test1..."}'
 
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetDrepById \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetDrepById \
   -H "Content-Type: application/json" \
   -d '{"drepId":"drep1..."}'
 ```
@@ -308,11 +308,11 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetDrepById \
 - Address UTxOs and Assets
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetUTxOsByAddress \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetUTxOsByAddress \
   -H "Content-Type: application/json" \
   -d '{"address":"addr_test1..."}'
 
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetAssetsByAddress \
   -H "Content-Type: application/json" \
   -d '{"address":"addr_test1..."}'
 ```
@@ -320,7 +320,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress \
 - Transaction metadata
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetMetadataByTxHash \
   -H "Content-Type: application/json" \
   -d '{"txHash":"<64-hex-hash>"}'
 ```
@@ -328,8 +328,8 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash \
 Tip: You can also read by keys where applicable, e.g.:
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano-odata/Transactions('<64-hex-hash>')"
-curl "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1...')"
+curl "http://localhost:4004/odata/v4/cardano/Transactions('<64-hex-hash>')"
+curl "http://localhost:4004/odata/v4/cardano/Addresses('addr_test1...')"
 ```
 
 ## Testing All Endpoints

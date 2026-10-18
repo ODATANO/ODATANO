@@ -138,7 +138,7 @@ const BACKEND_CONFIGS: BackendConfig[] = [
 
 async function waitForServer(maxWaitMs: number = 120_000): Promise<number> {
   const start = Date.now();
-  const healthUrl = `${BASE}/odata/v4/cardano-odata/NetworkInformation`;
+  const healthUrl = `${BASE}/odata/v4/cardano/NetworkInformation`;
 
   while (Date.now() - start < maxWaitMs) {
     try {

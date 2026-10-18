@@ -14,7 +14,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/$metadata",
+					"raw": "http://localhost:4004/odata/v4/cardano/$metadata",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -23,7 +23,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"$metadata"
 					]
 				},
@@ -37,7 +37,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/NetworkInformation",
+					"raw": "http://localhost:4004/odata/v4/cardano/NetworkInformation",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -46,7 +46,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"NetworkInformation"
 					]
 				},
@@ -72,7 +72,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Blocks('2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008')",
+					"raw": "http://localhost:4004/odata/v4/cardano/Blocks('2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -81,7 +81,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Blocks('2c1db6c1d204346e21fe971755fac85d7e7d1c127e1b31075ba705d5040c0008')"
 					]
 				},
@@ -95,7 +95,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Epochs(500)",
+					"raw": "http://localhost:4004/odata/v4/cardano/Epochs(500)",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -104,7 +104,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Epochs(500)"
 					]
 				},
@@ -118,7 +118,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Pools('pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r')",
+					"raw": "http://localhost:4004/odata/v4/cardano/Pools('pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -127,7 +127,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Pools('pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r')"
 					]
 				},
@@ -141,7 +141,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Dreps('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0')",
+					"raw": "http://localhost:4004/odata/v4/cardano/Dreps('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -150,7 +150,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Dreps('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0')"
 					]
 				},
@@ -164,7 +164,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Transactions",
+					"raw": "http://localhost:4004/odata/v4/cardano/Transactions",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -173,7 +173,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Transactions"
 					]
 				},
@@ -187,7 +187,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Accounts('stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p')",
+					"raw": "http://localhost:4004/odata/v4/cardano/Accounts('stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -196,7 +196,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Accounts('stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p')"
 					]
 				},
@@ -210,7 +210,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')",
+					"raw": "http://localhost:4004/odata/v4/cardano/Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -219,7 +219,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"Addresses('addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8')"
 					]
 				},
@@ -233,7 +233,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/TransactionMetadata( id ='1', tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')",
+					"raw": "http://localhost:4004/odata/v4/cardano/TransactionMetadata( id ='1', tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -242,7 +242,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"TransactionMetadata( id ='1', tx_hash='95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1')"
 					]
 				},
@@ -266,7 +266,7 @@
 					"raw": "{}"
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetNetworkInformation",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetNetworkInformation",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -275,7 +275,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetNetworkInformation"
 					]
 				},
@@ -304,7 +304,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetBlockByHash",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetBlockByHash",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -313,7 +313,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetBlockByHash"
 					]
 				},
@@ -342,7 +342,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetEpochByNumber",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetEpochByNumber",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -351,7 +351,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetEpochByNumber"
 					]
 				},
@@ -375,7 +375,7 @@
 					"raw": "{\n    \"poolId\": \"pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r\"\n}"
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetPoolById",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetPoolById",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -384,7 +384,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetPoolById"
 					]
 				},
@@ -413,7 +413,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetDrepById",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetDrepById",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -422,7 +422,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetDrepById"
 					]
 				},
@@ -451,7 +451,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAccountByStakeAddress",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetAccountByStakeAddress",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -460,7 +460,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetAccountByStakeAddress"
 					]
 				}
@@ -488,7 +488,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetTransactionByHash",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -497,7 +497,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetTransactionByHash"
 					]
 				},
@@ -526,7 +526,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetMetadataByTxHash",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetMetadataByTxHash",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -535,7 +535,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetMetadataByTxHash"
 					]
 				},
@@ -564,7 +564,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetAddressByBech32",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -573,7 +573,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetAddressByBech32"
 					]
 				},
@@ -602,7 +602,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetUTxOsByAddress",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetUTxOsByAddress",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -611,7 +611,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetUTxOsByAddress"
 					]
 				},
@@ -640,7 +640,7 @@
 					}
 				},
 				"url": {
-					"raw": "http://localhost:4004/odata/v4/cardano-odata/GetAssetsByAddress",
+					"raw": "http://localhost:4004/odata/v4/cardano/GetAssetsByAddress",
 					"protocol": "http",
 					"host": [
 						"localhost"
@@ -649,7 +649,7 @@
 					"path": [
 						"odata",
 						"v4",
-						"cardano-odata",
+						"cardano",
 						"GetAssetsByAddress"
 					]
 				},

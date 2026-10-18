@@ -134,7 +134,7 @@ variable is ignored.
 ```
 BTP Cloud Foundry
 ├── odatano-srv (CAP Node.js Backend)
-│   ├── CardanoODataService        (/odata/v4/cardano-odata/)
+│   ├── CardanoODataService        (/odata/v4/cardano/)
 │   ├── CardanoTransactionService  (/odata/v4/cardano-transaction/)
 │   ├── CardanoSignService         (/odata/v4/cardano-sign/)
 │   ├── CardanoIndexerService      (/odata/v4/cardano-indexer/  — crawler control, Admin)
@@ -422,7 +422,7 @@ parameters:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/odata/v4/cardano-odata/$metadata` | GET | Service health (200 + XML) |
+| `/odata/v4/cardano/$metadata` | GET | Service health (200 + XML) |
 | `/odata/v4/cardano-transaction/$metadata` | GET | Transaction service health (200 + XML) |
 | `/odata/v4/cardano-sign/$metadata` | GET | Signing service health (200 + XML) |
 

@@ -26,77 +26,77 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Transaction with Invalid Input', () => {
 			it('READ / Transactions with invalid transaction hash', async () => {
-				const response = await test.GET(`/odata/v4/cardano-odata/Transactions(hash='invalidhash')`).catch(err => err.response);
+				const response = await test.GET(`/odata/v4/cardano/Transactions(hash='invalidhash')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash format');
 			});
 
 			it('POST / GetTransactionByHash with invalid hash format', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'invalid_hash' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'invalid_hash' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash');
 			});
 
 			it('POST / GetTransactionByHash with short hash', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'abc123' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'abc123' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash');
 			});
 
 			it('POST / GetTransactionByHash with hash containing invalid characters', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash');
 			});
 
 			it('POST / GetTransactionByHash without hash parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('hash is required');
 			});
 
 			it('POST / GetTransactionByHash with Empty string transaction hash', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: '' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: '' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 			});
 
 			it('POST / GetTransactionByHash with Null transaction hash', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: null as any }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: null as any }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 			});
 
 			it('POST / GetTransactionByHash with transaction hash containing uppercase letters', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC1' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC1' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error).to.exist;
 			});
 
 			it('POST / GetTransactionByHash with transaction hash with exactly 63 characters (should fail)', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'a'.repeat(63) }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'a'.repeat(63) }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash');
 			});
 
 			it('POST / GetTransactionByHash with transaction hash with exactly 65 characters (should fail)', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetTransactionByHash`, { hash: 'a'.repeat(65) }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetTransactionByHash`, { hash: 'a'.repeat(65) }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('valid');
 			});
 
 			it('READ / TransactionMetadata with invalid tx key', async () => {
-				const response = await test.GET(`/odata/v4/cardano-odata/TransactionMetadata(id =1, tx_hash='invalidhash')`).catch(err => err.response);
+				const response = await test.GET(`/odata/v4/cardano/TransactionMetadata(id =1, tx_hash='invalidhash')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid transaction hash format');
 			});
 
 			it('POST / TransactionMetadata with tx key containing invalid characters', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetMetadataByTxHash`, { txHash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetMetadataByTxHash`, { txHash: 'ZZZZ23def456abc123def456abc123def456abc123def456abc123def456abc1' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid');
 			});
 
 			it('POST / TransactionMetadata without tx key', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetMetadataByTxHash`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetMetadataByTxHash`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('txHash is required');
 			});
@@ -104,25 +104,25 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Blocks – Invalid Input', () => {
 			it('POST / GetBlockByHash without blockHash parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetBlockByHash`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetBlockByHash`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('hash is required');
 			});
 
 			it('POST / GetBlockByHash with invalid hash format', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetBlockByHash`, { hash: 'invalid_hash' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetBlockByHash`, { hash: 'invalid_hash' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
 
 			it('POST / GetBlockByHash with short hash', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetBlockByHash`, { hash: 'abc123' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetBlockByHash`, { hash: 'abc123' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
 
 			it('READ / Blocks with invalid block hash', async () => {
-				const response = await test.GET(`/odata/v4/cardano-odata/Blocks(hash='hash123')`).catch(err => err.response);
+				const response = await test.GET(`/odata/v4/cardano/Blocks(hash='hash123')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid|hash/i);
 			});
@@ -130,25 +130,25 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Epochs – Invalid Input', () => {
 			it('POST / GetEpochByNumber with non-numeric epochNumber', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetEpochByNumber`, { epochNumber: '22222222' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetEpochByNumber`, { epochNumber: '22222222' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('epochNumber has invalid format');
 			});
 
 			it('POST / GetEpochByNumber without epochNumber parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetEpochByNumber`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetEpochByNumber`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('epochNumber');
 			});
 
 			it('POST / GetEpochByNumber with null epochNumber', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetEpochByNumber`, { epochNumber: null }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetEpochByNumber`, { epochNumber: null }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('epochNumber');
 			});
 
 			it('READ / Epochs with non-numeric epochNumber', async () => {
-				const response = await test.GET(`/odata/v4/cardano-odata/Epochs(epoch='122222')`).catch(err => err.response);
+				const response = await test.GET(`/odata/v4/cardano/Epochs(epoch='122222')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('epochNumber has invalid format');
 			});
@@ -156,61 +156,61 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Addresses – Invalid Input', () => {
 			it('POST / GetAddressByBech32 without address parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAddressByBech32`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('address is required');
 			});
 
 			it('POST / GetUTxOsByAddress without address parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetUTxOsByAddress`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetUTxOsByAddress`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('address is required');
 			});
 
 			it('POST / GetAssetsByAddress without address parameter', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAssetsByAddress`, {}).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAssetsByAddress`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('address is required');
 			});
 
 			it('POST / GetAddressByBech32 with invalid address format', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, { address: 'addr123456' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAddressByBech32`, { address: 'addr123456' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid bech32 address');
 			});
 
 			it('POST / GetAddressByBech32 with mainnet address on testnet', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, { address: 'addr1qxyz' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAddressByBech32`, { address: 'addr1qxyz' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid bech32 address');
 			});
 
 			it('POST / GetAddressByBech32 with too short address', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, { address: 'addr_test1q' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAddressByBech32`, { address: 'addr_test1q' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid bech32 address');
 			});
 
 			it('POST / GetAddressByBech32 with too long address', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAddressByBech32`, { address: 'addr_test1q' + 'a'.repeat(105) }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAddressByBech32`, { address: 'addr_test1q' + 'a'.repeat(105) }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('Invalid bech32 address');
 			});
 
 			it('POST / GetUTxOsByAddress with invalid bech32 address', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetUTxOsByAddress`, { address: 'invalid_address_format' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetUTxOsByAddress`, { address: 'invalid_address_format' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/pattern|bech32/i);
 			});
 
 			it('POST / GetAssetsByAddress with invalid bech32 address', async () => {
-				const response = await test.POST(`/odata/v4/cardano-odata/GetAssetsByAddress`, { address: 'not_valid_bech32' }).catch(err => err.response);
+				const response = await test.POST(`/odata/v4/cardano/GetAssetsByAddress`, { address: 'not_valid_bech32' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/pattern|bech32/i);
 			});
 
 			it('READ / Addresses with invalid bech32 address', async () => {
-				const response = await test.GET(`/odata/v4/cardano-odata/Addresses(address='invalid_address')`).catch(err => err.response);
+				const response = await test.GET(`/odata/v4/cardano/Addresses(address='invalid_address')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|bech32/i);
 			});
@@ -218,14 +218,14 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('GetLatestTransactionsByAddress - Invalid Input', () => {
 			it('POST /GetLatestTransactionsByAddress - missing address parameter', async () => {
-				const response = await test.POST('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', {})
+				const response = await test.POST('/odata/v4/cardano/GetLatestTransactionsByAddress', {})
 					.catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('address is required');
 			});
 
 			it('POST /GetLatestTransactionsByAddress - invalid bech32 address', async () => {
-				const response = await test.POST('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', {
+				const response = await test.POST('/odata/v4/cardano/GetLatestTransactionsByAddress', {
 					address: 'invalid_address_format'
 				}).catch(err => err.response);
 				expect(response.status).to.equal(400);
@@ -233,7 +233,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 
 			it('POST /GetLatestTransactionsByAddress - empty address string', async () => {
-				const response = await test.POST('/odata/v4/cardano-odata/GetLatestTransactionsByAddress', {
+				const response = await test.POST('/odata/v4/cardano/GetLatestTransactionsByAddress', {
 					address: ''
 				}).catch(err => err.response);
 				expect(response.status).to.equal(400);
@@ -242,19 +242,19 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Accounts – Invalid Input', () => {
 			it('POST / GetAccountByStakeAddress with invalid stake address format', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetAccountByStakeAddress`, { stakeAddress: 'invalid_stake_addr' }).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetAccountByStakeAddress`, { stakeAddress: 'invalid_stake_addr' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/pattern|stake|bech32/i);
 			});
 
 			it('POST / GetAccountByStakeAddress without stakeAddress parameter', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetAccountByStakeAddress`, {}).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetAccountByStakeAddress`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('stakeAddress is required');
 			});
 
 			it('READ / Accounts with invalid stake address', async () => {
-				const response = await test.get(`/odata/v4/cardano-odata/Accounts(stakeAddress='invalid_stake_addr')`).catch(err => err.response);
+				const response = await test.get(`/odata/v4/cardano/Accounts(stakeAddress='invalid_stake_addr')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|stake|bech32/i);
 			});
@@ -262,31 +262,31 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Pools – Invalid Input', () => {
 			it('POST / GetPoolById with invalid poolId format (random string)', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: 'invalid_pool' }).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: 'invalid_pool' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid poolId format|Pools/i);
 			});
 			it('POST / Invalid bech32 pool id: GetPoolById returns 400', async () => {
 				const nonexistentStakeAddr = 'pool1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-				const { status, data } = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: nonexistentStakeAddr }).catch(err => err.response);
+				const { status, data } = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: nonexistentStakeAddr }).catch(err => err.response);
 				expect(data.error).to.exist;
 				expect(data.error.message).to.match(/Invalid poolId format/i);
 				expect(status).to.equal(400);
 			})
 			it('POST / GetPoolById with invalid bech32-like poolId (wrong prefix)', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetPoolById`, { poolId: 'poolx' + 'a'.repeat(10) }).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetPoolById`, { poolId: 'poolx' + 'a'.repeat(10) }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid poolId format|Pools/i);
 			});
 
 			it('POST / GetPoolById without poolId parameter', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetPoolById`, {}).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetPoolById`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('poolId is required');
 			});
 
 			it('READ / Pools with invalid poolId', async () => {
-				const response = await test.get(`/odata/v4/cardano-odata/Pools(poolId='invalid_pool')`).catch(err => err.response);
+				const response = await test.get(`/odata/v4/cardano/Pools(poolId='invalid_pool')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|poolId/i);
 			});
@@ -294,19 +294,19 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 
 		describe('Dreps – Invalid Input', () => {
 			it('POST / GetDrepById with invalid drepId format', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetDrepById`, { drepId: 'invalid_drep' }).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetDrepById`, { drepId: 'invalid_drep' }).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid drepId format|Dreps/i);
 			});
 
 			it('POST / GetDrepById without drepId parameter', async () => {
-				const response = await test.post(`/odata/v4/cardano-odata/GetDrepById`, {}).catch(err => err.response);
+				const response = await test.post(`/odata/v4/cardano/GetDrepById`, {}).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.include('drepId is required');
 			});
 
 			it('READ / Dreps with invalid drepId', async () => {
-				const response = await test.get(`/odata/v4/cardano-odata/Dreps(drepId='invalid_drep')`).catch(err => err.response);
+				const response = await test.get(`/odata/v4/cardano/Dreps(drepId='invalid_drep')`).catch(err => err.response);
 				expect(response.status).to.equal(400);
 				expect(response.data.error.message).to.match(/Invalid value|drepId/i);
 			});
@@ -315,7 +315,7 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 		describe('Service – Availability', () => {
 			it('Invalid endpoint returns 404', async () => {
 				try {
-					await test.post(`/odata/v4/cardano-odata/NonExistentEntity`);
+					await test.post(`/odata/v4/cardano/NonExistentEntity`);
 					expect.fail('Should have thrown 404');
 				} catch (error: any) {
 					expect(error.response.status).to.equal(404);
@@ -323,12 +323,12 @@ describe('Error Code 400 - Service-Level Tests for Invalid / Missing Input', () 
 			});
 
 			it('Service metadata always available', async () => {
-				const { status } = await test.get(`/odata/v4/cardano-odata/$metadata`);
+				const { status } = await test.get(`/odata/v4/cardano/$metadata`);
 				expect(status).to.equal(200);
 			});
 
 			it('Service root accessible', async () => {
-				const { status } = await test.get(`/odata/v4/cardano-odata/`);
+				const { status } = await test.get(`/odata/v4/cardano/`);
 				expect(status).to.equal(200);
 			});
 		});

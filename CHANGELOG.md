@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.40] - read service at /odata/v4/cardano
+
+No schema change.
+
+### Changed
+
+- `CardanoODataService` is served at `/odata/v4/cardano` (`@path` in `srv/cardano-service.cds`); the service
+  name, the model and the handlers are unchanged. README, docs, the Postman collection, the wallet app and the
+  scripts name the new path.
+
+### Deprecated
+
+- `/odata/v4/cardano-odata`: still answered, rewritten to `/odata/v4/cardano` before the services
+  (`srv/utils/legacy-service-paths.ts`, registered by the standalone server and the plugin) and logged once per
+  client address as deprecated. The old path goes with the 2.0.0 release.
+
 ## [v2.0.0-rc.39] - reward-account registration answered by the certificate history
 
 No schema change.

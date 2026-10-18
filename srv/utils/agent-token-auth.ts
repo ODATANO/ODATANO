@@ -45,7 +45,7 @@ export function agentServicePaths(): string[] {
   return paths;
 }
 
-/** Exact segment boundary: `/odata/v4/cardano-odata` and below, never `/odata/v4/cardano-odata-evil`. */
+/** Exact segment boundary: `/odata/v4/cardano` and below, never `/odata/v4/cardano-evil`. */
 export function inAgentLane(path: string, servicePaths: string[] = agentServicePaths()): boolean {
   const bare = path.split('?')[0];
   return servicePaths.some((p) => inLaneOf(bare, p));

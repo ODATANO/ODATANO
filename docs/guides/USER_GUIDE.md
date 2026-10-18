@@ -46,7 +46,7 @@ Configure via `NETWORK` environment variable (default: `preview`)
 ### Base URL
 
 ```
-http://localhost:4004/odata/v4/cardano-odata
+http://localhost:4004/odata/v4/cardano
 ```
 
 ### Service Metadata
@@ -54,7 +54,7 @@ http://localhost:4004/odata/v4/cardano-odata
 View all available entities and actions:
 
 ```
-http://localhost:4004/odata/v4/cardano-odata/$metadata
+http://localhost:4004/odata/v4/cardano/$metadata
 ```
 
 ---
@@ -188,7 +188,7 @@ POST /GetDrepById
 **cURL:**
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetTransactionByHash \
   -H "Content-Type: application/json" \
   -d '{"hash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"}'
 ```
@@ -197,7 +197,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash \
 
 ```powershell
 $body = @{hash = "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"} | ConvertTo-Json
-Invoke-WebRequest -Uri "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash" `
+Invoke-WebRequest -Uri "http://localhost:4004/odata/v4/cardano/GetTransactionByHash" `
   -Method POST -ContentType "application/json" -Body $body
 ```
 
@@ -205,7 +205,7 @@ Invoke-WebRequest -Uri "http://localhost:4004/odata/v4/cardano-odata/GetTransact
 
 ```javascript
 const response = await fetch(
-  "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
+  "http://localhost:4004/odata/v4/cardano/GetTransactionByHash",
   {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -221,7 +221,7 @@ console.log(data);
 ### Example 2: Check Address Balance
 
 ```bash
-curl -X POST http://localhost:4004/odata/v4/cardano-odata/GetAddressByBech32 \
+curl -X POST http://localhost:4004/odata/v4/cardano/GetAddressByBech32 \
   -H "Content-Type: application/json" \
   -d '{"address": "addr_test1qz0wmc8twf9l8pf3vk7r3v2u0y0l0kz0m0n0p0q0r0s0t0u0v0w0x0y0z0"}'
 ```
@@ -369,7 +369,7 @@ Supported: `mainnet`, `preview`, `preprod`
 
 ```javascript
 const response = await fetch(
-  "http://localhost:4004/odata/v4/cardano-odata/GetTransactionByHash",
+  "http://localhost:4004/odata/v4/cardano/GetTransactionByHash",
   {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -747,7 +747,7 @@ stay empty and the crawler logs a warning once. The current pool or DRep of a st
 `pool_delegation` / `vote_delegation` row for it:
 
 ```
-GET /odata/v4/cardano-odata/TransactionCertificates?$filter=stakeAddress eq 'stake_test1…' and kind eq 'pool_delegation'&$orderby=tx/slot desc&$top=1
+GET /odata/v4/cardano/TransactionCertificates?$filter=stakeAddress eq 'stake_test1…' and kind eq 'pool_delegation'&$orderby=tx/slot desc&$top=1
 ```
 
 Blocks crawled before `certificates` was switched on can be filled in afterwards. Turn the knob on
@@ -869,9 +869,9 @@ runs. An exact SQLite would need `Lovelace` to be `Integer64` instead of `Decima
 schema-wide change that is not part of this feature.
 
 ```
-GET /odata/v4/cardano-odata/LedgerAddresses('addr_test1…')?$expand=assets
-GET /odata/v4/cardano-odata/LedgerUTxOs?$filter=address eq 'addr_test1…' and spentTxHash eq null&$expand=assets
-GET /odata/v4/cardano-odata/LedgerAccounts('stake_test1…')?$expand=addresses
+GET /odata/v4/cardano/LedgerAddresses('addr_test1…')?$expand=assets
+GET /odata/v4/cardano/LedgerUTxOs?$filter=address eq 'addr_test1…' and spentTxHash eq null&$expand=assets
+GET /odata/v4/cardano/LedgerAccounts('stake_test1…')?$expand=addresses
 ```
 
 Freshness is the crawl's: `confirmationDepth` blocks behind the tip. A caller who needs the mempool

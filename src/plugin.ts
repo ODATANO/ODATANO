@@ -59,6 +59,10 @@ logger.debug('Plugin registered');
 (require('../srv/utils/agent-grants-config') as typeof import('../srv/utils/agent-grants-config'))
   .activateAgentGrants();
 
+// The old path of the read service keeps answering until the 2.0.0 release.
+(require('../srv/utils/legacy-service-paths') as typeof import('../srv/utils/legacy-service-paths'))
+  .registerLegacyServicePaths();
+
 /**
  * Plugin mode: relative @impl paths resolve from cds.root (the consumer app), so
  * rewrite them to package-qualified paths that Node module resolution can find.

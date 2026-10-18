@@ -72,7 +72,7 @@ Three OData services are now live alongside your own — same CAP runtime, same 
 
 ## The three services
 
-- **Read** (`/odata/v4/cardano-odata`) — 18 entities: Blocks, Transactions, Addresses, UTxOs, Assets, Stake Pools, Epochs, Accounts, DReps, Protocol Parameters. Full OData V4 query surface: `$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip`, `$count`.
+- **Read** (`/odata/v4/cardano`) — 18 entities: Blocks, Transactions, Addresses, UTxOs, Assets, Stake Pools, Epochs, Accounts, DReps, Protocol Parameters. Full OData V4 query surface: `$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip`, `$count`.
 - **Transaction** (`/odata/v4/cardano-transaction`) — 11 actions covering the full Build/Sign/Submit lifecycle. ADA transfers, multi-asset, native token minting, CIP-20 metadata, Plutus V3. Each action returns a `TransactionBuilds` entity with fee estimate, unsigned CBOR, and outputs.
 - **Signing** (`/odata/v4/cardano-sign`) — 8 actions implementing external signing as a state machine (`pending → verified → submitted`). CIP-30 wallets, Cardano CLI, PKCS#11 HSMs. The service never touches private keys.
 
@@ -83,7 +83,7 @@ Three OData services are now live alongside your own — same CAP runtime, same 
 Every Cardano entity is a proper CDS model with associations and compositions. That changes what consumers can do:
 
 ```http
-GET /odata/v4/cardano-odata/Transactions('abc123')?$expand=inputs,outputs($expand=assets)
+GET /odata/v4/cardano/Transactions('abc123')?$expand=inputs,outputs($expand=assets)
 ```
 
 The response is structured and typed. Fiori, Excel, Power BI, custom consumers — nobody has to parse raw blockchain data.

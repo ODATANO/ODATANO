@@ -16,7 +16,7 @@ import { join } from 'path';
  */
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
-const ODATA_READ_URL = 'http://localhost:4004/odata/v4/cardano-odata';
+const ODATA_READ_URL = 'http://localhost:4004/odata/v4/cardano';
 const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
 const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 

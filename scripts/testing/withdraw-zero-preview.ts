@@ -41,7 +41,7 @@ function scriptStakeAddress(scriptCborHex: string): string {
 }
 
 async function isRegistered(stakeAddress: string): Promise<boolean> {
-  const res = await axios.post(`${BASE_URL}/cardano-odata/GetAccountByStakeAddress`, { stakeAddress }, axiosConfig);
+  const res = await axios.post(`${BASE_URL}/cardano/GetAccountByStakeAddress`, { stakeAddress }, axiosConfig);
   if (res.status === 404) return false;
   if (res.status !== 200) throw new Error(`GetAccountByStakeAddress ${res.status}: ${JSON.stringify(res.data)}`);
   return res.data.active === true;
@@ -87,7 +87,7 @@ async function buildSignSubmit(label: string, body: Record<string, unknown>): Pr
 async function waitConfirmed(txHash: string): Promise<void> {
   const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const res = await axios.post(`${BASE_URL}/cardano-odata/GetTransactionConfirmations`, { txHash }, axiosConfig);
+    const res = await axios.post(`${BASE_URL}/cardano/GetTransactionConfirmations`, { txHash }, axiosConfig);
     if (res.status === 200 && Number(res.data.confirmations ?? res.data) >= 1) {
       console.log(`  confirmed ${txHash}`);
       return;

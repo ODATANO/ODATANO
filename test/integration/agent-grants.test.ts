@@ -125,14 +125,14 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
   it('authenticates a token on the service paths and refuses unknown or revoked tokens', async () => {
     const issued = await issue({ allowedActions: ['VerifySignature'] });
 
-    const { data: doc } = await GET('/odata/v4/cardano-odata/', withToken(issued.token));
+    const { data: doc } = await GET('/odata/v4/cardano/', withToken(issued.token));
     expect(doc.value).to.be.an('array');
 
-    await expectStatus(GET('/odata/v4/cardano-odata/', withToken('odat_' + '0'.repeat(64))), 401);
-    await expectStatus(GET('/odata/v4/cardano-odata/', withToken('nope')), 401);
+    await expectStatus(GET('/odata/v4/cardano/', withToken('odat_' + '0'.repeat(64))), 401);
+    await expectStatus(GET('/odata/v4/cardano/', withToken('nope')), 401);
 
     await POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId });
-    await expectStatus(GET('/odata/v4/cardano-odata/', withToken(issued.token)), 401);
+    await expectStatus(GET('/odata/v4/cardano/', withToken(issued.token)), 401);
     await expectStatus(POST(`${AGENT}/RevokeAgentGrant`, { grantId: issued.grantId }), 404);
   });
 

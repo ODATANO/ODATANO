@@ -47,13 +47,13 @@ SAP Goods Receipt → SHA-256 Hash → ODATANO BuildTxWithMetadata → External 
 
 An operations dashboard class queries the Cardano network status through ODATANO and tracks response times. Useful for monitoring blockchain availability before executing supply chain transactions.
 
-**ODATANO API:** `GET /odata/v4/cardano-odata/GetNetworkInformation`
+**ODATANO API:** `GET /odata/v4/cardano/GetNetworkInformation`
 
 ### 3. Address Verification for Procurement
 
 Before releasing a payment, the system verifies that the recipient's Cardano wallet address exists on-chain and optionally checks for a minimum balance. Can be integrated into payment approval workflows.
 
-**ODATANO API:** `GET /odata/v4/cardano-odata/GetAddressByBech32`
+**ODATANO API:** `GET /odata/v4/cardano/GetAddressByBech32`
 
 ## Prerequisites
 

@@ -24,7 +24,7 @@ process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 process.env.TX_BUILDERS = 'buildooor';
 
-const SVC = '/odata/v4/cardano-odata';
+const SVC = '/odata/v4/cardano';
 const UTXOS = 'odatano.cardano.AddressUTxOs';
 const ASSETS = 'odatano.cardano.AddressAssets';
 /** The temporal window of the request must reach at least this far past its start. */

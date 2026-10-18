@@ -27,7 +27,7 @@ import {
 import { AGENT_ROLE, AGENT_TOKEN_HEADER, AGENT_TOKEN_PREFIX, type AgentGrantRow } from '../../srv/utils/agent-grants';
 
 const SERVICE_PATHS = [
-  '/odata/v4/cardano-odata',
+  '/odata/v4/cardano',
   '/odata/v4/cardano-transaction',
   '/odata/v4/cardano-sign',
   '/odata/v4/cardano-worker',
@@ -84,11 +84,11 @@ beforeEach(() => {
 
 describe('inAgentLane', () => {
   it('matches the service root and paths below it, never lookalike prefixes', () => {
-    expect(inAgentLane('/odata/v4/cardano-odata', SERVICE_PATHS)).toBe(true);
-    expect(inAgentLane('/odata/v4/cardano-odata/Blocks', SERVICE_PATHS)).toBe(true);
-    expect(inAgentLane('/odata/v4/cardano-odata?$top=1', SERVICE_PATHS)).toBe(true);
+    expect(inAgentLane('/odata/v4/cardano', SERVICE_PATHS)).toBe(true);
+    expect(inAgentLane('/odata/v4/cardano/Blocks', SERVICE_PATHS)).toBe(true);
+    expect(inAgentLane('/odata/v4/cardano?$top=1', SERVICE_PATHS)).toBe(true);
     expect(inAgentLane('/odata/v4/cardano-agent/GetGrantStatus()', SERVICE_PATHS)).toBe(true);
-    expect(inAgentLane('/odata/v4/cardano-odata-evil/Blocks', SERVICE_PATHS)).toBe(false);
+    expect(inAgentLane('/odata/v4/cardano-evil/Blocks', SERVICE_PATHS)).toBe(false);
     expect(inAgentLane('/odata/v4/other', SERVICE_PATHS)).toBe(false);
     expect(inAgentLane('/', SERVICE_PATHS)).toBe(false);
   });
@@ -101,7 +101,7 @@ describe('agent-token lane', () => {
   });
 
   it('delegates a request without the header untouched', async () => {
-    const req = fakeReq('/odata/v4/cardano-odata/Blocks');
+    const req = fakeReq('/odata/v4/cardano/Blocks');
     const next = vi.fn();
     await auth(req, fakeRes(), next);
     expect(delegate).toHaveBeenCalledTimes(1);
@@ -125,14 +125,14 @@ describe('agent-token lane', () => {
 
   it('answers 401 for an unknown token and 410 for an expired grant, and never calls the delegate', async () => {
     const res401 = fakeRes();
-    await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }), res401, vi.fn());
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }), res401, vi.fn());
     expect(res401.statusCode).toBe(401);
     expect((res401.body as { error: { message: string } }).error.message).toBe('invalid agent token');
     expect(res401.headers['WWW-Authenticate']).toBeUndefined();
 
     grantsMock.resolveAgentToken.mockResolvedValue({ ok: false, status: 410, message: 'agent grant expired' });
     const res410 = fakeRes();
-    await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }), res410, vi.fn());
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }), res410, vi.fn());
     expect(res410.statusCode).toBe(410);
     expect(delegate).not.toHaveBeenCalled();
   });
@@ -146,16 +146,16 @@ describe('agent-token lane', () => {
 
   it('throttles failed token attempts per client address (20 per window), then 429 even for a valid token', async () => {
     for (let i = 0; i < 20; i++) {
-      await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), fakeRes(), vi.fn());
+      await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), fakeRes(), vi.fn());
     }
     grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
     const res = fakeRes();
-    await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), res, vi.fn());
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), res, vi.fn());
     expect(res.statusCode).toBe(429);
     expect(res.headers['Retry-After']).toBeDefined();
     const other = fakeRes();
     const next = vi.fn();
-    await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.10'), other, next);
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.10'), other, next);
     expect(next).toHaveBeenCalled();
   });
 
@@ -163,7 +163,7 @@ describe('agent-token lane', () => {
     grantsMock.resolveAgentToken.mockRejectedValue(new Error('db gone'));
     const res = fakeRes();
     const next = vi.fn();
-    await auth(fakeReq('/odata/v4/cardano-odata/', { [AGENT_TOKEN_HEADER]: TOKEN }), res, next);
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }), res, next);
     expect(res.statusCode).toBe(500);
     expect(next).not.toHaveBeenCalled();
     expect(delegate).not.toHaveBeenCalled();
@@ -176,7 +176,7 @@ describe('agent-token lane', () => {
     grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
     const res = fakeRes();
     const next = vi.fn();
-    await withUsers(fakeReq('/odata/v4/cardano-odata/', { authorization: 'Basic ' + Buffer.from('op:wrong').toString('base64'), [AGENT_TOKEN_HEADER]: TOKEN }), res, next);
+    await withUsers(fakeReq('/odata/v4/cardano/', { authorization: 'Basic ' + Buffer.from('op:wrong').toString('base64'), [AGENT_TOKEN_HEADER]: TOKEN }), res, next);
     expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
     expect(grantsMock.resolveAgentToken).not.toHaveBeenCalled();
@@ -197,7 +197,7 @@ describe('a host with its own auth.impl keeps it as the delegate', () => {
 
     const refused = fakeRes();
     const next1 = vi.fn();
-    await wrapped(fakeReq('/odata/v4/cardano-odata/Blocks'), refused, next1);
+    await wrapped(fakeReq('/odata/v4/cardano/Blocks'), refused, next1);
     expect(refused.statusCode).toBe(401);
     expect(next1).not.toHaveBeenCalled();
 
@@ -207,7 +207,7 @@ describe('a host with its own auth.impl keeps it as the delegate', () => {
     expect(foreign.statusCode).toBe(401);
     expect(next2).not.toHaveBeenCalled();
 
-    const admitted = fakeReq('/odata/v4/cardano-odata/Blocks', { 'x-host-key': 'sesame' });
+    const admitted = fakeReq('/odata/v4/cardano/Blocks', { 'x-host-key': 'sesame' });
     const next3 = vi.fn();
     await wrapped(admitted, fakeRes(), next3);
     expect(next3).toHaveBeenCalledTimes(1);

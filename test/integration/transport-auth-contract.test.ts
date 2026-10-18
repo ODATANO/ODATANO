@@ -33,14 +33,14 @@ runTransportAuthContract({
   url: () => cap.url,
   kind: 'basic',
   anonymousPath: '/odata/v4/cardano-indexer/getLiveness()',
-  authenticatedPath: '/odata/v4/cardano-odata',
+  authenticatedPath: '/odata/v4/cardano',
   operator: { user: 'odatano', password: 'op-secret' },
   realm: 'odatano',
   maxFailures: 4,
   lane: {
     header: 'x-agent-token',
     value: 'odat_' + 'a'.repeat(64),
-    insidePath: '/odata/v4/cardano-odata/Blocks',
+    insidePath: '/odata/v4/cardano/Blocks',
     insideStatus: 401,
   },
 });

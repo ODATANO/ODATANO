@@ -128,7 +128,7 @@ ODATANO is not a generic blockchain dashboard and not a thin wrapper over a sing
 
 The platform is composed of three OData V4 services that together cover the full enterprise lifecycle of blockchain interaction:
 
-**Read Service** (`/odata/v4/cardano-odata`): 18 entities and 15 actions covering Cardano core components: network information, blocks, epochs, transactions and their inputs/outputs, addresses, UTxOs, assets, stake pools, accounts, DReps, and ledger protocol parameters. Targets comprehensive OData V4 query support, including `$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip`, and `$count`, within the scope of what SAP CAP's OData runtime provides.
+**Read Service** (`/odata/v4/cardano`): 18 entities and 15 actions covering Cardano core components: network information, blocks, epochs, transactions and their inputs/outputs, addresses, UTxOs, assets, stake pools, accounts, DReps, and ledger protocol parameters. Targets comprehensive OData V4 query support, including `$filter`, `$select`, `$expand`, `$orderby`, `$top`, `$skip`, and `$count`, within the scope of what SAP CAP's OData runtime provides.
 
 **Transaction Service** (`/odata/v4/cardano-transaction`): 8 entities and 11 actions for the full Build → Sign → Submit lifecycle. Supports simple ADA transfers, multi-asset transfers, native token minting, CIP-20 metadata transactions, and Plutus V3 spend transactions, including collateral configuration. Built on a dual-builder architecture (Cardano Serialization Library + Buildooor) with Ogmios as a live backend for protocol parameters and UTxO queries.
 
