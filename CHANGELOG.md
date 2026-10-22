@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.41] - image on Node 22.23.4
+
+No schema change.
+
+### Changed
+
+- `Dockerfile` builds from `node:22.23.4-alpine` (Node security release of 2026-10-21: Brotli decoder
+  out-of-bounds write, TLS hostname checks, keep-alive response desync, dependency updates). The base image
+  is pinned to the exact Node version instead of the floating `node:22-alpine`.
+- `follow-redirects` 1.16.1 in the lockfile (transitive via axios; closes two credential-header advisories).
+
 ## [v2.0.0-rc.40] - read service at /odata/v4/cardano
 
 No schema change.

@@ -1,5 +1,5 @@
 # Simple Docker build for ODATANO - matches CI setup
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 
 # Build arguments for versioning
 ARG VERSION=0.1.0
