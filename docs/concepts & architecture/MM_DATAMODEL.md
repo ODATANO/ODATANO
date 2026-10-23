@@ -139,6 +139,8 @@ erDiagram
         string dataHash
         string inlineDatum
         string referenceScriptHash
+        integer referenceScriptSize
+        string referenceScriptType
         boolean hasAssets
     }
 
@@ -181,6 +183,8 @@ erDiagram
         string dataHash
         string inlineDatum
         string referenceScriptHash
+        integer referenceScriptSize
+        string referenceScriptType
         boolean isCollateral
         boolean isReference
         boolean hasAddresses
@@ -194,6 +198,8 @@ erDiagram
         string dataHash
         string inlineDatum
         string referenceScriptHash
+        integer referenceScriptSize
+        string referenceScriptType
         boolean hasAddresses
         boolean hasAssets
     }

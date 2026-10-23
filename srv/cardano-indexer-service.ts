@@ -3,7 +3,7 @@ import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, TransactionValidationError } from './utils/errors';
 import { getCrawler, isCrawlerRunning, isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
 import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
-import { importUtxoSet, rebuildUtxoSetAggregates } from './blockchain/crawler/utxo-set-import';
+import { importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts } from './blockchain/crawler/utxo-set-import';
 import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
 import { isBlockHash } from './utils/validators';
@@ -271,8 +271,27 @@ module.exports = (srv: cds.Service) => {
         };
       });
     }
+    if (data.source === 'scripts') {
+      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process — pauseCrawler first');
+      if (utxoSetImportInFlight) return rejectInvalid(req, 'importUtxoSet', 'A UTxO set import is already running');
+      return handleRequest(req, async (db) => {
+        const cursor = await readCursor(db);
+        const { anchorSlot, anchorHash } = cursor?.utxoSet ?? {};
+        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to fill — run importUtxoSet first.');
+        utxoSetImportInFlight = refreshUtxoSetReferenceScripts({ filePath: data.filePath, client: getCardanoClient() })
+          .then((r) => logger.info(`UTxO set reference scripts filled: ${r.updated} of ${r.candidates} rows`))
+          .catch((err: unknown) => logger.error(`UTxO set reference-script fill failed: ${err instanceof Error ? err.message : String(err)}`))
+          .finally(() => { utxoSetImportInFlight = null; });
+        return {
+          accepted: true,
+          anchorSlot: String(anchorSlot),
+          anchorHash,
+          message: `Reference-script columns of the UTxO set are being filled (${data.filePath ? 'from the dump' : 'from the node'}); watch the log, then resumeCrawler.`,
+        };
+      });
+    }
     const source = data.source === 'file' || data.source === 'ogmios' ? data.source : null;
-    if (!source) return rejectInvalid(req, 'importUtxoSet', 'source must be "ogmios", "file" or "aggregates"', 'source');
+    if (!source) return rejectInvalid(req, 'importUtxoSet', 'source must be "ogmios", "file", "aggregates" or "scripts"', 'source');
     if (source === 'file' && !data.filePath) return rejectMissing(req, 'importUtxoSet', 'filePath');
     const anchorGiven = data.anchorSlot != null || !!data.anchorHash;
     if (source === 'file' && !anchorGiven) {

@@ -50,7 +50,7 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 
 vi.mock('../../srv/server', () => serverMock);
 // the snapshot import pulls cds.ql + the DB models at load time; not under test here
-vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn() }));
+vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn(), rebuildUtxoSetAggregates: vi.fn(), refreshUtxoSetReferenceScripts: vi.fn() }));
 vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCertificates: backfillMock }));
 vi.mock('../../srv/blockchain/crawler/transaction-backfill', () => ({ backfillTransactions: txBackfillMock }));
 

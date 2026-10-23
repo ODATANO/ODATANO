@@ -467,6 +467,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           collateralPercent: protocolParams.collateral_percent,
           maxCollateralInputs: protocolParams.max_collateral_inputs,
           coinsPerUtxoSize: protocolParams.coins_per_utxo_size,
+          minFeeRefScriptCostPerByte: protocolParams.min_fee_ref_script_cost_per_byte ?? null,
           maxBlockHeaderSize: protocolParams.max_block_header_size,
           maxTxSize: protocolParams.max_tx_size,
           keyDeposit: protocolParams.key_deposit,

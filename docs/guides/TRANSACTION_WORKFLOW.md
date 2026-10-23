@@ -358,6 +358,14 @@ in `forceInputsJson` is the collateral when no other sender UTxO qualifies: it m
 ADA-only, carry no reference script and hold at least 5 ADA. A wallet with a single UTxO can then build a mint
 whose redeemer names that UTxO. This holds for `BuildMintTransaction` and `BuildPlutusSpendTransaction` as well.
 
+Sender UTxOs that carry a reference script stay out of coin selection as long as the other UTxOs cover the build.
+Only when those run short does the builder select from them too, and it does the same for a UTxO named in
+`forceInputsJson`. Spending such a UTxO costs the Conway reference-script fee (`minFeeRefScriptCostPerByte`,
+15 lovelace per byte on all networks, 1.2 times more for every 25 600 bytes in one transaction), counted over
+the scripts of all inputs and reference inputs. The builder prices it from the script bytes when the source
+delivers them (Ogmios, Koios) or from the stored script size (crawled UTxO set); a UTxO known by its script
+hash alone cannot be priced, which the log notes, and the node may then reject the transaction as underpaid.
+
 ### SetCollateral
 
 | Parameter | Type | Required | Description |

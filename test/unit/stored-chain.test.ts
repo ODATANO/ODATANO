@@ -106,7 +106,7 @@ describe('stored chain in the provider shape', () => {
     expect(tx.inputs.map(i => i.outputIndex)).toEqual([0, 3]);
     expect(tx.inputs[0]).toMatchObject({ address: 'addr_in1', inlineDatum: 'd87980', amount: [{ unit: 'lovelace', quantity: '2000000' }, { unit: UNIT, quantity: '5' }] });
     expect(tx.inputs[1]).toMatchObject({ isCollateral: true, amount: [] });
-    expect(tx.outputs).toEqual([{ address: 'addr_out', amount: [{ unit: 'lovelace', quantity: '1830000' }], txHash: T1, outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false, referenceScriptHash: 'ab'.repeat(28) }]);
+    expect(tx.outputs).toEqual([{ address: 'addr_out', amount: [{ unit: 'lovelace', quantity: '1830000' }], txHash: T1, outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false, referenceScriptHash: 'ab'.repeat(28), referenceScriptSize: null, referenceScriptType: null }]);
     expect(tx.mint).toEqual([{ unit: UNIT, quantity: '-5' }]);
     expect(tx.certificates).toEqual([{ certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake_test1x', poolId: 'pool1x', drepId: null, deposit: null, epoch: null }]);
     expect(tx.withdrawals).toEqual([{ stakeAddress: 'stake_test1x', amount: '42' }]);

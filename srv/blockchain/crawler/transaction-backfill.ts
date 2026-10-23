@@ -69,6 +69,8 @@ interface StoredInputRow {
   utxoData_dataHash: string | null;
   utxoData_inlineDatum: string | null;
   utxoData_referenceScriptHash: string | null;
+  utxoData_referenceScriptSize: number | null;
+  utxoData_referenceScriptType: string | null;
   isCollateral: boolean | null;
   isReference: boolean | null;
 }
@@ -124,6 +126,8 @@ function missingFields(row: StoredInputRow, fresh: TxInputLine): Record<string, 
   if (row.utxoData_dataHash == null && fresh.dataHash) set.utxoData_dataHash = fresh.dataHash;
   if (row.utxoData_inlineDatum == null && fresh.inlineDatum) set.utxoData_inlineDatum = fresh.inlineDatum;
   if (row.utxoData_referenceScriptHash == null && fresh.referenceScriptHash) set.utxoData_referenceScriptHash = fresh.referenceScriptHash;
+  if (row.utxoData_referenceScriptSize == null && fresh.referenceScriptSize != null) set.utxoData_referenceScriptSize = fresh.referenceScriptSize;
+  if (row.utxoData_referenceScriptType == null && fresh.referenceScriptType) set.utxoData_referenceScriptType = fresh.referenceScriptType;
   if (!row.address_address && fresh.address) {
     set.address_address = fresh.address;
     set.hasAddresses = true;
@@ -150,6 +154,8 @@ const FILL_COLUMNS: Array<[column: string, sqlType: string]> = [
   ['utxoData_dataHash', 'text'],
   ['utxoData_inlineDatum', 'text'],
   ['utxoData_referenceScriptHash', 'text'],
+  ['utxoData_referenceScriptSize', 'integer'],
+  ['utxoData_referenceScriptType', 'text'],
   ['address_address', 'text'],
   ['hasAddresses', 'boolean'],
   ['hasAssets', 'boolean'],

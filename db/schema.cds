@@ -1367,6 +1367,10 @@ entity LedgerProtocolParameters {
         @description: 'The coins per UTxO size parameter for calculating min UTxO value'
         coinsPerUtxoSize      : String(32);
 
+        @title      : 'Minimum Fee per Reference Script Byte'
+        @description: 'Lovelace per byte of reference script on the inputs and reference inputs of a transaction (Conway); the ledger raises the price by 1.2 for every 25600 bytes'
+        minFeeRefScriptCostPerByte : Decimal(12, 6);
+
         @title      : 'Coins Per UTxO Word'
         @description: 'The coins per UTxO word parameter for calculating min UTxO value (alonzo legacy)'
         coinsPerUtxoWord      : String(32);

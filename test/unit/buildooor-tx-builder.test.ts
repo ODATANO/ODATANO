@@ -3,7 +3,7 @@ import { BuildooorTxBuilder } from '../../srv/blockchain/transaction-building/bu
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt, TxMetadatumText, TxMetadatumList, TxMetadatumMap } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
 import type { TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildContext, UTxO } from '../../srv/utils/types';
-import { TransactionValidationError, ScriptValidationError } from '../../srv/utils/errors';
+import { TransactionValidationError, ScriptValidationError, InsufficientFundsError } from '../../srv/utils/errors';
 
 // Test addresses and script hex from integration test fixtures
 const TEST_ADDRESS = 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp';
@@ -458,6 +458,14 @@ describe('BuildooorTxBuilder', () => {
       expect(rest.map((u: UTxO) => u.txHash)).toEqual(['aaaa']);
     });
 
+    it('offers the reference-script UTxOs to coin selection once asked to (funds short without them)', () => {
+      const withHash = { ...mkUtxo('dddd', 0), scriptRef: 'ab'.repeat(28) };
+      const utxos = [mkUtxo('aaaa', 0), withHash];
+      const { forced, rest } = (builder as any)._partitionForcedInputs(utxos, undefined, new Set(), undefined, true);
+      expect(forced).toHaveLength(0);
+      expect(rest.map((u: UTxO) => u.txHash)).toEqual(['aaaa', 'dddd']);
+    });
+
     it('should silently ignore refs not present in the UTxO pool', () => {
       const utxos = [mkUtxo('aaaa', 0), mkUtxo('bbbb', 0)];
       const { forced, rest } = partition(utxos, [
@@ -491,6 +499,36 @@ describe('BuildooorTxBuilder', () => {
       expect(forced.map((u: UTxO) => u.txHash).sort()).toEqual(['aaaa', 'cccc']);
       expect(rest).toHaveLength(2);
       expect(rest.map((u: UTxO) => u.txHash).sort()).toEqual(['bbbb', 'dddd']);
+    });
+  });
+
+  describe('_withRefScriptFallback', () => {
+    const plain: UTxO = { txHash: 'aaaa', outputIndex: 0, address: TEST_ADDRESS, amount: [{ unit: 'lovelace', quantity: '1' }] };
+    const scripted: UTxO = { ...plain, txHash: 'dddd', scriptRef: 'ab'.repeat(28) };
+    const fallback = (utxos: UTxO[], run: (include: boolean) => Promise<unknown>) => (builder as any)._withRefScriptFallback(utxos, run);
+
+    it('builds again with the reference-script UTxOs when the first attempt runs short', async () => {
+      const run = vi.fn(async (include: boolean) => {
+        if (!include) throw new InsufficientFundsError('lovelace', 10n, 1n);
+        return 'built';
+      });
+      await expect(fallback([plain, scripted], run)).resolves.toBe('built');
+      expect(run.mock.calls.map(c => c[0])).toEqual([false, true]);
+    });
+
+    it('rethrows when no UTxO carries a reference script, and any other error at once', async () => {
+      const short = vi.fn(async () => { throw new InsufficientFundsError('lovelace', 10n, 1n); });
+      await expect(fallback([plain], short)).rejects.toBeInstanceOf(InsufficientFundsError);
+      expect(short).toHaveBeenCalledTimes(1);
+      const invalid = vi.fn(async () => { throw new TransactionValidationError('bad'); });
+      await expect(fallback([plain, scripted], invalid)).rejects.toBeInstanceOf(TransactionValidationError);
+      expect(invalid).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns the first result when it succeeds', async () => {
+      const run = vi.fn(async () => 'ok');
+      await expect(fallback([plain, scripted], run)).resolves.toBe('ok');
+      expect(run).toHaveBeenCalledTimes(1);
     });
   });
 

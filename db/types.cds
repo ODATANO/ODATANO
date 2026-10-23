@@ -112,6 +112,14 @@ type UTxODataSlice {
     @title      : 'Reference Script Hash'
     @description: 'The reference script hash associated with the UTxO'
     referenceScriptHash : Blake2b256;
+
+    @title      : 'Reference Script Size'
+    @description: 'Size of the reference script in bytes as the ledger charges it (Conway reference-script fee); null when the source reports the hash only'
+    referenceScriptSize : Integer;
+
+    @title      : 'Reference Script Type'
+    @description: 'native | plutusV1 | plutusV2 | plutusV3; null when the source reports the hash only'
+    referenceScriptType : String(10);
 }
 
 // -----------------------------------------------------

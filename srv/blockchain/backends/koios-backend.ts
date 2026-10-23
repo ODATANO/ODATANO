@@ -28,8 +28,10 @@ import {
   TxCertificate,
   CertificateKind,
   TxInputLine,
-  TxOutputLine
+  TxOutputLine,
+  ReferenceScriptType
 } from '../../utils/types';
+import { normalizeScriptType } from '../../utils/reference-script';
 import { Network } from '../cardano-client';
 
 /** Bounded retries for instance-specific PostgREST server errors (42703, 57014, …). */
@@ -120,6 +122,14 @@ function koiosRefScriptHash(ref: unknown): string | null {
   if (typeof ref === 'string') return ref;
   const obj = ref as { hash?: string | null };
   return obj.hash || null;
+}
+
+/** Size and type of a Koios `reference_script` object; both null for the bare-hash form. */
+function koiosRefScriptMeta(ref: unknown): { size: number | null; type: ReferenceScriptType | null } {
+  if (!ref || typeof ref !== 'object') return { size: null, type: null };
+  const obj = ref as { size?: number | string | null; type?: string | null };
+  const size = Number(obj.size);
+  return { size: Number.isInteger(size) && size > 0 ? size : null, type: normalizeScriptType(obj.type) };
 }
 
 /** Sort Koios /address_txs rows newest-first — Koios gives no ordering guarantee. */
@@ -536,6 +546,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             amount: amount,
             datumHash: utxo.datum_hash || null,
             scriptRef: koiosRefScriptBytes(utxo.reference_script),
+            scriptRefSize: koiosRefScriptMeta(utxo.reference_script).size,
+            scriptRefType: koiosRefScriptMeta(utxo.reference_script).type,
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -576,6 +588,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             amount: amount,
             datumHash: utxo.datum_hash || null,
             scriptRef: koiosRefScriptBytes(utxo.reference_script),
+            scriptRefSize: koiosRefScriptMeta(utxo.reference_script).size,
+            scriptRefType: koiosRefScriptMeta(utxo.reference_script).type,
             inlineDatum: inlineDatumToHex(utxo.inline_datum),
           };
         });
@@ -1026,6 +1040,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           collateralPercent: data.collateralPercentage,
           maxCollateralInputs: data.maxCollateralInputs,
           coinsPerUtxoSize: data.utxoCostPerByte.toString(),
+          // cardano-cli spelling, as /cli_protocol_params publishes it
+          minFeeRefScriptCostPerByte: data.minFeeRefScriptCostPerByte ?? null,
           // --- Housekeeping ---
           fetchedAt: new Date().toISOString(),
           source: this.name
@@ -1534,6 +1550,8 @@ function mapKoiosInput(input: KoiosTxIO, flags: { isCollateral?: boolean; isRefe
     dataHash: input.datum_hash || null,
     inlineDatum: inlineDatumToHex(input.inline_datum),
     referenceScriptHash: koiosRefScriptHash(input.reference_script),
+    referenceScriptSize: koiosRefScriptMeta(input.reference_script).size,
+    referenceScriptType: koiosRefScriptMeta(input.reference_script).type,
     ...flags,
   };
 }
@@ -1548,6 +1566,8 @@ function mapKoiosOutput(txHash: string, output: KoiosTxIO, isCollateral: boolean
     inlineDatum: inlineDatumToHex(output.inline_datum),
     isCollateral,
     referenceScriptHash: koiosRefScriptHash(output.reference_script),
+    referenceScriptSize: koiosRefScriptMeta(output.reference_script).size,
+    referenceScriptType: koiosRefScriptMeta(output.reference_script).type,
   };
 }
 

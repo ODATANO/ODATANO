@@ -809,7 +809,7 @@ semantics:
 
 | Table | What lands there |
 |---|---|
-| `LedgerUTxOs` (+ `LedgerUTxOAssets`) | every output since the anchor; unspent while `spentTxHash eq null`, `spentTxHash` / `spentSlot` name the consumer |
+| `LedgerUTxOs` (+ `LedgerUTxOAssets`) | every output since the anchor; unspent while `spentTxHash eq null`, `spentTxHash` / `spentSlot` name the consumer; `utxo_referenceScriptHash`, `utxo_referenceScriptSize` (bytes) and `utxo_referenceScriptType` (`native`, `plutusV1`..`plutusV3`) describe a reference script on the output, so a consumer can leave such outputs out of its own coin selection or price the Conway reference-script fee |
 | `LedgerAddresses` (+ `LedgerAddressAssets`) | running `totalLovelace`, `utxoCount` and asset balances per address, as of the crawl tip |
 | `LedgerAccounts` | `controlledAmount`, `addressCount`, `utxoCount` per stake key (sum over its base addresses) |
 
@@ -845,6 +845,12 @@ The import loads the rows first and derives the sums (`LedgerAddresses`, `Ledger
 instead of importing again: `importUtxoSet { "source": "aggregates" }` (crawler paused). It uses the
 stored anchor; a cursor that moved past the anchor in the meantime is set back to it, and the blocks
 after it are crawled again. It refuses once blocks have been applied to the set.
+
+Rows imported from a dump carry the reference script of their output (hash, size, type) as the dump
+prints it. A set imported before those columns existed can be completed in place, crawler paused:
+`importUtxoSet { "source": "scripts", "filePath": "/data/utxo.ndjson" }` reads the same dump again
+and writes only the rows that carry a script; without `filePath` the unspent rows that hold a hash
+but no size are asked at the node (Ogmios). The set stays `active` throughout.
 
 The import refuses to start while the crawler holds its lease or when the cursor is already past
 the anchor, and it holds the cursor lease itself for its whole duration, re-taking it inside every

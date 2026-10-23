@@ -9,6 +9,7 @@ import {
 } from '@cardano-ogmios/client';
 import { bech32 } from 'bech32';
 import { blake2b_224 } from '@harmoniclabs/crypto';
+import { ogmiosReferenceScript } from '../../utils/reference-script';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionValidationError, normalizeBackendError } from '../../utils/errors';
@@ -80,21 +81,20 @@ function parseOgmiosRatio(ratio: string | number | undefined | null): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-const SCRIPT_LANGUAGE_TAG: Record<string, number> = { native: 0, 'plutus:v1': 1, 'plutus:v2': 2, 'plutus:v3': 3 };
-
 /** Hash of an Ogmios `Script`: blake2b-224 over the language tag byte followed by the script CBOR. */
 export function ogmiosScriptHash(script: unknown): string | null {
-  const s = script as { language?: string; cbor?: string } | null | undefined;
-  const tag = s?.language === undefined ? undefined : SCRIPT_LANGUAGE_TAG[s.language];
-  if (tag === undefined || typeof s?.cbor !== 'string' || s.cbor.length === 0) return null;
-  const bytes = Uint8Array.from(Buffer.concat([Buffer.from([tag]), Buffer.from(s.cbor, 'hex')]));
-  return Buffer.from(blake2b_224(bytes)).toString('hex');
+  return ogmiosReferenceScript(script)?.hash ?? null;
 }
 
 /** Full CBOR of a Plutus reference script as Ogmios delivers it; null for native or absent scripts. */
 export function ogmiosPlutusScriptCbor(script: unknown): string | null {
-  const s = script as { language?: string; cbor?: string } | null | undefined;
-  return s?.language?.startsWith('plutus:') && typeof s.cbor === 'string' && s.cbor.length > 0 ? s.cbor : null;
+  return ogmiosReferenceScript(script)?.cbor ?? null;
+}
+
+/** Reference-script columns of an output or UTxO from an Ogmios `script`. */
+function ogmiosReferenceScriptFields(script: unknown): Pick<TxOutputLine, 'referenceScriptHash' | 'referenceScriptSize' | 'referenceScriptType'> {
+  const ref = ogmiosReferenceScript(script);
+  return { referenceScriptHash: ref?.hash ?? null, referenceScriptSize: ref?.size ?? null, referenceScriptType: ref?.type ?? null };
 }
 
 /** Bech32 pool id of a block issuer: blake2b-224 of its cold verification key. */
@@ -735,6 +735,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     u: { transaction?: { id: string }; index?: number; address?: string; value: Parameters<OgmiosBackend['convertOgmiosValue']>[0]; datumHash?: string; datum?: unknown; script?: unknown },
     fallbackAddress = '',
   ): UTxO {
+    const ref = ogmiosReferenceScript(u.script);
     return {
       txHash: u.transaction?.id || '',
       outputIndex: u.index || 0,
@@ -744,8 +745,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       datumHash: u.datumHash,
       // Ogmios delivers the inline datum as CBOR hex in `datum`
       inlineDatum: typeof u.datum === 'string' ? u.datum : null,
-      scriptRef: ogmiosScriptHash(u.script) ?? undefined,
-      scriptRefCbor: ogmiosPlutusScriptCbor(u.script),
+      scriptRef: ref?.hash,
+      scriptRefCbor: ref?.cbor ?? null,
+      scriptRefSize: ref?.size ?? null,
+      scriptRefType: ref?.type ?? null,
     };
   }
 
@@ -1002,6 +1005,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         collateralPercent: params.collateralPercentage || 0,
         maxCollateralInputs: params.maxCollateralInputs || 0,
         coinsPerUtxoSize: params.minUtxoDepositCoefficient?.toString() || '0',
+        minFeeRefScriptCostPerByte: params.minFeeReferenceScripts?.base ?? null,
         maxBlockHeaderSize: params.maxBlockHeaderSize?.bytes || 0,
         maxTxSize: params.maxTransactionSize?.bytes || 0,
         keyDeposit: params.stakeCredentialDeposit?.ada?.lovelace?.toString() || '0',
@@ -1432,7 +1436,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       dataHash: output.datumHash ?? null,
       inlineDatum: output.datum ?? null,
       isCollateral,
-      referenceScriptHash: ogmiosScriptHash(output.script),
+      ...ogmiosReferenceScriptFields(output.script),
     });
 
     const outputs: TxOutputLine[] = spendsCollaterals

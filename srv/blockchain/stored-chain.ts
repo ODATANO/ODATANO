@@ -18,6 +18,7 @@ import type {
   Amount,
   BlockData,
   MetadataLabelTx,
+  ReferenceScriptType,
   Transaction as ProviderTransaction,
   TxCertificate,
   TxInputLine,
@@ -196,6 +197,8 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
         dataHash: (i.utxoData_dataHash as string | null) ?? null,
         inlineDatum: (i.utxoData_inlineDatum as string | null) ?? null,
         referenceScriptHash: (i.utxoData_referenceScriptHash as string | null) ?? null,
+        referenceScriptSize: numOrNull(i.utxoData_referenceScriptSize),
+        referenceScriptType: (i.utxoData_referenceScriptType as ReferenceScriptType | null) ?? null,
         isCollateral: Boolean(i.isCollateral),
         isReference: Boolean(i.isReference),
       }));
@@ -212,6 +215,8 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
         inlineDatum: (o.utxo_inlineDatum as string | null) ?? null,
         isCollateral: spendsCollaterals,
         referenceScriptHash: (o.utxo_referenceScriptHash as string | null) ?? null,
+        referenceScriptSize: numOrNull(o.utxo_referenceScriptSize),
+        referenceScriptType: (o.utxo_referenceScriptType as ReferenceScriptType | null) ?? null,
       }));
     const certs = certsByHash.get(hash);
     const withdrawn = withdrawalsByHash.get(hash);

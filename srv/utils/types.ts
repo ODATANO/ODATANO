@@ -1,4 +1,7 @@
 import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
+import type { ReferenceScriptType } from "./reference-script";
+
+export type { ReferenceScriptType };
 
 /** Hex-encoded string (case depends on source) */
 export type Hex = string;
@@ -24,6 +27,8 @@ export interface TxInputLine {
   dataHash?: Hex | null;
   inlineDatum?: string | null;
   referenceScriptHash?: Hex | null;
+  referenceScriptSize?: number | null;
+  referenceScriptType?: ReferenceScriptType | null;
   isCollateral?: boolean;
   isReference?: boolean;
 }
@@ -38,6 +43,8 @@ export interface TxOutputLine {
   inlineDatum: string | null;
   isCollateral: boolean;
   referenceScriptHash?: Hex | null;
+  referenceScriptSize?: number | null;
+  referenceScriptType?: ReferenceScriptType | null;
 }
 
 /**
@@ -166,6 +173,9 @@ export interface UTxO {
   scriptRef?: Hex | null;
   /** Full CBOR of the reference script (Plutus) when the source delivers it; builder use only. */
   scriptRefCbor?: Hex | null;
+  /** Bytes the ledger charges for the reference script; null when the source reports the hash only. */
+  scriptRefSize?: number | null;
+  scriptRefType?: ReferenceScriptType | null;
   inlineDatum?: string | null;
 }
 
@@ -352,6 +362,7 @@ export type LedgerProtocolParameters = {
   collateralPercent: number | null;
   maxCollateralInputs: number | null;
   coinsPerUtxoSize: string | null;  // babbage+
+  minFeeRefScriptCostPerByte: number | null; // lovelace per reference-script byte (conway); null when the source has none
   // --- Housekeeping ---
   fetchedAt: string;
   source: string;              // "blockfrost/koios/direct"

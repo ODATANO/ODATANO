@@ -121,6 +121,8 @@ export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderDat
       utxoData_dataHash: input.dataHash || null,
       utxoData_inlineDatum: input.inlineDatum || null,
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
+      utxoData_referenceScriptSize: input.referenceScriptSize ?? null,
+      utxoData_referenceScriptType: input.referenceScriptType ?? null,
       // outpoint of the consumed UTxO
       spentTxHash: input.txHash || null,
       spentOutputIndex: Number.isInteger(input.outputIndex) ? input.outputIndex : null,
@@ -252,6 +254,8 @@ export function mapTransactionOutputs(txSeq: number, txOutputs: TxOutputProvider
       utxo_dataHash: output.dataHash || null,
       utxo_inlineDatum: output.inlineDatum || null,
       utxo_referenceScriptHash: output.referenceScriptHash || null,
+      utxo_referenceScriptSize: output.referenceScriptSize ?? null,
+      utxo_referenceScriptType: output.referenceScriptType ?? null,
       hasAddresses: hasAddresses,
       hasAssets: hasAssets,
     };
@@ -414,6 +418,8 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       // Hash column: Blockfrost/Ogmios give a 56-hex hash, Koios the full script CBOR, so only
       // hash-length values are persisted
       utxodata_referenceScriptHash: utxo.scriptRef && utxo.scriptRef.length <= 64 ? utxo.scriptRef : null,
+      utxodata_referenceScriptSize: utxo.scriptRefSize ?? null,
+      utxodata_referenceScriptType: utxo.scriptRefType ?? null,
       lovelace: lovelace,
       validFrom: validFrom,
       validTo: validTo,
@@ -889,6 +895,7 @@ export function mapProtocolParameters(providerParams: ProtocolParameters): Proto
     collateralPercent: providerParams.collateralPercent,
     maxCollateralInputs: providerParams.maxCollateralInputs,
     coinsPerUtxoSize: providerParams.coinsPerUtxoSize,
+    minFeeRefScriptCostPerByte: providerParams.minFeeRefScriptCostPerByte,
     fetchedAt: providerParams.fetchedAt,
     source: providerParams.source,
   };

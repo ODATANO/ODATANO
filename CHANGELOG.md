@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.42] - reference scripts on UTxOs: size, type and fee
+
+Schema change: `referenceScriptSize` + `referenceScriptType` on `TransactionOutputs.utxo`,
+`TransactionInputs.utxoData`, `AddressUTxOs.utxodata` and `LedgerUTxOs.utxo`;
+`minFeeRefScriptCostPerByte` on `LedgerProtocolParameters`. Run `cds deploy` on existing databases.
+
+### Added
+
+- `utxo_referenceScriptSize` (bytes as the ledger charges them) and `utxo_referenceScriptType`
+  (`native` | `plutusV1` | `plutusV2` | `plutusV3`) next to `utxo_referenceScriptHash` on every UTxO-shaped
+  entity. Filled by Ogmios (script bytes) and Koios (`reference_script.size` / `.type`); Blockfrost delivers the
+  hash only, so both stay null there.
+- `LedgerProtocolParameters.minFeeRefScriptCostPerByte` from Ogmios (`minFeeReferenceScripts.base`), Koios and
+  Blockfrost; the transaction builder uses it instead of the library default.
+- `importUtxoSet { source: "scripts", filePath? }`: fills the reference-script columns of `LedgerUTxOs` rows an
+  earlier import left empty, from the same cardano-cli dump or, without `filePath`, from Ogmios for the unspent
+  rows that hold a hash but no size. Crawler paused; the set stays `active`.
+
+### Changed
+
+- The cardano-cli dump import reads the `referenceScript` TextEnvelope: hash, size and type are written with the
+  row instead of null. Native scripts given as JSON are hashed as well.
+- Coin selection offers UTxOs carrying a reference script only when the other sender UTxOs run short (before:
+  never, unless forced); their script bytes are then priced into the fee.
+- Reference-script fee as the ledger computes it: scripts on spent inputs count, the price per byte rises by 1.2
+  for every 25 600 bytes, exact rationals. Buildooor 0.2.9 priced reference inputs only, linearly; its
+  `calcMinFee` is replaced at load (`srv/blockchain/transaction-building/buildooor-fee-patch.ts`). A UTxO known
+  by hash and size only is priced through a placeholder of that size; one known by hash alone is logged as
+  unpriceable.
+- `backfillTransactions` fills the two new input columns as well.
+
 ## [v2.0.0-rc.41] - image on Node 22.23.4
 
 No schema change.

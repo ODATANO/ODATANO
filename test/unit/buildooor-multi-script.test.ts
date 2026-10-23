@@ -236,16 +236,22 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     expect(err.message).toMatch(/cannot be spent and referenced/);
   });
 
-  it('never selects a sender UTxO with a reference script as funding, unless it is forced', async () => {
-    // the only UTxO that could fund the outputs carries a reference script
-    const deployed: UTxO = { txHash: 'd2'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '90000000' }], scriptRef: 'ab'.repeat(28) };
-    const ctx = context({ utxos: [deployed, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] });
+  it('selects a sender UTxO with a reference script as funding only when the plain UTxOs run short, and prices its bytes', async () => {
+    const deployed: UTxO = { txHash: 'd2'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '90000000' }], scriptRef: 'ab'.repeat(28), scriptRefSize: 2000, scriptRefType: 'plutusV3' };
+    const plain: UTxO = { txHash: 'c9'.repeat(32), outputIndex: 0, address: SENDER, amount: [{ unit: 'lovelace', quantity: '90000000' }] };
     // more than the script inputs hold, so the build needs funding from the sender
     const outputs = [{ address: OTHER, lovelaceAmount: '40000000' }];
-    const err = await builder.buildUnsignedPlutusTransaction(request({ outputs }), ctx).catch(e => e);
-    expect(err).toBeInstanceOf(Error);
-    const forced = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(request({ outputs, forceInputs: [{ txHash: deployed.txHash, outputIndex: 0 }] }), ctx)).unsignedTxCbor);
-    expect(forced.body.inputs.map((i: any) => i.utxoRef.id.toString())).toContain(deployed.txHash);
+    const inputsOf = (r: { unsignedTxCbor: string }) => Tx.fromCbor(r.unsignedTxCbor).body.inputs.map((i: any) => i.utxoRef.id.toString());
+    // plain funds suffice: the deployed script stays untouched
+    const withPlain = await builder.buildUnsignedPlutusTransaction(request({ outputs }), context({ utxos: [deployed, plain, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
+    expect(inputsOf(withPlain)).not.toContain(deployed.txHash);
+    // the only UTxO that can fund the outputs carries the script: it is spent, 2000 bytes at 15 lovelace priced in
+    const short = await builder.buildUnsignedPlutusTransaction(request({ outputs }), context({ utxos: [deployed, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
+    expect(inputsOf(short)).toContain(deployed.txHash);
+    const forced = await builder.buildUnsignedPlutusTransaction(request({ outputs, forceInputs: [{ txHash: deployed.txHash, outputIndex: 0 }] }), context({ utxos: [deployed, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
+    expect(inputsOf(forced)).toContain(deployed.txHash);
+    const unsized = await builder.buildUnsignedPlutusTransaction(request({ outputs, forceInputs: [{ txHash: deployed.txHash, outputIndex: 0 }] }), context({ utxos: [{ ...deployed, scriptRefSize: null }, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
+    expect(BigInt(forced.feeLovelace) - BigInt(unsized.feeLovelace)).toBe(30000n);
   });
 
   it('does not take a UTxO carrying a reference script as collateral', async () => {

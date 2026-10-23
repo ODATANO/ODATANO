@@ -48,6 +48,8 @@ import { DataI, dataFromCbor, dataToCbor, type Data } from "@harmoniclabs/plutus
 import { CardanoClient } from "../cardano-client";
 import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums, datumHashOf, witnessDatumsGrowth, writeWitnessDatums } from "./caller-datums";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
+import { installReferenceScriptFeePatch } from './buildooor-fee-patch';
+import { sizePlaceholderScript } from '../../utils/reference-script';
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
 type MintScriptSource = { inline: Script } | { ref: LedgerUTxO };
@@ -168,11 +170,15 @@ function ledgerScript(script: Script): Script {
   return new Script(script.type, script.bytes);
 }
 
+const hasRefScript = (u: OdatanoUtxo): boolean => Boolean(u.scriptRef || u.scriptRefCbor);
+
 // Hash32 inherits Hash.clone(), which returns a plain Hash; TxOut rejects that as datum when
 // Buildooor clones outputs, so a datum-hash output could never be built. Hash28 has its own clone.
 if (!Object.prototype.hasOwnProperty.call(Hash32.prototype, 'clone')) {
   Hash32.prototype.clone = function (this: Hash32): Hash32 { return new Hash32(this.toString()); };
 }
+
+installReferenceScriptFeePatch();
 
 /** CardanoTxBuilder implementation on top of Buildooor. */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
@@ -223,19 +229,19 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   /** Build an unsigned transfer transaction (ADA-only or with native assets). */
   public buildUnsignedTransfer(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    return this._buildSimpleTransfer(req, ctx, 'transfer');
+    return this._withRefScriptFallback(ctx.utxos, (include) => this._buildSimpleTransfer(req, ctx, 'transfer', include));
   }
 
   /** Build an unsigned transfer transaction with attached metadata. */
   public buildUnsignedTransactionWithMetadata(req: TxBuildRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    return this._buildSimpleTransfer(req, ctx, 'metadata transfer');
+    return this._withRefScriptFallback(ctx.utxos, (include) => this._buildSimpleTransfer(req, ctx, 'metadata transfer', include));
   }
 
   /**
    * Shared non-script transfer build; assets, outputDatum and metadataJson are each
    * handled only when present in the request.
    */
-  private async _buildSimpleTransfer(req: TxBuildRequest, ctx: TxBuildContext, label: string): Promise<TxBuildResult> {
+  private async _buildSimpleTransfer(req: TxBuildRequest, ctx: TxBuildContext, label: string, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
     try {
       this._ensureCurrentProtocolParameters(ctx);
       if (!ctx.utxos || ctx.utxos.length === 0) {
@@ -272,7 +278,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const outputs = [recipient];
 
       // Partition: forced UTxOs become fixed inputs; rest is the coin-selection pool
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs, includeRefScriptUtxos);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
       const candidateInputs = rest.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
@@ -296,7 +302,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  public async buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+  public buildUnsignedMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    return this._withRefScriptFallback(ctx.utxos, (include) => this._buildMintTransaction(req, ctx, include));
+  }
+
+  private async _buildMintTransaction(req: TxBuildMintRequest, ctx: TxBuildContext, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
     // Set once the collateral partition is known: it explains insufficient-funds rejections
     // that the builder's own message cannot attribute.
     let coinSelectionContext: string | undefined;
@@ -321,7 +331,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       // Partition forced vs candidate UTxOs. Forced inputs are already committed;
       // coin selection operates on the remainder only.
-      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
+      const { forced, rest } = this._partitionForcedInputs(ctx.utxos, req.forceInputs, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs, includeRefScriptUtxos);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Funding must cover the lovelace plus, for extra outputs, their lovelace and any asset
@@ -406,8 +416,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  public async buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
-    // See buildUnsignedMintTransaction — same collateral-partition context for rejections.
+  public buildUnsignedPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    return this._withRefScriptFallback(ctx.utxos, (include) => this._buildPlutusSpendTransaction(req, ctx, include));
+  }
+
+  private async _buildPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
+    // See _buildMintTransaction — same collateral-partition context for rejections.
     let coinSelectionContext: string | undefined;
     let requestedOutputs: number | undefined;
     try {
@@ -443,7 +457,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const forceInputsFiltered = (req.forceInputs ?? []).filter(
         r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
       );
-      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs);
+      const { forced, rest } = this._partitionForcedInputs(senderUtxos, forceInputsFiltered, this._referencedKeys(ctx, req.referenceInputs), req.protectInputs, includeRefScriptUtxos);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
       // Funding covers fee + min change (the script UTxO covers the output) plus extra outputs;
@@ -570,7 +584,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
    * Several script inputs in one transaction, each with its own redeemer (inline validator or a
    * reference-script UTxO), the outputs exactly in the given order and change after them.
    */
-  public async buildUnsignedPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+  public buildUnsignedPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
+    return this._withRefScriptFallback(ctx.utxos, (include) => this._buildPlutusTransaction(req, ctx, include));
+  }
+
+  private async _buildPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
     let coinSelectionContext: string | undefined;
     let requestedOutputs: number | undefined;
     try {
@@ -671,7 +689,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       if (scriptKeyClash) throw new TransactionValidationError(`protectInputs ${scriptKeyClash} is also a script input`);
       const { forced, rest } = this._partitionForcedInputs(senderUtxos, (req.forceInputs ?? []).filter(r => !scriptKeys.has(keyOf(r))),
         this._referencedKeys(ctx, req.referenceInputs, req.scriptInputs.flatMap(s => (s.referenceScript ? [s.referenceScript] : []))),
-        req.protectInputs);
+        req.protectInputs, includeRefScriptUtxos);
       this._checkForeignForcedInputs(forced, req);
       const forcedInputs = forced.map(u => ({ utxo: this._mapMultiAssetUtxoToLedgerUtxo(u) }));
 
@@ -1174,6 +1192,20 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   /**
+   * Run a build without the sender's reference-script UTxOs first; when that leaves the funds short
+   * and such UTxOs exist, build again with them in the pool (their script bytes then count in the fee).
+   */
+  private async _withRefScriptFallback(utxos: OdatanoUtxo[] | undefined, build: (includeRefScriptUtxos: boolean) => Promise<TxBuildResult>): Promise<TxBuildResult> {
+    try {
+      return await build(false);
+    } catch (err: unknown) {
+      if (!(err instanceof InsufficientFundsError) || !(utxos ?? []).some(hasRefScript)) throw err;
+      logger.info('Funds short without the reference-script UTxOs — building again with them in the coin-selection pool');
+      return build(true);
+    }
+  }
+
+  /**
    * Split UTxOs into forced inputs (must be consumed) and remaining candidates; forceInputs
    * refs absent from utxos are ignored (existence is validated upstream).
    */
@@ -1181,12 +1213,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     utxos: OdatanoUtxo[],
     forceInputs?: Array<{ txHash: string; outputIndex: number }>,
     referenced: ReadonlySet<string> = new Set(),
-    protectInputs?: Array<{ txHash: string; outputIndex: number }>
+    protectInputs?: Array<{ txHash: string; outputIndex: number }>,
+    includeRefScriptUtxos = false
   ): { forced: OdatanoUtxo[]; rest: OdatanoUtxo[] } {
-    const hasRefScript = (u: OdatanoUtxo) => Boolean(u.scriptRef || u.scriptRefCbor);
+    const excluded = (u: OdatanoUtxo) => !includeRefScriptUtxos && hasRefScript(u);
     const key = (r: { txHash: string; outputIndex: number }) => `${r.txHash.toLowerCase()}#${r.outputIndex}`;
     const protectedKeys = new Set((protectInputs ?? []).map(key));
-    if ((!forceInputs || forceInputs.length === 0) && referenced.size === 0 && protectedKeys.size === 0 && !utxos.some(hasRefScript)) {
+    if ((!forceInputs || forceInputs.length === 0) && referenced.size === 0 && protectedKeys.size === 0 && !utxos.some(excluded)) {
       return { forced: [], rest: utxos };
     }
     const forcedKeys = new Set((forceInputs ?? []).map(key));
@@ -1199,9 +1232,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const rest: OdatanoUtxo[] = [];
     for (const u of utxos) {
       if (forcedKeys.has(key(u))) forced.push(u);
-      // reference inputs, protected UTxOs and UTxOs carrying a reference script stay out of coin
-      // selection and collateral; a deployed script is spent only when forced
-      else if (!referenced.has(key(u)) && !protectedKeys.has(key(u)) && !hasRefScript(u)) rest.push(u);
+      // reference inputs and protected UTxOs stay out of coin selection; UTxOs carrying a reference
+      // script too, until the other funds prove short (then their bytes are priced into the fee)
+      else if (!referenced.has(key(u)) && !protectedKeys.has(key(u)) && !excluded(u)) rest.push(u);
     }
     return { forced, rest };
   }
@@ -1546,12 +1579,17 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   /**
    * Map an input UTxO's reference script to a Script: `scriptRefCbor` (Ogmios), else a full-CBOR
-   * `scriptRef` (Koios); Blockfrost and the tables carry the 28-byte hash only, unusable locally.
+   * `scriptRef` (Koios). With the hash and size only (Blockfrost, the tables) a placeholder of
+   * that size stands in, so the fee counts its bytes; without the size nothing can be counted.
    */
   private _buildInputRefScript(utxo: OdatanoUtxo): Script | undefined {
     const cbor = utxo.scriptRefCbor ?? (utxo.scriptRef && utxo.scriptRef.length > 56 ? utxo.scriptRef : undefined);
     if (!cbor) {
-      if (utxo.scriptRef) logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only — local Plutus eval will not see the script`);
+      if (utxo.scriptRef && utxo.scriptRefSize) {
+        logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash and size only — fee counts ${utxo.scriptRefSize} bytes, local Plutus eval will not see the script`);
+        return sizePlaceholderScript(utxo.scriptRefSize);
+      }
+      if (utxo.scriptRef) logger.warn(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only — its reference-script fee cannot be counted, the node may reject the transaction as underpaid`);
       return undefined;
     }
     try {
@@ -1688,6 +1726,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       stakePoolTargetNum: toUInt(pp.nOpt) ?? d.stakePoolTargetNum,
       collateralPercentage: toUInt(pp.collateralPercent) ?? d.collateralPercentage,
       maxCollateralInputs: toUInt(pp.maxCollateralInputs) ?? d.maxCollateralInputs,
+      minfeeRefScriptCostPerByte: pp.minFeeRefScriptCostPerByte != null && Number(pp.minFeeRefScriptCostPerByte) > 0
+        ? Number(pp.minFeeRefScriptCostPerByte)
+        : d.minfeeRefScriptCostPerByte,
     };
 
     const maxTxExMem = toUInt(pp.maxTxExMem);

@@ -5,7 +5,8 @@ import { createInterface } from 'node:readline';
 import type { Transaction as CapTransaction } from '@sap/cds';
 import type { CardanoClient } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
-import type { Amount } from '../../utils/types';
+import type { Amount, ReferenceScriptType } from '../../utils/types';
+import { cliReferenceScript } from '../../utils/reference-script';
 import { buildLedgerUtxoRows, type LedgerAnchor, type LedgerUtxoAssetRow, type LedgerUtxoRow } from '../ledger-state';
 import {
   readCursor,
@@ -27,7 +28,7 @@ import {
 } from '#cds-models/odatano/cardano';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 
-const { UPSERT, DELETE, SELECT } = cds.ql;
+const { UPSERT, DELETE, SELECT, UPDATE } = cds.ql;
 const logger = cds.log('LedgerState');
 
 /**
@@ -59,6 +60,8 @@ export interface UtxoSetEntry {
   dataHash?: string | null;
   inlineDatum?: string | null;
   referenceScriptHash?: string | null;
+  referenceScriptSize?: number | null;
+  referenceScriptType?: ReferenceScriptType | null;
 }
 
 export interface UtxoSetImportOptions {
@@ -116,6 +119,7 @@ export function parseCliUtxoEntry(key: string, value: CliUtxoValue | null | unde
     }
   }
   if (!amount.some(a => a.unit === 'lovelace')) amount.unshift({ unit: 'lovelace', quantity: '0' });
+  const ref = cliReferenceScript(value.referenceScript);
   return {
     txHash: m[1].toLowerCase(),
     outputIndex: Number(m[2]),
@@ -123,8 +127,9 @@ export function parseCliUtxoEntry(key: string, value: CliUtxoValue | null | unde
     amount,
     dataHash: value.datumhash ?? value.datumHash ?? null,
     inlineDatum: typeof value.inlineDatumRaw === 'string' ? value.inlineDatumRaw : null,
-    // the cli prints the script itself, not its hash — resolved lazily, like every other path
-    referenceScriptHash: null,
+    referenceScriptHash: ref?.hash ?? null,
+    referenceScriptSize: ref?.size ?? null,
+    referenceScriptType: ref?.type ?? null,
   };
 }
 
@@ -170,6 +175,8 @@ async function* readFromOgmios(client: CardanoClient, anchor: LedgerAnchor): Asy
       dataHash: u.datumHash ?? null,
       inlineDatum: u.inlineDatum ?? null,
       referenceScriptHash: u.scriptRef ?? null,
+      referenceScriptSize: u.scriptRefSize ?? null,
+      referenceScriptType: u.scriptRefType ?? null,
     };
   }
 }
@@ -414,5 +421,85 @@ export async function rebuildUtxoSetAggregates(opts: { indexer: CardanoIndexer }
     logger.info(`UTxO set sums rebuilt from ${utxos} rows at anchor ${anchor.slot}/${anchor.hash}` +
       (rewindTo ? ` (cursor set back from slot ${cursor.lastSlot})` : ''));
     return { utxos, anchor };
+  });
+}
+
+/** Reference-script columns of one `LedgerUTxOs` row. */
+interface ReferenceScriptFill {
+  txHash: string;
+  outputIndex: number;
+  hash: string;
+  size: number;
+  type: ReferenceScriptType;
+}
+
+export interface UtxoSetScriptRefreshResult {
+  /** Rows whose reference-script columns were written. */
+  updated: number;
+  /** Rows looked at: dump entries carrying a script, or stored rows with a hash but no size. */
+  candidates: number;
+}
+
+/**
+ * Fill the reference-script columns (hash, size, type) of `LedgerUTxOs` rows an earlier import
+ * left empty: from the same cardano-cli dump, or, without a file, from the node for the unspent
+ * rows that hold a hash but no size. Takes the cursor lease like an import, so the crawler must
+ * be paused; the set stays `active` throughout.
+ */
+export async function refreshUtxoSetReferenceScripts(
+  opts: { filePath?: string; client: CardanoClient; batchSize?: number },
+): Promise<UtxoSetScriptRefreshResult> {
+  const cursor = await cds.tx((tx) => readCursor(tx));
+  if (!cursor) throw new UtxoSetImportError('No crawler cursor yet.');
+  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running — pause it first (pauseCrawler).');
+  if (cursor.utxoSet.anchorSlot == null) throw new UtxoSetImportError('No imported UTxO set — run importUtxoSet first.');
+  const batchSize = opts.batchSize ?? 2000;
+
+  return withImportLease(async (lease) => {
+    let candidates = 0;
+    let updated = 0;
+    const write = async (fills: ReferenceScriptFill[]): Promise<void> => {
+      if (!fills.length) return;
+      await lease.writeTx(async (tx) => {
+        for (const f of fills) {
+          const n = await tx.run(
+            UPDATE.entity(LedgerUTxOs)
+              .set({ utxo_referenceScriptHash: f.hash, utxo_referenceScriptSize: f.size, utxo_referenceScriptType: f.type })
+              .where({ txHash: f.txHash, outputIndex: f.outputIndex }),
+          );
+          updated += Number(n) || 0;
+        }
+      });
+    };
+
+    if (opts.filePath) {
+      let fills: ReferenceScriptFill[] = [];
+      for await (const e of readUtxoSetFile(opts.filePath)) {
+        if (!e.referenceScriptHash || e.referenceScriptSize == null || !e.referenceScriptType) continue;
+        candidates++;
+        fills.push({ txHash: e.txHash, outputIndex: e.outputIndex, hash: e.referenceScriptHash, size: e.referenceScriptSize, type: e.referenceScriptType });
+        if (fills.length >= batchSize) {
+          await write(fills);
+          fills = [];
+        }
+      }
+      await write(fills);
+    } else {
+      const backend = opts.client.getLedgerStateBackend();
+      if (!backend) throw new UtxoSetImportError('No Ogmios backend available — pass the cardano-cli dump as filePath instead.');
+      const rows = await cds.tx((tx) => tx.run(
+        SELECT.from(LedgerUTxOs).columns('txHash', 'outputIndex')
+          .where({ spentTxHash: null, utxo_referenceScriptHash: { '!=': null }, utxo_referenceScriptSize: null }),
+      )) as Array<{ txHash: string; outputIndex: number | string }> | undefined;
+      candidates = rows?.length ?? 0;
+      for (const refs of chunk(rows ?? [], IN_CHUNK)) {
+        const live = await backend.getUnspentOutputs(refs.map(r => ({ txHash: r.txHash, outputIndex: Number(r.outputIndex) })));
+        await write(live.flatMap(u => (u.scriptRef && u.scriptRefSize != null && u.scriptRefType
+          ? [{ txHash: u.txHash, outputIndex: u.outputIndex, hash: u.scriptRef, size: u.scriptRefSize, type: u.scriptRefType }]
+          : [])));
+      }
+    }
+    logger.info(`UTxO set reference scripts refreshed: ${updated} of ${candidates} rows (${opts.filePath ? 'dump' : 'node'})`);
+    return { updated, candidates };
   });
 }

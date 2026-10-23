@@ -103,7 +103,7 @@ import {
 } from '../utils/mappers';
 
 import { ProviderUnavailableError, AllBackendsFailedError, NotFoundError, isNotFoundOnAllBackends } from '../utils/errors';
-import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData, TransactionConfirmations } from '../utils/types';
+import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData, TransactionConfirmations, ReferenceScriptType } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
 import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
 import {
@@ -133,13 +133,37 @@ interface StoredOutputRow {
   utxo_dataHash: string | null;
   utxo_inlineDatum: string | null;
   utxo_referenceScriptHash: string | null;
+  utxo_referenceScriptSize: number | null;
+  utxo_referenceScriptType: ReferenceScriptType | null;
 }
 
-/** Datum hash, inline datum and reference-script hash of the spent output onto its input. */
-function copyUtxoData(input: TxInputLine, dataHash?: string | null, inlineDatum?: string | null, referenceScriptHash?: string | null): void {
-  input.dataHash = input.dataHash ?? dataHash ?? null;
-  input.inlineDatum = input.inlineDatum ?? inlineDatum ?? null;
-  input.referenceScriptHash = input.referenceScriptHash ?? referenceScriptHash ?? null;
+/** Datum and reference-script columns of a spent output, in the shape the stored tables use. */
+interface SpentUtxoData {
+  utxo_dataHash?: string | null;
+  utxo_inlineDatum?: string | null;
+  utxo_referenceScriptHash?: string | null;
+  utxo_referenceScriptSize?: number | null;
+  utxo_referenceScriptType?: ReferenceScriptType | null;
+}
+
+/** Datum hash, inline datum and reference script of the spent output onto its input. */
+function copyUtxoData(input: TxInputLine, out: SpentUtxoData): void {
+  input.dataHash = input.dataHash ?? out.utxo_dataHash ?? null;
+  input.inlineDatum = input.inlineDatum ?? out.utxo_inlineDatum ?? null;
+  input.referenceScriptHash = input.referenceScriptHash ?? out.utxo_referenceScriptHash ?? null;
+  input.referenceScriptSize = input.referenceScriptSize ?? out.utxo_referenceScriptSize ?? null;
+  input.referenceScriptType = input.referenceScriptType ?? out.utxo_referenceScriptType ?? null;
+}
+
+/** A provider output in the stored-column shape, for copyUtxoData. */
+function utxoDataOf(o: TxOutputLine): SpentUtxoData {
+  return {
+    utxo_dataHash: o.dataHash,
+    utxo_inlineDatum: o.inlineDatum,
+    utxo_referenceScriptHash: o.referenceScriptHash,
+    utxo_referenceScriptSize: o.referenceScriptSize,
+    utxo_referenceScriptType: o.referenceScriptType,
+  };
 }
 
 function lovelaceSum(value: unknown): string {
@@ -936,6 +960,8 @@ export class CardanoIndexer {
           datumHash: (u.utxo_dataHash as string | null) ?? undefined,
           inlineDatum: (u.utxo_inlineDatum as string | null) ?? null,
           scriptRef: (u.utxo_referenceScriptHash as string | null) ?? undefined,
+          scriptRefSize: u.utxo_referenceScriptSize == null ? null : Number(u.utxo_referenceScriptSize),
+          scriptRefType: (u.utxo_referenceScriptType as ReferenceScriptType | null) ?? null,
         });
       }
     }
@@ -1348,7 +1374,7 @@ export class CardanoIndexer {
         if (local) {
           input.address = local.address;
           input.amount = local.amount ?? [];
-          copyUtxoData(input, local.dataHash, local.inlineDatum, local.referenceScriptHash);
+          copyUtxoData(input, utxoDataOf(local));
         } else {
           unresolved.push({ input, key });
         }
@@ -1365,7 +1391,7 @@ export class CardanoIndexer {
         if (!row) continue;
         unresolved[i].input.address = row.address;
         unresolved[i].input.amount = ledgerRowAmount(row, ledger.assets.get(unresolved[i].key));
-        copyUtxoData(unresolved[i].input, row.utxo_dataHash, row.utxo_inlineDatum, row.utxo_referenceScriptHash);
+        copyUtxoData(unresolved[i].input, row);
         unresolved.splice(i, 1);
       }
       if (!unresolved.length) return;
@@ -1399,7 +1425,7 @@ export class CardanoIndexer {
     for (const { input, key } of unresolved) {
       const out = outByKey.get(key);
       if (out?.address_address != null) input.address = out.address_address;
-      if (out) copyUtxoData(input, out.utxo_dataHash, out.utxo_inlineDatum, out.utxo_referenceScriptHash);
+      if (out) copyUtxoData(input, out);
       const amt = amtByKey.get(key);
       if (amt) input.amount = amt;
     }

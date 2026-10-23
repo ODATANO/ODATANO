@@ -7,7 +7,7 @@ import {
   LedgerAddressAssets,
   LedgerAccounts,
 } from '#cds-models/odatano/cardano';
-import type { Amount, BlockData, Transaction as ProviderTransaction, TxOutputLine } from '../utils/types';
+import type { Amount, BlockData, Transaction as ProviderTransaction, TxOutputLine, ReferenceScriptType } from '../utils/types';
 import { decodeShelleyAddress } from '../utils/mappers';
 import { chunk, IN_CHUNK } from '../utils/collections';
 
@@ -49,6 +49,8 @@ export interface LedgerUtxoRow {
   utxo_dataHash: string | null;
   utxo_inlineDatum: string | null;
   utxo_referenceScriptHash: string | null;
+  utxo_referenceScriptSize: number | null;
+  utxo_referenceScriptType: ReferenceScriptType | null;
   hasAssets: boolean;
 }
 
@@ -71,9 +73,11 @@ export interface LedgerOutputLike {
   dataHash?: string | null;
   inlineDatum?: string | null;
   referenceScriptHash?: string | null;
+  referenceScriptSize?: number | null;
+  referenceScriptType?: ReferenceScriptType | null;
 }
 
-const outpoint = (txHash: string, outputIndex: number): string => `${txHash}#${outputIndex}`;
+const outpoint =(txHash: string, outputIndex: number): string => `${txHash}#${outputIndex}`;
 const lovelaceOf = (amount: Amount[] | undefined): bigint =>
   BigInt(amount?.find(a => a.unit === 'lovelace')?.quantity ?? '0');
 const nativeAssets = (amount: Amount[] | undefined): Amount[] =>
@@ -122,6 +126,8 @@ export function buildLedgerUtxoRows(
       utxo_dataHash: o.dataHash || null,
       utxo_inlineDatum: o.inlineDatum || null,
       utxo_referenceScriptHash: o.referenceScriptHash || null,
+      utxo_referenceScriptSize: o.referenceScriptSize ?? null,
+      utxo_referenceScriptType: o.referenceScriptType ?? null,
       hasAssets: assets.length > 0,
     },
     assets,

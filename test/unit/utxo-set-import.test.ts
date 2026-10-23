@@ -22,6 +22,7 @@ vi.mock('@sap/cds', () => {
     if (typeof q === 'string' && db.hold) await db.hold;
     txRuns.push(q as Record<string, unknown>);
     if (typeof q === 'object' && q._op === 'SELECT') return q.entity === 'LedgerUTxOs' ? { n: String(db.utxoCount) } : db.anchorBlock;
+    if (typeof q === 'object' && q._op === 'UPDATE') return 1;
     return undefined;
   }) };
   const cdsMock = {
@@ -31,6 +32,7 @@ vi.mock('@sap/cds', () => {
     ql: {
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
       DELETE: { from: (entity: string) => ({ _op: 'DELETE', entity, where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
+      UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', entity, set, where }) }) }) },
       SELECT: { one: { from: (entity: string) => ({ columns: () => {
         const q = { _op: 'SELECT', entity };
         return { ...q, where: (where: unknown) => ({ ...q, where }) };
@@ -60,11 +62,15 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   CRAWLER_LEASE_TTL_MS: 15_000,
 }));
 
-import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, rebuildUtxoSetAggregates, UtxoSetImportError, UtxoSetLeaseLostError, parseJsonLossless } from '../../srv/blockchain/crawler/utxo-set-import';
+import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts, UtxoSetImportError, UtxoSetLeaseLostError, parseJsonLossless } from '../../srv/blockchain/crawler/utxo-set-import';
+import { Cbor, CborBytes } from '@harmoniclabs/cbor';
 
 const TX = 'a'.repeat(64);
 const ADDR = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
 const POLICY = 'p'.repeat(56);
+// compiled Plutus V3 script (86 bytes) and its ledger hash
+const PLUTUS_V3 = '585401010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748000c01cdd500144c9289bae30093008375400516401830060013003375400d149a26cac8009';
+const PLUTUS_V3_HASH = 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea';
 
 describe('parseCliUtxoEntry', () => {
   it('maps a cardano-cli entry incl. native assets, datum hash and inline datum raw', () => {
@@ -78,8 +84,18 @@ describe('parseCliUtxoEntry', () => {
     expect(entry).toEqual({
       txHash: TX, outputIndex: 3, address: ADDR,
       amount: [{ unit: 'lovelace', quantity: '5000000' }, { unit: `${POLICY}746f6b656e`, quantity: '7' }, { unit: POLICY, quantity: '1' }],
-      dataHash: 'd'.repeat(64), inlineDatum: 'd87980', referenceScriptHash: null,
+      dataHash: 'd'.repeat(64), inlineDatum: 'd87980', referenceScriptHash: null, referenceScriptSize: null, referenceScriptType: null,
     });
+  });
+
+  it('derives hash, size and type of a reference script from the TextEnvelope the cli prints', () => {
+    const cborHex = Buffer.from(Cbor.encode(new CborBytes(Buffer.from(PLUTUS_V3, 'hex')))).toString('hex');
+    const entry = parseCliUtxoEntry(`${TX}#0`, {
+      address: ADDR,
+      value: { lovelace: 2000000 },
+      referenceScript: { script: { type: 'PlutusScriptV3', description: '', cborHex }, scriptLanguage: 'PlutusScriptLanguage PlutusScriptV3' },
+    });
+    expect(entry).toMatchObject({ referenceScriptHash: PLUTUS_V3_HASH, referenceScriptSize: 86, referenceScriptType: 'plutusV3' });
   });
 
   it('adds a zero lovelace line when the value has none and rejects malformed keys', () => {
@@ -237,6 +253,49 @@ describe('importUtxoSet preconditions', () => {
     expect(lease.acquired[0]).toMatch(/^import:/);
     expect(lease.released).toEqual(lease.acquired);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('refreshUtxoSetReferenceScripts', () => {
+  const client = (backend: unknown = null) => ({ getLedgerStateBackend: () => backend }) as never;
+  const envelope = { script: { type: 'PlutusScriptV3', description: '', cborHex: Buffer.from(Cbor.encode(new CborBytes(Buffer.from(PLUTUS_V3, 'hex')))).toString('hex') }, scriptLanguage: 'PlutusScriptLanguage PlutusScriptV3' };
+  beforeEach(() => { txRuns.length = 0; utxoSetStates.length = 0; lease.acquire = true; lease.renewFailAfter = null; lease.renewCalls = 0; lease.acquired.length = 0; lease.released.length = 0; });
+
+  it('fills hash, size and type of the rows the dump carries a script for, under the cursor lease', async () => {
+    cursorState.cursor = { lastSlot: 50, leaseUntil: null, utxoSet: { anchorSlot: 10, anchorHash: 'h' } };
+    const dir = mkdtempSync(join(tmpdir(), 'odatano-utxo-'));
+    const p = join(dir, 'set.json');
+    writeFileSync(p, JSON.stringify({
+      [`${TX}#0`]: { address: ADDR, value: { lovelace: 1 } },
+      [`${TX}#1`]: { address: ADDR, value: { lovelace: 2 }, referenceScript: envelope },
+      [`${TX}#2`]: { address: ADDR, value: { lovelace: 3 }, referenceScript: null },
+    }));
+
+    const r = await refreshUtxoSetReferenceScripts({ filePath: p, client: client() });
+
+    expect(r).toEqual({ updated: 1, candidates: 1 });
+    const updates = txRuns.filter(q => q._op === 'UPDATE');
+    expect(updates).toEqual([{
+      _op: 'UPDATE', entity: 'LedgerUTxOs',
+      set: { utxo_referenceScriptHash: PLUTUS_V3_HASH, utxo_referenceScriptSize: 86, utxo_referenceScriptType: 'plutusV3' },
+      where: { txHash: TX, outputIndex: 1 },
+    }]);
+    // nothing is deleted or re-imported; the set stays as it is
+    expect(txRuns.some(q => q._op === 'DELETE' || q._op === 'UPSERT')).toBe(false);
+    expect(utxoSetStates).toHaveLength(0);
+    expect(lease.acquired).toHaveLength(1);
+    expect(lease.released).toEqual(lease.acquired);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses without an imported set, with an active crawler lease, and without Ogmios when no dump is given', async () => {
+    cursorState.cursor = { lastSlot: 50, leaseUntil: null, utxoSet: { anchorSlot: null } };
+    await expect(refreshUtxoSetReferenceScripts({ client: client() })).rejects.toThrow(UtxoSetImportError);
+    cursorState.cursor = { lastSlot: 50, leaseUntil: new Date(Date.now() + 60_000).toISOString(), utxoSet: { anchorSlot: 10 } };
+    await expect(refreshUtxoSetReferenceScripts({ client: client() })).rejects.toThrow(/pause/);
+    cursorState.cursor = { lastSlot: 50, leaseUntil: null, utxoSet: { anchorSlot: 10 } };
+    await expect(refreshUtxoSetReferenceScripts({ client: client() })).rejects.toThrow(/Ogmios/);
+    expect(txRuns.filter(q => q._op === 'UPDATE')).toHaveLength(0);
   });
 });
 
