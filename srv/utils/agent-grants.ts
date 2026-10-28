@@ -78,7 +78,7 @@ export const AGENT_ALWAYS_ALLOWED_EVENTS: ReadonlySet<string> = new Set([
   'GetAssetInfo', 'GetAssetHistory', 'GetAccountByStakeAddress', 'GetTransactionByHash',
   'GetTransactionConfirmations', 'GetMetadataByTxHash', 'GetAddressByBech32', 'GetUTxOsByAddress', 'GetUTxOsByCredential',
   'GetAssetsByAddress', 'GetLatestTransactionsByAddress', 'GetLatestBlock', 'GetLatestEpoch',
-  'GetLedgerProtocolParameters', 'ParseTransactionCbor',
+  'GetLedgerProtocolParameters', 'ParseTransactionCbor', 'DecodePlutusData',
   // CardanoTransactionService: compute-only
   'GetBuildDetails', 'GetTransactionBuildsByAddress', 'DeriveScriptAddress', 'ExtractPaymentKeyHash',
   // CardanoSignService: reads and stateless verification

@@ -120,6 +120,10 @@ type UTxODataSlice {
     @title      : 'Reference Script Type'
     @description: 'native | plutusV1 | plutusV2 | plutusV3; null when the source reports the hash only'
     referenceScriptType : String(10);
+
+    @title      : 'Payment Credential'
+    @description: 'Payment key or script hash of the output address (28 bytes hex); the same for every stake variant of an address. Null for Byron addresses'
+    paymentCredential   : String(56);
 }
 
 // -----------------------------------------------------

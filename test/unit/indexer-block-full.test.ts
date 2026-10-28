@@ -76,7 +76,7 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   Account: 'Account', Drep: 'Drep', Pool: 'Pool', Asset: 'Asset', Address: 'Address',
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
   TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
-  TransactionRedeemers: 'TransactionRedeemers',
+  TransactionRedeemers: 'TransactionRedeemers', TransactionDatums: 'TransactionDatums',
 }));
 
 // ledger-state reads the DB-level entities; the indexer only forwards to it
@@ -105,7 +105,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionOutputs: 'TransactionOutputs', TransactionOutputAssets: 'TransactionOutputAssets',
   TransactionMetadata_: 'TransactionMetadata', TransactionCertificates: 'TransactionCertificates',
   TransactionWithdrawals: 'TransactionWithdrawals',
-  TransactionRedeemers: 'TransactionRedeemers',
+  TransactionRedeemers: 'TransactionRedeemers', TransactionDatums: 'TransactionDatums',
 }));
 
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -192,6 +192,14 @@ describe('CardanoIndexer.indexBlockFull — bulk persistence', () => {
       tx_hash: 't1'.padEnd(64, '0'), purpose: 'spend', redeemerIndex: 0, data: 'd87980', mem: 1200, steps: 3400000,
       spentTxHash: 'e'.repeat(64), spentOutputIndex: 2, policyId: null,
     }]);
+  });
+
+  it('writes the witness datums of the block keyed by transaction and hash', async () => {
+    const { indexer } = makeIndexer();
+    const datums = [{ hash: 'd'.repeat(64), cbor: 'd8799f182aff' }];
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx('t1'.padEnd(64, '0'), { datums }), tx('t2'.padEnd(64, '0'), { index: 1, datums: [] })]);
+    expect(upsertsFor('TransactionDatums')).toHaveLength(1);
+    expect(upsertsFor('TransactionDatums')[0].entries).toEqual([{ tx_hash: 't1'.padEnd(64, '0'), dataHash: 'd'.repeat(64), datum: 'd8799f182aff' }]);
   });
 
   it('skips empty tables (no UPSERT with zero rows)', async () => {

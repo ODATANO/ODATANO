@@ -22,15 +22,15 @@
 
 ### Service Surface
 
-**42 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (v2.0 crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (v2.0 wallet worker, exposed via CardanoWorkerService)
+**50 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (v2.0 crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (v2.0 wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
 
-**20 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor
+**21 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData
 
 **13 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
 
 **9 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
 
-**Crawler control (CardanoIndexerService):** `getStatus` (function) + `pauseCrawler` / `resumeCrawler` (actions, Admin)
+**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` (actions, Admin)
 
 **Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
 
@@ -152,7 +152,7 @@ srv/
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds                   # 47 entities with temporal support
+db/schema.cds                   # 50 entities with temporal support
 test/                           # 88 test files (70 unit + 18 integration, vitest)
 ```
 ---
@@ -197,7 +197,7 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
 │   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds               # 47 entities (namespace: odatano.cardano)
+│   └── schema.cds               # 50 entities (namespace: odatano.cardano)
 └── config/                      # Network genesis configurations
 ```
 

@@ -51,6 +51,7 @@ export interface LedgerUtxoRow {
   utxo_referenceScriptHash: string | null;
   utxo_referenceScriptSize: number | null;
   utxo_referenceScriptType: ReferenceScriptType | null;
+  utxo_paymentCredential: string | null;
   hasAssets: boolean;
 }
 
@@ -128,6 +129,7 @@ export function buildLedgerUtxoRows(
       utxo_referenceScriptHash: o.referenceScriptHash || null,
       utxo_referenceScriptSize: o.referenceScriptSize ?? null,
       utxo_referenceScriptType: o.referenceScriptType ?? null,
+      utxo_paymentCredential: decoded.paymentCredential,
       hasAssets: assets.length > 0,
     },
     assets,

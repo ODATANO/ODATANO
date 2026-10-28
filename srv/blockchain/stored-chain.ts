@@ -12,6 +12,7 @@ import {
   TransactionCertificates,
   TransactionWithdrawals,
   TransactionRedeemers,
+  TransactionDatums,
   AssetHistory_ as AssetHistory,
 } from '#cds-models/odatano/cardano';
 import type {
@@ -21,6 +22,7 @@ import type {
   ReferenceScriptType,
   Transaction as ProviderTransaction,
   TxCertificate,
+  TxDatum,
   TxInputLine,
   TxOutputLine,
   TxRedeemer,
@@ -161,7 +163,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     }
     return out;
   };
-  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, mints, redeemers] = await Promise.all([
+  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, mints, redeemers, datums] = await Promise.all([
     fetchIn(TransactionInputs, 'txSeq', seqs),
     fetchIn(TransactionInputAssets, 'input_txSeq', seqs),
     fetchIn(TransactionOutputs, 'txSeq', seqs),
@@ -171,6 +173,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     fetchIn(TransactionWithdrawals, 'tx_hash', hashes),
     fetchIn(AssetHistory, 'txHash', hashes),
     fetchIn(TransactionRedeemers, 'tx_hash', hashes),
+    fetchIn(TransactionDatums, 'tx_hash', hashes),
   ]);
 
   const inputsBySeq = groupBy(inputs, r => str(r.txSeq));
@@ -182,6 +185,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
   const withdrawalsByHash = groupBy(withdrawals, r => str(r.tx_hash));
   const mintsByHash = groupBy(mints, r => str(r.txHash));
   const redeemersByHash = groupBy(redeemers, r => str(r.tx_hash));
+  const datumsByHash = groupBy(datums, r => str(r.tx_hash));
 
   return rows.map((t) => {
     const seq = str(t.txSeq);
@@ -222,6 +226,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     const withdrawn = withdrawalsByHash.get(hash);
     const minted = mintsByHash.get(hash);
     const redeemed = redeemersByHash.get(hash);
+    const witnessDatums = datumsByHash.get(hash);
     return {
       hash,
       blockHash: str(t.blockHash),
@@ -262,6 +267,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
           outputIndex: numOrNull(r.spentOutputIndex),
           policyId: (r.policyId as string | null) ?? null,
         })),
+      datums: witnessDatums?.map((d): TxDatum => ({ hash: str(d.dataHash), cbor: str(d.datum) })),
     };
   });
 }

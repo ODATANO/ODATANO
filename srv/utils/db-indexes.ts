@@ -52,6 +52,10 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_cardanoagentgrants_token', table: 'odatano_cardano_CardanoAgentGrants', columns: 'tokenHash' },
   // crawler-fed ledger state: "who spent this output" and delegation per stake key / pool / DRep
   { name: 'odatano_cardano_transactioninputs_spent', table: 'odatano_cardano_TransactionInputs', columns: 'spentTxHash, spentOutputIndex' },
+  // outputs to / inputs from a payment credential in slot order (txSeq); datum lookup by hash across txs
+  { name: 'odatano_cardano_transactionoutputs_paycred', table: 'odatano_cardano_TransactionOutputs', columns: 'utxo_paymentCredential, txSeq' },
+  { name: 'odatano_cardano_transactioninputs_paycred', table: 'odatano_cardano_TransactionInputs', columns: 'utxoData_paymentCredential, txSeq' },
+  { name: 'odatano_cardano_transactiondatums_hash', table: 'odatano_cardano_TransactionDatums', columns: 'dataHash' },
   { name: 'odatano_cardano_transactioncertificates_stake', table: 'odatano_cardano_TransactionCertificates', columns: 'stakeAddress' },
   { name: 'odatano_cardano_transactioncertificates_pool', table: 'odatano_cardano_TransactionCertificates', columns: 'poolId' },
   { name: 'odatano_cardano_transactioncertificates_drep', table: 'odatano_cardano_TransactionCertificates', columns: 'drepId' },
@@ -59,6 +63,7 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   // crawler-fed UTxO set: open rows per address, "who spent", stake-key rollups, asset holders
   { name: 'odatano_cardano_ledgerutxos_address', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, spentTxHash' },
   { name: 'odatano_cardano_ledgerutxos_spent', table: 'odatano_cardano_LedgerUTxOs', columns: 'spentTxHash' },
+  { name: 'odatano_cardano_ledgerutxos_paycred', table: 'odatano_cardano_LedgerUTxOs', columns: 'utxo_paymentCredential, spentTxHash' },
   { name: 'odatano_cardano_ledgeraddresses_stake', table: 'odatano_cardano_LedgerAddresses', columns: 'stakeAddress' },
   { name: 'odatano_cardano_ledgeraddresses_paycred', table: 'odatano_cardano_LedgerAddresses', columns: 'paymentCredential' },
   { name: 'odatano_cardano_ledgerutxoassets_unit', table: 'odatano_cardano_LedgerUTxOAssets', columns: 'unit' },

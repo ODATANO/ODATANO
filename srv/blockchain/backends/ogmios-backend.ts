@@ -301,6 +301,8 @@ interface OgmiosChainSyncTx {
   /** Keyed by reward account (bech32 `stake…` / `stake_test…`). */
   withdrawals?: Record<string, { ada?: { lovelace?: number | bigint } }>;
   redeemers?: { redeemer: string; executionUnits: { memory: number | bigint; cpu: number | bigint }; validator: { purpose: string; index: number } }[];
+  /** Witness-set datums: hash -> CBOR hex (original bytes). */
+  datums?: Record<string, string>;
 }
 /**
  * Ogmios v6 `Certificate` (cardano.json), structurally typed for the fields we index.
@@ -1489,6 +1491,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         amount: (value?.ada?.lovelace ?? 0).toString(),
       })),
       redeemers: mapOgmiosRedeemers(tx),
+      datums: Object.entries(tx.datums ?? {}).map(([hash, cbor]) => ({ hash, cbor })),
     });
   }
 

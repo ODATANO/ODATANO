@@ -50,7 +50,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionInputAssets: 'TransactionInputAssets', TransactionOutputs: 'TransactionOutputs',
   TransactionOutputAssets: 'TransactionOutputAssets', TransactionMetadata_: 'TransactionMetadata',
   TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
-  TransactionRedeemers: 'TransactionRedeemers',
+  TransactionRedeemers: 'TransactionRedeemers', TransactionDatums: 'TransactionDatums',
   AssetHistory_: 'AssetHistory',
 }));
 
@@ -81,6 +81,7 @@ beforeEach(() => {
       { tx_hash: T1, purpose: 'spend', redeemerIndex: 0, data: 'd87980', mem: '1000', steps: '2000', spentTxHash: '8'.repeat(64), spentOutputIndex: 0, policyId: null },
       { tx_hash: T1, purpose: 'mint', redeemerIndex: 0, data: 'd87a80', mem: '10', steps: '20', spentTxHash: null, spentOutputIndex: null, policyId: 'p'.repeat(56) },
     ],
+    TransactionDatums: [{ tx_hash: T1, dataHash: 'd'.repeat(64), datum: 'd8799f182aff' }],
     AssetHistory: [{ unit: UNIT, txHash: T1, action: 'burn', quantity: '5' }],
   };
 });
@@ -114,6 +115,7 @@ describe('stored chain in the provider shape', () => {
       { purpose: 'mint', index: 0, data: 'd87a80', mem: '10', steps: '20', txHash: null, outputIndex: null, policyId: 'p'.repeat(56) },
       { purpose: 'spend', index: 0, data: 'd87980', mem: '1000', steps: '2000', txHash: '8'.repeat(64), outputIndex: 0, policyId: null },
     ]);
+    expect(tx.datums).toEqual([{ hash: 'd'.repeat(64), cbor: 'd8799f182aff' }]);
     expect(lacksOutpoints(tx)).toBe(false);
     // metadata numbers above 2^53 survive (safeJSON)
     expect(String((tx.metadata![0].json as { n: unknown }).n)).toBe('18446744073709551615');
@@ -123,11 +125,13 @@ describe('stored chain in the provider shape', () => {
     tables.TransactionInputs[0].spentTxHash = null; // inputIndex 1
     tables.TransactionInputs[0].spentOutputIndex = null;
     tables.TransactionRedeemers = [];
+    tables.TransactionDatums = [];
     const tx = (await readTransactionsByHash(db as never, [T1])).get(T1)!;
     expect(tx.inputs[0]).toMatchObject({ txHash: '8'.repeat(64), outputIndex: 0 });
     expect(tx.inputs[1]).toMatchObject({ txHash: null, outputIndex: null });
     expect(lacksOutpoints(tx)).toBe(true);
     expect(tx.redeemers).toBeUndefined();
+    expect(tx.datums).toBeUndefined();
   });
 
   it('derives the phase-2 flag from the ledger view: only collateral and reference inputs mean a failure', async () => {

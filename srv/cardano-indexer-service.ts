@@ -6,6 +6,7 @@ import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-stat
 import { importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts } from './blockchain/crawler/utxo-set-import';
 import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
+import { backfillUtxoCredentials, type CredentialBackfillProgress } from './blockchain/crawler/credential-backfill';
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -46,8 +47,19 @@ interface TransactionBackfillState extends TransactionBackfillProgress {
 }
 let transactionBackfillStarting = false;
 let transactionBackfill: TransactionBackfillState = {
-  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0,
+  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
   startedAt: null, finishedAt: null, error: null,
+};
+
+/** The payment-credential fill of this process, same lifecycle as the backfills. */
+interface CredentialBackfillState extends CredentialBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+let credentialBackfill: CredentialBackfillState = {
+  status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null,
 };
 
 type BackfillData = { fromSlot?: string | number | null; toSlot?: string | number | null };
@@ -149,12 +161,14 @@ module.exports = (srv: cds.Service) => {
           transactions: transactionBackfill.transactions,
           inputs: transactionBackfill.inputs,
           redeemers: transactionBackfill.redeemers,
+          datums: transactionBackfill.datums,
           rewritten: transactionBackfill.rewritten,
           skipped: transactionBackfill.skipped,
           startedAt: transactionBackfill.startedAt,
           finishedAt: transactionBackfill.finishedAt,
           error: transactionBackfill.error,
         },
+        credentialBackfill: { ...credentialBackfill },
         epochSnapshots: {
           enabled: epochSnapshotsConfigured(),
           source: epochSnapshotSource(),
@@ -220,7 +234,7 @@ module.exports = (srv: cds.Service) => {
       return await handleRequest(req, async (db) => {
         const { fromSlot, toSlot } = await backfillRange(db, data);
         transactionBackfill = {
-          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0,
+          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
           startedAt: new Date().toISOString(), finishedAt: null, error: null,
         };
         void backfillTransactions({
@@ -246,6 +260,23 @@ module.exports = (srv: cds.Service) => {
     } finally {
       transactionBackfillStarting = false;
     }
+  });
+
+  // backfillPaymentCredentials — walks the UTxO-shaped tables once and fills the credential
+  // from the stored address. No backend; runs detached, progress via getStatus().credentialBackfill.
+  srv.on('backfillPaymentCredentials', async (req: Request) => {
+    if (credentialBackfill.status === 'running') return rejectInvalid(req, 'backfillPaymentCredentials', 'A payment-credential backfill is already running');
+    credentialBackfill = { status: 'running', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    void backfillUtxoCredentials({
+      onProgress: (p) => { Object.assign(credentialBackfill, p); },
+    })
+      .then((r) => { Object.assign(credentialBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(credentialBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Payment-credential backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Payment-credential backfill started; poll getStatus().credentialBackfill.' };
   });
 
   // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validates, then

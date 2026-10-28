@@ -54,8 +54,10 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         utxoSet           : UtxoSetStatus;
         // one-off certificate/withdrawal backfill over already crawled blocks (this process)
         certificateBackfill : CertificateBackfillStatus;
-        // one-off input/redeemer backfill over already crawled blocks (this process)
+        // one-off input/redeemer/datum backfill over already crawled blocks (this process)
         transactionBackfill : TransactionBackfillStatus;
+        // one-off payment-credential fill of UTxO-shaped rows (this process)
+        credentialBackfill : CredentialBackfillStatus;
         // per-epoch pool/DRep/pot snapshots (crawler.epochSnapshots)
         epochSnapshots    : EpochSnapshotStatus;
     }
@@ -96,11 +98,31 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         transactions : Integer64;
         inputs       : Integer64; // input rows that got at least one field
         redeemers    : Integer64;
+        datums       : Integer64;
         rewritten    : Integer64; // transactions whose stored rows differed in order or extent from the ledger view, now rewritten
         skipped      : Integer64; // transactions whose stored inputs differ from the stream
         startedAt    : Timestamp;
         finishedAt   : Timestamp;
         error        : String;
+    }
+
+    @title      : 'Credential Backfill Status'
+    @description: 'Progress of the payment-credential fill started with backfillPaymentCredentials; process-local, none after a restart'
+    type CredentialBackfillStatus {
+        status      : String;    // none | running | done | failed
+        table       : String;    // table being walked: TransactionOutputs | TransactionInputs | LedgerUTxOs; null when finished
+        outputs     : Integer64; // rows that received a credential
+        inputs      : Integer64;
+        ledgerUtxos : Integer64;
+        startedAt   : Timestamp;
+        finishedAt  : Timestamp;
+        error       : String;
+    }
+
+    @title      : 'Backfill Result'
+    type BackfillResult {
+        accepted : Boolean;
+        message  : String;
     }
 
     @title      : 'Certificate Backfill Result'
@@ -195,7 +217,12 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     action   backfillCertificates(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
 
     @title      : 'Backfill Transactions'
-    @description: 'Complete transactions the crawl already holds from a second chain-sync stream (Ogmios): input outpoints, the spent output datum and reference-script hash, missing input addresses, and TransactionRedeemers. Fills empty fields only; a transaction whose stored inputs differ from the stream is skipped. fromSlot defaults to the crawl start, toSlot to the cursor; the crawler may keep running. Runs in the background; progress via getStatus().transactionBackfill.'
+    @description: 'Complete transactions the crawl already holds from a second chain-sync stream (Ogmios): input outpoints, the spent output datum and reference-script hash, missing input addresses, TransactionRedeemers and TransactionDatums. Fills empty fields only; a transaction whose stored inputs differ from the stream is skipped. fromSlot defaults to the crawl start, toSlot to the cursor; the crawler may keep running. Runs in the background; progress via getStatus().transactionBackfill.'
     @requires   : 'Admin'
     action   backfillTransactions(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
+
+    @title      : 'Backfill Payment Credentials'
+    @description: 'Fill utxo.paymentCredential on TransactionOutputs, TransactionInputs and LedgerUTxOs rows written before the column existed, decoded from the stored address. Walks each table once in key order; rows that carry a credential are left alone, so a second run is a no-op. No backend call; the crawler may keep running. Runs in the background; progress via getStatus().credentialBackfill.'
+    @requires   : 'Admin'
+    action   backfillPaymentCredentials() returns BackfillResult;
 }

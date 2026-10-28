@@ -35,6 +35,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionInputs: 'TransactionInputs',
   TransactionInputAssets: 'TransactionInputAssets',
   TransactionRedeemers: 'TransactionRedeemers',
+  TransactionDatums: 'TransactionDatums',
   TransactionOutputs: 'TransactionOutputs',
   TransactionOutputAssets: 'TransactionOutputAssets',
 }));
@@ -115,13 +116,14 @@ const run = (txs: Transaction[]) => backfillTransactions({ client: fakeClient([[
 beforeEach(() => { dbRun.mockReset(); resolver.resolveInputs.mockClear(); });
 
 describe('backfillTransactions', () => {
-  it('fills outpoint and datum of old rows and writes the redeemers', async () => {
+  it('fills outpoint and datum of old rows and writes the redeemers and witness datums', async () => {
     fakeIndex(
       [row(0, { address_address: 'addrA' }), row(1, { address_address: 'addrB', isCollateral: true })],
       [{ input_txSeq: String(SEQ), input_inputIndex: 0, asset_quantity: '5000000' }],
     );
     const redeemers = [{ purpose: 'spend', index: 0, data: 'd87980', mem: '1', steps: '2', txHash: A, outputIndex: 0, policyId: null }];
-    const r = await run([chainTx([bare(A, 0), bare(B, 1, { isCollateral: true })], { redeemers })]);
+    const datums = [{ hash: 'd'.repeat(64), cbor: 'd8799f182aff' }];
+    const r = await run([chainTx([bare(A, 0), bare(B, 1, { isCollateral: true })], { redeemers, datums })]);
 
     expect(updates().map(u => [u._where, u._set])).toEqual([
       [{ txSeq: SEQ, inputIndex: 0 }, { spentTxHash: A, spentOutputIndex: 0, utxoData_inlineDatum: 'd87980' }],
@@ -130,7 +132,8 @@ describe('backfillTransactions', () => {
     expect(upserts('TransactionRedeemers')[0].entries).toEqual([
       { tx_hash: T, purpose: 'spend', redeemerIndex: 0, data: 'd87980', mem: 1, steps: 2, spentTxHash: A, spentOutputIndex: 0, policyId: null },
     ]);
-    expect(r).toMatchObject({ blocks: 1, transactions: 1, inputs: 2, redeemers: 1, skipped: 0, atSlot: SLOT });
+    expect(upserts('TransactionDatums')[0].entries).toEqual([{ tx_hash: T, dataHash: 'd'.repeat(64), datum: 'd8799f182aff' }]);
+    expect(r).toMatchObject({ blocks: 1, transactions: 1, inputs: 2, redeemers: 1, datums: 1, skipped: 0, atSlot: SLOT });
   });
 
   it('leaves a transaction alone whose stored inputs are in another order', async () => {

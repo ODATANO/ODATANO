@@ -6,10 +6,11 @@
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
   backfillMock: vi.fn(),
   txBackfillMock: vi.fn(),
+  credentialBackfillMock: vi.fn(),
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
     getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
@@ -53,6 +54,7 @@ vi.mock('../../srv/server', () => serverMock);
 vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn(), rebuildUtxoSetAggregates: vi.fn(), refreshUtxoSetReferenceScripts: vi.fn() }));
 vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCertificates: backfillMock }));
 vi.mock('../../srv/blockchain/crawler/transaction-backfill', () => ({ backfillTransactions: txBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/credential-backfill', () => ({ backfillUtxoCredentials: credentialBackfillMock }));
 
 // The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
 // mocks above and surfaces the CJS export as `.default`. beforeAll, not top-level
@@ -103,9 +105,10 @@ describe('CardanoIndexerService.getStatus', () => {
         startedAt: null, finishedAt: null, error: null,
       },
       transactionBackfill: {
-        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0,
+        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
         startedAt: null, finishedAt: null, error: null,
       },
+      credentialBackfill: { status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null },
       epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
     });
   });
@@ -298,8 +301,29 @@ describe('CardanoIndexerService.backfillTransactions', () => {
     expect(txBackfillMock.mock.calls[0][0].indexer).toBeDefined();
     await expect(handlers.backfillTransactions({ data: {} })).rejects.toThrow(/already running/);
 
-    finishRun({ atSlot: 900, blocks: 3, transactions: 4, inputs: 5, redeemers: 2, skipped: 1, fromSlot: 200, toSlot: 900, intersection: 'origin' });
+    finishRun({ atSlot: 900, blocks: 3, transactions: 4, inputs: 5, redeemers: 2, datums: 3, skipped: 1, fromSlot: 200, toSlot: 900, intersection: 'origin' });
     await new Promise((r) => setImmediate(r));
-    expect(await handlers.getStatus({})).toMatchObject({ transactionBackfill: { status: 'done', atSlot: '900', inputs: 5, redeemers: 2, skipped: 1 } });
+    expect(await handlers.getStatus({})).toMatchObject({ transactionBackfill: { status: 'done', atSlot: '900', inputs: 5, redeemers: 2, datums: 3, skipped: 1 } });
+  });
+});
+
+describe('CardanoIndexerService.backfillPaymentCredentials', () => {
+  it('runs detached without a backend, refuses a second start and reports progress in getStatus', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
+    let finishRun!: (r: unknown) => void;
+    credentialBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ table: 'TransactionInputs', outputs: 7, inputs: 2, ledgerUtxos: 0 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillPaymentCredentials({ data: {} })).toMatchObject({ accepted: true });
+    await expect(handlers.backfillPaymentCredentials({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ credentialBackfill: { status: 'running', table: 'TransactionInputs', outputs: 7, inputs: 2 } });
+
+    finishRun({ table: null, outputs: 7, inputs: 9, ledgerUtxos: 4 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ credentialBackfill: { status: 'done', table: null, outputs: 7, inputs: 9, ledgerUtxos: 4, error: null } });
+    expect(await handlers.backfillPaymentCredentials({ data: {} })).toMatchObject({ accepted: true });
   });
 });

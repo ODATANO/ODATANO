@@ -3,11 +3,11 @@ import type { Transaction as CapTransaction } from '@sap/cds';
 import type { CardanoClient } from '../cardano-client';
 import type { ChainPoint } from '../backends/cardano-backend';
 import type { Transaction, TxInputLine } from '../../utils/types';
-import { mapTransactionInputAssets, mapTransactionRedeemers, txSeqOf } from '../../utils/mappers';
+import { mapTransactionInputAssets, mapTransactionRedeemers, mapTransactionDatums, txSeqOf } from '../../utils/mappers';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { streamCrawledBlocks } from './certificate-backfill';
 import type { LedgerLookup } from '../ledger-state';
-import { TransactionInputs, TransactionInputAssets, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers } from '#cds-models/odatano/cardano';
+import { TransactionInputs, TransactionInputAssets, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums } from '#cds-models/odatano/cardano';
 
 const { SELECT, UPDATE, UPSERT, DELETE } = cds.ql;
 const logger = cds.log('TransactionBackfill');
@@ -15,8 +15,8 @@ const logger = cds.log('TransactionBackfill');
 /**
  * Completes transactions the crawl already holds from a second chain-sync stream: input
  * outpoints (spentTxHash / spentOutputIndex), the spent output's datum and reference-script
- * hash, a missing input address, and the redeemers. Only empty input fields are filled; a
- * transaction whose stored inputs do not line up with the stream is left as it is.
+ * hash, a missing input address, the redeemers and the witness datums. Only empty input fields
+ * are filled; a transaction whose stored inputs do not line up with the stream is left as it is.
  */
 
 export class TransactionBackfillError extends Error {
@@ -34,6 +34,7 @@ export interface TransactionBackfillProgress {
   /** Input rows that got at least one field. */
   inputs: number;
   redeemers: number;
+  datums: number;
   /** Transactions whose stored rows differed from the ledger view (order, inputs or outputs the ledger did not apply) and were rewritten. */
   rewritten: number;
   /** Transactions left as they are: stored inputs differ from the stream. */
@@ -248,7 +249,7 @@ async function dropUnappliedOutputs(tx: CapTransaction, txs: Transaction[]): Pro
 
 export async function backfillTransactions(opts: TransactionBackfillOptions): Promise<TransactionBackfillResult> {
   const { fromSlot, toSlot, indexer } = opts;
-  const progress: TransactionBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, rewritten: 0, skipped: 0 };
+  const progress: TransactionBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0 };
   let started = false;
 
   const intersection = await streamCrawledBlocks(
@@ -324,6 +325,9 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
       const redeemerRows = txs.flatMap((t) => mapTransactionRedeemers(t.hash, t.redeemers ?? []));
       progress.redeemers += redeemerRows.length;
       if (redeemerRows.length) await tx.run(UPSERT.into(TransactionRedeemers).entries(redeemerRows));
+      const datumRows = txs.flatMap((t) => mapTransactionDatums(t.hash, t.datums ?? []));
+      progress.datums += datumRows.length;
+      if (datumRows.length) await tx.run(UPSERT.into(TransactionDatums).entries(datumRows));
     },
     (atSlot) => {
       started = true;
@@ -334,7 +338,7 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
   if (!started) progress.atSlot = intersection === 'origin' ? 0 : intersection.slot;
   logger.info(
     `Transaction backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.inputs} inputs, ` +
-    `${progress.redeemers} redeemers, ${progress.rewritten} transactions rewritten, ${progress.skipped} skipped`
+    `${progress.redeemers} redeemers, ${progress.datums} datums, ${progress.rewritten} transactions rewritten, ${progress.skipped} skipped`
   );
   return { ...progress, fromSlot, toSlot, intersection };
 }

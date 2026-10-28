@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.43] - payment credential on UTxOs, witness datums, PlutusData as JSON
+
+Schema change: `paymentCredential` on `TransactionOutputs.utxo`, `TransactionInputs.utxoData`,
+`AddressUTxOs.utxodata` and `LedgerUTxOs.utxo`; new table `TransactionDatums`. Run `cds deploy` on existing
+databases, then `backfillPaymentCredentials` once.
+
+### Added
+
+- `utxo_paymentCredential` (payment key or script hash of the address, 28 bytes hex) on every UTxO-shaped
+  entity, decoded from the address when the row is written; null for Byron addresses. One filter covers every
+  stake variant of a script address. Indexes `(utxo_paymentCredential, txSeq)` on `TransactionOutputs` and
+  `TransactionInputs`, `(utxo_paymentCredential, spentTxHash)` on `LedgerUTxOs`.
+- `TransactionDatums`: the witness-set datums of a transaction, keyed `(tx, dataHash)`, `datum` the CBOR bytes as
+  the transaction carried them; composition `datums` on `Transactions`, index on `dataHash`. Written by the
+  crawler on Ogmios chain-sync and by `backfillTransactions` (`transactionBackfill.datums`); a Blockfrost or
+  Koios crawl leaves it empty. `CardanoBackendService` returns stored transactions with `datums`.
+- `DecodePlutusData(cbor)` on `CardanoODataService`: PlutusData CBOR hex to the DetailedSchema JSON the build
+  actions accept as `outputDatumJson` (`constructor` / `fields`, `int`, `bytes`, `list`, `map`); integers beyond
+  2^53 as decimal strings. Pure, no backend call, 400 on malformed CBOR; allowed for agent tokens.
+- `backfillPaymentCredentials()` on `CardanoIndexerService` (Admin): fills the credential of rows written before
+  the column existed on `TransactionOutputs`, `TransactionInputs` and `LedgerUTxOs`, one pass per table in key
+  order, bulk statements on Postgres and SQLite, no backend call; progress in `getStatus().credentialBackfill`.
+
+### Changed
+
+- Lockfile: `body-parser` 2.4.0 (closes GHSA-27r3-jxmh-p828, request-body decompression), `qs` 6.17.0,
+  `fast-uri` 3.1.9 (transitive via express / ajv); no dependency range changed.
+
 ## [v2.0.0-rc.42] - reference scripts on UTxOs: size, type and fee
 
 Schema change: `referenceScriptSize` + `referenceScriptType` on `TransactionOutputs.utxo`,

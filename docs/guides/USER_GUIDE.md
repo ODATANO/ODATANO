@@ -95,7 +95,15 @@ POST /GetMetadataByTxHash
 
 POST /GetTransactionConfirmations
 {"txHash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"}
+
+POST /DecodePlutusData
+{"cbor": "d8799f581c32b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319182aff"}
 ```
+
+`DecodePlutusData` turns PlutusData CBOR hex (an inline datum, a `TransactionDatums` row, a redeemer) into
+the JSON the build actions take as `outputDatumJson`: `constructor` / `fields`, `int`, `bytes`, `list`, `map`
+(`k` / `v`). Integers beyond 2^53 come back as decimal strings. Pure function, no backend call; malformed
+CBOR is a 400.
 
 `GetTransactionConfirmations` returns `blockHeight`, `tipHeight` and `confirmations` (tip height minus block
 height plus one; 0 while the transaction is not on chain). With a synced crawler, a transaction in a crawled
@@ -146,6 +154,16 @@ so an address holding no UTxO is asked at the node on every read.
 `contains(utxodata_inlineDatum, '<hex>')` matches a byte string only up to 64 bytes: Plutus data CBOR
 splits longer byte strings into 64-byte chunks, so the hex of a longer field is not contiguous. The
 same holds for `utxo_inlineDatum` on `LedgerUTxOs`.
+
+Every UTxO-shaped row (`TransactionOutputs.utxo`, `TransactionInputs.utxoData`, `AddressUTxOs.utxodata`,
+`LedgerUTxOs.utxo`) carries `paymentCredential`, the payment key or script hash of its address (28 bytes,
+hex). It is the same for every stake variant of an address, so all outputs of a script are one filter
+instead of one per address; Byron addresses have none (null):
+
+```http
+GET /TransactionOutputs?$filter=utxo_paymentCredential eq '<56 hex>' and txSeq ge 1000000000&$orderby=txSeq
+GET /LedgerUTxOs?$filter=utxo_paymentCredential eq '<56 hex>' and spentTxHash eq null
+```
 
 **Response Example (Address):**
 
@@ -698,6 +716,7 @@ so the crawler also fills the tables that analytics need:
 | `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | every pool and DRep once per epoch, plus treasury, reserves and stake totals | off |
 | `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
 | `TransactionRedeemers` | every redeemer: purpose, index, data (CBOR hex), execution units, the redeemed input or minted policy | on (Ogmios chain-sync) |
+| `TransactionDatums` | every witness-set datum: hash and the original CBOR bytes, which outputs with a datum hash and no inline datum refer to | on (Ogmios chain-sync) |
 
 ```jsonc
 "crawler": {
@@ -777,6 +796,12 @@ the PlutusData as CBOR hex, `mem` / `steps` the execution units. A `spend` redee
 it unlocks (`spentTxHash`, `spentOutputIndex`), a `mint` redeemer its `policyId`. Ogmios chain-sync
 delivers redeemers with the block; a crawl on Blockfrost or Koios leaves the table empty.
 
+`TransactionDatums` holds one row per witness-set datum, keyed `(tx, dataHash)`, `datum` the CBOR bytes as
+the transaction carried them. An output that has `utxo_dataHash` but no inline datum (the older contract
+style) is resolved by the datum the spending transaction supplied: `GET /TransactionDatums?$filter=dataHash
+eq '<hash>'`, or `$expand=datums` on `Transactions`. Ogmios chain-sync delivers the datums with the block;
+a crawl on Blockfrost or Koios leaves the table empty (Koios reports datums as JSON, not as the bytes).
+
 Rows indexed before these fields existed are completed with a second backfill, same range rules and
 lifecycle as `backfillCertificates`:
 
@@ -786,7 +811,17 @@ GET  /odata/v4/cardano-indexer/getStatus()            # → transactionBackfill.
 ```
 
 It fills empty input fields only (outpoint, `utxoData`, a missing address with its assets) and
-writes `TransactionRedeemers`.
+writes `TransactionRedeemers` and `TransactionDatums` (`transactionBackfill.datums`).
+
+`paymentCredential` of rows written before the column existed is filled by a third backfill, which
+needs no backend: it walks `TransactionOutputs`, `TransactionInputs` and `LedgerUTxOs` once in key
+order and decodes the stored address. Rows that carry a credential are left alone, so a repeat changes
+nothing; `AddressUTxOs` is a cache and refills itself. Requires Admin.
+
+```
+POST /odata/v4/cardano-indexer/backfillPaymentCredentials
+GET  /odata/v4/cardano-indexer/getStatus()            # → credentialBackfill: status, table, outputs, inputs, ledgerUtxos
+```
 
 Transaction rows hold the same ledger view whichever source the crawl used: inputs in ledger order
 (regular, collateral, reference, each by transaction hash and output index); after a phase-2 failure
@@ -797,7 +832,7 @@ by their outpoint, the regular inputs of a failed script and never-produced outp
 flags, address or lovelace per position, no outpoint to move by) is left as it is and counted in
 `transactionBackfill.skipped`. Requires Ogmios (Admin).
 
-`CardanoBackendService` returns stored transactions with `redeemers`. An input whose outpoint is not
+`CardanoBackendService` returns stored transactions with `redeemers` and `datums`. An input whose outpoint is not
 recorded comes back with `txHash` and `outputIndex` `null`; `GetTransaction` and
 `GetTransactionsBatch` then take the transaction from a backend that can serve it.
 

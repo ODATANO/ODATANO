@@ -118,9 +118,9 @@ beforeEach(() => { tables.clear(); fakeTx.run.mockClear(); });
 describe('buildLedgerUtxoRows', () => {
   it('derives stake address, type and script flag from the address itself', () => {
     const { row, assets } = buildLedgerUtxoRows(out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }]), 100);
-    expect(row).toMatchObject({ txHash: T1, outputIndex: 0, address: ADDR_A, stakeAddress: STAKE_A, addressType: 'base', isScript: false, lovelace: '5000000', createdSlot: 100, spentTxHash: null, hasAssets: true });
+    expect(row).toMatchObject({ txHash: T1, outputIndex: 0, address: ADDR_A, stakeAddress: STAKE_A, addressType: 'base', isScript: false, lovelace: '5000000', createdSlot: 100, spentTxHash: null, hasAssets: true, utxo_paymentCredential: PAYMENT });
     expect(assets).toEqual([{ utxo_txHash: T1, utxo_outputIndex: 0, unit: UNIT, asset_quantity: '3', asset_policyId: 'p'.repeat(56), asset_assetNameHex: '746f6b656e', asset_assetName: 'token' }]);
-    expect(buildLedgerUtxoRows(out(T1, 1, ADDR_E, '1'), null).row).toMatchObject({ stakeAddress: null, addressType: 'enterprise', createdSlot: null, hasAssets: false });
+    expect(buildLedgerUtxoRows(out(T1, 1, ADDR_E, '1'), null).row).toMatchObject({ stakeAddress: null, addressType: 'enterprise', createdSlot: null, hasAssets: false, utxo_paymentCredential: PAYMENT });
   });
 });
 

@@ -129,6 +129,11 @@ service CardanoODataService @(impl: './cardano-service') {
     entity TransactionRedeemers     as projection on db.TransactionRedeemers;
 
     @readonly
+    @title      : 'Transaction Datums'
+    @description: 'Projection for Transaction Datums (crawler-fed, Ogmios chain-sync): witness-set datums byte for byte'
+    entity TransactionDatums        as projection on db.TransactionDatums;
+
+    @readonly
     @title      : 'Ledger UTxOs'
     @description: 'Crawler-maintained UTxO set (crawler.utxoSet); unspent while spentTxHash is null'
     entity LedgerUTxOs              as projection on db.LedgerUTxOs;
@@ -329,4 +334,11 @@ service CardanoODataService @(impl: './cardano-service') {
                                 @title: 'Transaction CBOR'
                                 @description: 'Hex-encoded transaction CBOR; signed or unsigned. Capped at 128 KiB of hex.'
                                 cbor: LargeString)                    returns ParsedTransaction;
+
+    @title      : 'Decode Plutus Data'
+    @description: 'Decode PlutusData CBOR hex (an inline datum, a witness datum, a redeemer) into the JSON the build actions accept as outputDatumJson (DetailedSchema: constructor/fields, int, bytes, list, map). Integers beyond 2^53 are decimal strings. Pure function, no network call, no DB write.'
+    action DecodePlutusData(
+                                @title: 'PlutusData CBOR'
+                                @description: 'Hex-encoded PlutusData CBOR. Capped at 128 KiB of hex.'
+                                cbor: LargeString)                    returns LargeString;
 }

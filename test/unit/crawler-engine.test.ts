@@ -54,6 +54,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionCertificates: 'odatano.cardano.TransactionCertificates',
   TransactionWithdrawals: 'odatano.cardano.TransactionWithdrawals',
   TransactionRedeemers: 'odatano.cardano.TransactionRedeemers',
+  TransactionDatums: 'odatano.cardano.TransactionDatums',
   LedgerUTxOs: 'odatano.cardano.LedgerUTxOs', LedgerUTxOAssets: 'odatano.cardano.LedgerUTxOAssets',
   LedgerAddresses: 'odatano.cardano.LedgerAddresses', LedgerAddressAssets: 'odatano.cardano.LedgerAddressAssets',
   LedgerAccounts: 'odatano.cardano.LedgerAccounts',

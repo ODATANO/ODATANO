@@ -8,7 +8,10 @@ import {
   mapTransactionMetadata,
   mapTransactionInputs,
   mapTransactionInputAssets,
+  mapTransactionOutputs,
   mapTransactionOutputAssets,
+  mapTransactionDatums,
+  paymentCredentialOf,
   mapAddress,
   mapAddressTransactions,
   mapAddressAssets,
@@ -290,6 +293,39 @@ describe('mappers', () => {
       expect(result[0].spentOutputIndex).toBe(2);
       expect(result[1].spentTxHash).toBeNull();
       expect(result[1].spentOutputIndex).toBeNull();
+    });
+  });
+
+  describe('payment credential on UTxO rows', () => {
+    const BASE = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
+    const ENTERPRISE = 'addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0';
+    const BYRON = 'Ae2tdPwUPEZFRbyhz3cpfC2CumGzNkFBN2L42rcUc2yjQpEkxDbkPodpMAi';
+    const PAYMENT = '32b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319';
+
+    it('is the same hash for every stake variant of an address and null without one', () => {
+      expect(paymentCredentialOf(BASE)).toBe(PAYMENT);
+      expect(paymentCredentialOf(ENTERPRISE)).toBe(PAYMENT);
+      expect(paymentCredentialOf(BYRON)).toBeNull();
+      expect(paymentCredentialOf('')).toBeNull();
+      expect(paymentCredentialOf(null)).toBeNull();
+    });
+
+    it('is written on outputs, inputs and address UTxOs', () => {
+      const out = (address: string, outputIndex: number) => ({ address, outputIndex, amount: [], txHash: 't', dataHash: null, inlineDatum: null, isCollateral: false });
+      expect(mapTransactionOutputs(7, [out(BASE, 0), out(ENTERPRISE, 1), out(BYRON, 2)]).map(r => r.utxo_paymentCredential)).toEqual([PAYMENT, PAYMENT, null]);
+      // an unresolved chain-sync input ('' address) has no credential yet
+      expect(mapTransactionInputs(7, [{ txHash: 'a', outputIndex: 0, address: BASE, amount: [] }, { txHash: 'b', outputIndex: 0, address: '', amount: [] }]).map(r => r.utxoData_paymentCredential)).toEqual([PAYMENT, null]);
+      expect(mapAddressUtxos(ENTERPRISE, '2024-01-01', '2025-01-01', [{ txHash: 'tx1', outputIndex: 0, address: ENTERPRISE, amount: [], blockHash: 'b', datumHash: null, scriptRef: null }])[0].utxodata_paymentCredential).toBe(PAYMENT);
+    });
+  });
+
+  describe('mapTransactionDatums', () => {
+    it('keys the witness datums by transaction and hash and keeps the bytes as given', () => {
+      expect(mapTransactionDatums('tx1', [{ hash: 'h1', cbor: 'd87980' }, { hash: 'h2', cbor: '182a' }])).toEqual([
+        { tx_hash: 'tx1', dataHash: 'h1', datum: 'd87980' },
+        { tx_hash: 'tx1', dataHash: 'h2', datum: '182a' },
+      ]);
+      expect(mapTransactionDatums('tx1', [])).toEqual([]);
     });
   });
 

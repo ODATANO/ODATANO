@@ -786,6 +786,11 @@ entity Transactions {
         withdrawals : Composition of many TransactionWithdrawals
                           on withdrawals.tx = $self;
 
+        @title      : 'Transaction Datums'
+        @description: 'Witness-set datums of the transaction (the datums spent outputs with a datum hash refer to). Filled by the chain crawler on Ogmios chain-sync only; the lazy path leaves it empty.'
+        datums      : Composition of many TransactionDatums
+                          on datums.tx = $self;
+
         @title      : 'Transaction Has Metadata'
         @description: 'Indicates if transaction has metadata'
         hasMetadata : Boolean;
@@ -1151,6 +1156,24 @@ entity TransactionRedeemers {
         @title      : 'Policy ID'
         @description: 'mint: the policy the redeemer runs'
         policyId         : Blake2b224;
+}
+
+@title      : 'Transaction Datums'
+@description: 'Datums of the transaction witness set as the chain crawler saw them (Ogmios chain-sync), byte for byte. They resolve outputs that carry a datum hash without an inline datum. Not written by the lazy path.'
+@readonly
+entity TransactionDatums {
+
+        @title      : 'Transaction (key)'
+        @description: 'The transaction whose witness set carries the datum'
+    key tx           : Association to Transactions;
+
+        @title      : 'Datum Hash (key)'
+        @description: 'Blake2b-256 hash of the datum bytes, as outputs reference it in utxo.dataHash'
+    key dataHash     : Blake2b256;
+
+        @title      : 'Datum'
+        @description: 'PlutusData CBOR hex, the original bytes of the witness set'
+        datum        : LargeString;
 }
 
 @title      : 'Transaction Outputs'

@@ -16,6 +16,7 @@ import {
   TxCertificate as TxCertificateProviderData,
   TxWithdrawal as TxWithdrawalProviderData,
   TxRedeemer as TxRedeemerProviderData,
+  TxDatum as TxDatumProviderData,
   Amount as AmountProviderData,
   NetworkInformation as NetworkInfoProviderData,
   BlockData as BlockProviderData,
@@ -43,6 +44,7 @@ import {
   TransactionCertificate as TransactionCertificateRow,
   TransactionWithdrawal as TransactionWithdrawalRow,
   TransactionRedeemer as TransactionRedeemerRow,
+  TransactionDatum as TransactionDatumRow,
   NetworkInformation as NetworkInfoRow,
   TransactionMetadata as TransactionMetadataRow,
   Block as BlockRow,
@@ -123,6 +125,7 @@ export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderDat
       utxoData_referenceScriptHash: input.referenceScriptHash || null,
       utxoData_referenceScriptSize: input.referenceScriptSize ?? null,
       utxoData_referenceScriptType: input.referenceScriptType ?? null,
+      utxoData_paymentCredential: paymentCredentialOf(input.address),
       // outpoint of the consumed UTxO
       spentTxHash: input.txHash || null,
       spentOutputIndex: Number.isInteger(input.outputIndex) ? input.outputIndex : null,
@@ -239,6 +242,11 @@ export function mapTransactionRedeemers(txHash: string, redeemers: TxRedeemerPro
   }));
 }
 
+/** Witness-set datums to TransactionDatumRows, keyed (tx, dataHash). */
+export function mapTransactionDatums(txHash: string, datums: TxDatumProviderData[]): TransactionDatumRow[] {
+  return datums.map((d) => ({ tx_hash: txHash, dataHash: d.hash, datum: d.cbor }));
+}
+
 /** Provider transaction outputs to TransactionOutputRows. */
 export function mapTransactionOutputs(txSeq: number, txOutputs: TxOutputProviderData[]): TransactionOutputRow[] {
   return txOutputs.map((output) => {
@@ -256,6 +264,7 @@ export function mapTransactionOutputs(txSeq: number, txOutputs: TxOutputProvider
       utxo_referenceScriptHash: output.referenceScriptHash || null,
       utxo_referenceScriptSize: output.referenceScriptSize ?? null,
       utxo_referenceScriptType: output.referenceScriptType ?? null,
+      utxo_paymentCredential: paymentCredentialOf(output.address),
       hasAddresses: hasAddresses,
       hasAssets: hasAssets,
     };
@@ -420,6 +429,7 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
       utxodata_referenceScriptHash: utxo.scriptRef && utxo.scriptRef.length <= 64 ? utxo.scriptRef : null,
       utxodata_referenceScriptSize: utxo.scriptRefSize ?? null,
       utxodata_referenceScriptType: utxo.scriptRefType ?? null,
+      utxodata_paymentCredential: paymentCredentialOf(addr),
       lovelace: lovelace,
       validFrom: validFrom,
       validTo: validTo,
@@ -1085,6 +1095,11 @@ export function decodeShelleyAddress(address: string): DecodedAddress {
     default:
       return { ...none, networkId };
   }
+}
+
+/** Payment credential (hex) of a bech32 address; null for Byron, reward and unresolved ('') addresses. */
+export function paymentCredentialOf(address: string | null | undefined): string | null {
+  return address ? decodeShelleyAddress(address).paymentCredential : null;
 }
 
 /** DRep credential to CIP-129 DRep ID (29 bytes): header 0x22 key hash / 0x23 script hash. */

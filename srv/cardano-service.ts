@@ -4,7 +4,7 @@ import { getCardanoIndexer } from './server';
 import { isTxHash, isBlockHash, isValidBech32Address, isValidBech32StakeAddress, isValidPoolId, isValidDrepId, isEpochNumber, isValidTxCborHex, isValidCredential, isAssetUnit } from './utils/validators';
 import { rejectInvalid, rejectMissing, AllBackendsFailedError } from './utils/errors';
 import { handleRequest} from './utils/backend-request-handler';
-import { parseTransaction } from './cbor';
+import { parseTransaction, decodePlutusData } from './cbor';
 import type { AddressAsset, AddressUTxO } from '#cds-models/CardanoODataService';
 
 /** Newest temporal slice per key; child tables keep one row per validFrom. */
@@ -470,6 +470,15 @@ module.exports = (srv: cds.Service) => {
       rejectInvalid(req, 'ParseTransactionCbor', 'Invalid CBOR hex or exceeds size limit', 'cbor');
     }
     return handleRequest(req, async () => parseTransaction(cbor as string));
+  });
+
+  srv.on('DecodePlutusData', async (req: Request) => {
+    const { cbor } = req.data as { cbor?: string };
+    if (cbor == null || cbor === '') rejectMissing(req, 'DecodePlutusData', 'cbor');
+    if (!isValidTxCborHex(cbor)) {
+      rejectInvalid(req, 'DecodePlutusData', 'Invalid CBOR hex or exceeds size limit', 'cbor');
+    }
+    return handleRequest(req, async () => JSON.stringify(decodePlutusData(cbor as string)));
   });
 
   // ---------------------------------------------------------------------------

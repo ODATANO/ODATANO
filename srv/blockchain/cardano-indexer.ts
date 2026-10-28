@@ -17,6 +17,7 @@ import {
   TransactionCertificates,
   TransactionWithdrawals,
   TransactionRedeemers,
+  TransactionDatums,
   NetworkInformation,
   UTxOAssets,
   Block,
@@ -72,6 +73,7 @@ import {
   mapTransactionCertificates,
   mapTransactionWithdrawals,
   mapTransactionRedeemers,
+  mapTransactionDatums,
   sumUtxoAmounts,
   decodeShelleyAddress,
   decodeAssetName,
@@ -1254,8 +1256,9 @@ export class CardanoIndexer {
       ? txs.flatMap(t => mapTransactionWithdrawals(t.hash, t.withdrawals ?? []))
       : [];
     if (this.crawlCertificates) this.warnIfCertificatesUnreported(txs);
-    // Redeemers come with the block on chain-sync; keyed (tx, purpose, index) like the certificates.
+    // Redeemers and witness datums come with the block on chain-sync; keyed by tx like the certificates.
     const redeemerRows = txs.flatMap(t => mapTransactionRedeemers(t.hash, t.redeemers ?? []));
+    const datumRows = txs.flatMap(t => mapTransactionDatums(t.hash, t.datums ?? []));
     // Mint/burn is derived from rows already in hand — keyed (unit, txHash), so a re-crawl is
     // idempotent and a reorg removes these rows with their transactions (crawler handleReorg).
     const assetHistoryRows = this.crawlAssetHistory ? this.buildAssetHistoryRows(blockData, txs) : [];
@@ -1269,6 +1272,7 @@ export class CardanoIndexer {
     if (certificateRows.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certificateRows));
     if (withdrawalRows.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawalRows));
     if (redeemerRows.length) await tx.run(UPSERT.into(TransactionRedeemers).entries(redeemerRows));
+    if (datumRows.length) await tx.run(UPSERT.into(TransactionDatums).entries(datumRows));
     // Same transaction, so the UTxO set can never be a block ahead of or behind the cursor.
     if (ledgerDue) {
       if (priorInvalidation) {

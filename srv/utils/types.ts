@@ -111,6 +111,14 @@ export interface TxRedeemer {
   policyId?: Hex | null;
 }
 
+/** One datum of a transaction witness set. */
+export interface TxDatum {
+  /** Blake2b-256 of the datum bytes. */
+  hash: Hex;
+  /** PlutusData CBOR hex, the original bytes. */
+  cbor: string;
+}
+
 /** Normalized transaction */
 export interface Transaction {
   hash: Hex;
@@ -149,6 +157,8 @@ export interface Transaction {
   withdrawals?: TxWithdrawal[];
   /** Redeemers; `[]` when the tx has none, undefined when the source does not report them (Blockfrost, Koios). */
   redeemers?: TxRedeemer[];
+  /** Witness-set datums; same `[]` vs undefined convention as `redeemers`. */
+  datums?: TxDatum[];
 }
 
 /** Address view with current value and known UTxOs */

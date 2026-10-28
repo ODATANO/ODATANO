@@ -628,3 +628,29 @@ describe('OgmiosBackend chain-sync — redeemers', () => {
     ]);
   });
 });
+
+describe('OgmiosBackend chain-sync — witness datums', () => {
+  beforeEach(() => {
+    captured.handlers = undefined;
+    captured.opts = undefined;
+  });
+
+  it('reports [] for a transaction without datums', async () => {
+    const { rolled } = await openStream();
+    await captured.handlers!.rollForward({ block: praosBlock(), tip: 'origin' }, vi.fn());
+    expect(rolled[0].txs[0].datums).toEqual([]);
+  });
+
+  it('maps the datums record (hash -> CBOR hex) byte for byte, also on a phase-2 failure', async () => {
+    const { rolled } = await openStream();
+    const block = praosBlock();
+    const tx = (block.transactions as Array<Record<string, unknown>>)[0];
+    tx.datums = { ['1'.repeat(64)]: 'd8799f182aff', ['2'.repeat(64)]: '9f01ff' };
+    tx.spends = 'collaterals';
+    await captured.handlers!.rollForward({ block, tip: 'origin' }, vi.fn());
+    expect(rolled[0].txs[0].datums).toEqual([
+      { hash: '1'.repeat(64), cbor: 'd8799f182aff' },
+      { hash: '2'.repeat(64), cbor: '9f01ff' },
+    ]);
+  });
+});

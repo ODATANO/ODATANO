@@ -8,7 +8,7 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 - **Unit Tests**: 69 files (`npm run test:unit`) — hermetic, no network.
 - **Integration Tests**: 18 files; how many cases actually execute depends on backend reachability (the Ogmios-dependent suites self-skip).
-- **Total Test Suites**: 88 test files (70 unit + 18 integration)
+- **Total Test Suites**: 95 test files (75 unit + 20 integration)
 - Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
 - **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%

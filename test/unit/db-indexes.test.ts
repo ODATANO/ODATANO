@@ -34,6 +34,11 @@ describe('DB_INDEXES', () => {
     expect(by['odatano_cardano_Pools:poolId']).toBeDefined();
     expect(by['odatano_cardano_Accounts:stakeAddress']).toBeDefined();
     expect(by['odatano_cardano_CardanoAgentGrants:tokenHash']).toBeDefined();
+    // outputs to / inputs from a payment credential in slot order; datum by hash
+    expect(by['odatano_cardano_TransactionOutputs:utxo_paymentCredential, txSeq']).toBeDefined();
+    expect(by['odatano_cardano_TransactionInputs:utxoData_paymentCredential, txSeq']).toBeDefined();
+    expect(by['odatano_cardano_LedgerUTxOs:utxo_paymentCredential, spentTxHash']).toBeDefined();
+    expect(by['odatano_cardano_TransactionDatums:dataHash']).toBeDefined();
   });
 
   it('renders CREATE INDEX IF NOT EXISTS with unquoted identifiers', () => {
