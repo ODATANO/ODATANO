@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.44] - CIP-68 decimals on Assets, credential backfill paged by key
+
+Schema change: `decimals` on `Assets`. Run `cds deploy` on existing databases, then `backfillAssetDecimals` once.
+
+### Added
+
+- `Assets.decimals`: the token's decimal places. For a unit with CIP-68 label 333 or 444 it is the `decimals`
+  field of the reference datum, read from the output that holds the reference NFT in the crawled chain (the NFT
+  is followed from its latest mint through the spending transactions; a datum given by hash comes from
+  `TransactionDatums`); for any other unit the CIP-26 registry value. Set when the lazy path or the crawler
+  catalogue writes the row, and refreshed on every crawled block whose outputs carry a reference NFT.
+- `backfillAssetDecimals()` on `CardanoIndexerService` (Admin): resolves every label-333/444 catalogue unit and
+  writes all its slices; pages the catalogue by unit, no backend call; progress in `getStatus().decimalsBackfill`
+  (`scanned`, `candidates`, `filled`). A repeat refreshes the values.
+
+### Changed
+
+- `backfillPaymentCredentials` pages each table by its primary key alone and skips filled rows in process. The
+  page query no longer filters on the credential column, so its plan is a key range scan whatever the column
+  statistics say. A second run reads the tables once more instead of being near-free.
+
 ## [v2.0.0-rc.43] - payment credential on UTxOs, witness datums, PlutusData as JSON
 
 Schema change: `paymentCredential` on `TransactionOutputs.utxo`, `TransactionInputs.utxoData`,

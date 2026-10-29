@@ -453,6 +453,10 @@ entity Assets : temporal {
         @description: 'CIP-26 off-chain registry: decimal precision'
         registryDecimals  : Integer;
 
+        @title      : 'Decimals'
+        @description: 'Decimal places of the token: the decimals field of the CIP-68 reference datum for a unit with label 333 or 444, else the CIP-26 registry value; null when neither is known'
+        decimals          : Integer;
+
         @title      : 'Registry Description'
         @description: 'CIP-26 off-chain registry: human-readable description'
         registryDescription : LargeString;

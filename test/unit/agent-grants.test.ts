@@ -1137,7 +1137,7 @@ describe('every operation in the service models is classified for agent tokens',
   // Operator only: an agent token gets 403 for these on purpose.
   const OPERATOR_ONLY = new Set([
     'CreateAgentGrant', 'RevokeAgentGrant', 'RotateAgentGrantToken', 'UpdateAgentGrant',
-    'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions', 'backfillPaymentCredentials',
+    'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions', 'backfillPaymentCredentials', 'backfillAssetDecimals',
     'SignWithHsm', 'SignAndSubmitWithHsm', 'PauseWorker', 'ResumeWorker',
   ]);
 

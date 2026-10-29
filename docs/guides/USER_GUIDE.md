@@ -712,7 +712,7 @@ so the crawler also fills the tables that analytics need:
 | Table | What lands there | Default |
 |---|---|---|
 | `AssetHistory` | every mint and burn in the range, one row per (unit, transaction) | on |
-| `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint | on (`bare`) |
+| `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint, `decimals` from the CIP-68 reference datum for label-333/444 units | on (`bare`) |
 | `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | every pool and DRep once per epoch, plus treasury, reserves and stake totals | off |
 | `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
 | `TransactionRedeemers` | every redeemer: purpose, index, data (CBOR hex), execution units, the redeemed input or minted policy | on (Ogmios chain-sync) |
@@ -821,6 +821,21 @@ nothing; `AddressUTxOs` is a cache and refills itself. Requires Admin.
 ```
 POST /odata/v4/cardano-indexer/backfillPaymentCredentials
 GET  /odata/v4/cardano-indexer/getStatus()            # → credentialBackfill: status, table, outputs, inputs, ledgerUtxos
+```
+
+`Assets.decimals` is the token's decimal places. For a unit with CIP-68 label 333 or 444 it is the
+`decimals` field of the reference datum, read from the output that holds the reference NFT in the
+crawled chain: the NFT is followed from its latest mint through the spending transactions, so a
+metadata update is reflected, and a datum given by hash is taken from `TransactionDatums`. For any
+other unit it is the CIP-26 registry value (`registryDecimals`). The crawler sets it when the
+catalogue row is written and again on every block whose outputs carry a reference NFT; the lazy path
+resolves it when it writes the row. Rows written before the column existed are filled by a fourth
+backfill, which pages the catalogue by unit and needs no backend; a repeat refreshes the values.
+Requires Admin.
+
+```
+POST /odata/v4/cardano-indexer/backfillAssetDecimals
+GET  /odata/v4/cardano-indexer/getStatus()            # → decimalsBackfill: status, scanned, candidates, filled
 ```
 
 Transaction rows hold the same ledger view whichever source the crawl used: inputs in ledger order
@@ -986,7 +1001,7 @@ then answers a lookup the database misses with 404 instead of asking Blockfrost 
 | `Blocks`, `GetBlockByHash` | 404 `not in the crawled chain up to slot …` |
 | `Transactions`, `GetTransactionByHash` | same |
 | `GetMetadataByTxHash` | empty list for a crawled transaction without metadata; 404 for an unknown one |
-| `Assets`, `GetAssetInfo` | supply = mints − burns from `AssetHistory`, mint count, first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
+| `Assets`, `GetAssetInfo` | supply = mints − burns from `AssetHistory`, mint count, first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty, `decimals` from the CIP-68 reference datum when the chain holds one. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
 | `GetAssetHistory` | the crawled `AssetHistory` rows, newest first |
 
 The same answers apply without the knob when no configured backend can serve the lookup at all

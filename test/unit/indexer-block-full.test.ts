@@ -3,7 +3,7 @@
  * and the Ogmios bare-ref input backfill. String entity proxies, real mappers.
  */
 
-type Q = { _op: string; entity: string; where?: unknown; entries?: unknown };
+type Q = { _op: string; entity: string; where?: unknown; entries?: unknown; set?: unknown };
 const runs: Q[] = [];
 /** Units the `Assets` table already holds, as the catalogue's existence check sees them. */
 let knownAssets: string[] = [];
@@ -15,6 +15,8 @@ let seqRangeRows: Array<{ hash: string; txSeq: string }> = [];
 /** The crawler cursor the ledger anchor verification reads (readCursor is mocked below). */
 let cursorRow: { lastSlot: number; lastBlockHash: string | null; utxoSet: { appliedSlot: number | null } } | null =
   { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
+/** Rows the CIP-68 reference trail finds, by entity (SELECT.one); null = the chain has no trail. */
+let refTrail: Record<string, unknown> | null = null;
 /** txSeq of the prior-block transaction prev… (string, as Postgres returns Int64). */
 const PREV_SEQ = '262144000';
 const mockTx = {
@@ -39,6 +41,7 @@ const mockTx = {
     if (q._op === 'SELECT.many' && q.entity === 'AssetsTable') {
       return knownAssets.map(unit => ({ unit }));
     }
+    if (q._op === 'SELECT.one') return refTrail?.[q.entity];
     return undefined;
   }),
 };
@@ -49,10 +52,18 @@ vi.mock('@sap/cds', () => {
   ql: {
     UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
-    UPDATE: { entity: (entity: string) => ({ set: () => ({ where: () => ({ _op: 'UPDATE', entity }) }) }) },
+    UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', entity, set, where }) }) }) },
     DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
     SELECT: {
-      one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
+      one: {
+        from: (entity: string) => {
+          const q: Record<string, unknown> = { _op: 'SELECT.one', entity };
+          q.columns = () => q;
+          q.orderBy = () => q;
+          q.where = (where: unknown) => { const w: Record<string, unknown> = { ...q, where }; w.orderBy = () => w; return w; };
+          return q;
+        },
+      },
       distinct: { from: (entity: string) => ({ columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.distinct', entity, where }) }) }) },
       from: (entity: string) => ({
         where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
@@ -106,6 +117,8 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionMetadata_: 'TransactionMetadata', TransactionCertificates: 'TransactionCertificates',
   TransactionWithdrawals: 'TransactionWithdrawals',
   TransactionRedeemers: 'TransactionRedeemers', TransactionDatums: 'TransactionDatums',
+  // asset-decimals (CIP-68 reference trail)
+  AssetHistory: 'AssetHistory',
 }));
 
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -125,6 +138,8 @@ import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
 import { applyBlockToLedger } from '../../srv/blockchain/ledger-state';
 import { setUtxoSetState, readCursor } from '../../srv/blockchain/crawler/sync-state';
 import { BARE_ASSET_STAMP } from '../../srv/utils/mappers';
+import { CIP68_LABEL } from '../../srv/cbor/cip68';
+import { DataConstr, DataMap, DataPair, DataB, DataI, dataToCbor } from '@harmoniclabs/plutus-data';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 
 const blockData = (over: Partial<BlockData> = {}): BlockData => ({
@@ -148,6 +163,7 @@ function makeIndexer(getEpoch: Mock = vi.fn().mockRejectedValue(new Error('no ep
 beforeEach(() => {
   runs.length = 0;
   knownAssets = [];
+  refTrail = null;
   blocksAtHeight = [];
   referencedBlocks = [];
   seqRangeRows = [];
@@ -767,6 +783,75 @@ describe('CardanoIndexer.indexBlockFull — asset catalogue', () => {
 
     expect(upsertsFor('AssetHistory')).toHaveLength(0);
     expect(assetWrites()).toHaveLength(1); // catalogue is independent of it
+  });
+});
+
+// CIP-68 decimals: reference datums in the block, and the stored trail for new catalogue rows
+
+const REF_NAME = Buffer.from('INDY').toString('hex');
+const REF_UNIT = POLICY + CIP68_LABEL.reference + REF_NAME;
+const FT_UNIT = POLICY + CIP68_LABEL.ft + REF_NAME;
+const RFT_UNIT = POLICY + CIP68_LABEL.rft + REF_NAME;
+const referenceDatum = (decimals: number) => Buffer.from(dataToCbor(new DataConstr(0, [
+  new DataMap([new DataPair(new DataB(Buffer.from('decimals').toString('hex')), new DataI(decimals))]), new DataI(1),
+])) as unknown as Uint8Array).toString('hex');
+const decimalsUpdates = () => runs.filter(q => q._op === 'UPDATE' && q.entity === 'AssetsTable');
+
+describe('CardanoIndexer.indexBlockFull — CIP-68 decimals', () => {
+  it('writes the decimals of a reference-NFT datum to the label-333 and label-444 units', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd1'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [{ ...out(hash, 0, [{ unit: REF_UNIT, quantity: '1' }]), inlineDatum: referenceDatum(6) }] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(decimalsUpdates().map(q => [q.set, q.where])).toEqual([
+      [{ decimals: 6 }, { unit: FT_UNIT }], [{ decimals: 6 }, { unit: RFT_UNIT }],
+    ]);
+  });
+
+  it('resolves a datum given by hash from the witness datums of the transaction', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd2'.padEnd(64, '0');
+    const dataHash = 'e'.repeat(64);
+    const t = tx(hash, {
+      outputs: [{ ...out(hash, 0, [{ unit: REF_UNIT, quantity: '1' }]), dataHash }],
+      datums: [{ hash: dataHash, cbor: referenceDatum(2) }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    expect(decimalsUpdates().map(q => q.set)).toEqual([{ decimals: 2 }, { decimals: 2 }]);
+  });
+
+  it('gives a new catalogue row of a label-333 unit its decimals from the stored reference trail', async () => {
+    const { indexer } = makeIndexer();
+    refTrail = {
+      AssetHistory: { txHash: 'mint'.padEnd(64, '0') },
+      Transactions: { txSeq: '7' },
+      TransactionOutputAssets: { output_outputIndex: 0 },
+      TransactionOutputs: { utxo_inlineDatum: referenceDatum(4), utxo_dataHash: null },
+    };
+    const hash = 'd3'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: FT_UNIT, quantity: '500' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const rows = assetWrites()[0].entries as Array<Record<string, unknown>>;
+    expect(rows).toEqual([expect.objectContaining({ unit: FT_UNIT, decimals: 4 })]);
+    expect(decimalsUpdates()).toHaveLength(0);
+  });
+
+  it('leaves decimals null and makes no lookup for a unit without a CIP-68 label', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd4'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '5' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const rows = assetWrites()[0].entries as Array<Record<string, unknown>>;
+    expect(rows[0]).toMatchObject({ unit: UNIT_A, decimals: null });
+    expect(runs.filter(q => q._op === 'SELECT.one')).toHaveLength(0);
   });
 });
 

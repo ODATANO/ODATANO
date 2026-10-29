@@ -117,6 +117,7 @@ import {
   type LedgerLookup,
 } from './ledger-state';
 import { readCursor, setUtxoSetState, isCrawlerLeaseActive } from './crawler/sync-state';
+import { cip68Decimals, applyReferenceDatums } from './asset-decimals';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../utils/epoch-slots';
 import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../utils/const';
 import type { EpochStateBackend } from './backends/cardano-backend';
@@ -1295,6 +1296,8 @@ export class CardanoIndexer {
     const newAssets = this.crawlAssetCatalogue === 'off'
       ? 0
       : await this.ensureAssetRows(tx, this.collectBlockUnits(txs, assetHistoryRows));
+    // A reference NFT moved or minted in this block carries the current CIP-68 metadata of its token.
+    await applyReferenceDatums(tx, txs);
 
     logger.debug(
       `indexBlockFull: block ${blockData.hash} — ${txs.length} txs, ${outputRows.length} outputs, ` +
@@ -1572,6 +1575,7 @@ export class CardanoIndexer {
     if (!missing.length) return 0;
 
     const rows = missing.map(mapBareAsset).filter((r): r is NonNullable<typeof r> => r !== null);
+    for (const row of rows) row.decimals = await cip68Decimals(tx, row.unit!);
     // Chunked like the lookup: a mint-storm block can carry thousands of fresh units.
     for (const rowChunk of chunk(rows, IN_CHUNK)) {
       await tx.run(UPSERT.into(AssetsTable).entries(rowChunk));
@@ -1816,6 +1820,7 @@ export class CardanoIndexer {
   async indexAsset(tx: CapTransaction, unit: string): Promise<Asset> {
     const assetInfo = await this.resolveAssetInfo(tx, unit);
     const assetEntity = mapAsset(assetInfo, this.client.max_age_ms);
+    assetEntity.decimals = (await cip68Decimals(tx, unit, assetInfo.initialMintTxHash)) ?? assetInfo.registryDecimals;
 
     await tx.run(UPSERT.into(Assets).entries(assetEntity));
 

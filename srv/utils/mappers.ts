@@ -690,6 +690,8 @@ export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: numb
     registryName: providerAssetInfo.registryName,
     registryTicker: providerAssetInfo.registryTicker,
     registryDecimals: providerAssetInfo.registryDecimals,
+    // the registry value until the caller resolves a CIP-68 reference datum
+    decimals: providerAssetInfo.registryDecimals,
     registryDescription: providerAssetInfo.registryDescription,
     registryUrl: providerAssetInfo.registryUrl,
     registryLogo: providerAssetInfo.registryLogo,
@@ -732,6 +734,7 @@ export function mapBareAsset(unit: string): AssetRow | null {
     registryName: null,
     registryTicker: null,
     registryDecimals: null,
+    decimals: null,
     registryDescription: null,
     registryUrl: null,
     registryLogo: null,

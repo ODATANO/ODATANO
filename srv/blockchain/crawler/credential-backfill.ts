@@ -9,8 +9,9 @@ const logger = cds.log('CredentialBackfill');
 
 /**
  * Fills the payment credential of UTxO-shaped rows written before the column existed:
- * TransactionOutputs, TransactionInputs and LedgerUTxOs. Each table is walked once in key
- * order; rows that already carry a credential are skipped, so a second run changes nothing.
+ * TransactionOutputs, TransactionInputs and LedgerUTxOs. Each table is paged by its primary key
+ * alone, so the page query never depends on column statistics; rows that already carry a
+ * credential are skipped in process, and a second run changes nothing.
  */
 
 export interface CredentialBackfillProgress {
@@ -105,7 +106,7 @@ async function fillTable(spec: CredentialTableSpec, chunkSize: number, onChunk: 
   const decoded = new Map<string, string | null>();
   for (;;) {
     const done: boolean = await cds.tx(async (tx: CapTransaction) => {
-      const where: Record<string, unknown> = { [spec.column]: null };
+      const where: Record<string, unknown> = {};
       if (cursor?.within) {
         where[k1] = cursor.first;
         where[k2] = { '>': cursor.second };
@@ -113,7 +114,7 @@ async function fillTable(spec: CredentialTableSpec, chunkSize: number, onChunk: 
         where[k1] = { '>': cursor.first };
       }
       const rows = (await tx.run(
-        SELECT.from(spec.entity as never).columns(k1, k2, spec.address).where(where).orderBy(k1, k2).limit(chunkSize)
+        SELECT.from(spec.entity as never).columns(k1, k2, spec.address, spec.column).where(where).orderBy(k1, k2).limit(chunkSize)
       )) as Array<Record<string, unknown>> ?? [];
       const wasWithin = cursor?.within ?? false;
       if (!rows.length) {
@@ -129,6 +130,7 @@ async function fillTable(spec: CredentialTableSpec, chunkSize: number, onChunk: 
       const complete = full && !allSame ? rows.filter((r) => r[k1] !== lastFirst) : rows;
       const fills: Fill[] = [];
       for (const r of complete) {
+        if (r[spec.column] != null) continue;
         const address = r[spec.address] as string | null;
         if (!address) continue;
         if (!decoded.has(address)) decoded.set(address, paymentCredentialOf(address));

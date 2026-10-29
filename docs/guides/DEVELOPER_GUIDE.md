@@ -30,7 +30,7 @@
 
 **9 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
 
-**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` (actions, Admin)
+**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` / `backfillAssetDecimals` (actions, Admin)
 
 **Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
 

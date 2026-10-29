@@ -58,6 +58,8 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         transactionBackfill : TransactionBackfillStatus;
         // one-off payment-credential fill of UTxO-shaped rows (this process)
         credentialBackfill : CredentialBackfillStatus;
+        // one-off CIP-68 decimals fill of the asset catalogue (this process)
+        decimalsBackfill : DecimalsBackfillStatus;
         // per-epoch pool/DRep/pot snapshots (crawler.epochSnapshots)
         epochSnapshots    : EpochSnapshotStatus;
     }
@@ -117,6 +119,18 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         startedAt   : Timestamp;
         finishedAt  : Timestamp;
         error       : String;
+    }
+
+    @title      : 'Decimals Backfill Status'
+    @description: 'Progress of the CIP-68 decimals fill started with backfillAssetDecimals; process-local, none after a restart'
+    type DecimalsBackfillStatus {
+        status     : String;    // none | running | done | failed
+        scanned    : Integer64; // catalogue rows read
+        candidates : Integer64; // units with label 333 or 444
+        filled     : Integer64; // units that received a decimals value
+        startedAt  : Timestamp;
+        finishedAt : Timestamp;
+        error      : String;
     }
 
     @title      : 'Backfill Result'
@@ -225,4 +239,9 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @description: 'Fill utxo.paymentCredential on TransactionOutputs, TransactionInputs and LedgerUTxOs rows written before the column existed, decoded from the stored address. Walks each table once in key order; rows that carry a credential are left alone, so a second run is a no-op. No backend call; the crawler may keep running. Runs in the background; progress via getStatus().credentialBackfill.'
     @requires   : 'Admin'
     action   backfillPaymentCredentials() returns BackfillResult;
+
+    @title      : 'Backfill Asset Decimals'
+    @description: 'Fill Assets.decimals from the CIP-68 reference datum for every catalogue unit with label 333 or 444: the reference NFT is followed from its mint through the crawled transactions to the output that holds it now, and the decimals of that datum are written to every slice of the unit. No backend call; the crawler may keep running; a repeat refreshes the values. Runs in the background; progress via getStatus().decimalsBackfill.'
+    @requires   : 'Admin'
+    action   backfillAssetDecimals() returns BackfillResult;
 }

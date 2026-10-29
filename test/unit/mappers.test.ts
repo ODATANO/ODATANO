@@ -622,6 +622,8 @@ describe('mappers', () => {
       expect(result.mintOrBurnCount).toBe(3);
       expect(result.initialMintTime).toBe(1700000000);
       expect(result.registryDecimals).toBe(0);
+      // the registry value stands until the indexer resolves a CIP-68 reference datum
+      expect(result.decimals).toBe(0);
       // onchainMetadata is JSON-stringified for LargeString storage
       expect(result.onchainMetadata).toBe(JSON.stringify({ name: 'Hosky' }));
       // validFrom and validTo are ISO strings; validTo ~ now + max_age
@@ -715,6 +717,7 @@ describe('crawler analytics mappers', () => {
       expect(row.totalSupply).toBeNull();
       expect(row.mintOrBurnCount).toBeNull();
       expect(row.registryTicker).toBeNull();
+      expect(row.decimals).toBeNull();
       expect(row.onchainMetadata).toBeNull();
     });
 

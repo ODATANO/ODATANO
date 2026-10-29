@@ -6,11 +6,12 @@
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
   backfillMock: vi.fn(),
   txBackfillMock: vi.fn(),
   credentialBackfillMock: vi.fn(),
+  decimalsBackfillMock: vi.fn(),
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
     getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
@@ -55,6 +56,7 @@ vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: 
 vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCertificates: backfillMock }));
 vi.mock('../../srv/blockchain/crawler/transaction-backfill', () => ({ backfillTransactions: txBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/credential-backfill', () => ({ backfillUtxoCredentials: credentialBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/asset-decimals-backfill', () => ({ backfillAssetDecimals: decimalsBackfillMock }));
 
 // The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
 // mocks above and surfaces the CJS export as `.default`. beforeAll, not top-level
@@ -109,6 +111,7 @@ describe('CardanoIndexerService.getStatus', () => {
         startedAt: null, finishedAt: null, error: null,
       },
       credentialBackfill: { status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null },
+      decimalsBackfill: { status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null },
       epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
     });
   });
@@ -325,5 +328,26 @@ describe('CardanoIndexerService.backfillPaymentCredentials', () => {
     await new Promise((r) => setImmediate(r));
     expect(await handlers.getStatus({})).toMatchObject({ credentialBackfill: { status: 'done', table: null, outputs: 7, inputs: 9, ledgerUtxos: 4, error: null } });
     expect(await handlers.backfillPaymentCredentials({ data: {} })).toMatchObject({ accepted: true });
+  });
+});
+
+describe('CardanoIndexerService.backfillAssetDecimals', () => {
+  it('runs detached without a backend, refuses a second start and reports progress in getStatus', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
+    let finishRun!: (r: unknown) => void;
+    decimalsBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ scanned: 5000, candidates: 3, filled: 2 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillAssetDecimals({ data: {} })).toMatchObject({ accepted: true });
+    await expect(handlers.backfillAssetDecimals({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ decimalsBackfill: { status: 'running', scanned: 5000, candidates: 3, filled: 2 } });
+
+    finishRun({ scanned: 9000, candidates: 4, filled: 4 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ decimalsBackfill: { status: 'done', scanned: 9000, candidates: 4, filled: 4, error: null } });
+    expect(await handlers.backfillAssetDecimals({ data: {} })).toMatchObject({ accepted: true });
   });
 });

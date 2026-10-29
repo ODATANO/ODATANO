@@ -55,6 +55,11 @@ vi.mock('@sap/cds', () => {
 });
 
 // Mock all CDS entity imports
+vi.mock('../../srv/blockchain/asset-decimals', () => ({
+  cip68Decimals: vi.fn(async () => null),
+  applyReferenceDatums: vi.fn(async () => 0),
+}));
+
 vi.mock('#cds-models/CardanoODataService', () => ({
   Addresses: 'Addresses',
   Transaction: 'Transaction',
@@ -825,6 +830,21 @@ describe('CardanoIndexer', () => {
       expect(mockClient.getAssetInfo).toHaveBeenCalledWith(UNIT);
       expect(upsertInto).toHaveBeenCalledWith('Assets');
       expect(result.unit).toBe(UNIT);
+    });
+
+    it('takes the CIP-68 decimals of the reference datum over the registry value', async () => {
+      const { cip68Decimals } = await import('../../srv/blockchain/asset-decimals');
+      vi.mocked(cip68Decimals).mockResolvedValueOnce(6);
+      mockClient.getAssetInfo.mockResolvedValue({
+        unit: UNIT, policyId: POLICY, assetNameHex: '484f534b59', assetName: 'HOSKY', fingerprint: 'asset1xyz', totalSupply: '1000',
+        mintOrBurnCount: 1, initialMintTxHash: 'b'.repeat(64), initialMintTime: null, onchainMetadata: null,
+        registryName: null, registryTicker: null, registryDecimals: 0, registryDescription: null, registryUrl: null, registryLogo: null,
+      });
+
+      const result = await indexer.indexAsset(mockTx as any, UNIT);
+
+      expect(cip68Decimals).toHaveBeenCalledWith(mockTx, UNIT, 'b'.repeat(64));
+      expect(result.decimals).toBe(6);
     });
 
     it('propagates backend errors (no swallowing)', async () => {

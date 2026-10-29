@@ -7,6 +7,7 @@ import { importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts
 import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
 import { backfillUtxoCredentials, type CredentialBackfillProgress } from './blockchain/crawler/credential-backfill';
+import { backfillAssetDecimals, type DecimalsBackfillProgress } from './blockchain/crawler/asset-decimals-backfill';
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -60,6 +61,17 @@ interface CredentialBackfillState extends CredentialBackfillProgress {
 }
 let credentialBackfill: CredentialBackfillState = {
   status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null,
+};
+
+/** The CIP-68 decimals fill of this process, same lifecycle as the backfills. */
+interface DecimalsBackfillState extends DecimalsBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+let decimalsBackfill: DecimalsBackfillState = {
+  status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null,
 };
 
 type BackfillData = { fromSlot?: string | number | null; toSlot?: string | number | null };
@@ -169,6 +181,7 @@ module.exports = (srv: cds.Service) => {
           error: transactionBackfill.error,
         },
         credentialBackfill: { ...credentialBackfill },
+        decimalsBackfill: { ...decimalsBackfill },
         epochSnapshots: {
           enabled: epochSnapshotsConfigured(),
           source: epochSnapshotSource(),
@@ -277,6 +290,23 @@ module.exports = (srv: cds.Service) => {
         logger.error(`Payment-credential backfill failed: ${message}`);
       });
     return { accepted: true, message: 'Payment-credential backfill started; poll getStatus().credentialBackfill.' };
+  });
+
+  // backfillAssetDecimals — resolves the CIP-68 reference datum of every label-333/444 catalogue
+  // unit from the crawled chain. No backend; runs detached, progress via getStatus().decimalsBackfill.
+  srv.on('backfillAssetDecimals', async (req: Request) => {
+    if (decimalsBackfill.status === 'running') return rejectInvalid(req, 'backfillAssetDecimals', 'An asset-decimals backfill is already running');
+    decimalsBackfill = { status: 'running', scanned: 0, candidates: 0, filled: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    void backfillAssetDecimals({
+      onProgress: (p) => { Object.assign(decimalsBackfill, p); },
+    })
+      .then((r) => { Object.assign(decimalsBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(decimalsBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Asset-decimals backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Asset-decimals backfill started; poll getStatus().decimalsBackfill.' };
   });
 
   // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validates, then

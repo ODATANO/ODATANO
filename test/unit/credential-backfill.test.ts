@@ -1,7 +1,7 @@
 /**
  * Payment-credential backfill (srv/blockchain/crawler/credential-backfill.ts) against a tiny
- * in-memory store that interprets the module's CQL: every table is walked once in key order,
- * only rows without a credential are written, a second run writes nothing.
+ * in-memory store that interprets the module's CQL: every table is paged by its primary key
+ * alone, only rows without a credential are written, a second run writes nothing.
  */
 
 type Row = Record<string, unknown>;
@@ -100,6 +100,10 @@ describe('backfillUtxoCredentials', () => {
     expect(updates[0].where).toEqual({ txSeq: 1, outputIndex: 0, utxo_paymentCredential: null });
     expect(seen[0]).toEqual({ table: 'TransactionOutputs', outputs: 0, inputs: 0, ledgerUtxos: 0 });
     expect(seen.at(-1)).toEqual({ table: 'LedgerUTxOs', outputs: 2, inputs: 1, ledgerUtxos: 2 });
+    // paged by the primary key alone: no page query filters on the credential column
+    const pages = fakeTx.run.mock.calls.map(([q]) => q as Row).filter((q) => q._op === 'SELECT');
+    expect(pages.length).toBeGreaterThan(0);
+    for (const q of pages) expect(Object.keys(q.where as Row).some((k) => k.endsWith('paymentCredential'))).toBe(false);
 
     updates.length = 0;
     expect(await backfillUtxoCredentials({ chunkSize: 2 })).toEqual({ table: null, outputs: 0, inputs: 0, ledgerUtxos: 0 });
