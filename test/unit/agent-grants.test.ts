@@ -8,6 +8,7 @@ import cds from '@sap/cds';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  errorStatus,
   AGENT_ALLOWLISTABLE_ACTIONS,
   AGENT_ALWAYS_ALLOWED_EVENTS,
   AGENT_ROLE,
@@ -508,6 +509,14 @@ describe('enforceAgentGrant', () => {
       const crashed = makeReq('BuildSimpleAdaTransaction', {}, current());
       await enforceAgentGrant(crashed as never, store);
       crashed._failed.forEach((fn) => fn({ statusCode: 503 }));
+      await settled();
+      expect(current().jobsUsedToday).toBe(1);
+
+      // two parameters rejected by the model at once: no status on the combined error
+      const twoBad = makeReq('BuildSimpleAdaTransaction', {}, current());
+      await enforceAgentGrant(twoBad as never, store);
+      expect(current().jobsUsedToday).toBe(2);
+      twoBad._failed.forEach((fn) => fn({ message: 'MULTIPLE_ERRORS', details: [{ status: 400 }, { status: 400 }] }));
       await settled();
       expect(current().jobsUsedToday).toBe(1);
     });
@@ -1154,5 +1163,22 @@ describe('every operation in the service models is classified for agent tokens',
       }
     }
     expect(unclassified).toEqual([]);
+  });
+});
+
+describe('errorStatus', () => {
+  it('reads the status of a single error, including a numeric code', () => {
+    expect(errorStatus({ status: 404 })).toBe(404);
+    expect(errorStatus({ statusCode: 409, code: 'ODATANO_TX_ALREADY_SUBMITTED' })).toBe(409);
+    expect(errorStatus({ code: 400 })).toBe(400);
+    expect(errorStatus(new Error('boom'))).toBe(500);
+  });
+
+  it('derives the status of a combined error from its details, as CAP does', () => {
+    // two rejected parameters: CAP sets no status on the parent
+    expect(errorStatus({ code: 'MULTIPLE_ERRORS', details: [{ status: 400 }, { status: 400 }] })).toBe(400);
+    expect(errorStatus({ code: 'MULTIPLE_ERRORS', details: [{ status: 400 }, { status: 403 }] })).toBe(400);
+    expect(errorStatus({ code: 'MULTIPLE_ERRORS', details: [{ status: 400 }, { status: 503 }] })).toBe(500);
+    expect(errorStatus({ code: 'MULTIPLE_ERRORS', details: [{ code: 'ASSERT_RANGE' }] })).toBe(400);
   });
 });

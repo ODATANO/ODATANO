@@ -4,11 +4,8 @@ import { Tx, Hash32 } from "@harmoniclabs/cardano-ledger-ts";
 import { blake2b_256 } from "@harmoniclabs/crypto";
 import { toHex } from "@harmoniclabs/uint8array-utils";
 
-/**
- * Inline datums given as CBOR, keyed by output index. Buildooor writes every datum in its
- * own encoding, so definite lists and maps change bytes and hash. These helpers put the
- * caller's bytes back into the built transaction.
- */
+// Caller CBOR inline datums by output index. Buildooor re-encodes every datum, which changes
+// bytes and hash, so these helpers put the caller's bytes back.
 export type CallerDatums = Map<number, Uint8Array>;
 
 /** Output map entry `2 => [1, #6.24(datum)]` that holds an inline datum. */
@@ -28,10 +25,7 @@ export function callerDatumsGrowth(datums: CallerDatums): number {
   return Math.max(0, growth);
 }
 
-/**
- * Replace Buildooor's datum encoding in the listed outputs with the caller's bytes.
- * Only the datum bytes change. Containers in CBOR count items, not bytes, so the rest stays valid.
- */
+// Only the datum bytes change. CBOR containers count items, not bytes, so the rest stays valid.
 export function writeCallerDatums(tx: Tx, datums: CallerDatums): Tx {
   if (datums.size === 0) return tx;
   let bytes = Buffer.from(tx.toCbor());
@@ -86,11 +80,8 @@ function valueBytes(bytes: Buffer, entry: { k: CborObj; v: CborObj }): Buffer {
   return bytes.subarray(entry.k.subCborRef!.end, endOf(entry.v));
 }
 
-/**
- * Replace Buildooor's encoding of the witness datums with the caller's bytes, then recompute
- * scriptDataHash over redeemers, datums and language views as they now stand in the transaction.
- * The ledger finds a witness datum by the hash of its bytes, so a re-encoded datum is missing to it.
- */
+// The ledger finds a witness datum by the hash of its bytes, so the caller's bytes go back in.
+// Then scriptDataHash is recomputed over redeemers, datums and language views.
 export function writeWitnessDatums(tx: Tx, datums: Uint8Array[], languageViews: Uint8Array): Tx {
   const wanted = new Map<string, Uint8Array>();
   for (const datum of datums) {

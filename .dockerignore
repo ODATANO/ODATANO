@@ -23,9 +23,9 @@ coverage/
 .idea/
 
 # Environment files (should be provided at runtime)
-.env
-.env.local
-.env.*.local
+**/.env*
+!.env.example
+**/default-env.json
 
 # OS files
 .DS_Store
@@ -59,7 +59,22 @@ codecov.yml
 
 # Local keys, notes and deploy artifacts
 payment.*
+**/*.skey
+**/*.vkey
+**/*.key
+**/*.pem
+**/*.p12
+**/*seed*
+**/*mnemonic*
+**/*.local.*
+.claude/
 local_docs/
+scratch/
+repro*/
+output/
+gen/
+mtx/
+scripts/perf/*results*.json
 mta_archives/
 mta-op-*/
 *.mtaext

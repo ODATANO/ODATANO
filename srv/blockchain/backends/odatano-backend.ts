@@ -7,7 +7,7 @@ import {
   PaginatingBackend,
   EnumeratingBackend,
 } from './cardano-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionValidationError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionAlreadySubmittedError, TransactionValidationError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import type {
   Transaction,
@@ -29,7 +29,7 @@ import { Network } from '../cardano-client';
 
 const logger = cds.log('OdatanoBackend');
 
-/** Public ODATANO API per network (ACCESS gateway); mainnet has no default and needs `odatanoUrl`. */
+/** Public ODATANO API per network; mainnet has no default and needs `odatanoUrl`. */
 export const ODATANO_API_URLS: Partial<Record<Network, string>> = {
   preview: 'https://api.preview.odatano.dev',
   preprod: 'https://api.preprod.odatano.dev',
@@ -39,11 +39,8 @@ const SERVICE_PATH = '/odata/v4/cardano-backend';
 /** Ids per GetPools / GetDreps call, below the service's list cap. */
 const ENUMERATION_BATCH = 200;
 
-/**
- * Backend over another ODATANO instance (typically the hosted API behind the ACCESS gateway),
- * speaking its `CardanoBackendService`. Answers arrive in the provider shape, so everything above
- * this class treats it like Koios. The key goes as `Authorization: Bearer`.
- */
+// Backend over another ODATANO instance via its `CardanoBackendService`.
+// Answers arrive in the provider shape, so callers treat it like Koios.
 export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, PaginatingBackend, EnumeratingBackend {
   public readonly name = 'odatano';
   private readonly api: AxiosInstance;
@@ -149,11 +146,8 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
     return out;
   }
 
-  /**
-   * POST one operation, parse the JSON string it answers (safeJSON keeps big integers) and map
-   * HTTP failures to the backend error classes. The remote message is kept verbatim, so markers
-   * such as `CHAIN_POINT_MISMATCH:` reach the crawler unchanged.
-   */
+  // POSTs one operation and parses the JSON answer with safeJSON to keep big integers.
+  // The remote error message stays verbatim, so `CHAIN_POINT_MISMATCH:` reaches the crawler.
   private async call<T>(operation: string, body: Record<string, unknown> = {}): Promise<T> {
     try {
       const res = await this.api.post(`/${operation}`, body);
@@ -167,10 +161,12 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
   }
 
   private mapError(operation: string, err: unknown): Error {
-    const ax = err as AxiosError<{ error?: { message?: string } }>;
+    const ax = err as AxiosError<{ error?: { message?: string; code?: string } }>;
     if (!ax?.isAxiosError) return err instanceof Error ? err : new Error(String(err));
     const status = ax.response?.status;
     const message = ax.response?.data?.error?.message ?? ax.message;
+    // older instances carry the code only as a `[CODE]` prefix of the message
+    const code = ax.response?.data?.error?.code ?? message;
     // the remote prefixes `[CODE] Operation: `; the crawler recognises the reorg marker at the start
     const marker = message.indexOf('CHAIN_POINT_MISMATCH:');
     if (marker >= 0) return new ProviderUnavailableError(message.slice(marker), this.name);
@@ -180,8 +176,11 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
       const retryAfter = Number(ax.response?.headers?.['retry-after']);
       return new RateLimitError(message, this.name, Number.isFinite(retryAfter) ? retryAfter : undefined);
     }
+    if (status === 409 && code.includes(ERROR_CODES.TX_ALREADY_SUBMITTED)) {
+      return new TransactionAlreadySubmittedError(/[0-9a-f]{64}/.exec(message)?.[0] ?? '', message);
+    }
     if (status === 400) {
-      return message.includes(ERROR_CODES.SCRIPT_VALIDATION_FAILURE)
+      return code.includes(ERROR_CODES.SCRIPT_VALIDATION_FAILURE)
         ? new ScriptValidationError(message)
         : new TransactionValidationError(message);
     }

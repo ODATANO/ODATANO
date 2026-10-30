@@ -27,10 +27,8 @@ export function cip68UserUnits(referenceUnit: string): string[] | null {
 
 const DECIMALS_KEY = Buffer.from('decimals');
 
-/**
- * `decimals` of a CIP-68 reference datum: Constr 0 whose first field is the metadata map, keyed
- * by UTF-8 byte strings. null when the datum has no such integer in 0..255 or is not that shape.
- */
+// The datum is Constr 0 with the metadata map, keyed by UTF-8 bytes, as first field.
+// Null when the shape differs or decimals is not an integer in 0..255.
 export function cip68DecimalsFromDatum(cborHex: string): number | null {
   let data;
   try {

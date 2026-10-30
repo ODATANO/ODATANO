@@ -1,14 +1,6 @@
-/**
- * Wallet-worker end-to-end on preview: boots a server with the worker enabled,
- * submits a self-payment job and follows it pending → building → submitting →
- * submitted → confirmed, checking idempotency and the durable pre-submit row.
- *
- *   npx tsx scripts/testing/wallet-worker-e2e-preview.ts
- *   npx tsx scripts/testing/wallet-worker-e2e-preview.ts --amount 3000000 --depth 2
- *
- * The signing key is read from payment.skey and passed to the server in memory
- * only; the preflight refuses to run unless it derives the funded payment.addr.
- */
+// Wallet-worker end-to-end on preview. Follows a self-payment job until it is confirmed.
+// The key from payment.skey stays in memory and must derive the funded payment.addr.
+// Usage: npx tsx scripts/testing/wallet-worker-e2e-preview.ts [--amount 3000000] [--depth 2]
 
 import 'dotenv/config';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
@@ -95,7 +87,7 @@ async function main() {
   log('network        :', network);
   log('worker address :', address);
   if (address !== expected) {
-    throw new Error(`derived address ${address} != payment.addr ${expected} — the worker would spend a different (probably empty) address`);
+    throw new Error(`derived address ${address} != payment.addr ${expected}, the worker would spend a different (probably empty) address`);
   }
   log('matches payment.addr: yes');
 
@@ -114,7 +106,7 @@ async function main() {
     shell: process.platform === 'win32',
     env: {
       ...process.env,
-      [KEY_ENV]: seed, // in-memory only — never persisted, never logged
+      [KEY_ENV]: seed, // in-memory only, never persisted, never logged
       WALLET_WORKER_ENABLED: 'true',
       WALLET_WORKER_WALLETS: JSON.stringify([{ walletId: WALLET_ID, signerType: 'software', keyEnv: KEY_ENV }]),
       WALLET_WORKER_CONFIRMATION_DEPTH: String(DEPTH),
@@ -158,7 +150,7 @@ async function main() {
     log('running        :', status.running);
     log('wallets        :', status.wallets);
     if (!status.wallets?.includes(WALLET_ID)) {
-      throw new Error(`wallet "${WALLET_ID}" never registered — check the [srv] log above`);
+      throw new Error(`wallet "${WALLET_ID}" never registered, check the [srv] log above`);
     }
 
     // ---- 4. Submit the job (self-payment: only fees leave the wallet) ------
@@ -177,7 +169,7 @@ async function main() {
       body: JSON.stringify({ walletId: WALLET_ID, kind: 'simpleAda', requestJson, idempotencyKey }),
     });
     const idempotent = retry.jobId === submit.jobId && retry.deduplicated === true;
-    log('idempotent retry:', idempotent ? `OK — same job ${retry.jobId}` : `FAILED — got ${retry.jobId}`);
+    log('idempotent retry:', idempotent ? `OK: same job ${retry.jobId}` : `FAILED: got ${retry.jobId}`);
     if (!idempotent) throw new Error('idempotency violated: the retry created a second job');
 
     // ---- 6. Follow the session through its states -------------------------
@@ -212,7 +204,7 @@ async function main() {
     // The durable-pre-submit invariant: submitting must have carried the artifacts.
     const durable = seen.has('submitting') || Boolean(job.txHash);
     log('durable pre-submit:', durable ? 'OK' : 'NOT OBSERVED (job may have raced past it)');
-    log('\nPASS — wallet session completed end to end.');
+    log('\nPASS: wallet session completed end to end.');
   } finally {
     shutdown();
   }

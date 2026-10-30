@@ -15,13 +15,8 @@ interface PendingTx {
 
 const refKey = (txHash: string, outputIndex: number): string => `${txHash.toLowerCase()}#${outputIndex}`;
 
-/**
- * Transactions this process submitted that the ledger view does not show yet. The node's ledger
- * state and the crawled UTxO set both still list their inputs as unspent while they wait in the
- * mempool, so a second build would spend the same outputs. Builders skip those inputs and may
- * spend the pending outputs (change) instead. Process-local; an entry ends when a crawled block
- * holds the transaction or after PENDING_TX_TTL_MS.
- */
+// Submitted transactions still in the mempool, whose inputs still look unspent. Builders skip
+// those inputs and may spend the pending change. Entries end when crawled or after PENDING_TX_TTL_MS.
 export class PendingSpends {
   private readonly txs = new Map<string, PendingTx>();
 
@@ -57,11 +52,8 @@ export class PendingSpends {
     return undefined;
   }
 
-  /**
-   * The UTxOs of an address as they are after the pending transactions: inputs they spend are
-   * removed, their outputs to the address are added. A pending transaction whose outputs already
-   * appear in `utxos` has been crawled and is forgotten.
-   */
+  // The address's UTxOs after the pending transactions. One whose outputs already appear in `utxos`
+  // has been crawled and is forgotten.
   apply(address: string, utxos: UTxO[]): UTxO[] {
     this.prune();
     if (this.txs.size === 0) return utxos;

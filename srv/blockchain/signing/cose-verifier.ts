@@ -12,10 +12,8 @@ const COSE_SIGN1_TAG = 18;
 const COSE_KEY_LABEL_X = -2;
 const ED25519_PUBKEY_LEN = 32;
 
-/**
- * Input to {@link verifyDataSignature}, mirroring the CIP-30 `signData` result:
- * `coseSignature` = hex `signature` field (COSE_Sign1), `coseKey` = hex `key` field (COSE_Key).
- */
+// Mirrors the CIP-30 `signData` result. `coseSignature` is its hex `signature` field,
+// `coseKey` its hex `key` field.
 export interface CoseVerifyInput {
   address: string;
   coseSignature: string;
@@ -44,10 +42,8 @@ function findIntLabel(map: CborMap, label: number): CborObj | undefined {
   return entry?.v;
 }
 
-/**
- * Parsed COSE_Sign1. `protectedBytes` keeps the exact received bstr content:
- * the Sig_structure must re-use it byte-for-byte, so the header map is never re-encoded.
- */
+// `protectedBytes` keeps the received bytes, since the Sig_structure must reuse them unchanged.
+// The header map is never re-encoded.
 interface CoseSign1 {
   protectedBytes: Uint8Array;
   payload: Uint8Array;
@@ -80,11 +76,8 @@ function parseCoseKey(hex: string): Uint8Array {
   return x.bytes;
 }
 
-/**
- * Build the COSE Sig_structure that was actually signed and CBOR-encode it:
- *   [ "Signature1" (tstr), protected (bstr, exact bytes), external_aad (h''), payload (bstr) ]
- * external_aad is empty for CIP-8 / CIP-30 signData.
- */
+// The signed COSE Sig_structure: ["Signature1", protected, external_aad, payload].
+// external_aad is empty for CIP-8 and CIP-30 signData.
 function buildSigStructure(protectedBytes: Uint8Array, payload: Uint8Array): Uint8Array {
   const sigStruct = new CborArray([
     new CborText('Signature1'),
@@ -95,11 +88,8 @@ function buildSigStructure(protectedBytes: Uint8Array, payload: Uint8Array): Uin
   return Cbor.encode(sigStruct);
 }
 
-/**
- * Verify a CIP-30 `signData` (COSE_Sign1) signature against a bech32 address: signer key hash
- * (blake2b-224) must equal the address payment key credential, optional payload check, then
- * Ed25519 over the Sig_structure. Stateless, no nonce/replay handling; never throws (`{ valid: false, reason }`).
- */
+// The signer key hash must equal the address's payment credential, then Ed25519 is checked.
+// Stateless, with no replay protection. Never throws, failures return `valid: false`.
 export function verifyDataSignature(input: CoseVerifyInput): CoseVerifyResult {
   const result: CoseVerifyResult = { valid: false, reason: '', signedPayload: '', signerVkh: '' };
 

@@ -819,6 +819,14 @@ describe('CardanoTransactionService Handler Validations', () => {
         inputs: [],
         outputs: [],
       }]);
+      // the tip block, so the transaction at height 5000 counts as deep enough to confirm
+      nock('https://preview.koios.rest')
+        .post('/api/v1/block_info')
+        .reply(200, [{
+          hash: 'test-block-hash', epoch_no: 100, abs_slot: 50000000, epoch_slot: 100000, block_height: 1000000,
+          block_size: 1000, block_time: 1704067200, tx_count: 1, parent_hash: 'c'.repeat(64),
+        }])
+        .persist();
 
       const { status, data } = await test.post(
         `/odata/v4/cardano-transaction/TransactionSubmissions(${submissionId})/CardanoTransactionService.CheckSubmissionStatus`, {}

@@ -1,13 +1,5 @@
-/**
- * ODATANO Raw Ogmios UTxO Latency Test
- *
- * Directly calls Ogmios via @cardano-ogmios/client to measure raw UTxO fetch
- * latency — no ODATANO server, no caching, no routing. Pure Ogmios WebSocket.
- *
- * Usage:
- *   npx tsx scripts/perf-ogmios-raw.ts
- *   npx tsx scripts/perf-ogmios-raw.ts --rounds 20
- */
+// Measures raw Ogmios UTxO fetch latency over the WebSocket, without the ODATANO server.
+// Usage: npx tsx scripts/perf/perf-ogmios-raw.ts [--rounds 20]
 
 import {
   createInteractionContext,

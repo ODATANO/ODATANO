@@ -203,7 +203,7 @@ entity Pools : temporal {
 }
 
 @title      : 'Pool Epoch Snapshot Entity'
-@description: 'Stake-pool state as observed once per epoch by the chain crawler. Non-temporal: each row is a dated observation, not a cached slice, so the crawled range is a true time series. Written only when the crawler runs with epochSnapshots enabled, an enumerating backend (Koios) is configured, and the crawl is at the chain tip — the provider reports the pool set as it is now, so an epoch passed during a backfill is skipped rather than filled with current figures.'
+@description: 'Stake-pool state as observed once per epoch by the chain crawler. Non-temporal: each row is a dated observation, not a cached slice, so the crawled range is a true time series. Written only when the crawler runs with epochSnapshots enabled, an enumerating backend (Koios) is configured, and the crawl is at the chain tip. The provider reports the pool set as it is now, so an epoch passed during a backfill is skipped rather than filled with current figures.'
 entity PoolEpochSnapshots {
 
         @title      : 'Pool Id (Key)'
@@ -211,7 +211,7 @@ entity PoolEpochSnapshots {
     key poolId         : Bech32;
 
         @title      : 'Epoch (Key)'
-        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+        @description: 'Epoch the observation belongs to, i.e. the epoch running at snapshotSlot'
     key epoch          : Integer;
 
         @title      : 'Snapshot Slot'
@@ -284,7 +284,7 @@ entity DrepEpochSnapshots {
     key drepId          : Bech32;
 
         @title      : 'Epoch (Key)'
-        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+        @description: 'Epoch the observation belongs to, i.e. the epoch running at snapshotSlot'
     key epoch           : Integer;
 
         @title      : 'Snapshot Slot'
@@ -471,7 +471,7 @@ entity Assets : temporal {
 }
 
 @title      : 'Asset History Entry'
-@description: 'Mint or burn event for a native asset. Immutable on-chain — entries are never updated, only inserted. Free-standing (not a Composition) so history can be queried before/without the parent Assets row.'
+@description: 'Mint or burn event for a native asset. Immutable on-chain: entries are never updated, only inserted. Free-standing (not a Composition) so history can be queried before/without the parent Assets row.'
 @readonly
 entity AssetHistory {
 
@@ -488,7 +488,7 @@ entity AssetHistory {
         action      : String(10);
 
         @title      : 'Quantity'
-        @description: 'Absolute mint/burn amount (BigInt-safe decimal string; always positive — sign info is in `action`)'
+        @description: 'Absolute mint/burn amount (BigInt-safe decimal string; always positive; sign info is in `action`)'
         quantity    : String(40);
 
         @title      : 'Block Time'
@@ -882,8 +882,7 @@ entity TransactionInputAssets {
 }
 
 // -----------------------------------------------------
-// Crawler-fed ledger state (crawler.utxoSet) — non-temporal, separate from the lazy
-// provider-fed Addresses / AddressUTxOs so their TTL semantics stay untouched.
+// Crawler-fed ledger state. Separate from the lazy Addresses tables, so their TTL logic stays untouched.
 // -----------------------------------------------------
 
 @title      : 'Ledger UTxOs'
@@ -1078,7 +1077,7 @@ entity TransactionCertificates {
     key certIndex    : Integer;
 
         @title      : 'Certificate Kind (key)'
-        @description: 'stake_registration | stake_deregistration | pool_delegation | vote_delegation | pool_registration | pool_retirement | drep_registration | drep_update | drep_retirement | committee_hot_auth | committee_resign | genesis_delegation | treasury_mir | reserve_mir | pot_transfer | param_proposal — or the raw source type for anything else'
+        @description: 'stake_registration | stake_deregistration | pool_delegation | vote_delegation | pool_registration | pool_retirement | drep_registration | drep_update | drep_retirement | committee_hot_auth | committee_resign | genesis_delegation | treasury_mir | reserve_mir | pot_transfer | param_proposal, or the raw source type for anything else'
     key kind         : String(40);
 
         @title      : 'Stake Address'
@@ -1921,7 +1920,7 @@ entity SignatureVerifications {
 }
 
 // -----------------------------------------------------
-// Chain Crawler / Pre-Sync (v2.0)
+// Chain Crawler / Pre-Sync
 // -----------------------------------------------------
 
 @title      : 'Cardano Sync State'
@@ -1929,7 +1928,7 @@ entity SignatureVerifications {
 entity CardanoSyncState {
 
         @title      : 'Cursor Id (Key)'
-        @description: 'Singleton key — always the literal string SINGLETON'
+        @description: 'Singleton key, always the literal string SINGLETON'
     key ID                : String(10) default 'SINGLETON';
 
         @title      : 'Network'
@@ -1949,7 +1948,7 @@ entity CardanoSyncState {
         lastSlot          : Integer64 default 0;
 
         @title      : 'Last Block Hash'
-        @description: 'Hash of the last indexed block — used for the reorg parent-hash check'
+        @description: 'Hash of the last indexed block, used for the reorg parent-hash check'
         lastBlockHash     : Blake2b256;
 
         @title      : 'Last Height'
@@ -1972,9 +1971,7 @@ entity CardanoSyncState {
         @description: 'Current crawler state (stopped | syncing | synced | error)'
         syncStatus        : CrawlSyncStatus default 'stopped';
 
-        // NOTE: live progress is computed by CardanoIndexerService.getStatus from
-        // lastHeight/tipHeight — deliberately NOT persisted here (a stored copy went
-        // stale immediately and misled OData readers).
+        // Live progress is computed by getStatus and not stored here, since a stored copy goes stale at once.
 
         @title      : 'Last Error'
         @description: 'Message of the most recent crawler error (null when healthy)'
@@ -2113,11 +2110,8 @@ entity CardanoWorkerWallets {
 
 @title      : 'Cardano Wallet Jobs'
 @description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
-// Idempotency is enforced by the DATABASE, not by a read-before-insert check:
-// concurrent retries of the same key (two app instances, or two HANA sessions)
-// can both find no existing job and both insert. The unique constraint makes one
-// of them lose, and insertJob returns the winner's job to it. See `dedupKey`.
-// Generates a table UNIQUE constraint on SQLite and a UNIQUE INVERTED INDEX on HANA.
+// The database enforces idempotency, since two concurrent retries can both find no job.
+// The unique constraint makes one insert lose, and insertJob returns the winner's job.
 @assert.unique.dedup: [
     walletId,
     kind,
@@ -2142,11 +2136,11 @@ entity CardanoWalletJobs {
         status         : WalletJobStatus default 'pending';
 
         @title      : 'Idempotency Key'
-        @description: 'Optional caller-supplied dedup key — a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
+        @description: 'Optional caller-supplied dedup key: a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
         idempotencyKey : String(100);
 
         @title      : 'Dedup Key (internal)'
-        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide — no reliance on NULL semantics, which differ across databases.'
+        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide, with no reliance on NULL semantics, which differ across databases.'
         dedupKey       : String(100);
 
         @title      : 'Request'
@@ -2154,7 +2148,7 @@ entity CardanoWalletJobs {
         request        : LargeString;
 
         @title      : 'Priority'
-        @description: 'Dispatch order within a wallet queue — lower runs sooner (default 100)'
+        @description: 'Dispatch order within a wallet queue: lower runs sooner (default 100)'
         priority       : Integer default 100;
 
         @title      : 'Not Before'
@@ -2170,7 +2164,7 @@ entity CardanoWalletJobs {
         maxAttempts    : Integer default 3;
 
         @title      : 'Transaction Hash'
-        @description: 'Hash of the signed transaction — persisted before the submit call (status submitting), so a crash mid-submit stays reconcilable'
+        @description: 'Hash of the signed transaction, persisted before the submit call (status submitting), so a crash mid-submit stays reconcilable'
         txHash         : Blake2b256;
 
         @title      : 'Unsigned Transaction CBOR'
@@ -2178,7 +2172,7 @@ entity CardanoWalletJobs {
         unsignedTxCbor : LargeString;
 
         @title      : 'Signed Transaction CBOR'
-        @description: 'The signed transaction, stored before submission — reused verbatim for crash reconciliation and rollback re-submission (never rebuilt)'
+        @description: 'The signed transaction, stored before submission, reused verbatim for crash reconciliation and rollback re-submission (never rebuilt)'
         signedTxCbor   : LargeString;
 
         @title      : 'Fee'
@@ -2186,7 +2180,7 @@ entity CardanoWalletJobs {
         fee            : Lovelace;
 
         @title      : 'Submitted At'
-        @description: 'Timestamp of the submission attempt (written with the signed tx, before it is sent) — the base for the confirmation timeout'
+        @description: 'Timestamp of the submission attempt (written with the signed tx, before it is sent), the base for the confirmation timeout'
         submittedAt    : Timestamp;
 
         @title      : 'Confirmed At'
@@ -2194,11 +2188,11 @@ entity CardanoWalletJobs {
         confirmedAt    : Timestamp;
 
         @title      : 'Confirmed Slot'
-        @description: 'Absolute slot of the block containing the transaction — used for reorg checks'
+        @description: 'Absolute slot of the block containing the transaction, used for reorg checks'
         confirmedSlot  : Integer64;
 
         @title      : 'Confirmed Height'
-        @description: 'Block height of the block containing the transaction — used for depth calculation'
+        @description: 'Block height of the block containing the transaction, used for depth calculation'
         confirmedHeight : Integer64;
 
         @title      : 'Error Code'
@@ -2222,16 +2216,8 @@ entity CardanoWalletJobs {
         finishedAt     : Timestamp;
 }
 
-/**
- * Agent grants (v2.0): scoped bearer capabilities an Admin hands to an agent
- * instead of a full user. The token is a capability, not an identity — it is
- * stored as SHA-256 only, and a request carrying it runs as the principal
- * `agent:<ID>` with the role `agent-grant`, never as the operator. Enforcement
- * (allow list, wallet pinning, daily budget) lives in srv/utils/agent-grants.ts;
- * the transport lane that admits `x-agent-token` in srv/utils/agent-token-auth.ts.
- * Admin-only table: creation and revocation happen through CardanoAgentService
- * actions, a token request may read its own row only.
- */
+// Agent grants: the token is stored as SHA-256 only; a request carrying it runs as `agent:<ID>`.
+// Created and revoked through CardanoAgentService; a token may read its own row only.
 @title      : 'Agent Grants'
 @description: 'Scoped, budgeted bearer capabilities for agents (token stored as SHA-256 only)'
 entity CardanoAgentGrants {
@@ -2294,13 +2280,8 @@ entity CardanoAgentGrants {
         lastUsedAt      : Timestamp;
 }
 
-/**
- * Daily per-action counters of admitted calls under a grant (feeds
- * CardanoAgentService.GetGrantUsage). Written by the enforcement hook next to
- * the daily budget: `calls + 1` when a call is admitted, `refunded + 1` when the
- * handler then refuses its input. Not exposed as an entity — the function is
- * the contract. A few dozen rows per grant and day at most; no retention job yet.
- */
+// Daily per-action call counters of a grant, read by GetGrantUsage. The enforcement hook counts
+// calls on admission and refunds when the handler refuses the input. Not exposed as an entity.
 entity CardanoAgentGrantUsage {
 
         @title      : 'Grant'

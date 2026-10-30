@@ -3,18 +3,24 @@ import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
 import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, validatePlutusJson, isAssetUnit } from './utils/validators';
-import { getTxHashFromCbor, getLovelace, isCollateralCandidate, applyScriptParameters, extractTxCacheTargets } from './utils/tx-build-helper';
+import { getTxHashFromCbor, getLovelace, isCollateralCandidate, applyScriptParameters } from './utils/tx-build-helper';
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
-import { computeCip14Fingerprint, scriptHashToEnterpriseAddress } from './utils/mappers';
+import { computeCip14Fingerprint, scriptHashToEnterpriseAddress, mapError } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
+import type { Network } from './blockchain/cardano-client';
 import { toSignedTransaction } from './utils/signing-helper';
+import { detachedTx } from './utils/tx-utils';
+import { pageOf } from './utils/paging';
+import { submitRecorded } from './blockchain/signing/submission-finalizer';
+import { SubmitTransaction } from '#cds-models/CardanoTransactionService';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
 import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
 import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates, parsePlutusCbor } from './utils/tx-request-parsers';
 
-const VALID_DERIVE_NETWORKS = ['mainnet', 'preview', 'preprod'] as const;
-type DeriveNetwork = typeof VALID_DERIVE_NETWORKS[number];
 const { SELECT, UPDATE } = cds.ql;
+
+/** Blocks on top of a submitted transaction, its own included, before CheckSubmissionStatus confirms it. */
+const SUBMISSION_CONFIRMATION_DEPTH = 3;
 
 const logger = cds.log('CardanoTxService');
 
@@ -29,7 +35,7 @@ module.exports = (srv: cds.Service) => {
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
 
-  // BuildSimpleAdaTransaction — ADA (optionally with assets / datum) to one recipient or a script.
+  // BuildSimpleAdaTransaction: ADA (optionally with assets / datum) to one recipient or a script.
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
@@ -135,7 +141,7 @@ module.exports = (srv: cds.Service) => {
       return buildResult;
     });
   });
-  // BuildTransactionWithMetadata — ADA transfer with auxiliary metadata.
+  // BuildTransactionWithMetadata: ADA transfer with auxiliary metadata.
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
 
@@ -161,7 +167,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // BuildMultiAssetTransaction — ADA plus native assets to one recipient.
+  // BuildMultiAssetTransaction: ADA plus native assets to one recipient.
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
@@ -214,7 +220,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // BuildMintTransaction — mint/burn under one or more Plutus policies.
+  // BuildMintTransaction: mint/burn under one or more Plutus policies.
   srv.on('BuildMintTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, extraOutputsJson, metadataJson, validityStartMs, validityEndMs } = req.data;
 
@@ -258,7 +264,7 @@ module.exports = (srv: cds.Service) => {
         action.assetUnit.length % 2 === 0 &&
         /^[0-9a-fA-F]*$/.test(action.assetUnit);
       if (typeof action.assetUnit !== 'string' || (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`, 'mintActionsJson');
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`, 'mintActionsJson');
       }
       let assetUnit = action.assetUnit;
       if (actionPolicyId) {
@@ -272,7 +278,7 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
       }
       if (!/^-?\d+$/.test(action.quantity)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}": must be an integer string`, 'mintActionsJson');
       }
       try {
         return {
@@ -283,7 +289,7 @@ module.exports = (srv: cds.Service) => {
           ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
         };
       } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}" — cannot parse as integer`, 'mintActionsJson');
+        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}": cannot parse as integer`, 'mintActionsJson');
       }
     });
 
@@ -419,7 +425,7 @@ module.exports = (srv: cds.Service) => {
           return rejectInvalid(
             req,
             'BuildMintTransaction',
-            `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
+            `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}: pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
             'mintActionsJson'
           );
         }
@@ -469,7 +475,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // BuildPlutusSpendTransaction — consume a UTxO at a script address, optionally minting too.
+  // BuildPlutusSpendTransaction: consume a UTxO at a script address, optionally minting too.
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
     const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
 
@@ -549,7 +555,7 @@ module.exports = (srv: cds.Service) => {
         }
         const action = rawAction as Record<string, unknown>;
         if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}" — must be an integer string`, 'mintActionsJson');
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}": must be an integer string`, 'mintActionsJson');
         }
         if (typeof action.assetUnit !== 'string') {
           return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must have assetUnit string', 'mintActionsJson');
@@ -575,7 +581,7 @@ module.exports = (srv: cds.Service) => {
           action.assetUnit.length % 2 === 0 &&
           /^[0-9a-fA-F]*$/.test(action.assetUnit);
         if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when a per-action mintingPolicyScript is set, or scriptParamsJson is set and the policy equals the validator)`, 'mintActionsJson');
+          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when a per-action mintingPolicyScript is set, or scriptParamsJson is set and the policy equals the validator)`, 'mintActionsJson');
         }
         let assetUnit = action.assetUnit;
         if (actionPolicyId) {
@@ -660,7 +666,7 @@ module.exports = (srv: cds.Service) => {
               return rejectInvalid(
                 req,
                 'BuildPlutusSpendTransaction',
-                `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
+                `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}: pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
                 'mintActionsJson'
               );
             }
@@ -732,7 +738,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // BuildPlutusTransaction — several script UTxOs in one transaction, each with its own redeemer.
+  // BuildPlutusTransaction: several script UTxOs in one transaction, each with its own redeemer.
   srv.on('BuildPlutusTransaction', async (req: Request) => {
     const { senderAddress, changeAddress, scriptInputsJson, outputsJson, referenceInputsJson, forceInputsJson, protectInputsJson, withdrawalsJson, certificatesJson, requiredSignersJson, mintActionsJson, validityStartMs, validityEndMs } = req.data;
     const action = 'BuildPlutusTransaction';
@@ -842,7 +848,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // GetBuildDetails — an existing transaction build by id.
+  // GetBuildDetails: an existing transaction build by id.
   srv.on('GetBuildDetails', async (req: Request) => {
     const { buildId } = req.data;
 
@@ -856,7 +862,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // SetCollateral — collateral is available when the builders would find it: an ADA-only UTxO of
+  // SetCollateral: collateral is available when the builders would find it: an ADA-only UTxO of
   // >= 5 ADA without a reference script, plus another UTxO to fund with; otherwise a self-send creates one.
   srv.on('SetCollateral', async (req: Request) => {
     const { address } = req.data;
@@ -893,7 +899,7 @@ module.exports = (srv: cds.Service) => {
         return rejectInvalid(
           req,
           'SetCollateral',
-          `Insufficient funds — need at least ${Number(COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) / 1_000_000} ADA, have ${Number(totalLovelace) / 1_000_000} ADA`,
+          `Insufficient funds: need at least ${Number(COLLATERAL_LOVELACE + FEE_BUFFER_LOVELACE) / 1_000_000} ADA, have ${Number(totalLovelace) / 1_000_000} ADA`,
           'address',
         );
       }
@@ -910,70 +916,38 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // SubmitTransaction — submit the signed CBOR of a previous build.
-  srv.on('SubmitTransaction', async (req: Request) => {
+  // SubmitTransaction: submit the signed CBOR of a previous build.
+  srv.on(SubmitTransaction, async (req) => {
     logger.debug('SubmitTransaction Action handler called');
-    const { buildId, signedTxCbor: signedInput } = req.data as { buildId: string; signedTxCbor: string };
+    const { buildId, signedTxCbor: signedInput } = req.data;
+    if (!buildId) return rejectMissing(req, 'SubmitTransaction', 'buildId');
+    if (!signedInput) return rejectMissing(req, 'SubmitTransaction', 'signedTxCbor');
 
     const errors = validateTransactionInputs({ buildId, signedTxCbor: signedInput }, ['buildId', 'signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitTransaction', errors);
 
-    return handleRequest(req, async (db) => {
-      logger.debug({ buildId }, 'Submitting signed transaction');
-
-      const existing = await db.run(SELECT.one.from(TransactionBuilds).where({ id: buildId }));
-      if (!existing) throw new NotFoundError(`Build '${buildId}'`);
+    try {
+      const build = await detachedTx('load build for submit', (db) =>
+        db.run(SELECT.one.from(TransactionBuilds).columns('unsignedTxCbor', 'txBodyHash').where({ id: buildId }))
+      ) as { unsignedTxCbor: string; txBodyHash: string } | undefined;
+      if (!build) throw new NotFoundError(`Build '${buildId}'`);
 
       // A CIP-30 wallet returns only the witness set; cardano-cli a full signed tx.
-      const signedTxCbor = toSignedTransaction(existing.unsignedTxCbor, signedInput);
+      const signedTxCbor = toSignedTransaction(build.unsignedTxCbor, signedInput);
 
       // The signed CBOR must belong to this build (audit-trail integrity)
       const signedTxHash = getTxHashFromCbor(signedTxCbor);
-      if (signedTxHash !== existing.txBodyHash) {
-        return rejectInvalid(req, 'SubmitTransaction', `signedTxCbor hash '${signedTxHash}' does not match build txBodyHash '${existing.txBodyHash}'`, 'signedTxCbor');
+      if (signedTxHash !== build.txBodyHash) {
+        rejectInvalid(req, 'SubmitTransaction', `signedTxCbor hash '${signedTxHash}' does not match build txBodyHash '${build.txBodyHash}'`, 'signedTxCbor');
       }
 
-      const txHash = existing.txBodyHash;
-
-      // Two-phase submit: persist as 'pending', then submit
-      const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
-        signedTxCbor,
-        txHash,
-        buildId,
-      });
-
-      try {
-        await getCardanoClient().submitTransaction(signedTxCbor);
-        logger.info({ txHash }, 'Transaction submitted to blockchain');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
-        submissionRecord.status = 'submitted';
-
-        // Best-effort UTxO cache invalidation (spent inputs, output addresses, sender);
-        // a failure must not fail the successful submit.
-        try {
-          const addrBuild = await db.run(
-            SELECT.one.from(AddressTransactionBuilds).where({ txBuild_id: buildId })
-          );
-          await getCardanoIndexer().invalidateUtxoCacheForTx(
-            db,
-            extractTxCacheTargets(signedTxCbor),
-            addrBuild?.address_address ? [addrBuild.address_address] : []
-          );
-        } catch (invalidateErr: unknown) {
-          logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        logger.error({ txHash, error: errMsg }, 'Transaction submission failed');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', errMsg);
-        throw err;
-      }
-
-      return submissionRecord;
-    });
+      return await submitRecorded({ signedTxCbor, txHash: build.txBodyHash, buildId });
+    } catch (e: unknown) {
+      return mapError(req, e, 'SubmitTransaction');
+    }
   });
 
-  // SubmitSignedTransaction — submit externally built signed CBOR (no prior build).
+  // SubmitSignedTransaction: submit externally built signed CBOR (no prior build).
   srv.on('SubmitSignedTransaction', async (req: Request) => {
     logger.debug('SubmitSignedTransaction Action handler called');
     const { signedTxCbor, network } = req.data;
@@ -981,46 +955,19 @@ module.exports = (srv: cds.Service) => {
     const errors = validateTransactionInputs({ signedTxCbor }, ['signedTxCbor']);
     throwIfValidationErrors(req, 'SubmitSignedTransaction', errors);
 
-    return handleRequest(req, async (db) => {
+    try {
       // A caller targeting the wrong deployment gets a clear 400
       const configuredNetwork = getCardanoClient().network;
       if (network && network !== configuredNetwork) {
-        return rejectInvalid(req, 'SubmitSignedTransaction', `network '${network}' does not match this deployment's network '${configuredNetwork}'`, 'network');
+        rejectInvalid(req, 'SubmitSignedTransaction', `network '${network}' does not match this deployment's network '${configuredNetwork}'`, 'network');
       }
-
-      const txHash = getTxHashFromCbor(signedTxCbor);
-
-      // Two-phase submit: persist as 'pending', then submit
-      const submissionRecord = await getCardanoIndexer().persistTransactionSubmission(db, {
-        signedTxCbor,
-        txHash,
-        buildId: null,
-      });
-
-      try {
-        await getCardanoClient().submitTransaction(signedTxCbor);
-        logger.info({ txHash }, 'External transaction submitted');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'submitted');
-        submissionRecord.status = 'submitted';
-
-        // Best-effort UTxO cache invalidation
-        try {
-          await getCardanoIndexer().invalidateUtxoCacheForTx(db, extractTxCacheTargets(signedTxCbor));
-        } catch (invalidateErr: unknown) {
-          logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        logger.error({ txHash, error: errMsg }, 'External transaction submission failed');
-        await getCardanoIndexer().updateSubmissionStatus(db, submissionRecord.id!, 'failed', errMsg);
-        throw err;
-      }
-
-      return submissionRecord;
-    });
+      return await submitRecorded({ signedTxCbor, txHash: getTxHashFromCbor(signedTxCbor), buildId: null });
+    } catch (e: unknown) {
+      return mapError(req, e, 'SubmitSignedTransaction');
+    }
   });
 
-  // CheckSubmissionStatus — bound action; the @from: [#submitted] state gate is enforced by CAP.
+  // CheckSubmissionStatus: bound action; the @from: [#submitted] state gate is enforced by CAP.
   srv.on('CheckSubmissionStatus', async (req: Request) => {
     logger.debug('CheckSubmissionStatus Action handler called');
     const { id: submissionId } = req.params[0] as { id: string };
@@ -1029,46 +976,30 @@ module.exports = (srv: cds.Service) => {
       const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
       if (!submission) throw new NotFoundError(`Submission '${submissionId}'`);
 
-      try {
-        // the local index first (filled by the crawler), then the backends
-        const txDetails = await getCardanoIndexer().findIndexedTransaction(db, submission.txHash)
-          ?? await getCardanoClient().getTransaction(submission.txHash);
-        if (txDetails) {
-          await db.run(
-            UPDATE.entity(TransactionSubmissions)
-              .set({ status: 'confirmed' })
-              .where({ id: submissionId })
-          );
-          submission.status = 'confirmed';
-          logger.info({ submissionId, txHash: submission.txHash }, 'Transaction confirmed on chain');
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (err instanceof NotFoundError || (err as { statusCode?: number })?.statusCode === 404) {
-          logger.debug({ submissionId, txHash: submission.txHash }, 'Transaction not yet confirmed on chain');
-        } else {
-          // A provider error must not be masked as "pending"
-          logger.warn({ submissionId, txHash: submission.txHash, error: errMsg }, 'Failed to check transaction confirmation status');
-          throw err;
-        }
+      // a block this deep is not rolled back in practice; a status set here is never reverted
+      const { confirmations } = await getCardanoIndexer().resolveTransactionConfirmations(db, submission.txHash);
+      if (confirmations >= SUBMISSION_CONFIRMATION_DEPTH) {
+        await db.run(UPDATE.entity(TransactionSubmissions).set({ status: 'confirmed' }).where({ id: submissionId }));
+        submission.status = 'confirmed';
+        logger.info({ submissionId, txHash: submission.txHash, confirmations }, 'Transaction confirmed on chain');
       }
 
       return submission;
     });
   });
 
-  // GetTransactionBuildsByAddress — address ↔ build associations.
+  // GetTransactionBuildsByAddress: address ↔ build associations.
   srv.on('GetTransactionBuildsByAddress', async (req: Request) => {
     logger.debug('GetTransactionBuildsByAddress Action handler called');
     const { address } = req.data;
     if (!address) return rejectMissing(req, 'GetTransactionBuildsByAddress', 'address');
     if (!isValidBech32Address(address)) return rejectInvalid(req, 'GetTransactionBuildsByAddress', 'Invalid bech32 address format', 'address');
-    return handleRequest(req, async (db) => {
-      return db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }));
-    });
+    const { limit, skip } = pageOf(req.data, 1000);
+    return handleRequest(req, (db) =>
+      db.run(SELECT.from(AddressTransactionBuilds).where({ address_address: address }).orderBy('txBuild_id').limit(limit, skip)));
   });
 
-  // DeriveScriptAddress — enterprise address + hash of a validator, optionally parameterized.
+  // DeriveScriptAddress: enterprise address + hash of a validator, optionally parameterized.
   srv.on('DeriveScriptAddress', async (req: Request) => {
     const { validatorScript, scriptParamsJson, network } = req.data;
 
@@ -1087,15 +1018,9 @@ module.exports = (srv: cds.Service) => {
       scriptParams = jsonResult.parsed as JSONValue[];
     }
 
-    if (network && !VALID_DERIVE_NETWORKS.includes(network as DeriveNetwork)) {
-      return rejectInvalid(req, 'DeriveScriptAddress', `Invalid network "${network}". Must be one of: ${VALID_DERIVE_NETWORKS.join(', ')}`, 'network');
-    }
-
     return handleRequest(req, async () => {
       // Resolved outside the CBOR try/catch so an uninitialized client stays a 503, not a 400.
-      const targetNetwork: DeriveNetwork = network
-        ? (network as DeriveNetwork)
-        : (getCardanoClient().network as DeriveNetwork);
+      const targetNetwork: Network = network ?? getCardanoClient().network;
 
       try {
         const finalScript = scriptParams && scriptParams.length > 0
@@ -1111,7 +1036,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // ExtractPaymentKeyHash — 28-byte payment credential of a bech32 address; pure local decoding.
+  // ExtractPaymentKeyHash: 28-byte payment credential of a bech32 address; pure local decoding.
   srv.on('ExtractPaymentKeyHash', async (req: Request) => {
     const { address } = req.data;
 

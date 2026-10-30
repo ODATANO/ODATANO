@@ -6,11 +6,8 @@ import { ConfigError } from '../../utils/errors';
 const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoCrawler');
 
-/**
- * Cursor helpers for `CardanoSyncState`, the singleton row recording how far the crawler
- * has indexed. Integer64/Decimal columns come back from the DB as strings, so every read
- * coerces numeric fields; callers get a numeric `SyncCursor`.
- */
+// Cursor helpers for the singleton `CardanoSyncState` row.
+// Numeric columns come back from the DB as strings, so every read converts them to numbers.
 
 export const SINGLETON_ID = 'SINGLETON';
 
@@ -54,13 +51,13 @@ export interface SyncCursor {
   tipHeight: number | null;
   syncStatus: CrawlSyncStatusValue;
   consecutiveErrors: number;
+  lastIndexedAt: string | null;
   desiredRunning: boolean;
   leaseOwner: string | null;
   leaseUntil: string | null;
   utxoSet: UtxoSetState;
 }
 
-/** Coerce a numeric-as-string (or number/bigint/null) into a JS number. */
 function optionalNum(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -77,10 +74,7 @@ function timestamp(v: unknown): string | null {
   return String(v);
 }
 
-/**
- * Import-lease read-back: ownership and deadline only. Unlike the crawler lease it does not
- * require `desiredRunning`, which is cleared while an import runs.
- */
+/** Unlike the crawler lease, this ignores `desiredRunning`, which is cleared while an import runs. */
 function importLeaseHeld(cursor: SyncCursor | null, owner: string, expectedMs: number): boolean {
   if (!cursor || cursor.leaseOwner !== owner || !cursor.leaseUntil) return false;
   const actualMs = Date.parse(cursor.leaseUntil);
@@ -95,7 +89,6 @@ function leaseDeadlineReached(cursor: SyncCursor | null, owner: string, expected
   return Number.isFinite(actualMs) && actualMs >= expectedMs - 1_000;
 }
 
-/** Map a raw DB row into the normalized numeric cursor. */
 function toCursor(row: Record<string, unknown>): SyncCursor {
   return {
     network: (row.network as string) ?? null,
@@ -108,6 +101,7 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
     tipHeight: optionalNum(row.tipHeight),
     syncStatus: ((row.syncStatus as CrawlSyncStatusValue) ?? 'stopped'),
     consecutiveErrors: requiredNum(row.consecutiveErrors),
+    lastIndexedAt: timestamp(row.lastIndexedAt),
     desiredRunning: row.desiredRunning !== false,
     leaseOwner: (row.leaseOwner as string) ?? null,
     leaseUntil: timestamp(row.leaseUntil),
@@ -122,10 +116,7 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
   };
 }
 
-/**
- * Ensure the singleton cursor row exists and return it; a fresh DB gets the configured
- * start point and status 'stopped'.
- */
+/** Ensure the cursor row exists and return it. A fresh DB gets the configured start point. */
 export async function ensureSyncStateSingleton(
   db: CapTransaction,
   network: string,
@@ -182,10 +173,7 @@ export function isCrawlerLeaseActive(cursor: SyncCursor | null, now = new Date()
   return Number.isFinite(deadline) && deadline > now.getTime();
 }
 
-/**
- * Acquire an expired/unowned lease with compare-and-swap semantics. Verified by a read-back
- * SELECT: affected-row return shapes differ between SQLite and HANA.
- */
+/** Take a free or expired lease. Verified by reading back, since affected-row results differ per database. */
 export async function tryAcquireCrawlerLease(
   db: CapTransaction,
   owner: string,
@@ -200,9 +188,8 @@ export async function tryAcquireCrawlerLease(
   const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
   if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
 
-  // CAS on the observed OWNER only, verified by read-back. leaseUntil is deliberately not
-  // compared: timestamp normalization on some adapters would make that CAS never match again
-  // after a leader crash. A concurrently renewing old owner is fenced by its next renew.
+  // Compare the owner only. Some adapters reformat timestamps, so a leaseUntil match could fail forever.
+  // An old owner that renews meanwhile is fenced by its next renewal.
   const where: Record<string, unknown> = {
     ID: SINGLETON_ID,
     leaseOwner: raw.leaseOwner ?? null,
@@ -217,10 +204,7 @@ export async function tryAcquireCrawlerLease(
   return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
 }
 
-/**
- * Renew/fence a lease. Call this inside the same transaction as every crawler write:
- * the conditional UPDATE serializes a former leader against a newly elected one.
- */
+/** Renew the lease inside every crawler write transaction, so a former leader cannot write after a takeover. */
 export async function renewCrawlerLease(
   db: CapTransaction,
   owner: string,
@@ -237,10 +221,8 @@ export async function renewCrawlerLease(
   return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
 }
 
-/**
- * Release only the caller's lease. `pauseCluster` clears `desiredRunning`, which no restart
- * undoes — reserve it for failures a restart cannot fix (misconfiguration, no resume point).
- */
+// Release only the caller's lease. `pauseCluster` keeps the crawler down across restarts.
+// Use it only for failures a restart cannot fix, such as misconfiguration.
 export async function releaseCrawlerLease(
   db: CapTransaction,
   owner: string,
@@ -255,10 +237,7 @@ export async function releaseCrawlerLease(
   }).where({ ID: SINGLETON_ID, leaseOwner: owner }));
 }
 
-/**
- * Persist the pause/resume intent shared by every instance. Resuming clears the error
- * streak so the standby backoff restarts at its base.
- */
+/** Store the pause intent for all instances. Resuming clears the error streak, so the backoff restarts. */
 export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunning: boolean): Promise<void> {
   const set: Record<string, unknown> = { desiredRunning };
   if (desiredRunning) set.consecutiveErrors = 0;
@@ -266,10 +245,8 @@ export async function setCrawlerDesiredRunning(db: CapTransaction, desiredRunnin
   await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
 }
 
-/**
- * Latch the cluster off because of a poison block. Deliberately not lease-scoped: the poison
- * is a property of the block, not of the instance. Only resumeCrawler brings the crawler back.
- */
+// Latch the cluster off for a poison block. Not tied to the lease, since the fault is in the block.
+// Only resumeCrawler brings the crawler back.
 export async function latchPoisonBlock(db: CapTransaction, message: string): Promise<void> {
   await db.run(UPDATE.entity(CardanoSyncState).set({
     desiredRunning: false,
@@ -279,12 +256,8 @@ export async function latchPoisonBlock(db: CapTransaction, message: string): Pro
   }).where({ ID: SINGLETON_ID }));
 }
 
-/**
- * Advance the cursor to a freshly indexed block, clear the error streak and optionally
- * record the latest known tip. Pass status 'synced' when the block is at the tip.
- * With `leaseOwner` the same UPDATE renews and fences the crawler lease (see renewCrawlerLease).
- * @returns false when the lease is no longer held; the caller must roll back
- */
+// Advance the cursor to an indexed block and clear the error streak. With `leaseOwner` the
+// same UPDATE renews the lease. Returns false when the lease is lost, and the caller must roll back.
 export async function advanceCursor(
   db: CapTransaction,
   block: CrawlPoint,
@@ -324,10 +297,7 @@ export async function advanceCursor(
   return leaseDeadlineReached(verified, leaseOwner, now.getTime() + ttlMs);
 }
 
-/**
- * Lease for the UTxO set import, on the crawler's lease columns: a crawler start on any
- * instance and a second import are refused while it is held. Does not require `desiredRunning`.
- */
+// Lease for the UTxO set import on the crawler's lease columns. Blocks crawler starts and other imports.
 export async function tryAcquireImportLease(
   db: CapTransaction,
   owner: string,
@@ -400,11 +370,7 @@ export async function setSyncStatus(
   }).where({ ID: SINGLETON_ID }));
 }
 
-/**
- * Record a crawler error. Increments the consecutive-error counter and flips status
- * to 'error' once the circuit-breaker threshold is reached. Returns the new streak
- * length so the caller can decide whether to back off / stop.
- */
+/** Record a crawler error and return the new streak. Sets status 'error' at the threshold. -1 means the lease is lost. */
 export async function recordError(db: CapTransaction, err: unknown, leaseOwner?: string): Promise<number> {
   if (leaseOwner && !(await renewCrawlerLease(db, leaseOwner))) return -1;
   const current = await readCursor(db);

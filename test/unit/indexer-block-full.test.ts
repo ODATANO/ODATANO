@@ -243,6 +243,18 @@ describe('CardanoIndexer.indexBlockFull — superseded rows at the same height',
     expect(deletes()[0].where).toEqual({ hash: { in: ['stub'.padEnd(64, '0')] } });
   });
 
+  it('checks for references only after the transactions of the block moved to it', async () => {
+    const { indexer } = makeIndexer();
+    blocksAtHeight = ['lazy'.padEnd(64, '0')];
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx('t1'.padEnd(64, '0'))]);
+
+    const txUpsert = runs.findIndex(q => q._op === 'UPSERT' && q.entity === 'Transactions');
+    const referenceCheck = runs.findIndex(q => q._op === 'SELECT.distinct');
+    expect(txUpsert).toBeGreaterThanOrEqual(0);
+    expect(referenceCheck).toBeGreaterThan(txUpsert);
+  });
+
   it('deletes nothing when the height holds no other row or every other row is referenced', async () => {
     const { indexer } = makeIndexer();
     await indexer.indexBlockFull(mockTx as never, blockData(), []);

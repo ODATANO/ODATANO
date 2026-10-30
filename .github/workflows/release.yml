@@ -6,18 +6,15 @@ on:
       - 'v*'
 
 jobs:
-  # Gate 1: full test pipeline (cds:types, typecheck, lint, unit/integration
-  # suites) — reuses the same workflow that guards main.
+  # Gate 1: the full test pipeline, the same workflow that guards main.
   verify:
     uses: ./.github/workflows/test.yaml
     secrets: inherit
     permissions:
       contents: read
 
-  # Gate 2: the npm package itself must build and be clean — `npm ci` runs the
-  # `prepare` build (catches TS5058-class packaging breaks), the production
-  # audit blocks known-vulnerable releases, and pack --dry-run validates the
-  # files allowlist. Publishing to npm stays a MANUAL step by policy.
+  # Gate 2: the npm package must build, pass the production audit and pack cleanly.
+  # Publishing to npm stays a manual step.
   package-check:
     runs-on: ubuntu-latest
     permissions:
@@ -81,12 +78,12 @@ jobs:
           VERSION='${{ steps.version.outputs.version }}'
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$PKG_VERSION" != "$VERSION" ]; then
-            echo "::error::tag version '$VERSION' does not match package.json version '$PKG_VERSION' — retag the correct commit or bump package.json first"
+            echo "::error::tag version '$VERSION' does not match package.json version '$PKG_VERSION'. Retag the correct commit or bump package.json first"
             exit 1
           fi
           MTA_VERSION=$(sed -n 's/^version:[[:space:]]*//p' mta.yaml | head -1)
           if [ "$MTA_VERSION" != "$VERSION" ]; then
-            echo "::error::tag version '$VERSION' does not match mta.yaml version '$MTA_VERSION' — keep mta.yaml in sync with package.json"
+            echo "::error::tag version '$VERSION' does not match mta.yaml version '$MTA_VERSION'. Keep mta.yaml in sync with package.json"
             exit 1
           fi
       
@@ -100,8 +97,8 @@ jobs:
         with:
           context: .
           push: true
-          # `latest` only for stable releases — an RC must never replace the
-          # stable container tag (empty list entries are ignored by the action).
+          # `latest` only for stable releases, so an RC never replaces the stable tag.
+          # The action ignores empty list entries.
           tags: |
             ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
             ${{ steps.version.outputs.prerelease == 'false' && format('ghcr.io/{0}/odatano:latest', steps.repo.outputs.repository_owner_lowercase) || '' }}

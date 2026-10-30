@@ -1,10 +1,6 @@
-/**
- * Bulk INSERT/UPSERT on PostgreSQL: send the rows as one text parameter.
- * @cap-js/postgres turns every `.entries()` row list into a stream and ships it through a
- * per-transaction temp table (`CREATE TEMP TABLE` + `COPY`), three round trips per write plus a
- * table created and dropped per transaction. Row lists built from in-memory arrays are drained
- * into a string instead; streams a caller passes in (media) keep the driver's path.
- */
+// Sends bulk INSERT and UPSERT rows on PostgreSQL as one text parameter. The driver default
+// streams them through a temp table, which costs three round trips per write.
+// Streams a caller passes in keep the driver's path.
 import cds from '@sap/cds';
 import { Readable } from 'stream';
 

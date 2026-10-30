@@ -52,10 +52,8 @@ if (req) {
 
 logger.debug('Plugin registered');
 
-/**
- * Agent grants (off by default). Must run at plugin load, before CAP builds its
- * middlewares, because it swaps the auth impl. Idempotent; server.ts repeats it for standalone.
- */
+// Agent grants swap the auth impl, so this runs at plugin load before CAP builds middlewares.
+// Idempotent. server.ts repeats it for standalone mode.
 (require('../srv/utils/agent-grants-config') as typeof import('../srv/utils/agent-grants-config'))
   .activateAgentGrants();
 
@@ -63,10 +61,8 @@ logger.debug('Plugin registered');
 (require('../srv/utils/legacy-service-paths') as typeof import('../srv/utils/legacy-service-paths'))
   .registerLegacyServicePaths();
 
-/**
- * Plugin mode: relative @impl paths resolve from cds.root (the consumer app), so
- * rewrite them to package-qualified paths that Node module resolution can find.
- */
+// In plugin mode relative @impl paths resolve from the consumer app.
+// Rewrite them to package-qualified paths that Node can resolve.
 cds.on('loaded', (model) => {
   if (path.resolve(cds.root) === pluginRoot) return;
   const defs = (model as { definitions?: Record<string, { '@impl'?: string }> }).definitions ?? {};

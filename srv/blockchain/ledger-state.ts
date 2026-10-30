@@ -6,6 +6,8 @@ import {
   LedgerAddresses,
   LedgerAddressAssets,
   LedgerAccounts,
+  type LedgerUTxO,
+  type LedgerUTxOAsset,
 } from '#cds-models/odatano/cardano';
 import type { Amount, BlockData, Transaction as ProviderTransaction, TxOutputLine, ReferenceScriptType } from '../utils/types';
 import { decodeShelleyAddress } from '../utils/mappers';
@@ -14,11 +16,8 @@ import { chunk, IN_CHUNK } from '../utils/collections';
 const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('LedgerState');
 
-/**
- * Crawler-fed ledger state (`crawler.utxoSet`): UTxO set + per-address/per-stake-key running
- * sums in non-temporal tables. Only blocks AFTER the imported anchor are applied; a reorg past
- * the anchor invalidates the set, one after it is undone by a recount of the open rows.
- */
+// UTxO set and running sums per address and stake key, fed by the crawler (`crawler.utxoSet`).
+// Only blocks after the imported snapshot (the anchor) are applied. A reorg before it invalidates the set.
 
 /** The point the imported UTxO set describes; blocks with slot > anchor.slot are applied. */
 export interface LedgerAnchor {
@@ -29,43 +28,19 @@ export interface LedgerAnchor {
 export interface LedgerApplyResult {
   created: number;
   spent: number;
-  /** Consumed outpoints with no open row — a gap between snapshot and crawl, never expected. */
+  /** Consumed outputs with no open row. Means a gap between snapshot and crawl, never expected. */
   missing: number;
   addresses: number;
 }
 
-/** DB row of `LedgerUTxOs` (flattened struct columns as CAP names them). */
-export interface LedgerUtxoRow {
-  txHash: string;
-  outputIndex: number;
-  address: string;
-  stakeAddress: string | null;
-  addressType: string;
-  isScript: boolean;
-  lovelace: string;
-  createdSlot: number | null;
-  spentTxHash: string | null;
-  spentSlot: number | null;
-  utxo_dataHash: string | null;
-  utxo_inlineDatum: string | null;
-  utxo_referenceScriptHash: string | null;
-  utxo_referenceScriptSize: number | null;
-  utxo_referenceScriptType: ReferenceScriptType | null;
-  utxo_paymentCredential: string | null;
-  hasAssets: boolean;
-}
+/** A `LedgerUTxOs` row as the block path writes it: every column set, lovelace as an exact string. */
+export type LedgerUtxoRow = Required<Omit<LedgerUTxO, 'assets' | 'lovelace' | 'utxo_referenceScriptType' | 'address' | 'addressType' | 'isScript' | 'hasAssets'>>
+  & { address: string; addressType: string; isScript: boolean; hasAssets: boolean; lovelace: string; utxo_referenceScriptType: ReferenceScriptType | null };
 
-export interface LedgerUtxoAssetRow {
-  utxo_txHash: string;
-  utxo_outputIndex: number;
-  unit: string;
-  asset_quantity: string;
-  asset_policyId: string | null;
-  asset_assetNameHex: string | null;
-  asset_assetName: string | null;
-}
+/** A `LedgerUTxOAssets` row as the block path writes it. */
+export type LedgerUtxoAssetRow = Required<Omit<LedgerUTxOAsset, 'utxo' | 'asset_fingerprint' | 'asset_quantity'>> & { asset_quantity: string };
 
-/** Minimal output shape the row builder needs — shared by the block path and the import. */
+/** Minimal output shape the row builder needs, shared by the block path and the import. */
 export interface LedgerOutputLike {
   txHash: string;
   outputIndex: number;
@@ -90,7 +65,7 @@ function decodeAssetName(hex: string): string | null {
   if (!hex) return null;
   try {
     const text = Buffer.from(hex, 'hex').toString('utf8');
-    // printable only — a binary asset name has no useful decoded form
+    // printable only, a binary asset name has no useful decoded form
     return /^[\x20-\x7e]*$/.test(text) ? text : null;
   } catch {
     return null;
@@ -185,10 +160,8 @@ export interface LedgerLookup {
   assets: Map<string, LedgerUtxoAssetRow[]>;
 }
 
-/**
- * Read the ledger rows of the given source transactions. Asset rows are read only for
- * transactions with at least one row carrying assets, so an ada-only block costs one SELECT.
- */
+// Read the ledger rows of the given source transactions. Asset rows are read only where a row
+// has assets, so an ada-only block costs one SELECT.
 export async function readLedgerOutputs(tx: CapTransaction, txHashes: Iterable<string>, into?: LedgerLookup): Promise<LedgerLookup> {
   const lookup: LedgerLookup = into ?? { hashes: new Set(), rows: new Map(), assets: new Map() };
   const todo = [...new Set(txHashes)].filter(h => !lookup.hashes.has(h));
@@ -218,12 +191,8 @@ export function ledgerRowAmount(row: LedgerUtxoRow, assets: LedgerUtxoAssetRow[]
   ];
 }
 
-/**
- * Apply one block to the ledger tables. Caller guarantees `block.slot > anchor.slot`.
- * `lookup` may carry rows the caller already read for this block (input resolution).
- * Never throws for a missing outpoint (it is counted and logged); DB errors propagate so the
- * block transaction rolls back as a whole.
- */
+// Apply one block after the anchor. `lookup` may carry rows the caller already read.
+// A missing output is counted, not thrown. DB errors propagate so the block transaction rolls back.
 export async function applyBlockToLedger(
   tx: CapTransaction,
   block: BlockData,
@@ -241,7 +210,7 @@ export async function applyBlockToLedger(
     }
   }
 
-  // 2) everything this block consumes — same-block outputs first, the rest from the DB
+  // 2) everything this block consumes, same-block outputs first, the rest from the DB
   const lookups: { key: string; txHash: string; outputIndex: number; spender: string }[] = [];
   const spentInBlock = new Set<string>();
   for (const t of txs) {
@@ -265,7 +234,7 @@ export async function applyBlockToLedger(
     if (!row || row.spentTxHash) {
       missing++;
       if (missing <= 3) {
-        logger.warn(`ledger: ${l.spender} consumes ${l.key} which has no open row (${row ? 'already spent' : 'unknown'}) — snapshot gap?`);
+        logger.warn(`ledger: ${l.spender} consumes ${l.key} which has no open row (${row ? 'already spent' : 'unknown'}), snapshot gap?`);
       }
       continue;
     }
@@ -390,11 +359,8 @@ export async function applyBlockToLedger(
   return { created: created.size, spent: spentInBlock.size + spentRows.length, missing, addresses: touched.length };
 }
 
-/**
- * Reorg undo for a set of rolled-back transactions: drop what they created, reopen what
- * they spent, then recount every address either side touched from the open rows.
- * @returns the recounted addresses
- */
+// Undo rolled-back transactions: drop what they created, reopen what they spent,
+// then recount every touched address. Returns the recounted addresses.
 export async function undoLedgerForTransactions(tx: CapTransaction, txHashes: string[]): Promise<string[]> {
   if (!txHashes.length) return [];
   const touched = new Set<string>();
@@ -413,10 +379,7 @@ export async function undoLedgerForTransactions(tx: CapTransaction, txHashes: st
   return addresses;
 }
 
-/**
- * Recount running sums for the given addresses from their open UTxO rows, then the
- * stake keys those addresses belong to. Also the repair path for a drifted sum.
- */
+// Recount the sums of these addresses and their stake keys from open rows. Also repairs a drifted sum.
 export async function recountLedgerAddresses(tx: CapTransaction, addresses: string[]): Promise<void> {
   const stakes = new Set<string>();
   for (const address of addresses) {
@@ -503,11 +466,7 @@ export async function recountLedgerAccounts(tx: CapTransaction, stakeAddresses: 
 /** Address types that carry a payment credential. */
 const CREDENTIAL_ADDRESS_TYPES = ['base', 'pointer', 'enterprise'];
 
-/**
- * Fill `LedgerAddresses.paymentCredential` where it is missing (rows from the import's SQL
- * aggregation, or written before the column existed). One transaction per chunk, idempotent.
- * @returns rows updated
- */
+// Fill a missing `LedgerAddresses.paymentCredential`, one transaction per chunk. Returns rows updated.
 export async function backfillPaymentCredentials(chunkSize = 1000): Promise<number> {
   let updated = 0;
   for (;;) {

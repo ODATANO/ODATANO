@@ -100,6 +100,8 @@ describe('CardanoIndexerService.getStatus', () => {
       tipHeight: '200',
       syncProgress: '25.00', // 50/200
       consecutiveErrors: 2,
+      lastIndexedAt: null,
+      stalled: false,
       // crawler-fed UTxO set: not configured, nothing imported
       utxoSet: { enabled: false, status: 'none', anchorSlot: null, anchorHash: null, importedAt: null, error: null },
       certificateBackfill: {
@@ -114,6 +116,22 @@ describe('CardanoIndexerService.getStatus', () => {
       decimalsBackfill: { status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null },
       epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
     });
+  });
+
+  it('reports a crawler that holds its lease but committed no block for 10 minutes as stalled', async () => {
+    const lease = { desiredRunning: true, leaseOwner: 'leader', leaseUntil: '2999-01-01T00:00:00.000Z' };
+    const base = { lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0, ...lease };
+    const handlers = boot();
+
+    readCursorMock.mockResolvedValue({ ...base, lastIndexedAt: new Date(Date.now() - 11 * 60_000).toISOString() });
+    expect(await handlers.getStatus({})).toMatchObject({ running: true, stalled: true });
+
+    readCursorMock.mockResolvedValue({ ...base, lastIndexedAt: new Date(Date.now() - 60_000).toISOString() });
+    expect(await handlers.getStatus({})).toMatchObject({ stalled: false });
+
+    // paused: no lease, nothing to report
+    readCursorMock.mockResolvedValue({ ...base, leaseUntil: '2000-01-01T00:00:00.000Z', lastIndexedAt: '2000-01-01T00:00:00.000Z' });
+    expect(await handlers.getStatus({})).toMatchObject({ running: false, stalled: false });
   });
 
   it('reports the newest epoch snapshot and the source the next one would use', async () => {

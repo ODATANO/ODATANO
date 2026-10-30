@@ -1,19 +1,6 @@
 
-/**
- * ODATANO Performance Benchmark
- *
- * Runs a series of OData calls against a running server, measures response times,
- * and writes results to scripts/perf-results.json.
- *
- * Usage:
- *   1. Start server: cds watch
- *   2. Run: npx tsx scripts/perf-benchmark.ts
- *
- * Options:
- *   --rounds <n>    Number of rounds per endpoint (default: 3)
- *   --base <url>    Base URL (default: http://localhost:4004)
- *   --output <file> Output file (default: scripts/perf-results.json)
- */
+// Times a series of OData calls against a running server and writes perf-results.json next to it.
+// Usage: npx tsx scripts/perf/perf-benchmark.ts [--rounds 3] [--base http://localhost:4004] [--output <file>]
 
 import axios, { AxiosError } from 'axios';
 import * as fs from 'fs';
@@ -294,10 +281,7 @@ export function computeStats(rounds: CallResult[]): EndpointResult['stats'] {
   };
 }
 
-/**
- * Run the full benchmark suite against a running server.
- * Returns a BenchmarkReport with all results.
- */
+/** Runs the full benchmark suite against a running server. */
 export async function runBenchmark(base: string, rounds: number, opts?: { silent?: boolean }): Promise<BenchmarkReport> {
   const silent = opts?.silent ?? false;
   const endpoints = buildEndpoints(base);
@@ -385,7 +369,7 @@ export async function runBenchmark(base: string, rounds: number, opts?: { silent
       console.log('  GetSigningRequest                       skipped (no signing request ID)');
     }
   } else if (!silent) {
-    console.log('  skipped — no build ID captured from BuildSimpleAdaTransaction');
+    console.log('  skipped, no build ID captured from BuildSimpleAdaTransaction');
   }
 
   // Build report

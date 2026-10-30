@@ -21,7 +21,7 @@ const RECIPIENT_ADDRESS = "addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu
 // Lovelace to send to recipient from the script UTxO
 const LOVELACE_AMOUNT = 2_000_000; // 2 ADA
 
-// PlutusV3 validator script in CBOR hex — an always-true validator for testing;
+// PlutusV3 validator script in CBOR hex, an always-true validator for testing;
 // replace with your own for real use.
 const VALIDATOR_SCRIPT = "587601010029800aba2aba1aab9eaab9dab9a48888966002646465300130053754003300700398038012444b30013370e9000001c4c9289bae300a3009375400915980099b874800800e2646644944c02c004c02cc030004c024dd5002459007200e18031803800980300098019baa0068a4d13656400401";
 

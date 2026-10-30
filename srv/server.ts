@@ -141,10 +141,7 @@ interface AppContext {
 let appContext: AppContext | null = null;
 let bootstrapError: Error | null = null;
 
-/**
- * Initialize the application context; every start path (standalone hook, plugin) comes through here.
- * @param protocolParams - optional, lets tests skip the backend call
- */
+/** Every start path, standalone hook and plugin, comes through here. */
 async function initializeAppContext(
   config: CardanoClientConfig,
   protocolParams?: LedgerProtocolParameters,
@@ -206,10 +203,7 @@ export { loadAgentGrantsConfig, activateAgentGrants } from './utils/agent-grants
 activateAgentGrants();
 registerLegacyServicePaths();
 
-/**
- * The application context.
- * @throws {ProviderUnavailableError} 503 when uninitialized; a bootstrap failure is appended as cause.
- */
+/** Throws 503 when uninitialized, with a bootstrap failure appended as cause. */
 export function getAppContext(): AppContext {
   if (!appContext) {
     const base = 'Application not initialized. This should be called after cds.served event.';
@@ -240,10 +234,8 @@ export function getHsmConfig(): HsmConfig | undefined {
   return hsmConfigInstance;
 }
 
-/**
- * Initialize from a pre-built config (plugin path). Idempotent: a second call must not
- * create a duplicate CardanoClient; tests reinitialize via resetAppContext() / createTestContext().
- */
+// Plugin path. Idempotent, so a second call never creates a duplicate CardanoClient.
+// Tests reinitialize with resetAppContext() or createTestContext().
 export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
   if (appContext) {
     logger.debug('initializeFromConfig: appContext already initialized, skipping');
@@ -271,11 +263,8 @@ export function resetAppContext(context: AppContext | null): void {
   logger.debug('Application context reset');
 }
 
-/**
- * Create an isolated test context with the given backends.
- * @param _txBuilderName ignored; Buildooor is the sole builder (kept for signature compatibility)
- * @param protocolParams optional, skips the backend call during init
- */
+// Isolated test context with the given backends.
+// _txBuilderName is ignored and kept for signature compatibility.
 export async function createTestContext(
   backends: BackendName[],
   _txBuilderName: TransactionBuilderName = 'buildooor',
@@ -299,8 +288,15 @@ export async function createTestContext(
   return await initializeAppContext(config, protocolParams);
 }
 
-/** Stop worker and crawler, then close all backend connections. */
-export async function shutdownAppContext(): Promise<void> {
+let shutdownInFlight: Promise<void> | null = null;
+
+/** Stop worker and crawler, then close all backend connections. Concurrent callers share one run. */
+export function shutdownAppContext(): Promise<void> {
+  shutdownInFlight ??= runShutdown().finally(() => { shutdownInFlight = null; });
+  return shutdownInFlight;
+}
+
+async function runShutdown(): Promise<void> {
   // Worker and crawler first: their in-flight writes must not hit a torn-down client.
   try {
     await stopWalletWorker();
@@ -331,11 +327,8 @@ export async function shutdownAppContext(): Promise<void> {
 }
 
 
-/**
- * Load and validate CardanoClientConfig.
- * Priority: cds.env.requires["odatano-core"].X > process.env.X > default.
- * @throws {ConfigError} if any value is invalid
- */
+// cds.env.requires["odatano-core"] wins over process.env, which wins over the default.
+// Throws ConfigError for an invalid value.
 export function loadConfigFromEnv(): CardanoClientConfig {
   const cdsConfig = coreCdsConfig();
 
@@ -420,10 +413,7 @@ export function loadConfigFromEnv(): CardanoClientConfig {
   };
 }
 
-/**
- * Load the HSM configuration (cds.requires.odatano-core.hsm.* or HSM_* env vars).
- * Returns undefined when HSM is not enabled.
- */
+/** From cds.requires.odatano-core.hsm or HSM_* env vars. Undefined when HSM is off. */
 export function loadHsmConfigFromEnv(): HsmConfig | undefined {
   const cdsConfig = coreCdsConfig();
   const hsmCds: HsmCdsSection = cdsConfig.hsm ?? {};
@@ -443,13 +433,13 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
 
   const slot = Number(hsmCds.slot ?? env.HSM_SLOT ?? 0);
   if (!Number.isInteger(slot) || slot < 0) {
-    throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}" — must be a non-negative integer`);
+    throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}": must be a non-negative integer`);
   }
 
   // Fail closed: the HSM holds a real signing key, so an explicit role gate is mandatory.
   const requiresRole = hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || '';
   if (!requiresRole) {
-    throw new ConfigError('HSM_REQUIRES_ROLE (or cds.requires.odatano-core.hsm.requiresRole) is required when HSM is enabled — set it to the XSUAA scope name allowed to invoke HSM signing actions');
+    throw new ConfigError('HSM_REQUIRES_ROLE (or cds.requires.odatano-core.hsm.requiresRole) is required when HSM is enabled. Set it to the XSUAA scope name allowed to invoke HSM signing actions');
   }
 
   return {
@@ -463,10 +453,7 @@ export function loadHsmConfigFromEnv(): HsmConfig | undefined {
   };
 }
 
-/**
- * Load the chain-crawler configuration (cds.requires.odatano-core.crawler.* or CRAWLER_* env vars).
- * Returns { enabled: false } when the crawler is off (the default).
- */
+/** From cds.requires.odatano-core.crawler or CRAWLER_* env vars. Off by default. */
 export function loadCrawlerConfigFromEnv(): CrawlerConfig {
   const cdsConfig = coreCdsConfig();
   const c: CrawlerCdsSection = cdsConfig.crawler ?? {};
@@ -523,7 +510,7 @@ export function loadCrawlerConfigFromEnv(): CrawlerConfig {
 
   if (enabled && (startSlot == null || Number.isNaN(startSlot) || !startBlockHash)) {
     throw new ConfigError(
-      'Crawler is enabled but no start block is configured — set crawler.startSlot + crawler.startBlockHash ' +
+      'Crawler is enabled but no start block is configured. Set crawler.startSlot + crawler.startBlockHash ' +
       '(or CRAWLER_START_SLOT + CRAWLER_START_HASH).'
     );
   }
@@ -578,7 +565,7 @@ export async function startCrawlerIfConfigured(): Promise<void> {
   try {
     config = loadCrawlerConfigFromEnv();
   } catch (err) {
-    logger.error('Invalid crawler configuration — crawler not started:', err);
+    logger.error('Invalid crawler configuration, crawler not started:', err);
     return;
   }
   if (!config.enabled) return;
@@ -604,10 +591,7 @@ const WALLET_WORKER_LIMITS = {
   maxAttempts: { min: 1, max: 10 },
 } as const;
 
-/**
- * Load the wallet-worker configuration (cds.requires.odatano-core.walletWorker.* or WALLET_WORKER_* env vars).
- * Returns { enabled: false } when the worker is off (the default).
- */
+/** From cds.requires.odatano-core.walletWorker or WALLET_WORKER_* env vars. Off by default. */
 export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
   const cdsConfig = coreCdsConfig();
   const w: WalletWorkerCdsSection = cdsConfig.walletWorker ?? {};
@@ -625,19 +609,19 @@ export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
     try {
       walletsRaw = JSON.parse(env.WALLET_WORKER_WALLETS);
     } catch {
-      throw new ConfigError('Invalid WALLET_WORKER_WALLETS — must be a JSON array of { walletId, signerType, keyEnv? }.');
+      throw new ConfigError('Invalid WALLET_WORKER_WALLETS: must be a JSON array of { walletId, signerType, keyEnv? }.');
     }
   }
   const wallets: WorkerWalletConfig[] = [];
   if (walletsRaw !== undefined) {
     if (!Array.isArray(walletsRaw)) {
-      throw new ConfigError('Invalid walletWorker.wallets — must be an array of { walletId, signerType, keyEnv? }.');
+      throw new ConfigError('Invalid walletWorker.wallets: must be an array of { walletId, signerType, keyEnv? }.');
     }
     for (const entry of walletsRaw) {
       const walletId = typeof entry?.walletId === 'string' ? entry.walletId.trim() : '';
       const signerType = entry?.signerType;
       if (!walletId || (signerType !== 'hsm' && signerType !== 'software')) {
-        throw new ConfigError(`Invalid wallet entry ${JSON.stringify(entry)} — walletId and signerType (hsm|software) are required.`);
+        throw new ConfigError(`Invalid wallet entry ${JSON.stringify(entry)}: walletId and signerType (hsm|software) are required.`);
       }
       if (signerType === 'software' && (typeof entry.keyEnv !== 'string' || !entry.keyEnv.trim())) {
         throw new ConfigError(`Wallet "${walletId}" is signerType=software but has no keyEnv (name of the env var holding the signing key).`);
@@ -695,7 +679,7 @@ export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
 
   if (enabled && wallets.length === 0) {
     throw new ConfigError(
-      'Wallet worker is enabled but no wallets are configured — set walletWorker.wallets (or WALLET_WORKER_WALLETS).',
+      'Wallet worker is enabled but no wallets are configured. Set walletWorker.wallets (or WALLET_WORKER_WALLETS).',
     );
   }
 
@@ -718,7 +702,7 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
   try {
     config = loadWalletWorkerConfigFromEnv();
   } catch (err) {
-    logger.error('Invalid wallet-worker configuration — worker not started:', err);
+    logger.error('Invalid wallet-worker configuration, worker not started:', err);
     return;
   }
   if (!config.enabled) return;
@@ -736,11 +720,8 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
   }
 }
 
-/**
- * Re-drive deferred submissions claimed as 'submitting' whose detached submit never ran
- * (process died first). Idempotent: an already submitted tx finalizes via
- * TransactionAlreadySubmittedError. Never throws.
- */
+// Retries submissions left in 'submitting' because the process died first. Idempotent,
+// because an already submitted tx finalizes on TransactionAlreadySubmittedError. Never throws.
 export async function redriveInterruptedSubmissionsIfConfigured(): Promise<void> {
   if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
   // Without a database there are no signing requests to re-drive
@@ -779,7 +760,7 @@ cds.on('served', async () => {
     // stderr directly: the cause stays visible when a test runner silences console.error.
     const where = config ? `backends={${config.backends.join(',')}} network=${config.network}` : 'config load';
     const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err);
-    process.stderr.write(`[ODATANO] Failed to initialize blockchain components — ${where}\n${msg}\n`);
+    process.stderr.write(`[ODATANO] Failed to initialize blockchain components: ${where}\n${msg}\n`);
     logger.error('Failed to initialize blockchain components:', err);
   }
 

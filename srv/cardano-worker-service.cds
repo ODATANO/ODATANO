@@ -1,21 +1,8 @@
+using { WalletJobKind } from '../db/types';
 using {odatano.cardano as db} from '../db/schema';
 
-/**
- * Cardano Wallet Worker Service (v2.0)
- *
- * Control + observability surface for the wallet worker / job engine:
- * - job submission (async build → sign → submit → confirm from server-side wallets)
- * - job status polling + cancellation
- * - read-only projections of jobs and registered worker wallets
- * - pause/resume of the local worker instance (admin)
- *
- * Security note: SubmitWalletJob executes value transfers with server-held keys —
- * the service requires authentication throughout; control actions and foreign-job
- * visibility are gated behind the Admin role. Jobs on HSM-backed wallets addition-
- * ally require the configured hsm.requiresRole (HSM_REQUIRES_ROLE), the same gate
- * the synchronous SignWithHsm path enforces. Keys are NEVER accepted or exposed
- * through this surface.
- */
+// Async wallet jobs signed with server-held keys. Control actions and foreign jobs need Admin;
+// jobs on HSM wallets also need hsm.requiresRole. Keys are never accepted or returned here.
 @requires: 'authenticated-user'
 service CardanoWorkerService @(impl: './cardano-worker-service') {
 
@@ -31,7 +18,7 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
 
     @readonly
     @title      : 'Worker Wallets'
-    @description: 'Registered server-side worker wallets (addresses and stats only — no key material, no lease internals)'
+    @description: 'Registered server-side worker wallets (addresses and stats only; no key material, no lease internals)'
     entity WorkerWallets  as projection on db.CardanoWorkerWallets excluding { leaseOwner, leaseUntil };
 
     @title      : 'Wallet Job Submission Result'
@@ -66,10 +53,7 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         pendingJobs          : Integer;
     }
 
-    /**
-     * Terminal job outcomes. Subscribing removes the need for a GetJobStatus poll loop:
-     *   (await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
-     */
+    /** Terminal job outcome. Subscribe instead of polling GetJobStatus. */
     event jobConfirmed {
         jobId    : UUID;
         walletId : String(50);
@@ -90,10 +74,10 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
     @description: 'Queue an asynchronous transaction job for a worker wallet. Returns immediately with a jobId; poll GetJobStatus for the outcome. The request JSON is the same payload shape as the corresponding Build* action; senderAddress is always overridden with the wallet address.'
     action SubmitWalletJob(
         @title: 'Wallet Id'          walletId       : String(50),
-        @title: 'Job Kind'           kind           : String(12),
+        @title: 'Job Kind'           @assert.range  kind : WalletJobKind,
         @title: 'Request JSON'       requestJson    : LargeString,
         @title: 'Idempotency Key'    idempotencyKey : String(100),
-        @title: 'Priority'           priority       : Integer,
+        @title: 'Priority'           @assert.range: [0, 10000] priority : Integer,
         @title: 'Not Before'         notBefore      : Timestamp
     ) returns JobSubmissionResult;
 

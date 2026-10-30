@@ -7,10 +7,7 @@ import { isCrawlerLeaseActive, readCursor, setCrawlerDesiredRunning } from './sy
 
 const logger = cds.log('CardanoCrawler');
 
-/**
- * Process-wide crawler singleton: started fire-and-forget from the `served` hook,
- * controlled (pause/resume/status) via the indexer service.
- */
+// Process-wide crawler, started from the `served` hook and controlled via the indexer service.
 
 let active: CardanoCrawler | null = null;
 let lifecycleQueue: Promise<void> = Promise.resolve();
@@ -21,10 +18,8 @@ let standbyGeneration = 0;
 const STANDBY_RETRY_MS = 5_000;
 const STANDBY_MAX_BACKOFF_MS = 5 * 60_000;
 
-/**
- * Delay before the next standby start attempt: 5 s for a healthy standby; after a local
- * error halt, exponential backoff (5 s … 5 min) driven by the shared cursor's error streak.
- */
+// Delay before the next standby start: 5 s when healthy. After an error halt it grows
+// exponentially up to 5 min with the shared cursor's error streak.
 export function standbyDelayMs(consecutiveErrors: number): number {
   if (!Number.isFinite(consecutiveErrors) || consecutiveErrors <= 1) return STANDBY_RETRY_MS;
   return Math.min(STANDBY_MAX_BACKOFF_MS, STANDBY_RETRY_MS * 2 ** Math.min(consecutiveErrors - 1, 10));
@@ -37,10 +32,7 @@ export interface StartCrawlerDeps {
   config: CrawlerConfig;
 }
 
-/**
- * Start the crawler (idempotent — a no-op if one is already running). Fire-and-forget:
- * returns once the ingest pipeline is launched, not when catch-up completes.
- */
+// Start the crawler, a no-op if one runs. Returns once the pipeline is launched, not when caught up.
 export async function startCrawler(deps: StartCrawlerDeps, resumeCluster = false): Promise<void> {
   const generation = ++standbyGeneration;
   standbyDeps = deps;
@@ -84,10 +76,7 @@ async function startCrawlerAttempt(deps: StartCrawlerDeps, resumeCluster: boolea
   });
 }
 
-/**
- * Stop the local crawler. `pauseCluster=true` additionally fences every instance via
- * shared DB intent; ordinary app shutdown leaves the desired state intact for failover.
- */
+// Stop the local crawler. `pauseCluster` stops every instance. A normal shutdown keeps failover possible.
 export async function stopCrawler(pauseCluster = false): Promise<void> {
   ++standbyGeneration; // invalidate callbacks that already left the timer queue
   standbyDeps = null;
@@ -146,10 +135,7 @@ function scheduleStandby(generation: number, delayMs = STANDBY_RETRY_MS): void {
   standbyTimer.unref?.();
 }
 
-/**
- * Backoff from the shared cursor's error streak after a local failure; the base delay
- * otherwise — a healthy tick costs no DB round-trip.
- */
+/** Backoff from the error streak after a local failure. A healthy tick costs no DB read. */
 async function nextStandbyDelay(failedHere: boolean): Promise<number> {
   if (!failedHere) return STANDBY_RETRY_MS;
   try {

@@ -1,35 +1,8 @@
 using {odatano.cardano as db} from '../db/schema';
 using { Blake2b256, Bech32, AssetUnit, ParsedTransaction, TransactionConfirmations } from '../db/types';
 
-/**
- * Cardano OData Service
- *
- * Handles external read-only queries for Cardano blockchain data, including:
- * - Retrieving network information, blocks, epochs, pools, dreps, transactions, accounts, addresses, UTxOs, assets, and metadata
- * - Providing actions for fetching specific data by identifiers (hashes, addresses, etc.) and for retrieving the latest blockchain state (latest block, epoch, protocol parameters)
- *
- * ## Security: Authentication & Authorization
- *
- * All services use `@requires: 'authenticated-user'` (service-level gate).
- * The XSUAA scopes defined in xs-security.json (Read, Transact, Sign) are available
- * for consumer-level role assignment but are NOT enforced per-action in ODATANO itself.
- *
- * This is intentional — ODATANO is a blockchain bridge, not a multi-tenant application.
- * Per-resource ownership checks (IDOR prevention) are deliberately omitted because:
- *
- * 1. **Blockchain security model**: Unsigned transaction CBOR is not exploitable without
- *    the corresponding private key. Viewing a build/signing request does not enable
- *    fund theft — only the key holder can sign and submit.
- *
- * 2. **Cross-address operations are legitimate**: Smart contract interactions routinely
- *    require building transactions for addresses the caller does not own — e.g. script
- *    redemptions, multi-party Plutus workflows, or DApp backends building on behalf of users.
- *    Enforcing sender == authenticated user would break these use cases.
- *
- * 3. **Consumer responsibility**: Consumers deploying ODATANO in multi-user environments
- *    should add their own authorization layer (e.g. `@restrict` annotations, custom
- *    middleware) that maps JWT claims to allowed wallet addresses if needed.
- */
+// Read queries for Cardano chain data. Every operation needs an authenticated user;
+// per-address ownership is not checked (docs/guides/SECURITY_GUIDE.md).
 @requires: 'authenticated-user'
 @path: '/odata/v4/cardano'
 service CardanoODataService @(impl: './cardano-service') {
@@ -217,6 +190,7 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetEpochByNumber(
                             @title: 'Epoch Number'
                             @description: 'The sequential number of the epoch'
+                            @assert.range: [0, _]
                             epochNumber: Integer)            returns Epochs;
 
     @title      : 'Get Pools by Pool Id'
@@ -234,21 +208,26 @@ service CardanoODataService @(impl: './cardano-service') {
                        drepId: String)                       returns Dreps;
 
     @title      : 'Get Asset Info'
-    @description: 'Retrieve native-asset information (supply, mint history, CIP-25 + CIP-26 metadata) by unit. Multi-backend (Blockfrost, Koios). Field availability differs slightly per backend — see entity description.'
+    @description: 'Retrieve native-asset information (supply, mint history, CIP-25 + CIP-26 metadata) by unit. Multi-backend (Blockfrost, Koios). Field availability differs slightly per backend; see entity description.'
     action GetAssetInfo(
                         @title: 'Asset Unit'
                         @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
                         unit: AssetUnit)                     returns Assets;
 
     @title      : 'Get Asset Mint/Burn History'
-    @description: 'Retrieve recent mint/burn events for a native asset (most recent first). Koios is preferred (provides block timestamps); Blockfrost is the fallback (timestamps null). Always-fresh fetch — UPSERTs entries by (unit, txHash). For full pagination, query the AssetHistory entity directly with $top/$skip after seeding.'
+    @description: 'Retrieve recent mint/burn events for a native asset, newest first. Koios is preferred (provides block timestamps); Blockfrost is the fallback (timestamps null). Always-fresh fetch, UPSERTs entries by (unit, txHash). skip + limit covers at most the newest 100 events; older events are read from the AssetHistory entity with $top/$skip.'
     action GetAssetHistory(
                            @title: 'Asset Unit'
                            @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
                            unit: AssetUnit,
                            @title: 'Limit'
-                           @description: 'Maximum number of recent events to fetch (default 100, clamped to 1-100)'
-                           limit: Integer)                   returns many AssetHistory;
+                           @description: 'Maximum number of rows (default 100, at most 100)'
+                           @assert.range: [1, 100]
+                           limit: Integer,
+                           @title: 'Skip'
+                           @description: 'Number of rows to skip (default 0)'
+                           @assert.range: [0, 99]
+                           skip: Integer)                    returns many AssetHistory;
 
     @title      : 'Get Accounts by Stake Address'
     @description: 'Retrieve account information using the Bech32 Stake Address'
@@ -276,7 +255,15 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetMetadataByTxHash(
                                @title: 'Transaction Hash'
                                @description: 'The unique identifier of the transaction'
-                               txHash: Blake2b256)        returns many TransactionMetadata;
+                               txHash: Blake2b256,
+                               @title: 'Limit'
+                               @description: 'Maximum number of rows (default 1000, at most 5000)'
+                               @assert.range: [1, 5000]
+                               limit: Integer,
+                               @title: 'Skip'
+                               @description: 'Number of rows to skip (default 0)'
+                               @assert.range: [0, _]
+                               skip: Integer)        returns many TransactionMetadata;
 
     @title      : 'Get Addresses by Bech32 Address'
     @description: 'Retrieve address information using the Bech32 Address'
@@ -290,31 +277,60 @@ service CardanoODataService @(impl: './cardano-service') {
     action GetUTxOsByAddress(
                              @title: 'Bech32 Address'
                              @description: 'The Bech32 encoded address'
-                             address: Bech32)             returns many AddressUTxOs;
+                             address: Bech32,
+                             @title: 'Limit'
+                             @description: 'Maximum number of rows (default 1000, at most 5000)'
+                             @assert.range: [1, 5000]
+                             limit: Integer,
+                             @title: 'Skip'
+                             @description: 'Number of rows to skip (default 0)'
+                             @assert.range: [0, _]
+                             skip: Integer)             returns many AddressUTxOs;
 
     @title      : 'Get UTxOs by Payment Credential'
     @description: 'Retrieve UTxOs across all bech32 addresses sharing the given 28-byte payment credential (key hash or script hash). Useful for protocols that write to multiple bech32 forms of the same script (e.g. Indigo CDPs, Liqwid positions). Served from the crawled UTxO set (crawler.utxoSet active and synced) with outputs read from the node at the tip, else from Koios; throws ProviderUnavailableError when neither is available. Always fresh, no cache check.'
     action GetUTxOsByCredential(
                                 @title: 'Payment Credential'
                                 @description: '28-byte payment credential hash as 56-char lowercase hex string'
-                                credential: String)       returns many AddressUTxOs;
+                                credential: String,
+                                @title: 'Limit'
+                                @description: 'Maximum number of rows (default 1000, at most 5000)'
+                                @assert.range: [1, 5000]
+                                limit: Integer,
+                                @title: 'Skip'
+                                @description: 'Number of rows to skip (default 0)'
+                                @assert.range: [0, _]
+                                skip: Integer)       returns many AddressUTxOs;
 
     @title      : 'Get Assets by Bech32 Address'
     @description: 'Retrieve asset information using the Bech32 Address'
     action GetAssetsByAddress(
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
-                              address: Bech32)            returns many AddressAssets;
+                              address: Bech32,
+                              @title: 'Limit'
+                              @description: 'Maximum number of rows (default 1000, at most 5000)'
+                              @assert.range: [1, 5000]
+                              limit: Integer,
+                              @title: 'Skip'
+                              @description: 'Number of rows to skip (default 0)'
+                              @assert.range: [0, _]
+                              skip: Integer)            returns many AddressAssets;
 
     @title : 'Get latest Transactions by Bech32 Address'
-    @description: 'Retrieve the latest transactions from the Bech32 Address'
+    @description: 'Retrieve the latest transactions of the Bech32 Address, newest first. skip + limit covers at most the newest 100 transactions.'
     action GetLatestTransactionsByAddress(
                                     @title: 'Bech32 Address'
                                     @description: 'The Bech32 encoded address'
                                     address: Bech32,
                                     @title: 'Limit'
-                                    @description: 'The maximum number of transactions to retrieve'
-                                    limit: Integer)            returns many AddressTransactions;
+                                    @description: 'Maximum number of rows (default 10, at most 100)'
+                                    @assert.range: [1, 100]
+                                    limit: Integer,
+                                    @title: 'Skip'
+                                    @description: 'Number of rows to skip (default 0)'
+                                    @assert.range: [0, 99]
+                                    skip: Integer)            returns many AddressTransactions;
 
     @title      : 'Get Latest Block'
     @description: 'Retrieve the latest block information'

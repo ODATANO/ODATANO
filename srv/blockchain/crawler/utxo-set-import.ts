@@ -31,11 +31,8 @@ import { chunk, IN_CHUNK } from '../../utils/collections';
 const { UPSERT, DELETE, SELECT, UPDATE } = cds.ql;
 const logger = cds.log('LedgerState');
 
-/**
- * One-off import of the UTxO set at the anchor `crawler.utxoSet` builds on: from Ogmios
- * (`queryLedgerState/utxo` at the cursor point) or a `cardano-cli query utxo --whole-utxo`
- * dump (`.json` parsed whole; `.ndjson`/`.jsonl` streamed, one entry or `{key,value}` per line).
- */
+// One-off import of the UTxO set that `crawler.utxoSet` builds on, from Ogmios or a cardano-cli dump.
+// A `.json` dump is parsed whole. Other files are streamed with one entry or `{key,value}` per line.
 
 export class UtxoSetImportError extends Error {
   constructor(message: string) {
@@ -46,7 +43,7 @@ export class UtxoSetImportError extends Error {
 
 /** The cursor lease went to someone else: nothing more may be written, not even `invalid`. */
 export class UtxoSetLeaseLostError extends UtxoSetImportError {
-  constructor(message = 'Lost the cursor lease during the import — aborted without further writes.') {
+  constructor(message = 'Lost the cursor lease during the import. Aborted without further writes.') {
     super(message);
     this.name = 'UtxoSetLeaseLostError';
   }
@@ -90,10 +87,7 @@ export interface CliUtxoValue {
   referenceScript?: unknown;
 }
 
-/**
- * `JSON.parse` for a cardano-cli dump that keeps every integer exact: integer literals outside
- * strings are quoted before parsing, so a quantity above 2^53 is never rounded.
- */
+/** `JSON.parse` that quotes integer literals first, so quantities above 2^53 are never rounded. */
 export function parseJsonLossless<T = unknown>(text: string): T {
   // string literals pass through untouched; floats keep their JSON meaning
   const rewritten = text.replace(
@@ -163,7 +157,7 @@ export async function* readUtxoSetFile(filePath: string): AsyncGenerator<UtxoSet
 async function* readFromOgmios(client: CardanoClient, anchor: LedgerAnchor): AsyncGenerator<UtxoSetEntry> {
   const backend = client.getLedgerStateBackend();
   if (!backend) {
-    throw new UtxoSetImportError('No Ogmios backend available for source "ogmios" — configure one or import a cardano-cli file.');
+    throw new UtxoSetImportError('No Ogmios backend available for source "ogmios". Configure one or import a cardano-cli file.');
   }
   const utxos = await backend.queryUtxoSetAt({ slot: anchor.slot, hash: anchor.hash });
   for (const u of utxos) {
@@ -190,11 +184,8 @@ const T = {
   accounts: 'odatano_cardano_LedgerAccounts',
 };
 
-/**
- * The three aggregate statements that derive the running sums from the imported rows.
- * Plain SQL because millions of addresses do not fit an in-memory map and a per-row
- * UPSERT would take hours; the syntax is the portable subset (sqlite, PostgreSQL, HANA).
- */
+// Derive the running sums from the imported rows. Plain SQL, because millions of addresses
+// do not fit in memory and per-row UPSERTs take hours. Portable across SQLite, PostgreSQL and HANA.
 export function aggregateStatements(): string[] {
   return [
     `INSERT INTO ${T.addresses} (address, stakeAddress, addressType, isScript, totalLovelace, utxoCount, firstSeenSlot, lastActiveSlot) ` +
@@ -211,20 +202,17 @@ export function aggregateStatements(): string[] {
   ];
 }
 
-/**
- * Run the import. Throws `UtxoSetImportError` on a precondition failure before anything is
- * written; a failure mid-way leaves the set marked `invalid` (never half-`active`).
- */
+// Precondition failures throw before any write. A failure mid-way marks the set `invalid`.
 export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSetImportResult> {
   const { anchor, source } = opts;
   const batchSize = opts.batchSize ?? 2000;
 
   const cursor = await cds.tx((tx) => readCursor(tx));
-  if (!cursor) throw new UtxoSetImportError('No crawler cursor yet — start the crawler once before importing.');
-  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running — pause it first (pauseCrawler).');
+  if (!cursor) throw new UtxoSetImportError('No crawler cursor yet. Start the crawler once before importing.');
+  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running. Pause it first (pauseCrawler).');
   if (cursor.lastSlot > anchor.slot) {
     throw new UtxoSetImportError(
-      `Crawler cursor (slot ${cursor.lastSlot}) is past the anchor (slot ${anchor.slot}) — blocks after the anchor were ` +
+      `Crawler cursor (slot ${cursor.lastSlot}) is past the anchor (slot ${anchor.slot}). Blocks after the anchor were ` +
       'already crawled without a set to apply them to. Dump the set at or after the cursor.'
     );
   }
@@ -285,23 +273,17 @@ type WriteTx = <T>(fn: (tx: CapTransaction) => Promise<T>) => Promise<T>;
 interface ImportLease {
   /** Short write: the lease is re-taken first, so a successor that took it in between fails here. */
   writeTx: WriteTx;
-  /**
-   * Long write: the lease is re-taken as the LAST statement. The cursor row is locked only for the
-   * moment before commit, so heartbeats and readers never queue behind the long work.
-   */
+  /** Long write: the lease is re-taken last, so heartbeats and readers never wait on the cursor row. */
   writeTxLeaseLast: WriteTx;
   /** Write the failure state if the lease is still ours; ignores a lost heartbeat, never throws. */
   markInvalid: (message: string) => Promise<void>;
 }
 
-/**
- * Hold the cursor lease for the whole run: a crawler start on any instance and a second import
- * are refused while it is held; renewed on a heartbeat (one at a time), released at the end.
- */
+/** Hold the cursor lease for the whole run, so no crawler and no second import can start. */
 async function withImportLease<R>(run: (lease: ImportLease) => Promise<R>): Promise<R> {
   const leaseOwner = `import:${process.pid}:${Date.now().toString(36)}`;
   const acquired = await cds.tx((tx) => tryAcquireImportLease(tx, leaseOwner));
-  if (!acquired) throw new UtxoSetImportError('Could not take the cursor lease — a crawler or another import holds it.');
+  if (!acquired) throw new UtxoSetImportError('Could not take the cursor lease: a crawler or another import holds it.');
   let leaseLost = false;
   let renewing = false;
   const heartbeat = setInterval(() => {
@@ -341,11 +323,8 @@ async function withImportLease<R>(run: (lease: ImportLease) => Promise<R>): Prom
 /** A bigger sort/hash budget for the GROUP BY over millions of rows (PostgreSQL only). */
 const AGGREGATE_WORK_MEM = '256MB';
 
-/**
- * Aggregates + activation in ONE transaction, so the set is never `active` with sums a successor's
- * import has meanwhile truncated. `prepare` runs first; `finish` and the activation run last,
- * together with the lease check, so the cursor row is not locked during the aggregation.
- */
+// Aggregates and activation share one transaction, so `active` never shows truncated sums.
+// The lease check runs last, so the cursor row is not locked during the aggregation.
 async function activateWithAggregates(
   lease: ImportLease,
   indexer: CardanoIndexer,
@@ -371,31 +350,27 @@ async function activateWithAggregates(
   void indexer.paymentCredentialsReady();
 }
 
-/**
- * Rebuild only the sums (LedgerAddresses, LedgerAddressAssets, LedgerAccounts) from the rows an
- * earlier import left at the stored anchor, e.g. after the aggregate phase failed. Nothing may have
- * been applied since the anchor; a cursor past it is set back to the anchor, and the blocks after
- * it are crawled again (idempotent writes) so the set follows them.
- */
+// Rebuild only the sums from rows an earlier import left, e.g. after the aggregate step failed.
+// A cursor past the snapshot slot is set back, so the blocks after it are crawled again.
 export async function rebuildUtxoSetAggregates(opts: { indexer: CardanoIndexer }): Promise<UtxoSetImportResult> {
   const cursor = await cds.tx((tx) => readCursor(tx));
   if (!cursor) throw new UtxoSetImportError('No crawler cursor yet.');
-  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running — pause it first (pauseCrawler).');
+  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running. Pause it first (pauseCrawler).');
   const { anchorSlot, anchorHash, appliedSlot, status } = cursor.utxoSet;
-  if (anchorSlot == null || !anchorHash) throw new UtxoSetImportError('No imported UTxO set to rebuild the sums from — run importUtxoSet first.');
+  if (anchorSlot == null || !anchorHash) throw new UtxoSetImportError('No imported UTxO set to rebuild the sums from: run importUtxoSet first.');
   if (status === 'importing') throw new UtxoSetImportError('The import is still loading rows (status "importing").');
   if (appliedSlot != null) {
-    throw new UtxoSetImportError(`Blocks up to slot ${appliedSlot} were already applied to the set — its rows are past the anchor; import again.`);
+    throw new UtxoSetImportError(`Blocks up to slot ${appliedSlot} were already applied to the set. Its rows are past the anchor; import again.`);
   }
   const anchor: LedgerAnchor = { slot: anchorSlot, hash: anchorHash };
   const rows = await cds.tx((tx) => tx.run(SELECT.one.from(LedgerUTxOs).columns('count(*) as n'))) as { n?: number | string } | undefined;
   const utxos = Number(rows?.n ?? 0);
-  if (utxos === 0) throw new UtxoSetImportError('LedgerUTxOs is empty — run importUtxoSet first.');
+  if (utxos === 0) throw new UtxoSetImportError('LedgerUTxOs is empty: run importUtxoSet first.');
 
   let rewindTo: { slot: number; hash: string; height: number } | null = null;
   if (cursor.lastSlot > anchor.slot) {
     const block = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).columns('height').where({ hash: anchor.hash }))) as { height?: number | string } | undefined;
-    if (!block) throw new UtxoSetImportError(`Cursor is past the anchor and the anchor block ${anchor.hash} is not stored — cannot set the cursor back.`);
+    if (!block) throw new UtxoSetImportError(`Cursor is past the anchor and the anchor block ${anchor.hash} is not stored, cannot set the cursor back.`);
     rewindTo = { slot: anchor.slot, hash: anchor.hash, height: Number(block.height ?? 0) };
   }
 
@@ -440,19 +415,15 @@ export interface UtxoSetScriptRefreshResult {
   candidates: number;
 }
 
-/**
- * Fill the reference-script columns (hash, size, type) of `LedgerUTxOs` rows an earlier import
- * left empty: from the same cardano-cli dump, or, without a file, from the node for the unspent
- * rows that hold a hash but no size. Takes the cursor lease like an import, so the crawler must
- * be paused; the set stays `active` throughout.
- */
+// Fill reference-script columns an earlier import left empty, from the dump or from the node.
+// Takes the cursor lease, so the crawler must be paused. The set stays `active`.
 export async function refreshUtxoSetReferenceScripts(
   opts: { filePath?: string; client: CardanoClient; batchSize?: number },
 ): Promise<UtxoSetScriptRefreshResult> {
   const cursor = await cds.tx((tx) => readCursor(tx));
   if (!cursor) throw new UtxoSetImportError('No crawler cursor yet.');
-  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running — pause it first (pauseCrawler).');
-  if (cursor.utxoSet.anchorSlot == null) throw new UtxoSetImportError('No imported UTxO set — run importUtxoSet first.');
+  if (isCrawlerLeaseActive(cursor)) throw new UtxoSetImportError('Crawler is running. Pause it first (pauseCrawler).');
+  if (cursor.utxoSet.anchorSlot == null) throw new UtxoSetImportError('No imported UTxO set: run importUtxoSet first.');
   const batchSize = opts.batchSize ?? 2000;
 
   return withImportLease(async (lease) => {
@@ -486,7 +457,7 @@ export async function refreshUtxoSetReferenceScripts(
       await write(fills);
     } else {
       const backend = opts.client.getLedgerStateBackend();
-      if (!backend) throw new UtxoSetImportError('No Ogmios backend available — pass the cardano-cli dump as filePath instead.');
+      if (!backend) throw new UtxoSetImportError('No Ogmios backend available. Pass the cardano-cli dump as filePath instead.');
       const rows = await cds.tx((tx) => tx.run(
         SELECT.from(LedgerUTxOs).columns('txHash', 'outputIndex')
           .where({ spentTxHash: null, utxo_referenceScriptHash: { '!=': null }, utxo_referenceScriptSize: null }),

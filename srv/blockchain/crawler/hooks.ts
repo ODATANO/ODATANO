@@ -3,10 +3,8 @@ import { emitServiceEvent } from '../../utils/service-events';
 
 const logger = cds.log('CardanoCrawler');
 
-/**
- * Listener registry for crawler progress: `blockIndexed` after each persisted block,
- * `reorg` after a completed rollback. Listener failures are logged and swallowed.
- */
+// Listeners for crawler progress: `blockIndexed` per stored block, `reorg` per rollback.
+// Listener failures are logged and swallowed.
 
 export interface BlockIndexedEvent {
   hash: string;
@@ -19,7 +17,7 @@ export interface BlockIndexedEvent {
 }
 
 export interface ReorgEvent {
-  /** Absolute slot of the fork point — everything after it was rolled back. */
+  /** Absolute slot of the fork point. Everything after it was rolled back. */
   forkSlot: number;
   /** How many blocks the rollback removed (0 when the fork was already the tip). */
   blocksRolledBack?: number;

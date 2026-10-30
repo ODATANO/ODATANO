@@ -73,6 +73,7 @@ vi.mock('@sap/cds', () => {
 vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoWalletJobs: 'odatano.cardano.CardanoWalletJobs',
   CardanoWorkerWallets: 'odatano.cardano.CardanoWorkerWallets',
+  TransactionSubmissions: 'odatano.cardano.TransactionSubmissions',
 }));
 
 import cds from '@sap/cds';
@@ -249,6 +250,23 @@ describe('ConfirmationTracker: polling path', () => {
     expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
       jobId, walletId: 'w1', outcome: 'confirmed', txHash: TX_HASH,
     }));
+  });
+
+  it('marks the recorded submission row confirmed with the job', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+    client.getTransaction.mockResolvedValue({ hash: TX_HASH, slot: 500, blockHeight: 100 });
+    const { tracker } = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    const submissions = [{ id: 's1', txHash: TX_HASH, status: 'submitted' }];
+    tables.set('odatano.cardano.TransactionSubmissions', submissions);
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: null });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    await tracker.pollOnce();
+
+    expect(submissions[0].status).toBe('confirmed');
+    tables.delete('odatano.cardano.TransactionSubmissions');
   });
 
   it('fails a tx unseen past the confirmation timeout as TX_DROPPED', async () => {

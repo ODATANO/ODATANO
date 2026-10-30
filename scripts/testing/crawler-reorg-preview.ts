@@ -1,11 +1,6 @@
-/**
- * Chain-crawler reorg recovery on preview. A testnet cannot be rolled back, so
- * the fork is staged locally: the last K crawled blocks and the cursor get
- * synthetic hashes; the restarted crawler must roll back, log the reorg, re-index.
- *
- *   npx tsx scripts/testing/crawler-reorg-preview.ts
- *   npx tsx scripts/testing/crawler-reorg-preview.ts --blocks 30 --fork 5
- */
+// Crawler reorg recovery on preview. The fork is staged by giving the last K blocks fake hashes.
+// The restarted crawler must roll back, log the reorg and re-index.
+// Usage: npx tsx scripts/testing/crawler-reorg-preview.ts [--blocks 30] [--fork 5]
 
 import 'dotenv/config';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
@@ -170,7 +165,7 @@ async function main() {
       if (logged > before) break;
       await sleep(2_000);
     }
-    if (logged === before) throw new Error('no reorg was recorded — the crawler did not detect the fork');
+    if (logged === before) throw new Error('no reorg was recorded, the crawler did not detect the fork');
     const secs = ((Date.now() - began) / 1000).toFixed(1);
     log(`reorg detected after ${secs}s`);
 
@@ -197,7 +192,7 @@ async function main() {
 
   const synthetic = query<{ c: number }>(
     "select count(*) c from odatano_cardano_Blocks where hash like 'dead%'")[0].c;
-  log('orphan rows left:', synthetic, synthetic === 0 ? 'ok — all removed' : 'FAIL');
+  log('orphan rows left:', synthetic, synthetic === 0 ? 'ok, all removed' : 'FAIL');
   if (synthetic !== 0) throw new Error('synthetic fork blocks survived the rollback');
 
   let restored = 0;
@@ -215,7 +210,7 @@ async function main() {
   log('contiguity      :', gaps.length ? 'GAPS' : 'ok');
   if (gaps.length) throw new Error('range has gaps after recovery');
 
-  log('\nPASS — fork detected, rolled back, audited and re-indexed.');
+  log('\nPASS: fork detected, rolled back, audited and re-indexed.');
 }
 
 main().catch((err) => { console.error('\nFAIL:', err.message); process.exit(1); });

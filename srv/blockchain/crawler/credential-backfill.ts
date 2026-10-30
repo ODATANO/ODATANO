@@ -7,12 +7,8 @@ import { TransactionOutputs, TransactionInputs, LedgerUTxOs } from '#cds-models/
 const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('CredentialBackfill');
 
-/**
- * Fills the payment credential of UTxO-shaped rows written before the column existed:
- * TransactionOutputs, TransactionInputs and LedgerUTxOs. Each table is paged by its primary key
- * alone, so the page query never depends on column statistics; rows that already carry a
- * credential are skipped in process, and a second run changes nothing.
- */
+// Fill the payment credential of TransactionOutputs, TransactionInputs and LedgerUTxOs rows.
+// Pages by primary key only, so the query plan never depends on column statistics. Idempotent.
 
 export interface CredentialBackfillProgress {
   /** Table being walked; null when finished. */
@@ -53,10 +49,8 @@ interface Fill {
   credential: string;
 }
 
-/**
- * One UPDATE per chunk: the fills travel as a JSON array and are joined on the key. Only rows
- * still without a credential are touched. Postgres and SQLite; other databases get one UPDATE per row.
- */
+// One UPDATE per chunk that joins a JSON array of fills on the key. Touches only rows without a
+// credential. Null for databases other than Postgres and SQLite, which update row by row.
 export function credentialFillStatement(kind: string, spec: CredentialTableSpec): string | null {
   const [k1, k2] = spec.keys;
   if (kind === 'postgres') {

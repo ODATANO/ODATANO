@@ -1,21 +1,10 @@
-# Full local stack: cardano-node + Ogmios + the ODATANO service.
-#
-#   docker compose up -d                      # everything (node + ogmios + odatano)
-#   docker compose up -d cardano-node ogmios  # just the chain backend (no odatano build)
-#   docker compose logs -f ogmios             # watch sync; /health = 202 syncing, 200 near tip
-#   docker compose down                       # stop (keeps node-db volume)
-#   docker compose down -v                    # also wipe the synced DB (full re-sync!)
-#
-# Notes:
-# - node <-> ogmios IPC socket lives in the NAMED VOLUME `node-ipc`, not a host bind
-#   (Unix domain sockets don't work over a Windows host mount).
-# - Genesis hashes depend on exact bytes: config files must be LF (enforced by
-#   .gitattributes). CRLF -> "GenesisHashMismatch".
-# - First boot syncs Preview from genesis (hours); node-db persists so restarts resume.
+# Local stack with cardano-node, Ogmios and ODATANO. The node socket lives in a named volume,
+# since Unix sockets fail over a Windows host mount. Genesis config files must stay LF,
+# otherwise the node fails with GenesisHashMismatch.
 
 services:
   # ---------------------------------------------------------------------------
-  # Cardano node (Preview) — uses the repo's node-11 config
+  # Cardano node (Preview) with the repo's node-11 config
   # ---------------------------------------------------------------------------
   cardano-node:
     image: ghcr.io/intersectmbo/cardano-node:11.0.1
@@ -38,7 +27,7 @@ services:
       - odatano-network
 
   # ---------------------------------------------------------------------------
-  # Ogmios bridge — connects to the node socket, serves ws/http on :1337
+  # Ogmios bridge on the node socket, serves ws and http on :1337
   # ---------------------------------------------------------------------------
   ogmios:
     image: cardanosolutions/ogmios:v7.0.0
@@ -66,7 +55,7 @@ services:
       - odatano-network
 
   # ---------------------------------------------------------------------------
-  # ODATANO service — uses local Ogmios for live data, Blockfrost as fallback
+  # ODATANO service with local Ogmios for live data and Blockfrost as fallback
   # ---------------------------------------------------------------------------
   odatano:
     build:
@@ -90,14 +79,13 @@ services:
       - PRIMARY_TIMEOUT_MS=15000
       - FALLBACK_TIMEOUT_MS=15000
       - INDEX_TTL_MS=600000
-      - LOG_LEVEL=info
       - NODE_ENV=production
       - ODATANO_HTTP_PASSWORD=${ODATANO_HTTP_PASSWORD:?set ODATANO_HTTP_PASSWORD}
       - AGENT_GRANTS_ENABLED=${AGENT_GRANTS_ENABLED:-false}
       - PORT=4004
     depends_on:
       ogmios:
-        # waits until Ogmios answers /health (connected to node) — not full sync
+        # waits until Ogmios answers /health, not for a full sync
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

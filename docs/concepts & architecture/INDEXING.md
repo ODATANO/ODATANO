@@ -38,7 +38,7 @@ Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by
 
 - **Transactions / Blocks / Epochs**: Confirmed, immutable chain data
 - **AssetHistory**: Mint/burn events, keyed (unit, txHash)
-- **PoolEpochSnapshots / DrepEpochSnapshots / EpochLedgerSnapshots** (v2.0): One dated observation per pool/DRep per epoch, plus the network figures (pots, stake totals) of that epoch
+- **PoolEpochSnapshots / DrepEpochSnapshots / EpochLedgerSnapshots**: One dated observation per pool/DRep per epoch, plus the network figures (pots, stake totals) of that epoch
 - **Pools / Dreps**: Registration data
 - **TransactionBuildInputs/Outputs/Assets** (M2): Build details
 - **TransactionSubmissionErrors**: Failed submission records
@@ -47,12 +47,12 @@ Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by
 
 See `db/schema.cds` for full entity definitions.
 
-## v2.0: pre-sync alongside lazy indexing
+## Pre-sync alongside lazy indexing
 
-Lazy indexing stays the default and is unchanged. v2.0 adds an **opt-in chain crawler** that fills
+Lazy indexing stays the default and is unchanged. An **opt-in chain crawler** fills
 the same tables *ahead* of the request instead of on a cache miss:
 
-| | Lazy indexing | Crawler pre-sync (v2.0) |
+| | Lazy indexing | Crawler pre-sync |
 |---|---|---|
 | Trigger | cache miss on a read | continuous, from a configured start block |
 | Scope | the single entity asked for | every block + its transactions, inputs/outputs/assets/metadata |
@@ -70,7 +70,7 @@ a `CardanoReorgLog` row. Two sources: Ogmios chain-sync (native `rollBackward`) 
 pagination (parent-hash comparison). Enable with `CRAWLER_ENABLED=true` plus a start point; see the
 [User Guide](../guides/USER_GUIDE.md).
 
-**Analytics coverage (v2.0).** Beyond blocks and transactions, the crawler fills three tables that
+**Analytics coverage.** Beyond blocks and transactions, the crawler fills three tables that
 the lazy path would otherwise only populate by accident — whatever somebody happened to request:
 
 | Table | Source | Cost |

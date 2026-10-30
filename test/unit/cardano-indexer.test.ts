@@ -320,7 +320,8 @@ describe('CardanoIndexer', () => {
     it('should batch-fetch transactions missing from ensureTransactionsIndexed', async () => {
       mockClient.getAddressTransactionHashes.mockResolvedValue(['tx1', 'tx2']);
 
-      // ensureTransactionsIndexed returns only tx1 (tx2 was already in DB)
+      // the address has no stored rows yet; ensureTransactionsIndexed returns only tx1 (tx2 was already in DB)
+      mockRun.mockResolvedValueOnce([]);
       mockRun.mockImplementation((query: any) => {
         // SELECT from Transactions for DB check
         if (typeof query === 'object') {
@@ -344,6 +345,61 @@ describe('CardanoIndexer', () => {
 
       // Should have called getTransactionsBatch for missing tx2
       expect(result).toHaveLength(2);
+    });
+  });
+
+  describe('indexTransactionMetadata', () => {
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'crawlAnswers').mockResolvedValue(false);
+    });
+
+    it('answers [] for a stored transaction the providers report without metadata', async () => {
+      const { NotFoundError } = await import('../../srv/utils/errors');
+      mockClient.getTransactionMetadata.mockRejectedValue(new NotFoundError('Transaction metadata'));
+      mockRun.mockResolvedValueOnce({ hash: 'tx1' });
+      await expect(indexer.indexTransactionMetadata(mockTx as any, 'tx1')).resolves.toEqual([]);
+    });
+
+    it('keeps the 404 for a transaction this instance does not know', async () => {
+      const { NotFoundError } = await import('../../srv/utils/errors');
+      mockClient.getTransactionMetadata.mockRejectedValue(new NotFoundError('Transaction metadata'));
+      mockRun.mockResolvedValueOnce(undefined);
+      await expect(indexer.indexTransactionMetadata(mockTx as any, 'tx1')).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('indexAddressTransactions freshness', () => {
+    beforeEach(() => {
+      vi.spyOn(indexer as any, 'localCoverage').mockResolvedValue(null);
+    });
+
+    it('lists the newest hashes on every call and fetches only those the address has no row for', async () => {
+      mockClient.getAddressTransactionHashes.mockResolvedValue(['tx_new', 'tx_old']);
+      mockRun.mockResolvedValueOnce([{ address_address: 'addr_test1q', tx_hash: 'tx_old', blockTime: 1000 }]);
+      const ensure = vi.spyOn(indexer as any, 'ensureTransactionsIndexed')
+        .mockResolvedValue(new Map([['tx_new', { hash: 'tx_new', inputs: [], outputs: [] }]]));
+      const mapAddressTransactions = vi.mocked((await import('../../srv/utils/mappers')).mapAddressTransactions);
+      mapAddressTransactions.mockReturnValue([{ address_address: 'addr_test1q', tx_hash: 'tx_new', blockTime: 2000 } as any]);
+
+      const result = await indexer.indexAddressTransactions(mockTx as any, 'addr_test1q', 10) as any[];
+
+      expect(ensure).toHaveBeenCalledWith(expect.anything(), ['tx_new']);
+      expect(result.map(r => r.tx_hash)).toEqual(['tx_new', 'tx_old']);
+    });
+
+    it('makes no transaction fetch when every listed hash is stored', async () => {
+      mockClient.getAddressTransactionHashes.mockResolvedValue(['b', 'a']);
+      mockRun.mockResolvedValueOnce([
+        { tx_hash: 'a', blockTime: 1000 }, { tx_hash: 'b', blockTime: 1000 },
+      ]);
+      const ensure = vi.spyOn(indexer as any, 'ensureTransactionsIndexed');
+
+      const result = await indexer.indexAddressTransactions(mockTx as any, 'addr_test1q', 10) as any[];
+
+      expect(ensure).not.toHaveBeenCalled();
+      expect(mockClient.getTransactionsBatch).not.toHaveBeenCalled();
+      // same block: the tx hash orders them
+      expect(result.map(r => r.tx_hash)).toEqual(['b', 'a']);
     });
   });
 
@@ -882,6 +938,17 @@ describe('CardanoIndexer', () => {
 
       expect(mockClient.getAssetHistory).toHaveBeenCalledWith(UNIT, 25);
       expect(upsertInto).toHaveBeenCalledWith('AssetHistory');
+      expect(result).toHaveLength(1);
+    });
+
+    it('writes a transaction the provider lists twice only once', async () => {
+      const row = { unit: UNIT, txHash: 'b'.repeat(64), action: 'mint', quantity: '1', blockTime: 1, blockHeight: 1 };
+      mockClient.getAssetHistory.mockResolvedValue([row, row]);
+      const mapAssetHistory = vi.mocked((await import('../../srv/utils/mappers')).mapAssetHistory);
+      mapAssetHistory.mockReturnValueOnce([row, { ...row }] as any);
+
+      const result = await indexer.indexAssetHistory(mockTx as any, UNIT, 25);
+
       expect(result).toHaveLength(1);
     });
   });

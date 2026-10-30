@@ -24,10 +24,7 @@ const CLI_NETWORK_FLAG: Record<string, string> = {
   preview: '--testnet-magic 2',
 };
 
-/**
- * Copy-pasteable cardano-cli signing recipe for the unsigned tx (network flag and CBOR
- * filled in; the caller supplies the signing key file).
- */
+/** cardano-cli signing recipe for the unsigned tx. The caller supplies the key file. */
 function buildCardanoCliCommand(network: string, unsignedTxCbor: string): string {
   const netFlag = CLI_NETWORK_FLAG[network] ?? '--testnet-magic <MAGIC>';
   return [
@@ -39,10 +36,7 @@ function buildCardanoCliCommand(network: string, unsignedTxCbor: string): string
   ].join('\n');
 }
 
-/**
- * External signing workflow: create signing request → export unsigned tx → verify the
- * signed tx → prepare submission. No private keys are ever handled here.
- */
+/** External signing workflow. No private keys are ever handled here. */
 export class ExternalSignerModule {
   private verifier: SignatureVerifier;
   private signingTtlMs: number;

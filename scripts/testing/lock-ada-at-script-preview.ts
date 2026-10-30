@@ -34,10 +34,7 @@ const NETWORK_ID = 0;
 
 // ---------------------------------------------------------------------------
 
-/**
- * Derives the enterprise script address the same way the server does
- * (Script.fromCbor → blake2b_224(0x03 || cbor) → bech32), so both match.
- */
+/** Derives the enterprise script address the same way the server does, so both match. */
 function deriveScriptAddress(scriptCborHex: string, networkId: number): string {
   const scriptHash = Script.fromCbor(Buffer.from(scriptCborHex, 'hex')).hash.toString();
   const network = networkId === 1 ? 'mainnet' : 'preview';

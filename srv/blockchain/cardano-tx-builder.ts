@@ -130,7 +130,7 @@ export class CardanoTransactionBuilder {
 
         const senderUtxos = await this._fetchUtxosForAddress(req.senderAddress);
         const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], senderUtxos);
-        // Resolve CIP-31 reference inputs (read-only, not consumed — kept separate from coin-selection set)
+        // CIP-31 reference inputs are not consumed, so they stay out of coin selection.
         const referenceInputUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], senderUtxos);
 
         const txContext: TxBuildContext = {
@@ -182,12 +182,12 @@ export class CardanoTransactionBuilder {
             allUtxos.push(await this._resolveScriptUtxo(scriptRef));
         }
 
-        // Resolve forced inputs (may overlap with sender UTxOs or the script UTxO — dedup below).
-        // The builder itself will skip any forced ref that matches scriptRef.
+        // Forced inputs may overlap with sender UTxOs, dedup below.
+        // The builder skips a forced ref that matches scriptRef.
         const forcedUtxos = await this._resolveForceInputs(req.forceInputs ?? [], allUtxos);
         const mergedUtxos = mergeUtxosUnique(allUtxos, forcedUtxos);
 
-        // Resolve CIP-31 reference inputs (read-only, not consumed — kept separate from coin-selection set)
+        // CIP-31 reference inputs are not consumed, so they stay out of coin selection.
         const referenceInputUtxos = await this._resolveReferenceInputs(req.referenceInputs ?? [], allUtxos);
 
         const txContext: TxBuildContext = {
@@ -212,10 +212,7 @@ export class CardanoTransactionBuilder {
         return txBuildResult;
     }
 
-    /**
-     * Several script inputs in one transaction: resolve every script UTxO and every reference-script
-     * UTxO (one ledger lookup each), plus the sender's UTxOs, forced and reference inputs.
-     */
+    /** Several script inputs in one transaction. */
     async buildPlutusTransaction(req: TxBuildPlutusRequest, protocolParameters: LedgerProtocolParameter): Promise<TxBuildResult> {
         const builder = await this.ensureInitialized();
         const cardanoClient = this.client;
@@ -252,11 +249,8 @@ export class CardanoTransactionBuilder {
         return builder.buildUnsignedPlutusTransaction(req, txContext);
     }
 
-    /**
-     * The ledger rejects a withdrawal from an unregistered reward account (also a zero one), so the
-     * build fails here with the account named. A provider failure is passed on as it is. When no
-     * backend can tell, the build goes on and the node decides at submit.
-     */
+    // The ledger rejects a withdrawal from an unregistered reward account, even a zero one.
+    // When no backend can tell, the build goes on and the node decides at submit.
     private async _assertRewardAccountsRegistered(
         withdrawals: ReadonlyArray<{ rewardAddress: string }>, registeredHere: ReadonlySet<string> = new Set()
     ): Promise<void> {
@@ -274,11 +268,8 @@ export class CardanoTransactionBuilder {
         }
     }
 
-    /**
-     * Resolve the script UTxO of a Plutus spend from the node's ledger, otherwise from its producing
-     * transaction. Spending an already-consumed script UTxO is the most common replay mistake —
-     * both paths reject it with a clear 400 instead of a node-side rejection at submit.
-     */
+    // Spending an already-consumed script UTxO is a common replay mistake.
+    // Both lookup paths reject it with a clear 400 instead of a node rejection at submit.
     private async _resolveScriptUtxo(scriptRef: { txHash: string; outputIndex: number }): Promise<UTxO> {
         const by = this.client.pendingSpends?.spentBy(scriptRef.txHash, scriptRef.outputIndex);
         if (by) throw new TransactionValidationError(`scriptUtxo ${outRefKey(scriptRef)} is spent by transaction ${by}, submitted and not yet on chain`);
@@ -308,10 +299,8 @@ export class CardanoTransactionBuilder {
         };
     }
 
-    /**
-     * Unspent outputs for `refs` from the node's ledger, keyed "txHash#index"; null when no
-     * ledger-state backend is usable or the query fails (callers fall back to getTransaction).
-     */
+    // Null when no ledger-state backend is usable or the query fails.
+    // Callers then fall back to getTransaction.
     private async _lookupUnspent(
         refs: Array<{ txHash: string; outputIndex: number }>
     ): Promise<Map<string, UTxO> | null> {
@@ -325,10 +314,8 @@ export class CardanoTransactionBuilder {
         }
     }
 
-    /**
-     * Verify that an output resolved via getTransaction is still unspent against the live UTxO
-     * set of its address (getTransaction only proves it existed). Lookup failures are tolerated.
-     */
+    // getTransaction only proves an output existed, so check the address's live UTxO set.
+    // Lookup failures are tolerated.
     private async _assertUnspent(
         ref: { txHash: string; outputIndex: number },
         address: string,
@@ -372,12 +359,8 @@ export class CardanoTransactionBuilder {
         return this._resolveInputRefs(refs, knownUtxos, 'referenceInput');
     }
 
-    /**
-     * Resolve {txHash, outputIndex} refs to full UTxO records: known UTxOs first, then the node's
-     * ledger, otherwise the producing transaction plus an unspent check. Throws
-     * TransactionValidationError (labelled by `kind`) for a missing or spent ref. Refs are
-     * deduplicated; order is preserved.
-     */
+    // Known UTxOs first, then the node's ledger, else the producing transaction plus an unspent check.
+    // Throws for a missing or spent ref. Refs are deduplicated in order.
     private async _resolveInputRefs(
         refs: Array<{ txHash: string; outputIndex: number }>,
         knownUtxos: UTxO[],
@@ -472,8 +455,8 @@ export class CardanoTransactionBuilder {
                 BigInt(0),
                 undefined,
                 all.length > 0
-                    ? `address ${address} holds only UTxOs with a reference script — they are not spent as funding; pass one in forceInputsJson to consume it`
-                    : `address ${address} has no UTxOs — verify this is the correct sender address and that it has been funded`
+                    ? `address ${address} holds only UTxOs with a reference script; they are not spent as funding, pass one in forceInputsJson to consume it`
+                    : `address ${address} has no UTxOs; verify this is the correct sender address and that it has been funded`
             );
         }
         return utxos;

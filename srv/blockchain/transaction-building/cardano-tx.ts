@@ -5,10 +5,7 @@ import { CardanoClient } from "../cardano-client";
 export interface CardanoTxBuilder {
   /** Builder name */
   name: string;
-  /**
-   * Initialize the builder.
-   * @param protocolParams - optional; fetched from the backend when omitted
-   */
+  /** Initialize the builder. Protocol parameters are fetched when omitted. */
   init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void>;
 
   /** Build an unsigned transfer transaction (ADA-only or with native assets). */

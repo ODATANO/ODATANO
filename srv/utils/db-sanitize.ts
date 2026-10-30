@@ -1,9 +1,7 @@
 import cds from '@sap/cds';
 
-/**
- * Strips U+0000 from every row this plugin writes: PostgreSQL cannot store NUL in `text`, and
- * @cap-js/postgres bulk rows go through a JSON parser that rejects the NUL escape, failing the whole write.
- */
+// Strips U+0000 from every row this plugin writes. PostgreSQL cannot store NUL in text,
+// and one NUL fails a whole bulk write.
 
 /** Remove U+0000 from every string value of the row (nested objects included); same row when unchanged. */
 export function stripNulStrings<T>(row: T): T {
@@ -69,10 +67,7 @@ interface HookableService {
 
 const installed = new WeakSet<object>();
 
-/**
- * Hook the sanitizer into the database service (idempotent per instance; no-op without a db).
- * @returns true when the hook was installed by this call
- */
+/** Hooks the sanitizer into the database service once. Returns true when this call installed it. */
 export function installDbSanitizer(db: HookableService | undefined = cds.db as unknown as HookableService | undefined): boolean {
   if (!db || typeof db.before !== 'function' || installed.has(db)) return false;
   db.before(['CREATE', 'UPSERT', 'UPDATE'], sanitizeDbRequest);

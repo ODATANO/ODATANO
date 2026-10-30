@@ -53,7 +53,7 @@ Explore the whole API and select the OData actions you want to use in your workf
 
 ## Reacting to on-chain events instead of polling
 
-The scenario below polls for a transaction's confirmation. Since v2.0 a CAP application embedding
+The scenario below polls for a transaction's confirmation. A CAP application embedding
 `@odatano/core` can subscribe instead:
 
 ```js

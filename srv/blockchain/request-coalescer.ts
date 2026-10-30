@@ -1,22 +1,8 @@
-/**
- * RequestCoalescer — Deduplicates concurrent requests for the same resource key.
- *
- * When multiple callers request the same key simultaneously (e.g., same txHash
- * during parallel address indexing), only one backend call is made. All callers
- * receive the same Promise/result.
- */
+/** Concurrent requests for the same key share one backend call and its result. */
 export class RequestCoalescer<T> {
   private pending = new Map<string, Promise<T>>();
 
-  /**
-   * Get a value by key, deduplicating concurrent requests.
-   * If a request for this key is already in-flight, returns the existing Promise.
-   * Otherwise, calls the fetcher and caches the Promise until it resolves.
-   *
-   * @param key    Unique identifier (e.g., txHash, bech32 address)
-   * @param fetcher Function that performs the actual fetch
-   * @returns The fetched value
-   */
+  /** Returns the in-flight promise for this key, or starts the fetcher. */
   async get(key: string, fetcher: () => Promise<T>): Promise<T> {
     const existing = this.pending.get(key);
     if (existing) return existing;

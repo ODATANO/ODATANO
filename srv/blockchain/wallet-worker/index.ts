@@ -4,10 +4,8 @@ import { CardanoWalletWorker, type WalletWorkerConfig, type WalletWorkerDeps } f
 
 const logger = cds.log('CardanoWalletWorker');
 
-/**
- * Process-wide wallet-worker singleton, started from the `served` hook and controlled via the
- * worker service. No standby: every instance may dispatch, the per-wallet DB leases decide who executes.
- */
+// Process-wide wallet-worker singleton, started from the served hook.
+// Every instance may dispatch. Per-wallet DB leases decide who executes.
 
 let active: CardanoWalletWorker | null = null;
 let lifecycleQueue: Promise<void> = Promise.resolve();
@@ -15,7 +13,7 @@ let lifecycleQueue: Promise<void> = Promise.resolve();
 export type StartWalletWorkerDeps = Omit<WalletWorkerDeps, 'instanceId'> & { instanceId?: string };
 export type { WalletWorkerConfig };
 
-/** Start the worker (idempotent — a no-op when one is already running). */
+/** Starts the worker. A no-op when one is already running. */
 export async function startWalletWorker(deps: StartWalletWorkerDeps): Promise<void> {
   return serializeLifecycle(async () => {
     if (active?.isRunning()) {

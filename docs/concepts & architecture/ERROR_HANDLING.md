@@ -149,7 +149,7 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | Ledger rejected the tx in phase-2 script evaluation |
 | `ODATANO_NESTED_TX_TIMEOUT` | 503 | A detached bookkeeping transaction could not acquire a pooled connection (see KNOWN_ISSUES #11) |
 
-### v2.0: failures that are deliberately NOT surfaced as errors
+### Failures that are deliberately NOT surfaced as errors
 
 The chain crawler and the wallet worker are background subsystems — their failures land on a row,
 not in an HTTP response:
@@ -233,7 +233,7 @@ The `normalizeBackendError()` function converts any error into a typed `BackendE
 
 ## Testing References
 
-- Error normalization unit tests: [test/unit/errors.test.ts](../../test/unit/errors.test.ts) (52 tests)
+- Error normalization unit tests: [test/unit/errors.test.ts](../../test/unit/errors.test.ts)
 - Blockfrost backend constructor tests: [test/unit/blockfrost-backend.test.ts](../../test/unit/blockfrost-backend.test.ts)
 - Error handling service integration tests: [test/integration/error-handling-service.test.ts](../../test/integration/error-handling-service.test.ts) (34 tests)
 

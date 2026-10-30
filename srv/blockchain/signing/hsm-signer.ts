@@ -4,6 +4,8 @@ import { HsmError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { Cbor, CborArray, CborBytes, CborMap, CborUInt } from '@harmoniclabs/cbor';
 import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
+import blake2b from 'blake2b';
+import { bech32 } from 'bech32';
 
 const logger = cds.log('HsmSigner');
 
@@ -45,10 +47,7 @@ export function setPkcs11Loader(loader: Pkcs11Loader | null): void {
   pkcs11Loader = loader ?? defaultPkcs11Loader;
 }
 
-/**
- * Ed25519 transaction signing through a PKCS#11 HSM (YubiHSM 2, CloudHSM, Luna, …); private
- * keys never leave the device. Lifecycle: init(network) → sign()/signTransaction() → shutdown().
- */
+/** Ed25519 signing through a PKCS#11 HSM. Private keys never leave the device. */
 export class HsmSigner {
   private pkcs11!: PKCS11Instance;
   private session!: Buffer;
@@ -63,10 +62,7 @@ export class HsmSigner {
     this.config = config;
   }
 
-  /**
-   * Open the PKCS#11 session, locate the key, export the public key and derive the
-   * enterprise address for `network`. Called once at startup.
-   */
+  /** Opens the session, exports the public key and derives the enterprise address. */
   async init(network: 'mainnet' | 'preview' | 'preprod' | string): Promise<void> {
     // pkcs11js is only loaded when HSM is configured
     let pkcs11js: Pkcs11JsModule;
@@ -103,8 +99,8 @@ export class HsmSigner {
       try {
         this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER as number, this.config.pin);
       } finally {
-        // Zero the PIN wherever it could linger (config object shared with the server
-        // singleton — mutate in place —, HSM_PIN env, CAP config), whatever the login outcome.
+        // Clear the PIN everywhere it could linger, whatever the login outcome.
+        // The config object is shared with the server singleton, so it is changed in place.
         this.config.pin = '';
         if (process.env.HSM_PIN) delete process.env.HSM_PIN;
         try {
@@ -120,13 +116,11 @@ export class HsmSigner {
       logger.debug({ publicKeyLength: this.publicKeyBytes.length }, 'Ed25519 public key exported');
 
       // Key hash = blake2b-224 of the public key
-      const blake2b = require('blake2b');
       const hashOut = Buffer.alloc(28);
       blake2b(28).update(this.publicKeyBytes).digest(hashOut);
       this.publicKeyHashHex = hashOut.toString('hex');
 
       // Enterprise key-hash address: header 0x61 (mainnet) or 0x60 (testnet)
-      const { bech32 } = require('bech32');
       const headerByte = network === 'mainnet' ? 0x61 : 0x60;
       const payload = Buffer.alloc(29);
       payload[0] = headerByte;
@@ -178,10 +172,7 @@ export class HsmSigner {
     }
   }
 
-  /**
-   * Sign the body hash (hex) in the HSM, build the VKey witness [publicKey, signature] and
-   * splice it into the witness set at the raw CBOR level. Returns the signed tx CBOR (hex).
-   */
+  /** Signs the body hash and splices the VKey witness in at the raw CBOR level. */
   signTransaction(unsignedTxCbor: string, txBodyHash: string): string {
     const hashBytes = Buffer.from(txBodyHash, 'hex');
     const result = this.sign(hashBytes);
@@ -199,8 +190,8 @@ export class HsmSigner {
         new CborBytes(Buffer.from(result.signatureHex, 'hex')),
       ]);
 
-      // Witness set (txObj.array[1]): vkey witnesses (key 0) become the HSM witness only — single
-      // signer; multi-sig goes through combineTransactionWithWitnesses(). Other keys are preserved.
+      // The HSM witness replaces all vkey witnesses, since it signs alone. Other keys are kept.
+      // Multi-sig goes through combineTransactionWithWitnesses().
       const origWs = txObj.array[1];
       if (origWs instanceof CborMap) {
         const entries = origWs.map.filter(
@@ -269,7 +260,7 @@ export class HsmSigner {
     };
   }
 
-  /** Graceful shutdown — close PKCS#11 session */
+  /** Closes the PKCS#11 session. */
   shutdown(): void {
     if (this.session) {
       try {
@@ -289,13 +280,13 @@ export class HsmSigner {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  /** Find an Ed25519 key object (private or public) in the HSM by label and/or ID. */
+  /** Finds an Ed25519 key object in the HSM by label or ID. */
   private _findKey(pkcs11js: Pkcs11JsModule, objectClass: number): Buffer {
     const template: Pkcs11Attribute[] = [
       { type: pkcs11js.CKA_CLASS as number, value: objectClass },
     ];
 
-    // CKK_EC_EDWARDS (0x40) — PKCS#11 v3.0, may not be defined in older pkcs11js versions
+    // CKK_EC_EDWARDS is PKCS#11 v3.0 and may be missing in older pkcs11js versions.
     const CKK_EC_EDWARDS = (pkcs11js.CKK_EC_EDWARDS as number | undefined) ?? 0x00000040;
     template.push({ type: pkcs11js.CKA_KEY_TYPE as number, value: CKK_EC_EDWARDS });
 
@@ -321,10 +312,7 @@ export class HsmSigner {
     return handles[0];
   }
 
-  /**
-   * Export the Ed25519 public key from the HSM.
-   * Handles both DER-wrapped (04 20 <32 bytes>) and raw 32-byte formats.
-   */
+  /** Accepts a DER-wrapped and a raw 32-byte Ed25519 public key. */
   private _exportPublicKey(pkcs11js: Pkcs11JsModule): Buffer {
     const pubKeyHandle = this._findKey(pkcs11js, pkcs11js.CKO_PUBLIC_KEY as number);
 

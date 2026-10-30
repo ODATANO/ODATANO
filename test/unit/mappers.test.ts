@@ -3,6 +3,7 @@
  */
 
 import {
+  mapError,
   mapTransaction,
   txSeqOf,
   mapTransactionMetadata,
@@ -828,5 +829,16 @@ describe('ledgerView — the same transaction rows whichever source reported it'
     const t = ledgerView({ ...base, inputs: [inp('b', 0), inp('a', 0)], outputs: [out(0, false), out(1, true)] });
     expect(t.inputs.map(i => i.txHash[0])).toEqual(['a', 'b']);
     expect(t.outputs).toHaveLength(2);
+  });
+});
+
+describe('mapError', () => {
+  it('answers a BackendError with its status, its ODATANO code and its target', async () => {
+    const { BackendError } = await import('../../srv/utils/errors');
+    const reject = vi.fn();
+    mapError({ reject } as never, new BackendError('no such build', 404, 'ODATANO_NOT_FOUND' as never, undefined, undefined, 'buildId'), 'SubmitTransaction');
+    expect(reject).toHaveBeenCalledWith({
+      status: 404, code: 'ODATANO_NOT_FOUND', message: '[ODATANO_NOT_FOUND] SubmitTransaction: no such build', target: 'buildId',
+    });
   });
 });

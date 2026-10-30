@@ -53,7 +53,7 @@
 | `NODE_ENV` | Yes | `development` | `production` | Activates HANA + XSUAA profiles |
 | `TX_BUILDERS` | No | `buildooor` | — | Deprecated/ignored — Buildooor is the sole builder |
 | `PORT` | No | `4004` | `4004` | HTTP server port |
-| `LOG_LEVEL` | No | `info` | `info` | `error`, `warn`, `info`, `debug` |
+| `DEBUG` | No | – | – | Comma-separated `cds.log` module names logged at debug level |
 
 ### API Keys
 
@@ -77,7 +77,6 @@
 NETWORK=mainnet
 NODE_ENV=production
 PORT=4004
-LOG_LEVEL=info
 BACKENDS=blockfrost,koios
 BLOCKFROST_API_KEY=mainnetYourApiKeyHere
 KOIOS_API_KEY=yourKoiosApiKeyHere
@@ -95,7 +94,7 @@ HSM_SLOT=0
 HSM_PIN=                          # supply via the credential store, never in the file
 HSM_KEY_LABEL=cardano-signing-key
 
-# --- Chain crawler / pre-sync (v2.0, off by default) ------------------------
+# --- Chain crawler / pre-sync (off by default) ------------------------
 CRAWLER_ENABLED=false
 CRAWLER_START_SLOT=               # required when enabled
 CRAWLER_START_HASH=               # required when enabled
@@ -104,7 +103,7 @@ CRAWLER_CONFIRMATION_DEPTH=3
 CRAWLER_BATCH_SIZE=20
 CRAWLER_POLL_INTERVAL_MS=20000
 
-# --- Wallet worker (v2.0, off by default) -----------------------------------
+# --- Wallet worker (off by default) -----------------------------------
 WALLET_WORKER_ENABLED=false
 WALLET_WORKER_WALLETS=            # [{"walletId":"treasury","signerType":"hsm"}]
 WALLET_WORKER_MAX_CONCURRENT=4

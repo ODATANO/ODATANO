@@ -1,33 +1,15 @@
+using { UtxoSetImportSource } from '../db/types';
 using {odatano.cardano as db} from '../db/schema';
 
-/**
- * Cardano Indexer Service (v2.0)
- *
- * Control + observability surface for the chain crawler / pre-sync engine:
- * - read-only projections of the sync cursor and reorg audit log
- * - status function + pause/resume actions delegating to the crawler singleton
- *
- * Security note: see CardanoODataService (cardano-service.cds) for the rationale on
- * auth. pause/resume are operational actions — gate behind a dedicated Admin scope.
- * Read-only status and audit data remain available to authenticated users.
- *
- * Deliberately NO service-level @requires: CAP checks a service-level requirement
- * on every request BEFORE the operation's own annotation, so an operation-level
- * `@requires: 'any'` can never open a single function on an otherwise
- * authenticated service (anonymous callers get the 401 challenge first). The
- * requirement therefore sits on each element, and getLiveness() alone is 'any'.
- */
-// Service-level 'any' on purpose: CAP authorizes the service BEFORE the operation and
-// treats a service without a service-level @requires as authenticated-user under
-// NODE_ENV=production, which would 401 the anonymous operation below despite its own
-// 'any'. Every element carries its requirement; the service itself refuses nothing.
+// Crawler control and status. The service itself is 'any': CAP checks the service before the
+// operation, so anything stricter would 401 the anonymous getLiveness. Each element carries its own requirement.
 @requires: 'any'
 service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     @readonly
     @requires   : 'authenticated-user'
     @title      : 'Sync State'
-    @description: 'Singleton crawl cursor — pre-sync progress, tip lag, status, errors'
+    @description: 'Singleton crawl cursor: pre-sync progress, tip lag, status, errors'
     entity SyncState as projection on db.CardanoSyncState;
 
     @readonly
@@ -41,15 +23,17 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     type CrawlerStatus {
         running           : Boolean;
         syncStatus        : String;
-        // 'chain-sync' | 'pagination' for the crawler in this process; null when this
-        // instance is not the one crawling. Pagination is ~50x slower, and a crawl that
-        // degraded to it still advances the cursor — this is how an operator tells.
+        // chain-sync or pagination for the crawler in this process, null when another instance crawls.
+        // Pagination is about 50x slower but still advances the cursor, so only this field shows it.
         source            : String;
         lastSlot          : String;
         lastHeight        : String;
         tipHeight         : String;
         syncProgress      : String;
         consecutiveErrors : Integer;
+        lastIndexedAt     : Timestamp; // when the last block was committed
+        // true: the crawler holds its lease but committed no block for 10 minutes
+        stalled           : Boolean;
         // crawler-fed ledger state (crawler.utxoSet): snapshot anchor + validity
         utxoSet           : UtxoSetStatus;
         // one-off certificate/withdrawal backfill over already crawled blocks (this process)
@@ -168,11 +152,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
 
     @title      : 'Get Crawler Status'
     @description: 'Return the current crawler run state and sync progress'
-    /**
-     * Emitted AFTER each block is committed. Subscribe instead of polling:
-     *   (await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
-     * In-process (plugin mode) this needs no messaging service.
-     */
+    /** Emitted after each block is committed. In plugin mode subscribing needs no messaging service. */
     event blockIndexed {
         hash     : String(64);
         slot     : Integer64;
@@ -201,10 +181,8 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         network   : String;    // configured network
     }
 
-    // Anonymous on purpose: a liveness probe carries no credentials. 200 as long
-    // as the process answers — no backend or DB probe, no secrets, no backend
-    // names, no API key state. Readiness stays with getStatus and the worker
-    // status, which remain authenticated.
+    // Anonymous on purpose, since a liveness probe carries no credentials.
+    // It probes no backend or DB and reveals no secrets. Readiness stays with the authenticated getStatus.
     @title      : 'Get Liveness'
     @description: 'Unauthenticated liveness probe: 200 while the process answers. Docker HEALTHCHECK and upstream probes use this instead of the service document.'
     @requires   : 'any'
@@ -223,17 +201,18 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Import UTxO Set'
     @description: 'One-off import of the UTxO set that anchors crawler.utxoSet. Pause the crawler first. source=ogmios acquires the set at the crawler cursor (crawl must be at the tip); source=file loads a cardano-cli query utxo --whole-utxo dump (.json, or .ndjson from jq -c to_entries[]) taken at anchorSlot/anchorHash. source=aggregates rebuilds only the sums (LedgerAddresses, LedgerAddressAssets, LedgerAccounts) from the rows an earlier import left, e.g. after its aggregate phase failed; a cursor past the anchor is set back to it. source=scripts fills the reference-script columns (utxo_referenceScriptHash, utxo_referenceScriptSize, utxo_referenceScriptType) of rows an earlier import left empty: from the same dump (filePath), or without filePath from Ogmios for the unspent rows that hold a hash but no size; the set stays active. Runs in the background; progress via getStatus().utxoSet and the log.'
     @requires   : 'Admin'
-    action   importUtxoSet(source: String, filePath: String, anchorSlot: Integer64, anchorHash: String) returns UtxoSetImportResult;
+    action   importUtxoSet(@assert.range source: UtxoSetImportSource, filePath: String,
+                           @assert.range: [0, _] anchorSlot: Integer64, anchorHash: String) returns UtxoSetImportResult;
 
     @title      : 'Backfill Certificates'
     @description: 'Fill TransactionCertificates and TransactionWithdrawals for blocks the crawl already holds, from a second chain-sync stream (Ogmios). fromSlot defaults to the crawl start, toSlot to the cursor. Writes only those two tables; the crawler may keep running. Runs in the background; progress via getStatus().certificateBackfill.'
     @requires   : 'Admin'
-    action   backfillCertificates(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
+    action   backfillCertificates(@assert.range: [0, _] fromSlot: Integer64, @assert.range: [0, _] toSlot: Integer64) returns CertificateBackfillResult;
 
     @title      : 'Backfill Transactions'
     @description: 'Complete transactions the crawl already holds from a second chain-sync stream (Ogmios): input outpoints, the spent output datum and reference-script hash, missing input addresses, TransactionRedeemers and TransactionDatums. Fills empty fields only; a transaction whose stored inputs differ from the stream is skipped. fromSlot defaults to the crawl start, toSlot to the cursor; the crawler may keep running. Runs in the background; progress via getStatus().transactionBackfill.'
     @requires   : 'Admin'
-    action   backfillTransactions(fromSlot: Integer64, toSlot: Integer64) returns CertificateBackfillResult;
+    action   backfillTransactions(@assert.range: [0, _] fromSlot: Integer64, @assert.range: [0, _] toSlot: Integer64) returns CertificateBackfillResult;
 
     @title      : 'Backfill Payment Credentials'
     @description: 'Fill utxo.paymentCredential on TransactionOutputs, TransactionInputs and LedgerUTxOs rows written before the column existed, decoded from the stored address. Walks each table once in key order; rows that carry a credential are left alone, so a second run is a no-op. No backend call; the crawler may keep running. Runs in the background; progress via getStatus().credentialBackfill.'

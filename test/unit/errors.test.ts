@@ -810,3 +810,14 @@ describe('Error Classes', () => {
     });
   });
 });
+
+describe('BackendError on the wire', () => {
+  it('exposes message, status, code and target, never the backend internals', () => {
+    const err = new BackendError('Op: bad x', 400, ERROR_CODES.INVALID_INPUT, 'koios', new Error('socket'), 'x');
+    // CAP copies the enumerable fields of a thrown error into the response body
+    expect(Object.keys(err).sort()).toEqual(['code', 'statusCode', 'target']);
+    expect(err.name).toBe('BackendError');
+    expect(err.backendName).toBe('koios');
+    expect((err.originalError as Error).message).toBe('socket');
+  });
+});

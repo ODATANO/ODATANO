@@ -644,6 +644,19 @@ describe('server.ts', () => {
       expect(() => getAppContext()).toThrow('Application not initialized');
     });
 
+    it('closes the backends once when the plugin and the standalone hook shut down together', async () => {
+      const mockShutdown = vi.fn().mockResolvedValue(undefined);
+      resetAppContext({
+        cardanoClient: { shutdown: mockShutdown } as any,
+        cardanoIndexer: {} as any,
+        cardanoTxBuilder: {} as any,
+      });
+
+      await Promise.all([shutdownAppContext(), shutdownAppContext()]);
+
+      expect(mockShutdown).toHaveBeenCalledTimes(1);
+    });
+
     it('should shutdown HSM signer if active', async () => {
       const mockShutdown = vi.fn().mockResolvedValue(undefined);
       resetAppContext({

@@ -17,10 +17,10 @@ export async function handleBackendRequest<T>(
 }
 
 /** Runs a service handler inside the request transaction and maps errors to OData responses. */
-export async function handleRequest(
+export async function handleRequest<T>(
   req: Request,
-  handler: (db: cds.Transaction) => Promise<unknown>):
-  Promise<unknown> {
+  handler: (db: cds.Transaction) => Promise<T>):
+  Promise<T> {
   const context = req.target?.name || req.event;
   // Managed transaction: CAP rolls back on req.reject()/req.error(), no explicit rollback.
   const db = cds.tx(req);
@@ -29,7 +29,6 @@ export async function handleRequest(
   } catch (e: unknown) {
     logger.error({ err: e }, `${context} error`);
     return mapError(req, e, context);
-
   }
 }
 

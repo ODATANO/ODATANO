@@ -10,13 +10,8 @@ import { Block, TransactionCertificates, TransactionWithdrawals } from '#cds-mod
 const { SELECT, UPSERT } = cds.ql;
 const logger = cds.log('CertificateBackfill');
 
-/**
- * Fills `TransactionCertificates` and `TransactionWithdrawals` for blocks the crawl already
- * holds, from a second chain-sync stream. Only those two tables are written, keyed so a
- * repeat is idempotent; the cursor, the block and transaction rows stay untouched and the
- * live crawler keeps its own stream. A block the index does not know (rolled back since) is
- * skipped, so no row can point at a transaction that is not there.
- */
+// Fill certificates and withdrawals for already crawled blocks from a second chain-sync stream.
+// Only those two tables are written, and a repeat run is idempotent. Unknown blocks are skipped.
 
 export class CertificateBackfillError extends Error {
   constructor(message: string) {
@@ -52,11 +47,8 @@ export interface CertificateBackfillResult extends CertificateBackfillProgress {
   intersection: ChainPoint | 'origin';
 }
 
-/**
- * Newest indexed block strictly before `slot` inside the crawled range; the crawler's own
- * start point when none is. Lazily indexed blocks below the crawl start are never picked:
- * they may lie far back or on a fork the node no longer knows.
- */
+// Newest crawled block before `slot`, else the crawl start. Lazily indexed blocks below the start
+// are never picked, since they may lie on a fork the node no longer knows.
 export async function intersectionBefore(db: CapTransaction, slot: number): Promise<ChainPoint | 'origin'> {
   const cursor = await readCursor(db);
   const floor = cursor?.startSlot ?? null;
@@ -86,11 +78,8 @@ export interface CrawledBlockStreamOptions {
   errorType?: new (message: string) => Error;
 }
 
-/**
- * Streams the crawled range `fromSlot..toSlot` over a second chain-sync connection and hands
- * batches of blocks the index holds to `writeBatch`, each in its own DB transaction. A block
- * the index does not know (rolled back since) is skipped. Returns the intersection used.
- */
+// Stream `fromSlot..toSlot` over a second chain-sync connection and pass stored blocks to
+// `writeBatch`, one DB transaction per batch. Returns the intersection used.
 export async function streamCrawledBlocks<T>(
   opts: CrawledBlockStreamOptions,
   collect: (block: BlockData, txs: Transaction[]) => T,
@@ -111,10 +100,7 @@ export async function streamCrawledBlocks<T>(
 
   let pending: StreamedBlock<T>[] = [];
 
-  /**
-   * Writes a batch: the index's blocks of the batch's slot range are read once (a sequential
-   * index range, not one random lookup per block) and only blocks the index holds are passed on.
-   */
+  // Read the stored blocks of the batch's slot range in one range query, not one lookup per block.
   const flush = async (): Promise<void> => {
     if (!pending.length) return;
     const batch = pending;
@@ -127,7 +113,7 @@ export async function streamCrawledBlocks<T>(
       const known = new Set(rows.map((r) => r.hash));
       const held = batch.filter((b) => {
         if (known.has(b.hash)) return true;
-        logger.warn(`Block ${b.hash} at slot ${b.slot} is not in the index — skipped`);
+        logger.warn(`Block ${b.hash} at slot ${b.slot} is not in the index, skipped`);
         return false;
       });
       await writeBatch(tx, held);

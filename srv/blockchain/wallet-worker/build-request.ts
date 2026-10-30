@@ -10,11 +10,8 @@ import type { JSONValue, MintAction, TxBuildRequest } from '../../utils/types';
 import type { Network } from '../cardano-client';
 import type { WalletJobKindValue } from './job-store';
 
-/**
- * Transforms a stored wallet-job request (Build*-action payload shape) into the
- * TxBuildRequest the CardanoIndexer build methods expect, mirroring the synchronous handlers.
- * Validation failures throw BackendError 400 INVALID_INPUT so the job fails terminally, not via retries.
- */
+// Turns a stored wallet-job request into the TxBuildRequest the build methods expect.
+// Invalid input throws 400 INVALID_INPUT so the job fails at once instead of retrying.
 
 type RawRequest = Record<string, unknown>;
 
@@ -54,7 +51,7 @@ function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[
     }
     const action = rawAction as Record<string, unknown>;
     if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
-      fail(`Invalid quantity: "${String(action.quantity)}" — must be an integer string`);
+      fail(`Invalid quantity: "${String(action.quantity)}": must be an integer string`);
     }
     if (typeof action.assetUnit !== 'string') fail('Each mint action must have an assetUnit string');
     // Optional per-action mintingPolicyScript + redeemerJson (multi-policy mint).
@@ -70,7 +67,7 @@ function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[
       action.assetUnit.length % 2 === 0 &&
       /^[0-9a-fA-F]*$/.test(action.assetUnit);
     if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-      fail(`Invalid assetUnit: "${action.assetUnit}" — must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`);
+      fail(`Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`);
     }
     let assetUnit = action.assetUnit as string;
     if (actionPolicyId) {
@@ -98,15 +95,12 @@ function scriptHashOf(scriptHex: string, context: string): string {
   }
 }
 
-/**
- * Every mint action must carry the effective policy id: parseAssetUnit drops the first
- * 56 hex chars, so a mismatched prefix would mint a truncated asset name.
- */
+/** parseAssetUnit drops the first 56 hex chars, so a wrong policy prefix would mint a truncated name. */
 function assertPolicyPrefix(actions: Array<{ assetUnit: string; mintingPolicyScript?: string }>, policyId: string): void {
   // Actions with their own script were already checked against that script's policy id.
   const mismatch = actions.find((a) => !a.mintingPolicyScript && !a.assetUnit.toLowerCase().startsWith(policyId));
   if (mismatch) {
-    fail(`assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId} — pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`);
+    fail(`assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}. Pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`);
   }
 }
 
@@ -242,7 +236,7 @@ function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
     try {
       effectivePolicyId = Script.fromCbor(Buffer.from(raw.mintingPolicyScript as string, 'hex')).hash.toString();
     } catch {
-      // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+      // Invalid script CBOR. The builder rejects it with its own message.
     }
   }
   if (effectivePolicyId) assertPolicyPrefix(mintActions, effectivePolicyId);
@@ -318,7 +312,7 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
       try {
         mintPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
       } catch {
-        // invalid script CBOR — skip the prefix check; the builder rejects it with its own message
+        // Invalid script CBOR. The builder rejects it with its own message.
       }
       if (mintPolicyId) assertPolicyPrefix(mintActions, mintPolicyId);
     }

@@ -379,7 +379,7 @@ erDiagram
     AddressTransactions }o--|| Transactions : "references"
 ```
 
-## v2.0 entities — chain crawler and wallet worker
+## entities — chain crawler and wallet worker
 
 Four entities were added in 2.0. They are standalone: the crawler writes into the existing
 `Blocks`/`Transactions` graph above but keeps its own cursor, and the worker's tables reference

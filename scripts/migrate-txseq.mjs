@@ -1,16 +1,7 @@
 #!/usr/bin/env node
-// Move a database written before the txSeq schema onto it: TransactionInputs / TransactionOutputs
-// and their asset tables are keyed by Transactions.txSeq (slot * 65536 + txIndex) instead of the
-// transaction hash. Runs against the configured `db` (PostgreSQL or SQLite) with ODATANO stopped:
-//
-//   node scripts/migrate-txseq.mjs            # image: docker compose run --rm --no-deps odatano migrate-txseq
-//   node scripts/migrate-txseq.mjs --dry-run  # report what would change, touch nothing
-//
-// One transaction: fill Transactions.txSeq, rebuild the four tables in the new layout (rows copied
-// in key order, row counts checked), recreate the service views, refresh the planner statistics
-// and store the new model in `cds_model` so the next schema deployment sees no difference. A
-// database already on the new layout is left alone. The table indexes are recreated by the server
-// on its next start.
+// Rekeys the transaction input and output tables by Transactions.txSeq in one transaction.
+// Run with ODATANO stopped. --dry-run only reports. A database already on this layout is left alone.
+// It also stores the new model in cds_model, so the next schema deploy sees no difference.
 import cds from '@sap/cds';
 
 const DRY = process.argv.includes('--dry-run');

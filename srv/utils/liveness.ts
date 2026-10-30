@@ -1,7 +1,5 @@
-/**
- * Unauthenticated liveness body for CardanoIndexerService.getLiveness(): process facts only,
- * never touches app context, backends or DB, so it answers while those initialize or fail.
- */
+// Liveness body for getLiveness(). It reports process facts only and never touches
+// backends or the DB, so it answers while those start or fail.
 
 import cds from '@sap/cds';
 import path from 'path';

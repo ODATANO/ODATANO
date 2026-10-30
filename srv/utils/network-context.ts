@@ -1,9 +1,7 @@
 import type { Network } from '../blockchain/cardano-client';
 
-/**
- * Dependency-free holder for the active network, so leaf utilities (validators) can read it
- * without importing `server.ts`. Set by `initializeAppContext`, `null` before bootstrap.
- */
+// Holds the active network so validators can read it without importing server.ts.
+// Null before bootstrap.
 let active: Network | null = null;
 
 /** Record the active network. Pass `null` to clear (shutdown/reset). */

@@ -32,12 +32,8 @@ import { chunk, IN_CHUNK } from '../utils/collections';
 
 const { SELECT } = cds.ql;
 
-/**
- * Stored blocks and transactions back in the provider shape (`BlockData`, `Transaction`), for
- * serving other ODATANO instances from what this one has indexed. The rows hold the ledger view
- * (see ledgerView), so the phase-2 flag follows from them: a valid transaction always spends a
- * regular input. Not stored, so absent: `totalCollateral` and `outputAmount`.
- */
+// Stored blocks and transactions in provider shape, served to other instances. A valid transaction
+// always spends a regular input, which gives the phase-2 flag. `totalCollateral` and `outputAmount` are absent.
 
 type Row = Record<string, unknown>;
 
@@ -73,10 +69,7 @@ export async function readBlockByHeight(db: CapTransaction, height: number): Pro
   return row ? blockRowToData(row) : null;
 }
 
-/**
- * Up to `count` stored blocks following height `afterHeight`, contiguous only: the run stops at
- * the first missing height, so a caller never walks over a gap.
- */
+/** Up to `count` stored blocks after `afterHeight`. Stops at the first gap, so callers never skip one. */
 export async function readNextBlocks(db: CapTransaction, afterHeight: number, count: number): Promise<BlockData[]> {
   const rows = await db.run(
     // one operator per column object: `{ '>': a, '<=': b }` renders as `height > a <= b`
@@ -107,10 +100,8 @@ export async function readTransactionsByHash(db: CapTransaction, hashes: string[
   return new Map(txs.map(t => [t.hash, t]));
 }
 
-/**
- * Stored transactions of a block in block order; null when the block is not stored with all of its
- * transactions (a lazily indexed block may hold only the ones somebody asked for).
- */
+// Stored transactions of a block in order. Null unless all are stored, since a lazily indexed
+// block may hold only some.
 export async function readBlockTransactions(db: CapTransaction, blockHash: string): Promise<ProviderTransaction[] | null> {
   const block = await db.run(SELECT.one.from(Blocks).columns('txCount').where({ hash: blockHash })) as Row | undefined;
   if (!block) return null;

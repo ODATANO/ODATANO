@@ -2,10 +2,8 @@ import cds from '@sap/cds';
 
 const logger = cds.log('ServiceEvents');
 
-/**
- * Emits a declared CAP service event in-process (no broker needed). Never throws, never blocks,
- * silent when the service is not served yet. Callers must emit AFTER their transaction commits.
- */
+// Emits a CAP service event in-process. Never throws and is silent before the service is served.
+// Callers must emit after their transaction commits.
 export function emitServiceEvent(serviceName: string, event: string, data: Record<string, unknown>): void {
   const srv = (cds.services as Record<string, { emit?: (e: string, d: unknown) => Promise<unknown> } | undefined>)?.[serviceName];
   if (!srv?.emit) return; // not served yet

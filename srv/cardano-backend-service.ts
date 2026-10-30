@@ -30,16 +30,12 @@ const logger = cds.log('CardanoBackendService');
 
 /** Largest list one call may ask for (hashes, refs, ids, blocks). */
 const MAX_LIST = 500;
-const MAX_LIMIT = 1000;
 
 type Data = Record<string, unknown>;
 type Db = Parameters<Parameters<typeof handleRequest>[1]>[0];
 
-/**
- * CardanoBackendService: the provider shape for another ODATANO instance. Stored blocks and
- * transactions come from the index; the rest goes through the indexer's resolvers (crawled data
- * first, then this instance's backends). Answers are JSON strings (safeJSON keeps big integers).
- */
+// Provider-shaped answers for another ODATANO instance. Stored blocks and txs come from the index.
+// The rest goes through the indexer's resolvers. Answers are JSON strings so big integers survive.
 module.exports = (srv: cds.Service) => {
   const client = () => getCardanoClient();
   const indexer = () => getCardanoIndexer();
@@ -59,7 +55,8 @@ module.exports = (srv: cds.Service) => {
     if (!check(data[field])) rejectInvalid(req, req.event, `Invalid ${what}`, field);
   };
   const both = (...checks: Array<(req: Request, data: Data) => void>) => (req: Request, data: Data) => checks.forEach(c => c(req, data));
-  const limitOf = (data: Data, fallback: number) => Math.min(Math.max(Number(data.limit) || fallback, 1), MAX_LIMIT);
+  // the model range-checks limit and count, so only the default is set here
+  const limitOf = (data: Data, fallback: number) => (data.limit == null ? fallback : Number(data.limit));
   const jsonList = (field: string, check: (v: unknown) => boolean, what: string) => (req: Request, data: Data) => {
     if (data[field] == null) rejectMissing(req, req.event, field);
     let list: unknown;
@@ -129,7 +126,7 @@ module.exports = (srv: cds.Service) => {
   }, need(v => Number.isInteger(Number(v)) && Number(v) >= 0, 'height', 'height'));
 
   op('GetNextBlocks', async ({ afterHash, count, afterHeight }, db) => {
-    const n = Math.min(Math.max(Number(count) || 1, 1), MAX_LIST);
+    const n = count == null ? 1 : Number(count);
     const anchor = await readBlock(db, String(afterHash));
     if (anchor?.height != null) {
       const next = await readNextBlocks(db, anchor.height, n);
@@ -228,10 +225,8 @@ module.exports = (srv: cds.Service) => {
     return hash;
   }, cbor);
 
-  /**
-   * The full pool and DRep set: an enumerating backend (Koios) when configured, else the node's
-   * ledger at the latest block (Ogmios). Cached for a minute; callers page through it by id.
-   */
+  // The full pool and DRep set, from Koios when configured, else from the Ogmios ledger.
+  // Cached for a minute. Details are read in batches of ids.
   let enumerated: { at: number; pools: PoolData[]; dreps: DrepData[] } | null = null;
   async function enumeration(): Promise<{ pools: PoolData[]; dreps: DrepData[] }> {
     if (enumerated && Date.now() - enumerated.at < 60_000) return enumerated;

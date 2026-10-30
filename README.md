@@ -103,13 +103,13 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 | Service | Path | Purpose |
 |---|---|---|
 | CardanoODataService | `/odata/v4/cardano/` | Read blockchain data (32 entities, 21 actions) |
-| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (13 actions) |
+| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (14 actions) |
 | CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
-| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (v2.0, off by default) |
-| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (v2.0, off by default) |
-| CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants: scoped bearer tokens for agents (v2.0, off by default) |
+| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (off by default) |
+| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (off by default) |
+| CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants: scoped bearer tokens for agents (off by default) |
 
-Both v2.0 services also publish **CAP events**, so a consumer can subscribe instead of polling —
+Both services also publish **CAP events**, so a consumer can subscribe instead of polling —
 in-process, no broker required:
 
 ```js
@@ -117,7 +117,7 @@ in-process, no broker required:
 (await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
 ```
 
-## Agent grants (v2.0, off by default)
+## Agent grants (off by default)
 
 Hand an agent a **scoped, budgeted token** instead of a user.
 

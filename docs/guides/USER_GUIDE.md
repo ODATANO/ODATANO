@@ -197,6 +197,31 @@ POST /GetDrepById
 {"drepId": "drep1..."}
 ```
 
+### List Operations: Page Size and Order
+
+Every operation that returns a list takes `limit` and `skip` and answers in a fixed order, so
+paging with `skip` is stable. A value outside the range is a `400` before the operation runs; two
+bad values in one request give one `400` with both in `details`.
+
+| Operation | Service | Order | Default `limit` | Max `limit` | `skip` |
+|---|---|---|---|---|---|
+| `GetAssetHistory` | read | newest first, tx hash on ties | 100 | 100 | `skip + limit` at most 100 |
+| `GetLatestTransactionsByAddress` | read | newest first, tx hash on ties | 10 | 100 | `skip + limit` at most 100 |
+| `GetUTxOsByAddress` | read | tx hash, output index | 1000 | 5000 | ≥ 0 |
+| `GetUTxOsByCredential` | read | tx hash, output index | 1000 | 5000 | ≥ 0 |
+| `GetAssetsByAddress` | read | asset unit | 1000 | 5000 | ≥ 0 |
+| `GetMetadataByTxHash` | read | metadata label | 1000 | 5000 | ≥ 0 |
+| `GetTransactionBuildsByAddress` | transaction | build id | 1000 | 5000 | ≥ 0 |
+| `GetSigningRequestsByAddress` | sign | signing request id | 1000 | 5000 | ≥ 0 |
+
+The two "latest" operations read the newest 100 entries of a provider; older entries are read from
+the `AssetHistory` and `AddressTransactions` entity sets with `$top` / `$skip`. Entity sets page with
+`$top` / `$skip` as usual (at most 1000 rows per page).
+
+Other parameters are range-checked the same way: heights, slots, epochs and output indexes must be
+`≥ 0`, and the enum parameters (`network`: `mainnet`, `preview`, `preprod`; `kind` of a wallet job;
+`source` of `importUtxoSet`) reject any other value with `400`.
+
 ---
 
 ## OData Query Examples
@@ -676,9 +701,9 @@ before until you enable them.
 
 ---
 
-## Chain Crawler / Pre-Sync (v2.0, opt-in)
+## Chain Crawler / Pre-Sync (opt-in)
 
-By default ODATANO indexes **lazily** (fetches from a backend on cache miss). v2.0 adds an optional **crawler** that pre-syncs `Blocks` and `Transactions` (+ inputs/outputs/assets/metadata) forward from a configured start block, so subsequent queries hit local data instead of a backend per request.
+By default ODATANO indexes **lazily** (fetches from a backend on cache miss). An optional **crawler** pre-syncs `Blocks` and `Transactions` (+ inputs/outputs/assets/metadata) forward from a configured start block, so subsequent queries hit local data instead of a backend per request.
 
 **Enable it** (plugin config or env):
 
@@ -1013,7 +1038,7 @@ transactions of the Byron era (mainnet and preprod before Shelley) and of the la
 
 ---
 
-## Wallet Worker (v2.0, opt-in)
+## Wallet Worker (opt-in)
 
 The wallet worker executes transactions **asynchronously** on behalf of server-side wallets: you queue a job, the worker builds, signs (software key or HSM), submits, and tracks the transaction until it reaches the configured confirmation depth. Per wallet only ONE job is in flight at a time, so UTxO contention between your own transactions is impossible by construction.
 
@@ -1072,9 +1097,9 @@ POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
 
 ---
 
-## Events — subscribe instead of polling (v2.0)
+## Events — subscribe instead of polling
 
-Both v2.0 subsystems publish CAP events. Because ODATANO ships as a **plugin**, a consumer
+Both subsystems publish CAP events. Because ODATANO ships as a **plugin**, a consumer
 runs in the same process, so subscribing needs **no message broker and no
 `cds.requires.messaging`** — connect to the service and listen:
 
@@ -1120,7 +1145,7 @@ invisible to existing HTTP clients.
 - **Developer Guide:** [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
 - **Transaction Workflow:** [TRANSACTION_WORKFLOW.md](TRANSACTION_WORKFLOW.md) - Build → Sign → Submit
 - **Backend Configuration:** [BACKEND_CONFIGURATION.md](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- **Test Docs:** [test/README.md](../../test/README.md) - 88 test files (70 unit + 18 integration, vitest)
+- **Test Docs:** [test/README.md](../../test/README.md) - unit and integration tests (vitest)
 - **Architecture:** [docs/concepts & architecture/](../concepts%20&%20architecture/)
 - **Issues:** [GitHub Issues](https://github.com/ODATANO/ODATANO/issues)
 - **Blockfrost:** https://docs.blockfrost.io/

@@ -16,18 +16,14 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Hard cap: without this a hung backend init / test makes the job run to the
-    # 6h GitHub default before it's killed. 45 min comfortably covers a full
-    # gate catch-up (≤25 min) + the test suite (~5 min) with margin.
+    # Hard cap, so a hung backend init does not run to the 6h default.
+    # 45 min covers the 25 min sync gate plus the test suite.
     timeout-minutes: 45
     strategy:
-      # Don't cancel one node version just because another hangs — let both
-      # report so a single flaky runner doesn't mask the other's result.
+      # Let both node versions report, so one flaky runner does not hide the other's result.
       fail-fast: false
       matrix:
-        # Node 20 is EOL — dropped. Both supported LTS lines are tested.
-        # (The Ogmios-/health "Premature close" on Node 22/24 from node-fetch v2
-        # keep-alive socket reuse is fixed in OgmiosBackend.disableHttpKeepAlive.)
+        # Both supported LTS lines are tested.
         node-version: [22.x, 24.x]
     steps:
       - name: Checkout repository
@@ -39,13 +35,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      # ==========================================
-      # Cardano Node DB Cache (Sync-Workflow)
-      # ==========================================
-      # The sync workflow saves under a unique key per run
-      # (cardano-node-ogmios-preview-<run_id>), so we restore the newest one by
-      # prefix. NOTE: prefix matches set cache-hit=false (it is only true on an
-      # exact primary-key match) — gate on cache-matched-key instead.
+      # The sync workflow saves a unique key per run, so the newest is restored by prefix.
+      # A prefix match sets cache-hit=false, so gate on cache-matched-key instead.
       - name: Restore Cardano Node DB Cache
         id: cache-cardano
         uses: actions/cache/restore@v4
@@ -120,30 +111,21 @@ jobs:
           echo "Waiting for Ogmios to connect + sync (max 25 minutes)..."
           MAX_WAIT=1500
           ELAPSED=0
-          # 0.99 is reported the instant the node opens the socket (it just
-          # echoes the CACHED tip, which is ~13 days behind live). Passing at
-          # 0.99 lets the node do its heavy multi-day catch-up DURING the test
-          # run, starving Ogmios while the test runner hammers the CPU → "Premature close"
-          # at backend init → whole Ogmios suite 503s. Requiring 0.999 (~1 day
-          # behind) forces the bulk catch-up to finish HERE — in the gate step,
-          # with no test runner competing — so tests run against a near-tip, lightly
-          # loaded node where Ogmios stays responsive.
+          # 0.99 is reported at once from the cached tip, days behind live. The catch-up would then
+          # run during the tests and starve Ogmios. 0.999 makes the catch-up finish in this step.
           THRESHOLD=0.999
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             HEALTH=$(curl -s --max-time 5 http://localhost:1337/health 2>/dev/null || echo "{}")
-            # Ogmios answers /health even while DISCONNECTED from the node (then
-            # connectionStatus="disconnected", networkSynchronization=null). A
-            # reachable endpoint therefore does NOT mean usable -- we must require
-            # an ACTIVE node connection AND near-tip sync, otherwise the gate
-            # false-positives and the Ogmios suite runs against a dead backend.
+            # Ogmios answers /health even while disconnected from the node.
+            # So require an active connection and near-tip sync, not just a reachable endpoint.
             CONN=$(sed -n 's/.*"connectionStatus":"\([^"]*\)".*/\1/p' <<< "$HEALTH")
             SYNC=$(sed -n 's/.*"networkSynchronization":\([0-9.]*\).*/\1/p' <<< "$HEALTH")
             [ -z "$SYNC" ] && SYNC=0
 
             if [ "$CONN" = "connected" ]; then
               PERCENT=$(echo "$SYNC * 100" | bc -l 2>/dev/null | cut -c1-5 || echo "0")
-              echo "Connected — sync progress: ${PERCENT}%"
+              echo "Connected, sync progress: ${PERCENT}%"
 
               if [ "$(echo "$SYNC >= $THRESHOLD" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
                 echo "✅ Ogmios connected and synced to tip!"
@@ -158,7 +140,7 @@ jobs:
             ELAPSED=$((ELAPSED + 10))
           done
 
-          echo "⚠️ Ogmios not connected+synced after ${MAX_WAIT}s — Ogmios suite will be skipped"
+          echo "⚠️ Ogmios not connected+synced after ${MAX_WAIT}s, Ogmios suite will be skipped"
           echo "ready=false" >> $GITHUB_OUTPUT
 
       - name: Cache Status Info
@@ -233,10 +215,8 @@ jobs:
         continue-on-error: true
 
       # ==========================================
-      # Cleanup & Upload Coverage
+      # Cleanup & Upload Coverage. Only ogmios-sync.yaml saves the node cache.
       # ==========================================
-      # Note: Cache is only saved by the sync job (ogmios-sync.yaml)
-      # This job only restores the cache to avoid conflicts
       - name: Cleanup Docker containers
         if: always()
         run: |

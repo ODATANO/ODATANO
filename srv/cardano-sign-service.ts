@@ -10,24 +10,23 @@ import { getHsmSigner } from './blockchain/signing/hsm-signer';
 import { verifyDataSignature } from './blockchain/signing/cose-verifier';
 import { toSignedTransaction } from './utils/signing-helper';
 import { detachedTx } from './utils/tx-utils';
+import { pageOf } from './utils/paging';
 import { submitAndFinalize, scheduleDeferredSubmit } from './blockchain/signing/submission-finalizer';
+import type { TransactionBuild } from '#cds-models/CardanoSignService';
 const { SELECT, UPDATE } = cds.ql;
 
 const logger = cds.log('CardanoSignService');
 
-interface TransactionBuildRecord {
-  id: string;
-  senderAddress: string;
-  unsignedTxCbor: string;
-  txBodyHash: string;
-  network: string;
-}
+
+/** A stored build: these columns are always set. */
+type StoredBuild = Omit<TransactionBuild, 'id' | 'senderAddress' | 'unsignedTxCbor' | 'txBodyHash' | 'network'>
+  & { id: string; senderAddress: string; unsignedTxCbor: string; txBodyHash: string; network: string };
 
 /** Load a build and, when an address is given, check it matches the build's senderAddress. */
 async function verifyBuildOwnership(
   req: Request, db: cds.Transaction, buildId: string, address: string | undefined, TransactionBuilds: unknown, actionName: string
-): Promise<TransactionBuildRecord> {
-  const build = await db.run(SELECT.one.from(TransactionBuilds as never).where({ id: buildId })) as TransactionBuildRecord | undefined;
+): Promise<StoredBuild> {
+  const build = await db.run(SELECT.one.from(TransactionBuilds as never).where({ id: buildId })) as StoredBuild | undefined;
   if (!build) rejectInvalid(req, actionName, 'Build not found', 'buildId');
   if (address && build.senderAddress !== address) {
     rejectInvalid(req, actionName, 'Address does not match build owner', 'address');
@@ -35,10 +34,7 @@ async function verifyBuildOwnership(
   return build;
 }
 
-/**
- * Expire a pending signing request past its TTL.
- * @returns true if expired, false otherwise
- */
+/** Expires a pending signing request past its TTL. Returns true if it expired. */
 async function checkAndExpireSigningRequest(
   db: cds.Transaction, signingRequest: { id: string; status: string }, SigningRequests: unknown
 ): Promise<boolean> {
@@ -57,11 +53,8 @@ async function checkAndExpireSigningRequest(
   return false;
 }
 
-/**
- * Key hashes that must witness a signing request: the body's `required_signers` plus the
- * payment key hash of the build's senderAddress (script credentials skipped).
- * Returns undefined when nothing is derivable.
- */
+// Key hashes that must sign: the body's required_signers plus the sender's payment key hash.
+// Script credentials are skipped. Returns undefined when nothing can be derived.
 async function resolveRequiredSigners(
   db: cds.Transaction,
   signingRequest: { unsignedTxCbor: string; build_id?: string | null },
@@ -125,7 +118,7 @@ module.exports = (srv: cds.Service) => {
   });
 
 
-  // CreateSigningRequest — persist a signing request for a build (idempotent per pending build).
+  // CreateSigningRequest: persist a signing request for a build (idempotent per pending build).
   srv.on('CreateSigningRequest', async (req: Request) => {
     logger.debug('CreateSigningRequest Action handler called');
     const { buildId , message } = req.data;
@@ -165,7 +158,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // GetSigningRequest — by id; expires a pending request past its TTL on read.
+  // GetSigningRequest: by id; expires a pending request past its TTL on read.
   srv.on('GetSigningRequest', async (req: Request) => {
     logger.debug('GetSigningRequest Action handler called');
     const { signingRequestId } = req.data;
@@ -185,7 +178,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // VerifySignature — verify a signed tx / witness set against the request; persists the result.
+  // VerifySignature: verify a signed tx or witness set against the request; persists the result.
   srv.on('VerifySignature', async (req: Request) => {
     logger.debug('VerifySignature Action handler called');
     const { signingRequestId, signedTxCbor, signerType, signerInfo, address } = req.data;
@@ -252,7 +245,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // SubmitVerifiedTransaction — verify and submit in one step.
+  // SubmitVerifiedTransaction: verify and submit in one step.
   srv.on('SubmitVerifiedTransaction', async (req: Request) => {
     logger.debug('SubmitVerifiedTransaction Action handler called');
     const { signingRequestId, signedTxCbor, signerType, signerInfo, address } = req.data;
@@ -331,7 +324,7 @@ module.exports = (srv: cds.Service) => {
         // Phase 1 on the caller's transaction; validation errors stay synchronous.
         const prep = await phase1(cds.tx(req) as cds.Transaction);
         scheduleDeferredSubmit(req, SigningRequests, finalizeParams(prep));
-        logger.info({ signingRequestId, txHash: prep.txHash }, 'Verified and claimed — submit deferred until after the caller commits');
+        logger.info({ signingRequestId, txHash: prep.txHash }, 'Verified and claimed, submit deferred until after the caller commits');
         return {
           id: null,
           build_id: prep.buildId,
@@ -357,7 +350,7 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  // VerifyDataSignature — stateless CIP-30 signData (COSE_Sign1) check for wallet login.
+  // VerifyDataSignature: stateless CIP-30 signData (COSE_Sign1) check for wallet login.
   // Public (@requires:'any') because the caller is not yet authenticated.
   srv.on('VerifyDataSignature', async (req: Request) => {
     logger.debug('VerifyDataSignature Action handler called');
@@ -372,22 +365,22 @@ module.exports = (srv: cds.Service) => {
     return verifyDataSignature({ address, coseSignature, coseKey, expectedPayload });
   });
 
-  // GetSigningRequestsByAddress — address ↔ signing request associations.
+  // GetSigningRequestsByAddress: signing requests linked to an address.
   srv.on('GetSigningRequestsByAddress', async (req: Request) => {
     logger.debug('GetSigningRequestsByAddress Action handler called');
     const { address } = req.data;
     if (!address) rejectMissing(req, 'GetSigningRequestsByAddress', 'address');
     if (!isValidBech32Address(address)) rejectInvalid(req, 'GetSigningRequestsByAddress', 'Invalid bech32 address format', 'address');
-    return handleRequest(req, async (db) => {
-      return db.run(SELECT.from(AddressSigningRequests).where({ address_address: address }));
-    });
+    const { limit, skip } = pageOf(req.data, 1000);
+    return handleRequest(req, (db) =>
+      db.run(SELECT.from(AddressSigningRequests).where({ address_address: address }).orderBy('signingRequest_id').limit(limit, skip)));
   });
 
   // ---------------------------------------------------------------------------
   // HSM signing actions
   // ---------------------------------------------------------------------------
 
-  // SignWithHsm — create a signing request, sign with the HSM, verify; returns the request.
+  // SignWithHsm: create a signing request, sign with the HSM, verify; returns the request.
   srv.on('SignWithHsm', async (req: Request) => {
     logger.debug('SignWithHsm Action handler called');
     enforceHsmRole(req, 'SignWithHsm');
@@ -461,7 +454,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // SignAndSubmitWithHsm — create a signing request, sign, verify and submit in one call.
+  // SignAndSubmitWithHsm: create a signing request, sign, verify and submit in one call.
   srv.on('SignAndSubmitWithHsm', async (req: Request) => {
     logger.debug('SignAndSubmitWithHsm Action handler called');
     enforceHsmRole(req, 'SignAndSubmitWithHsm');
@@ -503,7 +496,7 @@ module.exports = (srv: cds.Service) => {
         const hsmKeyIdentifier = hsmStatus.keyLabel || hsmStatus.keyId || 'unknown';
 
         if (!verificationResult.isValid) {
-          logger.error({ signingRequestId: signingRequestRecord.id, hsmKey: hsmKeyIdentifier }, 'HSM signature verification failed — aborting submission');
+          logger.error({ signingRequestId: signingRequestRecord.id, hsmKey: hsmKeyIdentifier }, 'HSM signature verification failed, aborting submission');
           rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
         }
 
@@ -532,7 +525,7 @@ module.exports = (srv: cds.Service) => {
         // Phase 1 on the caller's transaction; submit runs after its commit.
         const prep = await phase1(cds.tx(req) as cds.Transaction);
         scheduleDeferredSubmit(req, SigningRequests, finalizeParams(prep));
-        logger.info({ signingRequestId: prep.signingRequestId, txHash: prep.txHash }, 'HSM-signed and claimed — submit deferred until after the caller commits');
+        logger.info({ signingRequestId: prep.signingRequestId, txHash: prep.txHash }, 'HSM-signed and claimed, submit deferred until after the caller commits');
         return {
           id: null,
           build_id: buildId,
@@ -563,7 +556,7 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  // GetHsmStatus — connection status and key info; null fields when no HSM is configured.
+  // GetHsmStatus: connection status and key info; null fields when no HSM is configured.
   srv.on('GetHsmStatus', async (_req: Request) => {
     enforceHsmRole(_req, 'GetHsmStatus');
     const hsmSigner = getHsmSigner();

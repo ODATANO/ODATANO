@@ -83,6 +83,9 @@ const datum = (decimals: number) => hex(new DataConstr(0, [
   new DataMap([new DataPair(new DataB(Buffer.from('decimals').toString('hex')), new DataI(decimals))]), new DataI(1),
 ]));
 
+const input = (txSeq: number, inputIndex: number, over: Row = {}): Row =>
+  ({ txSeq, inputIndex, spentTxHash: MINT, spentOutputIndex: 1, isCollateral: false, isReference: false, ...over });
+
 /** The reference NFT minted at MINT#1 with 6 decimals, spent by UPDATE_TX whose output 0 gives the datum by hash. */
 function seedTrail(): void {
   tables.set('AssetHistory', [{ unit: REF, txHash: MINT, action: 'mint', blockHeight: 10 }]);
@@ -95,7 +98,7 @@ function seedTrail(): void {
     { txSeq: 100, outputIndex: 1, utxo_inlineDatum: datum(6), utxo_dataHash: null },
     { txSeq: 200, outputIndex: 0, utxo_inlineDatum: null, utxo_dataHash: DATUM_HASH },
   ]);
-  tables.set('TransactionInputs', [{ txSeq: 200, inputIndex: 0, spentTxHash: MINT, spentOutputIndex: 1 }]);
+  tables.set('TransactionInputs', [input(200, 0)]);
   tables.set('TransactionDatums', [{ dataHash: DATUM_HASH, datum: datum(8) }]);
 }
 
@@ -127,6 +130,24 @@ describe('cip68Decimals', () => {
     seedTrail();
     table('AssetHistory').push({ unit: REF, txHash: UPDATE_TX, action: 'mint', blockHeight: 20 });
     tables.set('TransactionInputs', []);
+    expect(await cip68Decimals(fakeTx as never, FT)).toBe(8);
+  });
+
+  it('does not take a transaction that only reads the reference NFT as its spender', async () => {
+    seedTrail();
+    tables.set('TransactionInputs', [input(150, 0, { isReference: true }), input(200, 0)]);
+    expect(await cip68Decimals(fakeTx as never, FT)).toBe(8);
+    tables.set('TransactionInputs', [input(150, 0, { isReference: true })]);
+    expect(await cip68Decimals(fakeTx as never, FT)).toBe(6);
+  });
+
+  it('takes collateral as the spender only in a phase-2 failure', async () => {
+    seedTrail();
+    // valid tx 150 lists the output as collateral next to a regular input: not consumed
+    tables.set('TransactionInputs', [input(150, 1, { isCollateral: true }), input(150, 0, { spentTxHash: 'e5'.repeat(32) })]);
+    expect(await cip68Decimals(fakeTx as never, FT)).toBe(6);
+    // failed tx 200 is stored with its collateral alone: consumed
+    tables.set('TransactionInputs', [input(200, 0, { isCollateral: true })]);
     expect(await cip68Decimals(fakeTx as never, FT)).toBe(8);
   });
 
@@ -206,7 +227,7 @@ describe('backfillAssetDecimals', () => {
     expect(table('Assets').map((x) => [x.unit, x.decimals])).toEqual([[PLAIN, null], [FT, 8], [FT, 8], [RFT, 8], [REF, null]]);
     expect(seen.at(-1)).toEqual(r);
     // page queries carry the unit cursor only, never a column predicate
-    const pages = fakeTx.run.mock.calls.map(([q]) => q as Query).filter((q) => q._op === 'SELECT');
+    const pages = fakeTx.run.mock.calls.map(([q]) => q as Query).filter((q) => q._op === 'SELECT' && q.entity === 'Assets');
     expect(pages.length).toBeGreaterThan(1);
     for (const q of pages) expect(Object.keys(q._where ?? {}).every((k) => k === 'unit')).toBe(true);
   });

@@ -13,7 +13,7 @@ const LOVELACE_AMOUNT = '5000000'; // 5 ADA
 
 async function main() {
   try {
-    console.log('=== HSM Signing Flow — Send ADA on Preview ===\n');
+    console.log('=== HSM Signing Flow: Send ADA on Preview ===\n');
 
     // 1. Check HSM status
     console.log('1. Checking HSM status...');

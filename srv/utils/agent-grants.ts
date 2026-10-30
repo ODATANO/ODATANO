@@ -1,8 +1,5 @@
-/**
- * Agent grants: scoped, budgeted bearer capabilities. The transport lane turns `x-agent-token` into the
- * principal `agent:<grantId>` (role `agent-grant`) before any hook runs; `attachAgentGrantEnforcement`
- * applies allow list, wallet pinning and daily budget; `registerAgentGrantHandlers` is the lifecycle API.
- */
+// Agent grants: scoped, budgeted bearer tokens. A token request runs as `agent:<grantId>` with the role `agent-grant`.
+// attachAgentGrantEnforcement checks allow list, wallet and budget; registerAgentGrantHandlers is the admin API.
 
 import cds, { Request } from '@sap/cds';
 import crypto from 'node:crypto';
@@ -10,6 +7,7 @@ import { runWithoutAmbientTx } from './tx-utils';
 import { RateLimiter, principalRateKey } from './rate-limiter';
 import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
+import type { CardanoAgentGrant } from '#cds-models/odatano/cardano';
 import { loadGrantAdminRateLimit, loadTokenCacheMs } from './agent-grants-config';
 
 const { SELECT, INSERT, UPDATE } = cds.ql;
@@ -39,10 +37,7 @@ export const AGENT_SERVICE_NAMES: readonly string[] = [
   'CardanoBackendService',
 ];
 
-/**
- * Actions an operator may put on a grant's allow list; each call costs one budget unit. Anything else
- * not in AGENT_ALWAYS_ALLOWED_EVENTS (HSM signing, pause/resume, grant administration) is a 403.
- */
+/** Actions an operator may allow on a grant; each call costs one budget unit. Anything else not always allowed is a 403. */
 export const AGENT_ALLOWLISTABLE_ACTIONS: readonly string[] = [
   // CardanoTransactionService: unsigned CBOR
   'BuildSimpleAdaTransaction',
@@ -67,10 +62,7 @@ export const AGENT_ALLOWLISTABLE_ACTIONS: readonly string[] = [
 /** Allow-listable actions that spend from a worker wallet: the grant must be pinned. */
 export const AGENT_WALLET_ACTIONS: ReadonlySet<string> = new Set(['SubmitWalletJob', 'CancelJob']);
 
-/**
- * Events every valid token may use without allow-list entry or budget: reads, compute-only actions,
- * status polling. Row-level narrowing is done by the `$user.grantId` restrictions in the CDS models.
- */
+/** Events every valid token may use without allow-list entry or budget. Row-level `$user.grantId` restrictions narrow them. */
 export const AGENT_ALWAYS_ALLOWED_EVENTS: ReadonlySet<string> = new Set([
   'READ',
   // CardanoODataService: chain reads through the backends
@@ -116,23 +108,8 @@ export function __resetGrantRateLimiterForTests(): void {
   tokenCacheOverride = null;
 }
 
-export interface AgentGrantRow {
-  ID: string;
-  userId: string;
-  agentLabel?: string | null;
-  tokenHash?: string;
-  allowedActions: string;
-  walletId?: string | null;
-  allowedJobKinds?: string | null;
-  maxJobsPerDay?: number | null;
-  jobsUsedToday?: number | null;
-  budgetWindow?: string | null;
-  validUntil?: string | null;
-  isActive?: boolean;
-  revokedAt?: string | null;
-  createdAt?: string | null;
-  lastUsedAt?: string | null;
-}
+/** A grant row with the fields every grant has set. */
+export type AgentGrantRow = Omit<CardanoAgentGrant, 'ID' | 'userId' | 'allowedActions'> & { ID: string; userId: string; allowedActions: string };
 
 /** Anything that runs a CQL statement: the primary db service or one transaction of it. */
 export type Runner = { run: (q: unknown) => Promise<unknown> };
@@ -193,14 +170,9 @@ export type TokenResolution =
   | { ok: true; grant: AgentGrantRow }
   | { ok: false; status: 401 | 410; message: string };
 
-// ---------------------------------------------------------------------------
-// Token cache: the resolved grant row per token hash, for AGENT_TOKEN_CACHE_MS
-// ---------------------------------------------------------------------------
-//
-// Positive results only; revoke / rotate / update drop the entry in this process, another replica sees
-// it on expiry. validUntil is checked per request against the cached row; budget and usage never read
-// the cached counters. A generation counter keeps a SELECT in flight from caching a row an
-// invalidation already superseded.
+// Token cache: the grant row per token hash for AGENT_TOKEN_CACHE_MS, positive results only.
+// Revoke, rotate and update drop the entry here; another replica sees the change when it expires.
+// A generation counter stops a lookup in flight from caching a row an invalidation already replaced.
 
 interface CachedToken { grant: AgentGrantRow; until: number }
 const TOKEN_CACHE_MAX = 10_000;
@@ -248,10 +220,7 @@ function rememberToken(hash: string, grant: AgentGrantRow, ttl: number): void {
   tokenHashOfGrant.set(grant.ID, hash);
 }
 
-/**
- * Authenticate a bearer token: prefix, hash lookup among active grants (revoked = unknown, non-leaking),
- * expiry. Runs detached from any ambient transaction; the lookup is cached (see above).
- */
+/** Authenticate a token by prefix, hash and expiry. A revoked grant answers like an unknown one. */
 export async function resolveAgentToken(token: string, runner: Runner = dbRunner()): Promise<TokenResolution> {
   if (typeof token !== 'string' || !token.startsWith(AGENT_TOKEN_PREFIX)) {
     return { ok: false, status: 401, message: 'invalid agent token' };
@@ -278,10 +247,7 @@ export async function resolveAgentToken(token: string, runner: Runner = dbRunner
   return { ok: true, grant };
 }
 
-/**
- * The principal a token request runs under: not the operator and without the operator's roles, so
- * `createdBy = $user` and `$user.grantId` restrictions narrow it and every `@requires: 'Admin'` refuses it.
- */
+/** The user a token request runs as: never the operator, so `$user` restrictions apply and every Admin gate refuses it. */
 export function makeAgentUser(grant: AgentGrantRow): cds.User {
   return new cds.User({
     id: agentPrincipalId(grant.ID),
@@ -455,10 +421,7 @@ export interface RotatedAgentGrant {
   token: string;
 }
 
-/**
- * Replace the grant's token; budget, wallet, allow list and expiry survive. The old token is unknown
- * from the next request (another replica: after AGENT_TOKEN_CACHE_MS). Null when missing or revoked.
- */
+/** Replace the grant's token and keep everything else. Null when the grant is missing or revoked. */
 export async function rotateAgentGrantToken(grantId: string, runner: Runner = dbRunner()): Promise<RotatedAgentGrant | null> {
   if (!grantId) return null;
   const token = AGENT_TOKEN_PREFIX + crypto.randomBytes(TOKEN_BYTES).toString('hex');
@@ -491,10 +454,8 @@ export type UpdateAgentGrantResult =
   | { ok: true; grantId: string; updated: string[] }
   | { ok: false; status: 404 | 409; code?: 'GRANT_REVOKED'; message: string };
 
-/**
- * Edit an active grant: absent field = untouched, explicit null = cleared (allowedActions cannot be emptied).
- * The merged row passes validateGrantInput. Unknown grant 404, revoked 409 GRANT_REVOKED, invalid input 400.
- */
+// Edit an active grant. An absent field stays, an explicit null clears it; allowedActions cannot be emptied.
+// Unknown grant is 404, revoked is 409 GRANT_REVOKED, invalid input is 400.
 export async function updateAgentGrant(
   grantId: string,
   input: UpdateAgentGrantInput,
@@ -588,10 +549,7 @@ export interface AgentGrantUsage {
   maxJobsPerDay: number | null;
 }
 
-/**
- * Admitted calls of the grant in `window`, grouped by service and action. Deferred counters are flushed
- * first on `flushRunner` (detached autocommit), so the read on `runner` sees them without holding locks.
- */
+/** Admitted calls of the grant in `window` per service and action. Buffered counters are flushed first. */
 export async function getGrantUsage(
   grant: AgentGrantRow,
   window: Extract<UsageWindow, { ok: true }>,
@@ -663,10 +621,7 @@ export function toGrantStatus(grant: AgentGrantRow): AgentGrantStatus {
 // CardanoAgentService handlers
 // ---------------------------------------------------------------------------
 
-/**
- * Prelude of the administration actions: rate limit (refusals consume the window), then no token
- * principal, then authentication. False after a reject.
- */
+/** Checks before each admin action: rate limit, no token caller, authenticated. False after a reject. */
 function checkGrantAdmin(req: Request, verb: string): boolean {
   const rate = grantAdminLimiter().check(principalRateKey(req, 'grant-admin'));
   if (!rate.allowed) {
@@ -788,11 +743,9 @@ export function attachAgentGrantEnforcement(srv: cds.Service, runner?: Runner): 
   srv.before('*', (req: Request) => enforceAgentGrant(req, runner, undefined, serviceName));
 }
 
-/**
- * Where the hook's writes go: detached from the request transaction by default (the spend sticks, no lock
- * across backend round trips). A request already inside an open transaction (`$batch` changeset parts,
- * `ready` or `dbc` set) rides its own, since a detached statement would deadlock on SQLite's single connection.
- */
+// Where the hook writes: outside the request transaction by default, so the spend sticks.
+// A request already inside an open transaction (a `$batch` changeset) writes on it,
+// since a separate statement would deadlock on SQLite's single connection.
 export interface BudgetRunner {
   runner: Runner;
   /** true: statements run outside the request transaction (and a refused request is refunded). */
@@ -815,10 +768,28 @@ async function runStmt(br: BudgetRunner, statement: unknown): Promise<unknown> {
   return br.detached ? runWithoutAmbientTx(() => br.runner.run(statement)) : br.runner.run(statement);
 }
 
-/**
- * The before('*') hook: allow list, wallet pinning, daily budget, usage, lastUsedAt. No-op without a grant.
- * `runner` / `detached` are test seams.
- */
+type StatusCarrier = { status?: unknown; statusCode?: unknown; code?: unknown; details?: StatusCarrier[] } | null | undefined;
+
+// HTTP status of a failed request's error, as CAP derives it. A combined error has no status:
+// one shared detail status wins, any 5xx gives 500, else 400.
+export function errorStatus(err: unknown): number {
+  const e = err as StatusCarrier;
+  const own = ownStatus(e);
+  if (own) return own;
+  if (!Array.isArray(e?.details)) return 500;
+  const nested = [...new Set(e.details.map(ownStatus).filter((n): n is number => !!n))];
+  if (nested.length === 1) return nested[0];
+  return nested.some(n => n >= 500) ? 500 : 400;
+}
+
+function ownStatus(e: StatusCarrier): number | undefined {
+  const status = Number(e?.status ?? e?.statusCode);
+  if (Number.isInteger(status) && status > 0) return status;
+  const code = Number(e?.code);
+  return Number.isInteger(code) && code >= 400 && code < 600 ? code : undefined;
+}
+
+/** The before('*') hook for token requests: allow list, wallet binding, daily budget and usage. */
 export async function enforceAgentGrant(
   req: Request,
   runner?: Runner,
@@ -887,9 +858,8 @@ export async function enforceAgentGrant(
   if (br.detached) {
     const chargedWindow = charge?.window ?? null;
     (req as unknown as { on?: (ev: string, fn: (err: unknown) => void) => void }).on?.('failed', (err: unknown) => {
-      const e = err as { status?: unknown; statusCode?: unknown; code?: unknown } | null;
-      const status = Number(e?.status ?? e?.statusCode ?? e?.code);
-      if (Number.isInteger(status) && status >= 400 && status < 429) {
+      const status = errorStatus(err);
+      if (status >= 400 && status < 429) {
         // Off the failing request's tick: its transaction is still rolling back when 'failed' fires,
         // and a concurrent write on a second SQLite connection would contend for the lock
         setImmediate(() => {
@@ -915,10 +885,8 @@ export interface BudgetCharge {
   window: string;
 }
 
-/**
- * Consume one unit of the daily budget with two conditional UPDATEs, so concurrent requests cannot
- * overspend: a compare-and-swap window reset and a bounded increment (`jobsUsedToday < max`).
- */
+// Consume one budget unit with two conditional UPDATEs, so concurrent requests cannot overspend:
+// a compare-and-swap reset of the day window, then an increment bounded by the daily maximum.
 export async function consumeDailyBudget(br: BudgetRunner | Runner, grant: AgentGrantRow): Promise<BudgetCharge> {
   const runner: BudgetRunner = 'runner' in br ? br : { runner: br, detached: true };
   const today = utcDay();
@@ -951,15 +919,9 @@ export async function refundDailyBudget(br: BudgetRunner | Runner, grant: AgentG
   );
 }
 
-// ---------------------------------------------------------------------------
-// Usage counters: synchronous on SQLite, buffered on Postgres / HANA
-// ---------------------------------------------------------------------------
-//
-// One admitted call is `calls + 1` on (grant, UTC day, service, action). Per-request that UPDATE
-// serializes every call of a grant on one row lock, so on Postgres / HANA the deltas are buffered and
-// flushed once a second (accounting, not admission; one replica assumed). SQLite keeps the awaited
-// write: a timer writing on a second connection during an open request transaction hits the WAL
-// snapshot race (SQLITE_BUSY_SNAPSHOT). A request on its own changeset transaction keeps it too.
+// Usage counters: Postgres and HANA buffer the deltas and flush once a second, so calls do not queue on one row lock.
+// SQLite writes them awaited: a timer writing on a second connection during a request hits SQLITE_BUSY_SNAPSHOT.
+// A request inside its own changeset transaction also writes awaited.
 
 type UsageMode = 'sync' | 'deferred';
 interface UsageDelta { grant_ID: string; day: string; service: string; action: string; calls: number; refunded: number }
@@ -1012,10 +974,7 @@ function bufferUsage(key: { grant_ID: string; day: string; service: string; acti
   }
 }
 
-/**
- * Writes the buffered deltas per key: UPDATE, INSERT when the row is missing, one more UPDATE when a racing
- * writer created it. A failed delta goes back into the buffer for the next flush.
- */
+/** Write the buffered deltas per key. A failed delta goes back into the buffer for the next flush. */
 export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ flushed: number; failed: number }> {
   if (usageBuffer.size === 0) return { flushed: 0, failed: 0 };
   if (!runner) {
@@ -1050,10 +1009,7 @@ export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ fl
   return { flushed, failed };
 }
 
-/**
- * One admitted call: `calls + 1` on (grant, UTC day, service, action). Deferred mode buffers the delta;
- * sync mode writes UPDATE / INSERT / UPDATE awaited. Never fails the request. Returns the day counted on.
- */
+/** Count one admitted call on (grant, UTC day, service, action). Never fails the request; returns the day counted on. */
 export async function recordGrantUsage(
   br: BudgetRunner | Runner,
   grant: AgentGrantRow,
@@ -1103,10 +1059,8 @@ export async function refundGrantUsage(
   );
 }
 
-/**
- * lastUsedAt, at most once a minute per grant. Awaited: a fire-and-forget write on a second connection
- * races the handler's reads (SQLITE_BUSY_SNAPSHOT in WAL mode). A failed touch never fails the request.
- */
+// lastUsedAt at most once a minute per grant. Awaited, since a fire-and-forget write on a second
+// connection races the handler's reads on SQLite. A failed touch never fails the request.
 const lastUsedTouched = new Map<string, number>();
 const LAST_USED_INTERVAL_MS = 60_000;
 

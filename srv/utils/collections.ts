@@ -1,9 +1,6 @@
 /** Small collection helpers shared across the blockchain layer. */
 
-/**
- * Split an array into fixed-size chunks; keeps CQL IN-lists below driver bind-variable limits
- * (SQLite: 999 on older builds, 32766 on node:sqlite).
- */
+/** Splits an array into chunks so CQL IN-lists stay below the driver's bind-variable limit. */
 export function chunk<T>(arr: T[], size: number): T[][] {
   if (size <= 0) throw new RangeError(`chunk size must be > 0, got ${size}`);
   const out: T[][] = [];

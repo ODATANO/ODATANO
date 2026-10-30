@@ -80,10 +80,8 @@ export type { TxWitnessVerification, TransactionConfirmations } from '../srv/uti
 // Pure script helpers (no initialize() needed)
 export { applyScriptParameters, plutusScriptHash } from '../srv/utils/tx-build-helper';
 
-/**
- * Initialize the plugin: config from cds.env.requires["odatano-core"] or env vars,
- * then all blockchain components plus the optional crawler and wallet worker.
- */
+// Reads config from cds.env.requires["odatano-core"] or env vars.
+// Starts all blockchain components plus the optional crawler and wallet worker.
 export async function initialize(): Promise<void> {
   const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig, getAppContext } = await import('../srv/server');
   let alreadyInitialized = false;
@@ -91,7 +89,7 @@ export async function initialize(): Promise<void> {
     getAppContext();
     alreadyInitialized = true;
   } catch {
-    // not initialized yet — initializeFromConfig will create the context
+    // Not initialized yet. initializeFromConfig creates the context.
   }
   const config = loadConfigFromEnv();
   const hsmConfig = loadHsmConfigFromEnv();

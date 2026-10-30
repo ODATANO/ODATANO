@@ -8,10 +8,8 @@ import { SignatureVerificationResult, TxWitnessVerification, VerificationOptions
 
 const logger = cds.log('SignatureVerifier');
 
-/**
- * blake2b-256 over the ORIGINAL transaction-body bytes (CBOR array index 0). subCborRef
- * preserves the exact received bytes, so the hash matches what was signed.
- */
+// blake2b-256 over the original body bytes. subCborRef keeps the received bytes,
+// so the hash matches what was signed.
 function computeBodyHash(txBytes: Uint8Array): string {
   const tx = Cbor.parse(txBytes);
   if (!(tx instanceof CborArray) || tx.array.length < 1 || !tx.array[0].subCborRef) {
@@ -22,11 +20,8 @@ function computeBodyHash(txBytes: Uint8Array): string {
 
 interface VkeyWitness { index: number; pubKey: Uint8Array; signature: Uint8Array }
 
-/**
- * Read vkey witnesses (raw public key + signature bytes) from a transaction's witness set
- * (CBOR array index 1, map key 0). Conway wraps the witness array in CBOR tag 258 (set),
- * which is unwrapped here. `malformed` counts entries that are not a [vkey, signature] byte pair.
- */
+// Conway wraps the vkey witness array in CBOR tag 258, which is unwrapped here.
+// `malformed` counts entries that are not a [vkey, signature] byte pair.
 function readVkeyWitnesses(txBytes: Uint8Array): { witnesses: VkeyWitness[]; malformed: number } {
   const tx = Cbor.parse(txBytes);
   if (!(tx instanceof CborArray) || !(tx.array[1] instanceof CborMap)) return { witnesses: [], malformed: 0 };
@@ -50,7 +45,7 @@ function readVkeyWitnesses(txBytes: Uint8Array): { witnesses: VkeyWitness[]; mal
 function extractVkeyWitnesses(txBytes: Uint8Array): VkeyWitness[] {
   const { witnesses, malformed } = readVkeyWitnesses(txBytes);
   if (malformed > 0) {
-    // not fatal, but a malformed witness in a signed tx is suspicious — surface it
+    // Not fatal, but a malformed witness in a signed tx is suspicious.
     logger.warn(`Skipped ${malformed} malformed vkey witness entr${malformed === 1 ? 'y' : 'ies'} while verifying (expected [vkey, signature] byte pairs)`);
   }
   return witnesses;
@@ -65,10 +60,8 @@ function signatureValid(w: VkeyWitness, bodyHashBytes: Uint8Array): boolean {
   }
 }
 
-/**
- * Check every vkey witness of a signed tx against its body hash. Pure, needs no initialize().
- * A tx without vkey witnesses is valid here; which keys had to sign is the caller's check.
- */
+// Checks every vkey witness against the body hash. Needs no initialize().
+// A tx without vkey witnesses is valid here; required signers are the caller's check.
 export function verifyTxWitnesses(signedTxCbor: string): TxWitnessVerification {
   const errors: string[] = [];
   const signerKeyHashes: string[] = [];
@@ -89,10 +82,7 @@ export function verifyTxWitnesses(signedTxCbor: string): TxWitnessVerification {
   return { valid: errors.length === 0, txBodyHash, signerKeyHashes, errors };
 }
 
-/**
- * Verifies externally signed transactions without private keys: CBOR parse, body-hash
- * integrity against the build, required signers present, Ed25519 check per witness.
- */
+/** Verifies externally signed transactions without private keys. */
 export class SignatureVerifier {
   /** Verify a signed tx (hex CBOR); all failures are reported in the result, never thrown. */
   public verify(signedTxCbor: string, options: VerificationOptions = {}): SignatureVerificationResult {
@@ -105,7 +95,7 @@ export class SignatureVerifier {
     };
 
     try {
-      // Body hash over the original body bytes — exactly what was signed.
+      // Body hash over the original body bytes, exactly what was signed.
       const txBytes = fromHex(signedTxCbor);
       const computedHash = computeBodyHash(txBytes);
       result.txBodyHash = computedHash;

@@ -16,7 +16,7 @@ export interface ParsedInput {
 export interface ParsedAsset {
   /** `"policyIdHex" + "assetNameHex"` (concatenated, no separator). */
   unit: string;
-  /** Signed decimal string — negative for burns in `mint`, always non-negative in outputs. */
+  /** Signed decimal string; negative for burns in `mint`, never negative in outputs. */
   quantity: string;
 }
 
@@ -53,16 +53,10 @@ export interface ParsedWitnesses {
 }
 
 export interface ParsedTransaction {
-  /**
-   * Blake2b-256 hash of the transaction body. Stable across signed/unsigned
-   * CBOR — signing adds witnesses without changing the body hash.
-   */
+  /** Blake2b-256 of the body. Signing adds witnesses, so the hash stays the same. */
   txHash: string;
-  /**
-   * `"mainnet"` or `"testnet"` when the body carries a network ID byte, else
-   * `null`. Preview vs preprod cannot be distinguished from CBOR alone; a
-   * consumer needing that split must compare against the service network.
-   */
+  // Null without a network ID in the body. Preview and preprod cannot be told apart from CBOR,
+  // so compare against the service network for that.
   network: 'mainnet' | 'testnet' | null;
   /** Body field 15: 1 = mainnet, 0 = testnet, null if absent. */
   networkId: number | null;
@@ -74,7 +68,7 @@ export interface ParsedTransaction {
   validityEnd: string | null;
   /** Fee in lovelace (decimal string). */
   fee: string;
-  /** Native-asset mint/burn entries; quantities are signed. */
+  /** Native-asset mint and burn entries; quantities are signed. */
   mint: ParsedAsset[];
   /** Metadata labels present (uint64 → decimal string); full payload via GetMetadataByTxHash for submitted txs. */
   metadataLabels: string[];
@@ -97,13 +91,8 @@ export interface ParsedTransaction {
   witnesses: ParsedWitnesses;
 }
 
-/**
- * Parse hex-encoded Cardano transaction CBOR (signed or unsigned) into structured
- * fields. Pure function — no network call, no DB write. Callers are responsible
- * for upstream size/format validation via `isValidTxCborHex`.
- *
- * @throws TransactionValidationError with code `TX_PARSE_FAILED` on malformed CBOR.
- */
+// Pure, no network call. Callers validate size and format with `isValidTxCborHex` first.
+// Throws TX_PARSE_FAILED on malformed CBOR.
 export function parseTransaction(cborHex: string): ParsedTransaction {
   let tx: Tx;
   let raw: BodyFields;

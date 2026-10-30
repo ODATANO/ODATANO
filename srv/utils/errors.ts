@@ -15,6 +15,8 @@ export class BackendError extends Error {
     super(message);
     this.name = this.constructor.name;
     Error.captureStackTrace(this, this.constructor);
+    // CAP copies enumerable fields into the response body; these stay server-side
+    for (const key of ['name', 'backendName', 'originalError']) Object.defineProperty(this, key, { enumerable: false });
   }
 }
 
@@ -64,10 +66,8 @@ export class ScriptValidationError extends BackendError {
   }
 }
 
-/**
- * A crawler cursor block this instance does not follow (409). A 4xx keeps its message in production,
- * so a remote crawler receives the `CHAIN_POINT_MISMATCH:` marker it recovers on.
- */
+// 409: the crawler cursor block is not on this instance's chain. A 4xx keeps its message in
+// production, so a remote crawler receives the `CHAIN_POINT_MISMATCH:` marker it recovers on.
 export class ChainPointMismatchError extends BackendError {
   constructor(message: string, backendName?: string) {
     super(message, 409, ERROR_CODES.CHAIN_POINT_MISMATCH, backendName);
@@ -90,10 +90,7 @@ export class TransactionAlreadySubmittedError extends BackendError {
   }
 }
 
-/**
- * Not enough of an asset for the transaction (400). `required`/`available` are 0n when unknown;
- * `detail` then replaces the amounts in the message.
- */
+// 400: not enough of an asset. The amounts are 0n when unknown, and then detail replaces them in the message.
 export class InsufficientFundsError extends BackendError {
   constructor(
     public readonly assetUnit: string,
@@ -185,10 +182,7 @@ export class AllBackendsFailedError extends BackendError {
   }
 }
 
-/**
- * True when the resource is absent on every consulted backend: a NotFoundError, or an
- * AllBackendsFailedError whose per-backend errors are all 404. A mixed result is not proof of absence.
- */
+// True when every consulted backend answered 404. A mixed result is not proof of absence.
 export function isNotFoundOnAllBackends(err: unknown): boolean {
   if (err instanceof NotFoundError) return true;
   return err instanceof AllBackendsFailedError
@@ -213,11 +207,8 @@ export interface HttpErrorLike {
   [k: string]: unknown;
 }
 
-/**
- * PostgreSQL error-code classes that mean a provider-side fault, which PostgREST (Koios) returns as HTTP 400:
- * 08 connection, 42 undefined object, 53 resources, 57 operator intervention, 58 system, XX internal.
- * Client-input classes (22 etc.) stay 4xx.
- */
+// PostgreSQL error classes that mean a provider-side fault. Koios returns them as HTTP 400.
+// Client-input classes such as 22 stay 4xx.
 const PG_SERVER_ERROR_CODE_CLASSES = ['08', '42', '53', '57', '58', 'XX'];
 
 /** True when a PostgREST error body's `code` denotes a provider-side SQL fault. */
@@ -247,11 +238,8 @@ const OGMIOS_SCRIPT_EXECUTION_FAILURE = 3010;
 /** Characters of Ogmios error data kept in a message. */
 const OGMIOS_DETAIL_MAX = 2000;
 
-/**
- * Normalizes any backend error into a typed BackendError. An Ogmios script failure is recognised
- * by its JSON-RPC code. Message hints are then checked in priority
- * order (already submitted, script failure, validation, not found, rate limit) before the HTTP status.
- */
+// Turns any backend error into a typed BackendError. Ogmios script failures are matched by JSON-RPC code.
+// Message hints are checked in a fixed priority order before the HTTP status.
 export function normalizeBackendError(
   err: unknown,
   backendName?: string,
@@ -448,11 +436,7 @@ export class ConfigError extends Error {
   }
 }
 
-/**
- * Ogmios chain-sync frame that could not be parsed. Names the block (when readable from the raw
- * text) so the crawler can fetch that one block through the paginating backend instead.
- */
-/** The Ogmios chain-sync socket closed without being asked to (server-side failure or restart). */
+/** The Ogmios chain-sync socket closed without being asked to. */
 export class ChainSyncClosedError extends ProviderUnavailableError {}
 
 /** Chain-sync closed before delivering block `height`; the crawler fetches it over pagination. */
@@ -462,6 +446,7 @@ export class ChainSyncStalledError extends BackendError {
   }
 }
 
+/** Unparsable chain-sync frame. Names the block when readable, so the crawler can fetch it by pagination. */
 export class ChainSyncFrameError extends BackendError {
   constructor(
     public readonly height: number | null,

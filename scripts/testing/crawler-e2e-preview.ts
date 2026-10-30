@@ -1,11 +1,5 @@
-/**
- * Chain-crawler end-to-end on preview: boots a server with the crawler enabled,
- * pre-syncs the last N blocks, then verifies contiguity, sampled block data
- * against the backend, and the tx/input/output rows.
- *
- *   npx tsx scripts/testing/crawler-e2e-preview.ts
- *   npx tsx scripts/testing/crawler-e2e-preview.ts --blocks 100 --source pagination
- */
+// Crawler end-to-end on preview. Pre-syncs the last N blocks, then checks contiguity and sampled data.
+// Usage: npx tsx scripts/testing/crawler-e2e-preview.ts [--blocks 100] [--source pagination]
 
 import 'dotenv/config';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
@@ -66,19 +60,13 @@ function query<T = Record<string, unknown>>(sql: string, ...params: unknown[]): 
   try { return db.prepare(sql).all(...params as never[]) as T[]; } finally { db.close(); }
 }
 
-/**
- * Drops the cursor so the configured start point applies; otherwise the crawler
- * resumes where the last run stopped. Crawled blocks stay and are re-UPSERTed.
- */
+/** Drops the cursor so the configured start applies. Crawled blocks stay and are re-UPSERTed. */
 function resetCursor(): void {
   const db = new DatabaseSync(DB_FILE);
   try { db.exec('delete from odatano_cardano_CardanoSyncState'); } finally { db.close(); }
 }
 
-/**
- * Chain-sync needs Ogmios in BACKENDS, not just a reachable process — add it
- * for the child when Ogmios answers.
- */
+/** Chain-sync needs ogmios in BACKENDS, so it is added for the child when Ogmios answers. */
 async function resolveBackends(): Promise<{ backends: string; ogmiosUp: boolean }> {
   const configured = (process.env.BACKENDS ?? 'blockfrost').split(',').map((b) => b.trim()).filter(Boolean);
   const url = process.env.OGMIOS_URL ?? 'ws://localhost:1337';
@@ -106,13 +94,13 @@ async function main() {
   log('range          :', `${BLOCKS} blocks (${start.height} → ${tip.height}, tip moves on)`);
   const existing = query<{ lastHeight: number }>('select lastHeight from odatano_cardano_CardanoSyncState')[0];
   if (existing && !args.includes('--reset')) {
-    throw new Error(`a cursor already exists (height ${existing.lastHeight}) — the crawler would resume there instead of the requested range. Re-run with --reset.`);
+    throw new Error(`a cursor already exists (height ${existing.lastHeight}), the crawler would resume there instead of the requested range. Re-run with --reset.`);
   }
   if (existing) { resetCursor(); log('cursor reset (was at height ' + existing.lastHeight + ')'); }
 
   const { backends, ogmiosUp } = await resolveBackends();
   log('source         :', SOURCE, SOURCE === 'auto' ? '(ogmios chain-sync if available, else pagination)' : '');
-  log('ogmios         :', ogmiosUp ? 'reachable — chain-sync path' : 'not reachable — pagination path');
+  log('ogmios         :', ogmiosUp ? 'reachable, chain-sync path' : 'not reachable, pagination path');
   log('backends       :', backends);
 
   // ---- 2. Boot a server with the crawler enabled ---------------------------
@@ -140,7 +128,7 @@ async function main() {
   child.stderr?.on('data', capture);
 
   // Windows: `shell: true` means child.kill() would only kill cmd.exe and orphan
-  // the server (which also keeps our stdout pipe open) — kill the whole tree.
+  // the server (which also keeps our stdout pipe open). So kill the whole tree.
   const shutdown = () => {
     if (child.exitCode !== null || child.killed) return;
     if (process.platform === 'win32' && child.pid) {
@@ -179,7 +167,7 @@ async function main() {
     // ---- 4. Verify what was persisted --------------------------------------
     log('\n── verification ───────────────────────────────────────────');
     // The start block is the cursor ANCHOR (already-processed), so crawling begins
-    // at start.height + 1 — the expected count is the range, not the range + 1.
+    // at start.height + 1. The expected count is the range, not the range + 1.
     const rows = query<{ height: number; hash: string; slot: number }>(
       'select height, hash, slot from odatano_cardano_Blocks where height between ? and ? order by height',
       start.height + 1, tip.height,
@@ -190,7 +178,7 @@ async function main() {
     for (let i = 1; i < rows.length; i++) {
       if (Number(rows[i].height) !== Number(rows[i - 1].height) + 1) gaps.push(Number(rows[i - 1].height));
     }
-    log('height gaps     :', gaps.length ? `FOUND after ${gaps.join(', ')}` : 'none — contiguous');
+    log('height gaps     :', gaps.length ? `FOUND after ${gaps.join(', ')}` : 'none, contiguous');
     if (gaps.length) throw new Error('crawled range has gaps');
 
     // Sample three blocks and compare against the backend, plus their txs.
@@ -247,7 +235,7 @@ async function main() {
       orphaned ? `| ORPHANED ${orphaned}` : '');
     if (orphaned) throw new Error(`${orphaned} AssetHistory row(s) reference no indexed transaction`);
 
-    log('\nPASS — crawler pre-synced', rows.length, 'blocks, contiguous and matching the chain.');
+    log('\nPASS: crawler pre-synced', rows.length, 'blocks, contiguous and matching the chain.');
   } finally {
     shutdown();
   }

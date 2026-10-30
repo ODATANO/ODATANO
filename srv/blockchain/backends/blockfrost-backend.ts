@@ -36,8 +36,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         new Error('Either projectId (BLOCKFROST_API_KEY) or customBackend (BLOCKFROST_CUSTOM_BACKEND) is required'),
       );
     }
-    // Self-hosted Blockfrost-compatible nodes reject an empty project_id header
-    // even without authentication — placeholder for the runtime HTTP header only.
+    // Self-hosted Blockfrost-compatible servers reject an empty project_id header,
+    // even without authentication, so a placeholder is sent.
     const effectiveProjectId = projectId || 'self-hosted';
     this.api = new BlockFrostAPI({
       projectId: effectiveProjectId,
@@ -107,7 +107,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   async getTransaction(hash: string): Promise<Transaction> {
     return handleBackendRequest(
       async () => {
-        // independent endpoints — fetch in parallel instead of 3 sequential roundtrips
+        // independent endpoints, fetched in parallel
         const [tx, txUtxos, txMetadata] = await Promise.all([
           this.api.txs(hash),
           this.api.txsUtxos(hash),
@@ -183,12 +183,12 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** Address data with UTxOs (no transactions — see getAddressTransactions()). */
+  /** Address data with UTxOs. Transactions come from getAddressTransactions(). */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(
       async () => {
         const address_data = await this.api.addresses(address);
-        // *All variant paginates internally — plain addressesUtxos caps at 100 entries and silently truncates
+        // plain addressesUtxos silently stops at 100 entries; the *All variant pages through all of them
         const address_utxos = await this.api.addressesUtxosAll(address);
 
         return {
@@ -218,7 +218,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   async getAddressTransactions(address: string, limit?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
-        // Blockfrost rejects count > 100 with a 400 — clamp instead
+        // Blockfrost rejects count > 100 with a 400
         const count = limit === undefined ? undefined : Math.min(Math.max(limit, 1), 100);
         const address_txs = await this.api.addressesTransactions(address, { order: 'desc', count });
         const txHashes = address_txs.map(tx => tx.tx_hash);
@@ -286,10 +286,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Asset info (supply, mint history, CIP-25 + CIP-26 metadata); unit = policyId + assetNameHex.
-   * Blockfrost does not expose the initial-mint timestamp here, so `initialMintTime` stays null.
-   */
+  /** Asset info. Blockfrost has no initial-mint timestamp here, so `initialMintTime` stays null. */
   async getAssetInfo(unit: string): Promise<AssetInfo> {
     return handleBackendRequest(
       async () => {
@@ -327,11 +324,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /**
-   * Mint/burn events of an asset, most recent first (max 100 per Blockfrost page).
-   * `assetsHistory` carries no block metadata; blockTime/blockHeight are backfilled with one
-   * best-effort `txs()` call per entry (a failed fetch leaves them null).
-   */
+  // Mint and burn events, newest first, at most 100 per page. `assetsHistory` has no block data,
+  // so one `txs()` call per entry fills blockTime and blockHeight. A failed call leaves them null.
   async getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     return handleBackendRequest(
       async () => {
@@ -556,12 +550,12 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           const utxos = await this.api.txsUtxos(txHash);
           const out = utxos?.outputs?.find(o => o.output_index === outputIndex);
           if (!out) return false;
-          // consumed_by_tx is optional on the openapi type (Blockfrost server >= 0.1.59); without it
-          // unspent cannot be proven — escalate so the router falls through to another backend.
+          // Blockfrost servers before 0.1.59 omit consumed_by_tx. Without it unspent cannot be
+          // proven, so the router must fall through to another backend.
           const consumed = (out as { consumed_by_tx?: string | null }).consumed_by_tx;
           if (consumed === undefined) {
             throw new ProviderUnavailableError(
-              `${this.name}: server does not expose consumed_by_tx — cannot determine UTxO status`,
+              `${this.name}: server does not expose consumed_by_tx, cannot determine UTxO status`,
               this.name,
             );
           }
@@ -586,7 +580,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     return handleBackendRequest(
       async () => {
-        // Blockfrost rejects count > 100 with a 400 — clamp instead
+        // Blockfrost rejects count > 100 with a 400
         const count = Math.min(Math.max(limit, 1), 100);
         const txs = await this.api.addressesTransactions(address, { order: 'desc', count });
         return txs.map(tx => tx.tx_hash);
@@ -616,7 +610,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   }
 
   // ---------------------------------------------------------------------------
-  // PaginatingBackend — forward iteration for the chain crawler
+  // PaginatingBackend: forward iteration for the chain crawler
   // ---------------------------------------------------------------------------
 
   /** Map a Blockfrost block summary (blocks()/blocksNext()) to BlockData. */
@@ -661,7 +655,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           const normalized = normalizeBackendError(err, this.name);
           if (normalized.statusCode === 404) {
             throw new ProviderUnavailableError(
-              `CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to ${this.name} — likely orphaned by a reorg`,
+              `CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to ${this.name}, likely orphaned by a reorg`,
               this.name
             );
           }

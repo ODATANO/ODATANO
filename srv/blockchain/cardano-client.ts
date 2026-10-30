@@ -76,10 +76,8 @@ export type CardanoClientConfig = {
   circuitBreaker?: Partial<CircuitBreakerConfig>;
 }
 
-/**
- * Multi-backend Cardano client: live/state queries prefer Ogmios, historical queries prefer
- * Blockfrost/Koios, with automatic fallback between them.
- */
+// Multi-backend client. Live state queries prefer Ogmios, historical queries prefer Blockfrost
+// or Koios, with automatic fallback between them.
 export class CardanoClient {
   private config: CardanoClientConfig;
   private liveBackend?: CardanoBackend;
@@ -87,7 +85,7 @@ export class CardanoClient {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private circuitBreaker: CircuitBreakerManager;
-  /** Backends whose init failed — kept in rotation and retried lazily per request */
+  /** Backends whose init failed. They stay in rotation and init is retried per request. */
   private uninitializedBackends = new Set<CardanoBackend>();
   network: Network;
   max_age_ms: number = 60000; // default 1 minute for temporary caching
@@ -99,7 +97,7 @@ export class CardanoClient {
   private lastLiveProtocolParams?: LedgerProtocolParameters;
   private static readonly PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-  // Request coalescers — deduplicate concurrent fetches for the same resource
+  // Deduplicate concurrent fetches for the same resource.
   private txCoalescer = new RequestCoalescer<Transaction>();
   private addrCoalescer = new RequestCoalescer<Address>();
   private credCoalescer = new RequestCoalescer<UTxO[]>();
@@ -153,10 +151,7 @@ export class CardanoClient {
     return names;
   }
 
-  /**
-   * Ensure backends are initialized. A rejected init promise is cleared so the next request
-   * retries instead of leaving the client permanently broken.
-   */
+  /** A failed init promise is cleared so the next request retries instead of staying broken. */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
     // ??= keeps concurrent callers on one init promise
@@ -167,10 +162,7 @@ export class CardanoClient {
     await this.initPromise;
   }
 
-  /**
-   * Transient (retryable) init failures: a backend momentarily unreachable at startup
-   * (connection refused/reset, a cut-short health response). Config/validation errors are not.
-   */
+  /** True for a backend that is briefly unreachable at startup. Config errors are not transient. */
   private static isTransientInitError(err: unknown): boolean {
     const e = err as { code?: string; message?: string; cause?: { code?: string; message?: string } };
     const code = e?.code ?? e?.cause?.code ?? '';
@@ -179,10 +171,8 @@ export class CardanoClient {
     return /premature close|socket hang up|econnreset|econnrefused|etimedout|timeout|fetch failed|terminated|other side closed/.test(msg);
   }
 
-  /**
-   * Init a backend, retrying brief transient failures. Kept small (3 attempts, 1 s backoff) so
-   * a sustained outage still fails fast and the total stays under the test bootstrap hook.
-   */
+  // Retries brief transient init failures. Few attempts with a short backoff, so a real
+  // outage still fails fast and stays under the test bootstrap timeout.
   private async initBackendWithRetry(backend: CardanoBackend): Promise<void> {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -191,16 +181,13 @@ export class CardanoClient {
         return;
       } catch (err: unknown) {
         if (attempt >= maxAttempts || !CardanoClient.isTransientInitError(err)) throw err;
-        logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}) — transient, retrying in 1s`, err);
+        logger.warn(`Init of ${backend.name} failed (attempt ${attempt}/${maxAttempts}), transient, retrying in 1s`, err);
         await new Promise(r => setTimeout(r, 1000));
       }
     }
   }
 
-  /**
-   * Initialize all backends. Backends whose init fails stay in rotation, tracked in
-   * `uninitializedBackends`, and are retried lazily per request (bounded by the circuit breaker).
-   */
+  /** Backends whose init fails stay in rotation and are retried per request, bounded by the breaker. */
   private async initBackends(): Promise<void> {
     const initErrors: BackendInitError[] = [];
 
@@ -213,7 +200,7 @@ export class CardanoClient {
         logger.debug(`Live backend initialized: ${this.liveBackend.name}`);
       } catch (err: unknown) {
         initErrors.push(new BackendInitError(this.liveBackend.name, err));
-        logger.error(`Failed to initialize live backend: ${this.liveBackend.name} — kept for lazy retry`, err);
+        logger.error(`Failed to initialize live backend: ${this.liveBackend.name}, kept for lazy retry`, err);
         this.uninitializedBackends.add(this.liveBackend);
       }
     }
@@ -227,7 +214,7 @@ export class CardanoClient {
         logger.debug(`Historical backend initialized: ${backend.name}`);
       } catch (err: unknown) {
         initErrors.push(new BackendInitError(backend.name, err));
-        logger.error(`Failed to initialize historical backend: ${backend.name} — kept for lazy retry`, err);
+        logger.error(`Failed to initialize historical backend: ${backend.name}, kept for lazy retry`, err);
         this.uninitializedBackends.add(backend);
       }
     }
@@ -240,11 +227,7 @@ export class CardanoClient {
     this.initialized = true;
   }
 
-  /**
-   * Lazily retry a backend's init when it failed at startup. Returns true when
-   * the backend is usable; false (after recording a breaker failure) when the
-   * retry failed.
-   */
+  /** Retries a failed startup init. False records a breaker failure. */
   private async ensureBackendInitialized(backend: CardanoBackend, errors?: BackendError[]): Promise<boolean> {
     if (!this.uninitializedBackends.has(backend)) return true;
     try {
@@ -287,15 +270,13 @@ export class CardanoClient {
     return this.config.primaryTimeoutMs;
   }
 
-  /**
-   * Single-backend call with the executeWithPriority resilience contract (breaker gate, timeout,
-   * success/failure recording, 4xx exempt) for paths that cannot fail over.
-   */
+  // One backend call with the same breaker, timeout and recording rules as executeWithPriority.
+  // For paths that cannot fail over.
   private async callWithResilience<T>(backend: CardanoBackend, fn: () => Promise<T>): Promise<T> {
     if (!this.circuitBreaker.shouldAttempt(backend.name)) {
       throw new ProviderUnavailableError(`Circuit open for ${backend.name}`, backend.name);
     }
-    // fast-path sync check — keeps fn() synchronous for the request coalescers
+    // Sync check first keeps fn() synchronous for the request coalescers.
     if (this.uninitializedBackends.has(backend) && !(await this.ensureBackendInitialized(backend))) {
       throw new ProviderUnavailableError(`Backend ${backend.name} is not initialized (lazy retry failed)`, backend.name);
     }
@@ -348,7 +329,7 @@ export class CardanoClient {
         skipped.push(`${backend.name}: circuit open`);
         continue;
       }
-      // fast-path sync check — only await the init retry in the rare failure case
+      // Sync check first, so only the rare failure case awaits the init retry.
       if (this.uninitializedBackends.has(backend) && !(await this.ensureBackendInitialized(backend, errors))) {
         continue;
       }
@@ -413,10 +394,8 @@ export class CardanoClient {
     return this.route('getAddressUtxos', b => b.getAddressUtxos(address));
   }
 
-  /**
-   * UTxOs by 28-byte payment credential (56-char hex), across all bech32 forms sharing it.
-   * Needs a credential-keyed backend (Koios, or another ODATANO); Blockfrost has none.
-   */
+  // UTxOs of every address form that shares the payment credential.
+  // Needs Koios or another ODATANO, because Blockfrost has no credential lookup.
   getCredentialUtxos(credHash: string): Promise<UTxO[]> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     const capable = candidates.filter((b): b is CardanoBackend => typeof b?.getCredentialUtxos === 'function');
@@ -462,17 +441,8 @@ export class CardanoClient {
     return this.route('getAccount', b => b.getAccount(stakeAddress));
   }
 
-  /**
-   * Whether the reward account is registered in the ledger. Node first; the first backend that
-   * answers decides, its "not found" means not registered. Only a backend failure falls through.
-   */
-  /**
-   * Whether the stake credential is registered. The node's reward-account summary proves it, but
-   * the summary lists only credentials delegated to a pool or a DRep, so its absence proves nothing and the
-   * providers answer from the certificate history; one that knows the account decides, one that
-   * knows no such account means not registered. `null`: nobody could tell (no summary on the
-   * node, no provider configured or reachable).
-   */
+  // The node lists only delegated credentials, so its absence proves nothing and providers decide.
+  // A provider 404 means not registered. Null when no source could tell.
   async isRewardAccountRegistered(stakeAddress: string): Promise<boolean | null> {
     try {
       return await this.executeWithPriority(async b => (await b.getAccount(stakeAddress)).active, true, 'getAccount');
@@ -491,10 +461,7 @@ export class CardanoClient {
     return this.route('getAssetInfo', b => b.getAssetInfo(unit));
   }
 
-  /**
-   * Latest mint/burn events for an asset, most recent first. Prefers Koios (block timestamps);
-   * Blockfrost is the fallback with timestamps left null.
-   */
+  /** Latest mint and burn events. Prefers Koios, because Blockfrost leaves timestamps null. */
   getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
     const koios = candidates.find(b => b?.name === 'koios' && typeof b.getAssetHistory === 'function');
@@ -513,10 +480,7 @@ export class CardanoClient {
   // Batch Methods (N+1 Optimization)
   //-----------------------------------------------------------------------------
 
-  /**
-   * Transaction hashes for an address; falls back to a full getAddressTransactions when no
-   * backend supports the lightweight listing.
-   */
+  /** Falls back to a full getAddressTransactions when no backend lists hashes only. */
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     const allBackends = this.getOrderedBackends();
     for (const backend of allBackends) {
@@ -524,7 +488,7 @@ export class CardanoClient {
         try {
           return await this.callWithResilience(backend, () => backend.getAddressTransactionHashes!(address, limit));
         } catch (err: unknown) {
-          logger.debug(`getAddressTransactionHashes failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)} — trying next backend`);
+          logger.debug(`getAddressTransactionHashes failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)}, trying next backend`);
         }
       }
     }
@@ -541,7 +505,7 @@ export class CardanoClient {
         try {
           return await this.callWithResilience(backend, () => backend.getTransactionsBatch!(txHashes));
         } catch (err: unknown) {
-          logger.debug(`getTransactionsBatch failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)} — trying next backend`);
+          logger.debug(`getTransactionsBatch failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)}, trying next backend`);
         }
       }
     }
@@ -559,10 +523,8 @@ export class CardanoClient {
     return backends;
   }
 
-  /**
-   * A backend that supports streamed chain-sync (Ogmios), or null. Backends whose init failed
-   * are skipped: the crawler uses these instances directly, outside the lazy-retry/breaker path.
-   */
+  // Skips backends whose init failed, because the crawler uses this instance
+  // directly, without lazy retry or breaker.
   getChainSyncBackend(): ChainSyncBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     for (const b of candidates) {
@@ -571,10 +533,7 @@ export class CardanoClient {
     return null;
   }
 
-  /**
-   * getChainSyncBackend(), retrying a failed startup init. Polled by the crawler while it runs
-   * on pagination because no chain-sync source was usable when it started.
-   */
+  /** Like getChainSyncBackend() but retries a failed init. The crawler polls it while on pagination. */
   async recoverChainSyncBackend(): Promise<ChainSyncBackend | null> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     for (const b of candidates) {
@@ -584,7 +543,7 @@ export class CardanoClient {
     return null;
   }
 
-  /** The first usable backend that can dump the UTxO set at a point (Ogmios) — crawler.utxoSet import. */
+  /** First usable backend that can dump the UTxO set at a point, for the UTxO set import. */
   getLedgerStateBackend(): LedgerStateBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     for (const b of candidates) {
@@ -593,11 +552,8 @@ export class CardanoClient {
     return null;
   }
 
-  /**
-   * Outputs among `refs` that are unspent at the tip, read from the node's ledger (Ogmios, or a remote
-   * ODATANO that asks its node); null when no backend can (the caller then resolves via the producing
-   * transaction, which carries no reference-script bytes).
-   */
+  // Outputs among refs that are unspent at the tip, read from the node's ledger.
+  // Null when no backend can. The caller then reads the producing tx, which lacks reference-script bytes.
   async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
     const backend = this.getLedgerStateBackend() ?? this.outputLookupBackend();
     return backend ? backend.getUnspentOutputs(refs) : null;
@@ -624,7 +580,7 @@ export class CardanoClient {
       && !b.unsupportedMethods?.has(method));
   }
 
-  /** A backend that reads pool/DRep/pot state at a block (Ogmios) — preferred source of epoch snapshots. */
+  /** Backend that reads pool, DRep and pot state at a block. Preferred source of epoch snapshots. */
   getEpochStateBackend(): EpochStateBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
     for (const b of candidates) {
@@ -633,10 +589,7 @@ export class CardanoClient {
     return null;
   }
 
-  /**
-   * A backend that can enumerate the full pool/DRep set (Koios), or null; without one the epoch
-   * snapshots stay off instead of degrading into thousands of single requests.
-   */
+  /** Without one, epoch snapshots stay off instead of making thousands of single requests. */
   getEnumeratingBackend(): EnumeratingBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
     for (const b of candidates) {
@@ -645,10 +598,7 @@ export class CardanoClient {
     return null;
   }
 
-  /**
-   * A backend that can be walked forward by pagination (Blockfrost/Koios), or null. Koios is
-   * preferred: it batches 100 txs per call, Blockfrost needs ~3 calls per tx.
-   */
+  /** Prefers Koios, because it batches 100 txs per call and Blockfrost needs about 3 calls per tx. */
   getPaginatingBackend(): PaginatingBackend | null {
     const usable = this.historicalBackends.filter(
       (b) => !this.uninitializedBackends.has(b) && isPaginatingBackend(b)
@@ -741,10 +691,8 @@ export class CardanoClient {
     return this.route('isUtxoUnspent', b => b.isUtxoUnspent(txHash, outputIndex));
   }
 
-  /**
-   * Submit a signed transaction (CBOR hex); returns its hash. On failover after a lost response
-   * the next backend may answer 409 "already submitted" — callers treat that as success.
-   */
+  // After a lost response, the next backend may answer 409 "already submitted".
+  // Callers treat that as success.
   async submitTransaction(signedTxCbor: string): Promise<string> {
     try {
       const hash = await this.route('submitTransaction', b => b.submitTransaction(signedTxCbor));

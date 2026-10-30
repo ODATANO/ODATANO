@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
-import { Assets } from '#cds-models/odatano/cardano';
+import { Assets, type Asset } from '#cds-models/odatano/cardano';
 import { cip68ReferenceUnit } from '../../cbor/cip68';
 import { cip68Decimals, setAssetDecimals } from '../asset-decimals';
 
@@ -22,16 +22,10 @@ export interface DecimalsBackfillOptions {
   onProgress?: (p: DecimalsBackfillProgress) => void;
 }
 
-interface CatalogueRow {
-  unit: string;
-  initialMintTxHash?: string | null;
-}
+type CatalogueRow = Pick<Asset, 'initialMintTxHash'> & { unit: string };
 
-/**
- * Fills Assets.decimals from the CIP-68 reference datum for every catalogue unit with label 333
- * or 444. The catalogue is paged by unit alone, so the page query never depends on column
- * statistics; a repeat resolves every unit again and so refreshes the values.
- */
+// Fill Assets.decimals from the CIP-68 reference datum for label 333 and 444 units. Pages by unit
+// only, so the query plan never depends on column statistics. A repeat run refreshes the values.
 export async function backfillAssetDecimals(opts: DecimalsBackfillOptions = {}): Promise<DecimalsBackfillProgress> {
   const chunkSize = opts.chunkSize ?? 5000;
   const progress: DecimalsBackfillProgress = { scanned: 0, candidates: 0, filled: 0 };

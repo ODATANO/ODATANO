@@ -1334,8 +1334,9 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
             validatorScript: TEST_FIXTURES.validPlutusScript,
             network: 'xyz',
           }).catch(err => err.response);
+          // rejected by the CDS enum on the parameter, which lists the allowed values
           expect(status).to.equal(400);
-          expect(data.error.message).to.include('Invalid network');
+          expect(data.error.message).to.include('mainnet');
         });
 
         it('POST /DeriveScriptAddress - non-array scriptParamsJson rejects with 400', async () => {

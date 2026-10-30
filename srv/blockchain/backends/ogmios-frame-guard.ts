@@ -1,8 +1,5 @@
-/**
- * Guard for Ogmios chain-sync frames the client's `safeJSON.parse` cannot handle: it recurses per
- * nesting level, so a deeply nested native script overflows the stack inside an un-awaited socket
- * handler and ends the process. On RangeError fall back to iterative `JSON.parse` (big ints as strings).
- */
+// The Ogmios client's `safeJSON.parse` recurses per nesting level. A deeply nested native script
+// overflows the stack in a socket handler and ends the process, so on RangeError we use `JSON.parse`.
 import { safeJSON } from '@cardano-ogmios/client';
 import cds from '@sap/cds';
 
@@ -18,11 +15,7 @@ export interface UnparseableFrame {
   bytes: number;
 }
 
-/**
- * Wrap integers outside the safe double range in JSON strings so plain `JSON.parse` cannot
- * round them. One linear pass, no recursion; digits inside strings, floats and exponents
- * are left alone.
- */
+/** Quote integers beyond 2^53 so `JSON.parse` cannot round them. One pass, no recursion. */
 export function widenBigIntegers(text: string): string {
   const SAFE_DIGITS = String(Number.MAX_SAFE_INTEGER).length; // 16
   let out = '';
@@ -53,7 +46,7 @@ export function widenBigIntegers(text: string): string {
     const digits = j - digitsFrom;
     if (digits === 0) continue;
 
-    // a fraction or exponent means it was never an exact integer — leave it alone
+    // a fraction or exponent means it was never an exact integer
     const after = text[j];
     if (after === '.' || after === 'e' || after === 'E') { i = j; continue; }
 
@@ -81,13 +74,8 @@ function readBlockHeader(text: string): { height: number | null; id: string | nu
 let installed = false;
 const reporters = new Set<(frame: UnparseableFrame) => void>();
 
-/**
- * Wrap `safeJSON.parse` once per process and register a report callback; returns its
- * unregister function. The parser is shared by every open chain-sync socket and cannot tell
- * which one a frame came from, so an unusable frame goes to every registered callback.
- * After a reported frame the stream stalls (the client drops non-nextBlock responses),
- * so the caller decides what happens next.
- */
+// Wraps `safeJSON.parse` once per process and returns an unregister function. The parser is shared
+// by all chain-sync sockets, so an unusable frame goes to every callback. That stream then stalls.
 export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableFrame) => void): () => void {
   reporters.add(onUnparseableFrame);
   const unregister = (): void => { reporters.delete(onUnparseableFrame); };
@@ -108,7 +96,7 @@ export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableF
         const parsed = JSON.parse(widenBigIntegers(text));
         logger.warn(
           `chain-sync frame too deeply nested for the client's parser (block ${where.height ?? '?'} ` +
-          `${where.id ?? ''}, ${text.length} bytes) — parsed without it. Integers beyond 2^53 are ` +
+          `${where.id ?? ''}, ${text.length} bytes), parsed without it. Integers beyond 2^53 are ` +
           `strings on this path; the chain-sync mapper stringifies them anyway.`
         );
         return parsed;
@@ -131,7 +119,7 @@ export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableF
   return unregister;
 }
 
-/** Tests only — drop the wrapper so each case starts from the untouched client. */
+/** Tests only: drop the wrapper so each case starts from the untouched client. */
 export function resetOgmiosFrameGuardForTests(originalParse?: typeof safeJSON.parse): void {
   if (originalParse) safeJSON.parse = originalParse;
   installed = false;

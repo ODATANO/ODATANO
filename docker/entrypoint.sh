@@ -1,23 +1,6 @@
 #!/bin/sh
-# Image entrypoint: CDS_CONFIG (db + auth) from the environment
-# (docker/cds-config.mjs), the schema, then node as PID 1 so SIGTERM reaches
-# the server.
-#
-#   ODATANO_DB_URL=postgres://user:pw@host:5432/db -> PostgreSQL; the schema is
-#       deployed on EVERY boot (CAP's evolution is additive, an image upgrade
-#       brings its columns with it). ODATANO_DB_DEPLOY=never skips that.
-#   otherwise -> SQLite at ODATANO_DB_PATH (default /data/db.sqlite), seeded on
-#       the first boot from the schema the image build deployed (/app/db.sqlite).
-#
-# `migrate` mode: deploy the schema into PostgreSQL and copy a SQLite file into
-# it, then exit. Run it as a one-off container BEFORE the first PostgreSQL start
-# of the service, with every writer stopped:
-#   ODATANO_DB_URL=postgres://... docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite
-#
-# `migrate-txseq` mode: move a database written before the txSeq key layout onto it
-# (scripts/migrate-txseq.mjs), then exit. Run it once with the service stopped, BEFORE the
-# first start of the new image; `--dry-run` only reports:
-#   docker compose run --rm --no-deps odatano migrate-txseq [--dry-run]
+# Image entrypoint. Builds CDS_CONFIG from the environment, deploys the schema,
+# then runs node as PID 1 so SIGTERM reaches the server.
 set -eu
 
 DB_URL="${ODATANO_DB_URL:-}"
@@ -40,6 +23,8 @@ wait_for_postgres() {
     '
 }
 
+# Moves an older database onto the txSeq key layout. Run once with the service stopped,
+# before the first start of the new image. --dry-run only reports.
 if [ "$MODE" = "migrate-txseq" ]; then
     shift
     CDS_CONFIG="$(node /app/docker/cds-config.mjs --db-only)" || exit 1
@@ -48,6 +33,8 @@ if [ "$MODE" = "migrate-txseq" ]; then
     exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-txseq.mjs "$@"
 fi
 
+# Copies a SQLite file into PostgreSQL. Run as a one-off container before the first
+# PostgreSQL start, with every writer stopped.
 if [ "$MODE" = "migrate" ]; then
     shift
     if [ -z "$DB_URL" ]; then
@@ -69,6 +56,8 @@ if [ -z "${CDS_CONFIG:-}" ]; then
     export CDS_CONFIG
 fi
 
+# PostgreSQL gets the schema on every boot, since CAP's schema evolution is additive.
+# SQLite is seeded on first boot from the schema the image build deployed.
 if [ -n "$DB_URL" ]; then
     DB_LABEL="postgres ($(printf '%s' "$DB_URL" | sed -E 's#://([^:/@]*)(:[^@]*)?@#://\1:***@#'))"
     wait_for_postgres

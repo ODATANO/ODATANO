@@ -15,10 +15,8 @@ export interface ReferenceScriptInfo {
 
 const LANGUAGE_TAG: Record<ReferenceScriptType, number> = { native: 0, plutusV1: 1, plutusV2: 2, plutusV3: 3 };
 
-/**
- * Provider spelling of a script type to ours: Ogmios `plutus:v3` / `native`, Koios and cardano-cli
- * `plutusV3` / `PlutusScriptV3` / `timelock` / `multisig` / `SimpleScript`. Null when unknown.
- */
+// Maps provider spellings such as `plutus:v3`, `PlutusScriptV3`, `timelock` or `SimpleScript`.
+// Null when unknown.
 export function normalizeScriptType(raw: unknown): ReferenceScriptType | null {
   if (typeof raw !== 'string') return null;
   const m = /^(?:plutus:?(?:script)?v?)([1-3])$/i.exec(raw.replace(/\s+/g, ''));
@@ -32,10 +30,7 @@ export function referenceScriptHash(type: ReferenceScriptType, bytes: Uint8Array
   return Buffer.from(blake2b_224(tagged)).toString('hex');
 }
 
-/**
- * Bytes the ledger charges for a reference script: for Plutus the script bytestring as the
- * compiler emits it, for a native script its CBOR.
- */
+// Ledger-charged size: the compiler's script bytestring for Plutus, the CBOR for native scripts.
 export function referenceScriptSize(script: Script): number {
   if (script.type === 'NativeScript') return script.bytes.length;
   const n = script.bytes.length;
@@ -44,11 +39,8 @@ export function referenceScriptSize(script: Script): number {
   return n + header;
 }
 
-/**
- * A Plutus script object of the given ledger size and no content: lets the fee count the bytes of
- * a reference script whose bytes are not at hand (hash and size only). Never a witness, never
- * serialized; its hash matches no real script.
- */
+// Empty script of the given ledger size, so the fee counts a reference script known by size only.
+// Never a witness, never serialized. Its hash matches no real script.
 export function sizePlaceholderScript(size: number): Script {
   for (let n = Math.max(0, size - 5); n <= size; n++) {
     const header = n < 24 ? 1 : n < 0x100 ? 2 : n < 0x10000 ? 3 : 5;
@@ -72,11 +64,8 @@ interface CliReferenceScript {
   scriptLanguage?: string;
 }
 
-/**
- * Hash, size and type of a cardano-cli dump's `referenceScript`. The Plutus TextEnvelope
- * `cborHex` wraps the script bytestring once more than the ledger does; the inner bytes are
- * what the ledger hashes and charges for. A native script is given as its JSON.
- */
+// cardano-cli's Plutus `cborHex` wraps the script once more than the ledger does.
+// The ledger hashes and charges the inner bytes. A native script is given as JSON.
 export function cliReferenceScript(ref: unknown): ReferenceScriptInfo | null {
   const r = ref as CliReferenceScript | null | undefined;
   const script = r?.script;
@@ -91,7 +80,7 @@ export function cliReferenceScript(ref: unknown): ReferenceScriptInfo | null {
       return { hash: referenceScriptHash(type, inner), size: inner.length, type, cbor: inner.toString('hex') };
     }
     if (type === 'native' || r?.scriptLanguage?.startsWith('SimpleScript')) {
-      // the cli prints a native script as its JSON (sig / all / any / atLeast / after / before)
+      // cardano-cli prints a native script as JSON.
       const native = Script.native(script as NativeScript);
       return { hash: native.hash.toString(), size: native.bytes.length, type: 'native', cbor: null };
     }

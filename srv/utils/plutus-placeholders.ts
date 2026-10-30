@@ -1,10 +1,8 @@
 import { TransactionValidationError } from './errors';
 import type { JSONValue } from './types';
 
-/**
- * PlutusData-JSON input-index placeholder `__INPUT_IDX:<64-hex txHash>#<outputIndex>__`; must be the
- * entire `int` field value. Hash case-insensitive, normalized to lowercase at the use site.
- */
+// Input-index placeholder; must be the entire `int` field value.
+// The hash is case-insensitive and lowercased at the use site.
 export const INPUT_IDX_REGEX = /^__INPUT_IDX:([0-9a-fA-F]{64})#(\d+)__$/;
 
 /** Reference-input index placeholder `__REF_IDX:<64-hex txHash>#<outputIndex>__`, same rules as INPUT_IDX_REGEX. */
@@ -36,10 +34,8 @@ export interface ResolveContext {
 
 const MAX_WALK_DEPTH = 64;
 
-/**
- * Replicates Buildooor's input sort (ledger CBOR-set order): txHash bytes, then outputIndex asc.
- * The ledger orders reference inputs the same way.
- */
+// Ledger set order as Buildooor sorts it: txHash bytes, then outputIndex.
+// The ledger orders reference inputs the same way.
 export function sortInputsLikeBuildooor<T extends InputRef>(refs: T[]): T[] {
   const copy = refs.slice();
   copy.sort((a, b) => {
@@ -62,11 +58,8 @@ export function sortWithdrawalsLikeLedger<T extends WithdrawalCredential>(entrie
   return copy;
 }
 
-/**
- * Replaces `{int: "__INPUT_IDX:…__"}`, `{int: "__REF_IDX:…__"}` and `{int: "__WDRL_IDX:…__"}` leaves with
- * the position in the matching list. Only `int` fields are inspected (`bytes` may legitimately contain
- * `__`); an unknown ref throws TransactionValidationError.
- */
+// Replaces INPUT_IDX, REF_IDX and WDRL_IDX placeholders with the position in the matching list.
+// Only `int` fields are inspected, since `bytes` may contain `__`. An unknown ref throws.
 export function resolveIndexPlaceholders(node: JSONValue, ctx: ResolveContext): JSONValue {
   return walk(node, ctx, 0);
 }

@@ -1,30 +1,11 @@
 #!/usr/bin/env node
-// Builds the CDS_CONFIG JSON for the image from the environment. Called by
-// docker/entrypoint.sh; kept in its own file so the mapping is unit tested
-// (test/unit/docker-cds-config.test.ts).
-//
-//   ODATANO_DB_URL          postgres://user:pw@host:5432/db  -> kind postgres
-//                           (postgresql:// accepted); anything else is refused
-//   ODATANO_DB_PATH         SQLite file (default /data/db.sqlite) when no URL
-//   ODATANO_SQLITE_TIMEOUT_MS  SQLite writer wait (default 5000)
-//   ODATANO_AUTH            basic (default) | dummy
-//   ODATANO_HTTP_USER       operator user (default odatano)
-//   ODATANO_HTTP_PASSWORD   required with basic auth
-//   ODATANO_HTTP_ROLES      comma-separated roles (default Admin)
-//
-// Prints the JSON on stdout; exits 2 with a message on stderr when the
-// environment is unusable. `--db-only` emits the database binding alone
-// (migrate mode serves nothing and needs no credentials).
+// Prints the image's CDS_CONFIG JSON, built from the environment. Exits 2 when the environment is unusable.
+// --db-only prints just the database binding, for migrate modes that need no credentials.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 
-/**
- * `@cap-js/postgres` takes pg Pool fields, not a connection string. sslmode
- * values node-postgres honours exactly: (none)|disable -> no TLS; require
- * (or ssl=true/1) -> TLS, certificate not verified; verify-full -> chain and
- * hostname verified against the system CAs or `sslrootcert=<pem>`.
- * allow/prefer/verify-ca are refused rather than approximated.
- */
+// @cap-js/postgres takes pg Pool fields, not a connection string.
+// Only sslmode disable, require and verify-full are supported. Other modes are refused, not approximated.
 export function postgresCredentials(url) {
     let u;
     try { u = new URL(url); } catch { throw new Error('ODATANO_DB_URL is not a valid URL'); }
@@ -93,12 +74,8 @@ export function authConfig(env = process.env) {
     return { kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { [user]: { password, roles } } };
 }
 
-/**
- * The `postgres` kind is registered by the `@cap-js/postgres` plugin, which
- * CAP only discovers among a project's dependencies; the image installs it
- * next to the pruned tree, so the kind definition is injected from the
- * plugin's own package.json.
- */
+// CAP only discovers @cap-js/postgres among project dependencies, but the image installs it beside them.
+// So the postgres kind is read from the plugin's own package.json.
 export function postgresKind() {
     let pkg;
     try { pkg = createRequire(import.meta.url)('@cap-js/postgres/package.json'); }

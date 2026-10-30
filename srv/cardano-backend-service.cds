@@ -1,13 +1,5 @@
-/**
- * Cardano Backend Service
- *
- * The data a CardanoBackend needs, for another ODATANO instance that uses this one as its
- * backend (`backends: ["odatano"]`). Every operation answers the provider shape as a JSON
- * string (`value`), so the caller maps it exactly like a Koios or Blockfrost answer.
- * Stored blocks and transactions come from this instance's index; everything else goes
- * through its own backends and crawled data, as the read service does. Nothing is persisted
- * for the caller.
- */
+// Backend data for another ODATANO instance that uses this one with `backends: ["odatano"]`.
+// Every operation returns the provider shape as a JSON string, mapped like a Koios answer.
 @requires: 'authenticated-user'
 service CardanoBackendService @(impl: './cardano-backend-service') {
 
@@ -16,21 +8,22 @@ service CardanoBackendService @(impl: './cardano-backend-service') {
     action GetTransactionsBatch(hashes: LargeString)                            returns LargeString;
     action GetTransactionMetadata(hash: String)                                 returns LargeString;
     action GetBlock(hash: String)                                               returns LargeString;
-    action GetBlockByHeight(height: Integer64)                                  returns LargeString;
-    action GetNextBlocks(afterHash: String, count: Integer, afterHeight: Integer64) returns LargeString;
+    action GetBlockByHeight(@assert.range: [0, _] height: Integer64)            returns LargeString;
+    action GetNextBlocks(afterHash: String, @assert.range: [1, 500] count: Integer,
+                         @assert.range: [0, _] afterHeight: Integer64)          returns LargeString;
     action GetBlockTransactions(blockHash: String)                              returns LargeString;
     action GetLatestBlock()                                                     returns LargeString;
     action GetCurrentSlot()                                                     returns LargeString;
-    action GetEpoch(epoch: Integer)                                             returns LargeString;
+    action GetEpoch(@assert.range: [0, _] epoch: Integer)                       returns LargeString;
     action GetLatestEpoch()                                                     returns LargeString;
 
     // --- addresses and UTxOs ------------------------------------------------------------------
     action GetAddress(address: String)                                          returns LargeString;
     action GetAddressUtxos(address: String)                                     returns LargeString;
-    action GetAddressTransactions(address: String, limit: Integer)              returns LargeString;
-    action GetAddressTransactionHashes(address: String, limit: Integer)         returns LargeString;
+    action GetAddressTransactions(address: String, @assert.range: [1, 100] limit: Integer) returns LargeString;
+    action GetAddressTransactionHashes(address: String, @assert.range: [1, 100] limit: Integer) returns LargeString;
     action GetCredentialUtxos(credential: String)                               returns LargeString;
-    action IsUtxoUnspent(txHash: String, outputIndex: Integer)                  returns LargeString;
+    action IsUtxoUnspent(txHash: String, @assert.range: [0, _] outputIndex: Integer) returns LargeString;
     action GetUnspentOutputs(refs: LargeString)                                 returns LargeString;
 
     // --- stake, governance, assets, network ------------------------------------------------
@@ -42,7 +35,7 @@ service CardanoBackendService @(impl: './cardano-backend-service') {
     action GetDrepIds()                                                         returns LargeString;
     action GetDreps(ids: LargeString)                                           returns LargeString;
     action GetAssetInfo(unit: String)                                           returns LargeString;
-    action GetAssetHistory(unit: String, limit: Integer)                        returns LargeString;
+    action GetAssetHistory(unit: String, @assert.range: [1, 100] limit: Integer) returns LargeString;
     action GetNetworkInformation()                                              returns LargeString;
     action GetProtocolParameters()                                              returns LargeString;
 

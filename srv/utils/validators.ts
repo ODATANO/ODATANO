@@ -213,10 +213,8 @@ export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
   return (cborRaw as string).trim().length <= MAX_TX_CBOR_HEX_LENGTH;
 }
 
-/**
- * Payment credential of a Shelley bech32 address: 28-byte hash (hex) plus whether it is a script
- * credential (bit 0 of the header's high nibble); null for undecodable or stake addresses.
- */
+// Payment credential hash of a Shelley address and whether it is a script credential.
+// Null for undecodable or stake addresses.
 export function extractPaymentCredential(address: string): { hash: string; isScript: boolean } | null {
   try {
     const decoded = bech32.decode(address, BECH32_MAX_LENGTH);

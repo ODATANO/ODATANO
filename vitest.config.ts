@@ -3,10 +3,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
     resolve: {
-        // The plugin build (build:plugin) compiles in place, so stale `.js` twins
-        // sit next to every `.ts` source. Prefer `.ts` for extensionless imports;
-        // otherwise the suite would silently exercise the last build instead of
-        // the sources.
+        // build:plugin leaves compiled `.js` twins next to every `.ts` source.
+        // Prefer `.ts`, otherwise the suite would test the last build instead of the sources.
         extensions: ['.ts', '.mts', '.js', '.mjs', '.json'],
         alias: [
             // ESM-style relative imports with a `.js` extension → strip so the
@@ -24,12 +22,9 @@ export default defineConfig({
         globals: true,
         environment: 'node',
         setupFiles: ['test/vitest.setup.ts'],
-        // Deletes the compiled `.js` twins first — CAP resolves service impls
-        // itself and prefers `.js`, so a stale build would be tested instead of
-        // the sources. See test/vitest.globalSetup.ts.
+        // Deletes the compiled `.js` twins first. CAP resolves service impls itself and prefers `.js`.
         globalSetup: ['test/vitest.globalSetup.ts'],
-        // Fork per test file; forks are killed after the run, which covers the
-        // open handles that used to require jest's --forceExit.
+        // Fork per test file; forks are killed after the run, so open handles cannot hang it.
         pool: 'forks',
         testTimeout: 120000,
         hookTimeout: 120000,
@@ -51,10 +46,7 @@ export default defineConfig({
                 test: {
                     name: 'integration',
                     include: ['test/integration/**/*.test.ts'],
-                    // Integration suites boot cds.test() against live Blockfrost/
-                    // Koios — concurrent boots trip their rate limits (the reason
-                    // for jest's maxWorkers: 1). One file at a time, but each
-                    // still gets its own fresh fork.
+                    // Integration suites call live providers, and concurrent boots trip their rate limits.
                     fileParallelism: false
                 }
             }

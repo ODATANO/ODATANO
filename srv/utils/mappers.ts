@@ -200,21 +200,16 @@ export function compareOutRef(a: { txHash: string; outputIndex: number }, b: { t
   return ha < hb ? -1 : ha > hb ? 1 : a.outputIndex - b.outputIndex;
 }
 
-/**
- * Inputs of a transaction in the order chain-sync reports them: regular, collateral, reference,
- * each sorted like the ledger's input sets. `inputIndex` and spend-redeemer indices rely on it.
- */
+// Inputs in chain-sync order: regular, collateral, reference, each sorted like the ledger's sets.
+// inputIndex and spend-redeemer indices rely on this order.
 export function ledgerInputOrder(inputs: TxInputProviderData[]): TxInputProviderData[] {
   const rank = (i: TxInputProviderData): number => (i.isReference ? 2 : i.isCollateral ? 1 : 0);
   return [...inputs].sort((a, b) => rank(a) - rank(b) || compareOutRef(a, b));
 }
 
-/**
- * The transaction as the ledger applied it, the same for every source: inputs in ledger order;
- * after a phase-2 failure only collateral and reference inputs, the collateral return as the only
- * output and no mint; otherwise no collateral return (never produced). Unknown validity
- * (`spendsCollaterals` undefined) keeps what the source reported.
- */
+// The transaction as the ledger applied it, identical for every source. After a phase-2 failure only
+// collateral and reference inputs remain and the collateral return is the only output.
+// Unknown validity keeps what the source reported.
 export function ledgerView<T extends TransactionProviderData>(tx: T): T {
   const inputs = ledgerInputOrder(tx.inputs ?? []);
   if (tx.spendsCollaterals === undefined) return { ...tx, inputs };
@@ -547,7 +542,7 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
     const id = metadataIdFor(lbl.label);
     if (id === null) {
       // a NaN key would fail the whole bulk write on PostgreSQL
-      logger.warn(`Metadata label ${JSON.stringify(lbl.label)} of tx ${lbl.txHash} is not a uint64 — row skipped`);
+      logger.warn(`Metadata label ${JSON.stringify(lbl.label)} of tx ${lbl.txHash} is not a uint64, row skipped`);
       continue;
     }
     rows.push({
@@ -562,11 +557,8 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   return rows;
 }
 
-/**
- * uint64 metadata label to the int64 `TransactionMetadata.id` key: labels >= 2^63 wrap via two's complement,
- * values beyond 2^53 are passed as a decimal string (CAP accepts strings for Integer64).
- * @returns the key, or null when the label is not a non-negative integer
- */
+// Maps a uint64 metadata label to the int64 id key. Labels >= 2^63 wrap by two's complement.
+// Values beyond 2^53 are returned as a decimal string. Null when the label is no non-negative integer.
 export function metadataIdFor(label: string | number): number | string | null {
   let big: bigint;
   if (typeof label === 'number') {
@@ -700,18 +692,12 @@ export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: numb
   };
 }
 
-/**
- * Fixed validity stamp for a crawler-written bare `Assets` row: epoch zero, so the row is born expired
- * (hidden by CAP's temporal filter) and its `(validFrom, unit)` key never collides with a mapAsset() slice.
- */
+// Epoch-zero stamp for bare Assets rows. The row is born expired and hidden by the temporal filter,
+// and its key never collides with an enriched row.
 export const BARE_ASSET_STAMP = '1970-01-01T00:00:00.000Z';
 
-/**
- * Bare AssetRow from the unit alone (policyId, assetNameHex, decoded name, CIP-14 fingerprint), no provider call.
- * Stamped `validTo === validFrom` with the fixed sentinel: hidden from OData reads, so the first keyed read
- * still misses and the lazy path enriches it; one idempotent row per unit inside the crawler's block tx.
- * @returns the row, or null when the unit is not a native asset unit
- */
+// Asset row built from the unit alone, without a provider call. Its stamp hides it from reads, so the
+// first keyed read still misses and the lazy path enriches it. Null for a non-asset unit.
 export function mapBareAsset(unit: string): AssetRow | null {
   // same unit definition isAssetUnit() enforces on the API
   if (!ASSET_UNIT_REGEX.test(unit)) return null;
@@ -800,13 +786,9 @@ export function mapAccount(providerAccountData: AccountProviderData, max_age: nu
 }
 
 /** Rejects the OData request for a BackendError; unknown errors are logged and answered as a sanitized 500. */
-export function mapError(req: Request, err: unknown, ctx: string) {
+export function mapError(req: Request, err: unknown, ctx: string): never {
     if (err instanceof BackendError) {
-      return req.reject(
-        err.statusCode,
-        fmt(err.code, ctx, err.message),
-        err.target
-      );
+      return req.reject({ status: err.statusCode, code: err.code, message: fmt(err.code, ctx, err.message), target: err.target });
     }
     const internalMsg = err instanceof Error ? err.message : String(err);
     logger.error({ error: internalMsg }, `Unexpected error in ${ctx}`);
@@ -944,10 +926,8 @@ export function mapAddressTransactionBuild(addr: string, buildId: string): Addre
 // Helper Functions
 //-----------------------------------------------------------------------
 
-/**
- * Cost models to number arrays in canonical Plutus parameter order. V3 goes through toCostModelArrV3
- * (canonical keys, padded to 297); for V1/V2 alphabetical key order is the canonical order.
- */
+// Cost models as number arrays in canonical Plutus parameter order.
+// For V1 and V2 the alphabetical key order is the canonical order.
 export function normalizeCostModels(raw: Record<string, unknown>): Record<string, number[]> {
   const result: Record<string, number[]> = {};
   for (const [key, value] of Object.entries(raw)) {
@@ -980,10 +960,8 @@ function hexToUtf8(hex: string): string {
 // ignoreBOM: a leading U+FEFF is part of the asset name's bytes and must survive the round trip
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
-/**
- * Asset name (hex bytes) to its display string; the hex is returned unchanged for invalid UTF-8 or
- * names containing U+0000 (PostgreSQL rejects NUL in `text`). `assetNameHex` always keeps the exact bytes.
- */
+// Display string for a hex asset name. Invalid UTF-8 or names with U+0000 return the hex unchanged,
+// because PostgreSQL rejects NUL in text.
 export function decodeAssetName(hex: string): string {
   if (!hex) return hex;
   let text: string;
@@ -1060,10 +1038,8 @@ export interface DecodedAddress {
   networkId: number | null;
 }
 
-/**
- * Decode the CIP-19 Shelley address header: type, script flag and, for base addresses, the embedded
- * stake credential as a reward account. Byron (base58) and unparseable input yield `byron` / `unknown`.
- */
+// Decodes the CIP-19 address header. Base addresses also yield the stake credential as a reward account.
+// Byron addresses yield type byron, unparsable input yields unknown.
 export function decodeShelleyAddress(address: string): DecodedAddress {
   const none: DecodedAddress = { type: 'unknown', isScript: false, stakeAddress: null, paymentCredential: null, networkId: null };
   if (typeof address !== 'string' || !address.length) return none;

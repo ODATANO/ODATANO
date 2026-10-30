@@ -1,13 +1,6 @@
-/**
- * Withdraw-zero from a staking script on preview, end to end: registers the script's stake
- * credential when it is not registered yet (legacy certificate, no witness), then builds, signs and
- * submits a zero withdrawal that runs the script under the Reward purpose.
- *
- * Needs a running ODATANO (BACKENDS with ogmios for script evaluation) and payment.skey of the
- * sender in the working directory. Signing uses cardano-cli from the cardano-node image.
- *
- *   npx tsx scripts/testing/withdraw-zero-preview.ts
- */
+// Zero withdrawal from a staking script on preview. Registers the stake credential first if needed.
+// Needs a running ODATANO with ogmios and payment.skey in the working directory.
+// Usage: npx tsx scripts/testing/withdraw-zero-preview.ts
 
 import axios from 'axios';
 import { Agent } from 'http';

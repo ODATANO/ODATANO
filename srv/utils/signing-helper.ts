@@ -5,10 +5,7 @@ import { TransactionValidationError } from './errors';
 
 const logger = cds.log('SigningHelper');
 
-/**
- * Combine an unsigned tx with the witness set a CIP-30 `signTx()` returns into a submittable signed tx.
- * @returns complete signed transaction CBOR (hex)
- */
+/** Merges the witness set from CIP-30 `signTx()` into the unsigned tx. Returns signed CBOR hex. */
 export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessSetCbor: string): string {
   try {
     // Raw CBOR level: no Cardano type validation, preserves all encoding metadata
@@ -69,10 +66,8 @@ export function combineTransactionWithWitnesses(unsignedTxCbor: string, witnessS
   }
 }
 
-/**
- * True when the CBOR is a CIP-30 witness set (map) rather than a full transaction (array).
- * Reads the major type of the first byte only; a malformed map fails later in the combine step.
- */
+// A witness set is a CBOR map, a full transaction an array. Only the first byte is read.
+// A malformed map fails later in the combine step.
 export function isWitnessSetCbor(cborHex: string): boolean {
   if (!/^[0-9a-f]{2}/i.test(cborHex)) return false;
   return parseInt(cborHex.slice(0, 2), 16) >> 5 === 5;

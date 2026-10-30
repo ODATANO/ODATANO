@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import { TransactionSubmissions } from '#cds-models/odatano/cardano';
 import type { CardanoClient } from '../cardano-client';
 import { isNotFoundOnAllBackends, TransactionAlreadySubmittedError } from '../../utils/errors';
 import {
@@ -18,14 +19,11 @@ import {
   recordConfirmationPoint,
 } from './job-store';
 
+const { UPDATE } = cds.ql;
 const logger = cds.log('CardanoWalletWorker');
 
-/**
- * Watches `submitted` jobs until their tx sits at depth >= `confirmationDepth`, via crawler
- * `blockIndexed`/`reorg` hooks plus an always-on polling fallback. A reorg re-submits the SAME
- * signed CBOR (never a rebuild); a tx unseen past `confirmationTimeoutMs` fails as TX_DROPPED.
- * Depth = `tipHeight - foundHeight + 1`, so depth 1 means "included in a block".
- */
+// Watches submitted jobs until their tx reaches confirmationDepth, via crawler hooks and polling.
+// A reorg re-submits the same signed CBOR, never a rebuild. Depth 1 means included in a block.
 
 export interface TrackedJob {
   jobId: string;
@@ -38,10 +36,7 @@ export interface TrackedJob {
   submittedAt: string;
   foundSlot: number | null;
   foundHeight: number | null;
-  /**
-   * Polling round in which the tx was last seen on-chain. An inclusion from an earlier
-   * round is re-checked before confirming, so a rollback the crawler did not report cannot slip through.
-   */
+  /** Polling round that last saw the tx. Older inclusions are re-checked to catch unreported rollbacks. */
   seenRound?: number;
 }
 
@@ -61,7 +56,7 @@ export interface ConfirmationTrackerDeps {
     walletId: string;
     outcome: 'confirmed' | 'failed';
     kind: string | null;
-    /** The tracked transaction — present even on failure (it was submitted). */
+    /** Set even on failure, since the tx was submitted. */
     txHash: string;
     errorCode?: string;
     errorMessage?: string;
@@ -157,16 +152,13 @@ export class ConfirmationTracker {
     }
     for (const job of this.pending.values()) {
       if (job.foundSlot != null && job.foundSlot > event.forkSlot) {
-        logger.warn(`Job ${job.jobId}: confirmation point (slot ${job.foundSlot}) rolled back past fork ${event.forkSlot} — re-watching`);
+        logger.warn(`Job ${job.jobId}: confirmation point (slot ${job.foundSlot}) rolled back past fork ${event.forkSlot}, re-watching`);
         await this.forgetInclusion(job);
       }
     }
   }
 
-  /**
-   * Inclusion rolled back: back to watching, optionally re-submitting the SAME signed CBOR
-   * (never a rebuild — the double-spend guard). "Already known" means the tx survived; success.
-   */
+  /** Back to watching after a rollback. Re-submits the same signed CBOR, never a rebuild, to avoid a double spend. */
   private async forgetInclusion(job: TrackedJob): Promise<void> {
     job.foundSlot = null;
     job.foundHeight = null;
@@ -182,7 +174,7 @@ export class ConfirmationTracker {
         logger.info(`Job ${job.jobId}: re-submitted original signed tx after rollback`);
       } catch (err) {
         if (err instanceof TransactionAlreadySubmittedError) {
-          logger.debug(`Job ${job.jobId}: tx already known after rollback — nothing to do`);
+          logger.debug(`Job ${job.jobId}: tx already known after rollback, nothing to do`);
         } else {
           logger.warn(`Job ${job.jobId}: rollback re-submit failed (polling continues to watch):`, err);
         }
@@ -198,7 +190,7 @@ export class ConfirmationTracker {
     this.polling = true;
     this.round++;
     try {
-      // Tip first — also the depth check for hook-found entries when the crawler is off.
+      // Tip first. It is also the depth check for hook-found entries when the crawler is off.
       try {
         const tip = await this.deps.client.getLatestBlock();
         if (tip.height != null) {
@@ -222,7 +214,7 @@ export class ConfirmationTracker {
           // Failover wraps per-backend 404s into AllBackendsFailedError; the helper
           // treats "every backend said 404" as proof of absence.
           if (isNotFoundOnAllBackends(err)) {
-            // Not on-chain yet — check the mempool-TTL timeout.
+            // Not on-chain yet. Check the submission timeout.
             const age = Date.now() - Date.parse(job.submittedAt);
             if (age > this.deps.options.confirmationTimeoutMs) {
               await this.finalize(job, 'failed', JOB_ERROR_CODES.TX_DROPPED,
@@ -243,10 +235,7 @@ export class ConfirmationTracker {
 
   // ---- Shared -----------------------------------------------------------------
 
-  /**
-   * Confirm every found job whose depth is met by the known tip. With `revalidate`
-   * (polling path) an inclusion not seen in this round is looked up again first.
-   */
+  /** Confirms found jobs deep enough. With revalidate, an inclusion not seen this round is looked up again. */
   private async confirmMature(revalidate = false): Promise<void> {
     const tip = this.lastKnownTipHeight;
     if (tip == null) return;
@@ -258,17 +247,14 @@ export class ConfirmationTracker {
     }
   }
 
-  /**
-   * Is the tx still on-chain and deep enough? A tx that moved blocks is re-anchored at its
-   * new height; one that is gone goes back to watching and the tip is re-learned next round.
-   */
+  /** True if the tx is still on-chain and deep enough. A moved tx takes its new height, a vanished one is watched again. */
   private async stillIncluded(job: TrackedJob, tip: number): Promise<boolean> {
     try {
       const tx = await this.deps.client.getTransaction(job.txHash);
       const height = tx.blockHeight ?? null;
       job.seenRound = this.round;
       if (height != null && height !== job.foundHeight) {
-        logger.warn(`Job ${job.jobId}: tx ${job.txHash} moved from height ${job.foundHeight} to ${height} — re-anchoring`);
+        logger.warn(`Job ${job.jobId}: tx ${job.txHash} moved from height ${job.foundHeight} to ${height}, re-anchoring`);
         job.foundHeight = height;
         job.foundSlot = tx.slot ?? null;
         await cds.tx((t) => recordConfirmationPoint(t, job.jobId, { slot: job.foundSlot, height: job.foundHeight }));
@@ -277,7 +263,7 @@ export class ConfirmationTracker {
       return true;
     } catch (err) {
       if (isNotFoundOnAllBackends(err)) {
-        logger.warn(`Job ${job.jobId}: tx ${job.txHash} no longer on-chain (was at height ${job.foundHeight}) — rollback without a crawler signal, re-watching`);
+        logger.warn(`Job ${job.jobId}: tx ${job.txHash} no longer on-chain (was at height ${job.foundHeight}). Rollback without a crawler signal, re-watching`);
         this.lastKnownTipHeight = null;
         await this.forgetInclusion(job);
         return false;
@@ -296,16 +282,19 @@ export class ConfirmationTracker {
           : await markFailed(tx, job.jobId, errorCode ?? 'FAILED', err ?? new Error('unknown'));
         if (transitioned) {
           await bumpWalletStats(tx, job.walletId, outcome);
+          if (outcome === 'confirmed') {
+            await tx.run(UPDATE.entity(TransactionSubmissions).set({ status: 'confirmed' }).where({ txHash: job.txHash, status: 'submitted' }));
+          }
         }
       });
     } catch (persistErr) {
       logger.error(`Job ${job.jobId}: failed to persist terminal state ${outcome} (next round retries):`, persistErr);
-      return; // keep tracking — the next round retries
+      return; // keep tracking, the next round retries
     }
     this.pending.delete(job.jobId);
     if (!transitioned) {
       // Another actor reached the terminal state first; stats bump and event belong to it.
-      logger.debug(`Job ${job.jobId}: ${outcome} transition already applied elsewhere — no event from this tracker`);
+      logger.debug(`Job ${job.jobId}: ${outcome} transition already applied elsewhere, no event from this tracker`);
       return;
     }
     logger.info(`Job ${job.jobId}: ${outcome}${outcome === 'failed' ? ` (${errorCode})` : ''}`);

@@ -7,10 +7,7 @@ export interface RateLimiterOptions {
   maxKeys?: number;
   /** Stale-key sweep interval (default 60 000 ms). */
   sweepIntervalMs?: number;
-  /**
-   * Max distinct keys one group (key up to its first ':', the principal) may hold (default 64),
-   * so one caller's made-up scopes cannot evict other callers' windows.
-   */
+  // default 64; max keys per principal, so one caller's made-up scopes cannot evict other callers.
   maxKeysPerGroup?: number;
 }
 
@@ -25,10 +22,8 @@ function groupOf(key: string): string {
   return i < 0 ? key : key.slice(0, i);
 }
 
-/**
- * Rate-limit key `principal:scope` for a CAP request; the principal is the user, else the client
- * address (last resort: batch parts and proxies hide it). No ':' in the principal, it is the group.
- */
+// Key `principal:scope` for a CAP request. The principal is the user, else the client address.
+// Colons in an IPv6 address are replaced, because the text before the first ':' is the group.
 export function principalRateKey(req: unknown, scope: string): string {
   const r = req as {
     user?: { id?: string };

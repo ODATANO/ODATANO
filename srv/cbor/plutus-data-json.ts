@@ -2,10 +2,8 @@ import { dataFromCbor, DataConstr, DataI, DataB, DataList, DataMap, type Data } 
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
 
-/**
- * PlutusData as cardano-cli DetailedSchema JSON, the shape the build actions accept as
- * outputDatumJson. Integers beyond the safe JS range are decimal strings so no digit is lost.
- */
+// cardano-cli DetailedSchema JSON, as the build actions accept it in outputDatumJson.
+// Integers beyond the safe JS range are decimal strings so no digit is lost.
 export type PlutusDataJson =
   | { constructor: number; fields: PlutusDataJson[] }
   | { int: number | string }

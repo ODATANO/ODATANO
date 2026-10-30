@@ -1,8 +1,6 @@
-/**
- * Secondary indexes the CDS model cannot declare (temporal keys start with `validFrom`, so business-key
- * lookups would scan). Created at start with CREATE INDEX IF NOT EXISTS, unquoted identifiers so Postgres
- * folds them like @cap-js does; failures are logged, never fatal. HANA is skipped (column store, no IF NOT EXISTS).
- */
+// Secondary indexes the CDS model cannot declare, created at start. Temporal keys start with validFrom,
+// so lookups by business key would scan without them. Failures are logged, never fatal.
+// HANA is skipped because it has no CREATE INDEX IF NOT EXISTS.
 import cds from '@sap/cds';
 
 const logger = cds.log('DbIndexes');
@@ -29,15 +27,16 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_blocks_epoch', table: 'odatano_cardano_Blocks', columns: 'epochNumber' },
   // block counts per pool (Pools.blocksEpoch / blocksMinted from crawled blocks)
   { name: 'odatano_cardano_blocks_slotleader', table: 'odatano_cardano_Blocks', columns: 'slotLeader, slot' },
-  // Transactions of a block (rollback `blockHash in`, OData filters by block / height)
-  { name: 'odatano_cardano_transactions_block', table: 'odatano_cardano_Transactions', columns: 'blockHash' },
+  // Transactions of a block in block order (rollback `blockHash in`, GetBlockTransactions)
+  { name: 'odatano_cardano_transactions_block_idx', table: 'odatano_cardano_Transactions', columns: 'blockHash, txIndex' },
   { name: 'odatano_cardano_transactions_height', table: 'odatano_cardano_Transactions', columns: 'blockHeight' },
   // Input/output rows back to their transaction (`tx` association, stale-seq check of the crawler)
   { name: 'odatano_cardano_transactions_txseq', table: 'odatano_cardano_Transactions', columns: 'txSeq' },
   // GetMetadataByTxHash, rollback
   { name: 'odatano_cardano_transactionmetadata_tx', table: 'odatano_cardano_TransactionMetadata', columns: 'tx_hash' },
-  // rollback `txHash in` (key is unit, txHash)
+  // rollback `txHash in` (key is unit, txHash); newest events of a unit
   { name: 'odatano_cardano_assethistory_tx', table: 'odatano_cardano_AssetHistory', columns: 'txHash' },
+  { name: 'odatano_cardano_assethistory_unit_height', table: 'odatano_cardano_AssetHistory', columns: 'unit, blockHeight DESC', postgres: 'unit, blockHeight DESC NULLS LAST' },
   // temporal entities: the business key behind validFrom
   { name: 'odatano_cardano_assets_unit', table: 'odatano_cardano_Assets', columns: 'unit' },
   { name: 'odatano_cardano_addresses_address', table: 'odatano_cardano_Addresses', columns: 'address' },
@@ -62,12 +61,23 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_transactionwithdrawals_stake', table: 'odatano_cardano_TransactionWithdrawals', columns: 'stakeAddress' },
   // crawler-fed UTxO set: open rows per address, "who spent", stake-key rollups, asset holders
   { name: 'odatano_cardano_ledgerutxos_address', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, spentTxHash' },
+  // newest created and spent rows of an address (latest transactions from the UTxO set)
+  { name: 'odatano_cardano_ledgerutxos_address_created', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, createdSlot' },
+  { name: 'odatano_cardano_ledgerutxos_address_spent', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, spentSlot' },
   { name: 'odatano_cardano_ledgerutxos_spent', table: 'odatano_cardano_LedgerUTxOs', columns: 'spentTxHash' },
   { name: 'odatano_cardano_ledgerutxos_paycred', table: 'odatano_cardano_LedgerUTxOs', columns: 'utxo_paymentCredential, spentTxHash' },
   { name: 'odatano_cardano_ledgeraddresses_stake', table: 'odatano_cardano_LedgerAddresses', columns: 'stakeAddress' },
   { name: 'odatano_cardano_ledgeraddresses_paycred', table: 'odatano_cardano_LedgerAddresses', columns: 'paymentCredential' },
   { name: 'odatano_cardano_ledgerutxoassets_unit', table: 'odatano_cardano_LedgerUTxOAssets', columns: 'unit' },
   { name: 'odatano_cardano_ledgeraddressassets_unit', table: 'odatano_cardano_LedgerAddressAssets', columns: 'unit' },
+  // wallet worker: due jobs in dispatch order, active jobs of one wallet
+  { name: 'odatano_cardano_cardanowalletjobs_due', table: 'odatano_cardano_CardanoWalletJobs', columns: 'status, priority, createdAt' },
+  { name: 'odatano_cardano_cardanowalletjobs_wallet', table: 'odatano_cardano_CardanoWalletJobs', columns: 'walletId, status, createdAt' },
+]);
+
+/** Indexes a composite entry above replaces; dropped at start. */
+export const DROPPED_DB_INDEXES: readonly string[] = Object.freeze([
+  'odatano_cardano_transactions_block',
 ]);
 
 /** The statement for one entry; exported so tests pin the shape. */
@@ -91,6 +101,10 @@ export async function ensureDbIndexes(runner: SqlRunner | undefined = cds.db as 
   if (kind === 'hana') {
     logger.info('HANA: secondary indexes not created (column store, no IF NOT EXISTS)');
     return { ensured, failed };
+  }
+  for (const name of DROPPED_DB_INDEXES) {
+    await runner.run(`DROP INDEX IF EXISTS ${name}`)
+      .catch((err: unknown) => logger.warn(`index ${name} not dropped: ${String((err as Error)?.message ?? err)}`));
   }
   for (const spec of DB_INDEXES) {
     try {

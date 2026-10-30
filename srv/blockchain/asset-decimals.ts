@@ -16,14 +16,28 @@ async function storedDatum(tx: CapTransaction, dataHash: string): Promise<string
   return row?.datum ?? null;
 }
 
-/**
- * Datum on the output that holds a reference NFT now: from the NFT's latest mint, each output is
- * followed to the transaction that spent it until an unspent one is reached. A datum given by
- * hash is read from TransactionDatums. null when the crawled chain has no trail.
- */
+// The transaction that consumed an output. Collateral consumes only in a phase-2 failure,
+// which is stored with collateral and reference inputs alone.
+async function consumingTx(tx: CapTransaction, spentTxHash: string, spentOutputIndex: number): Promise<{ txSeq?: number | string } | undefined> {
+  const inputs = await tx.run(
+    SELECT.from(TransactionInputs).columns('txSeq', 'isCollateral').where({ spentTxHash, spentOutputIndex, isReference: false })
+  ) as Array<{ txSeq?: number | string; isCollateral?: boolean | null }>;
+  const regular = (inputs ?? []).find(i => !i.isCollateral);
+  if (regular) return regular;
+  for (const candidate of inputs ?? []) {
+    const spendsRegular = await tx.run(
+      SELECT.one.from(TransactionInputs).columns('txSeq').where({ txSeq: candidate.txSeq, isCollateral: false, isReference: false })
+    );
+    if (!spendsRegular) return candidate;
+  }
+  return undefined;
+}
+
+// Datum of the output holding a reference NFT now, followed from its latest mint through each spend.
+// Hashed datums come from TransactionDatums. Null when the crawled chain has no trail.
 async function currentReferenceDatum(tx: CapTransaction, referenceUnit: string, mintTxHash: string | null): Promise<string | null> {
   const mint = await tx.run(
-    SELECT.one.from(AssetHistory).columns('txHash').where({ unit: referenceUnit, action: 'mint' }).orderBy('blockHeight desc')
+    SELECT.one.from(AssetHistory).columns('txHash').where({ unit: referenceUnit, action: 'mint' }).orderBy('blockHeight desc', 'blockTime desc', 'txHash desc')
   ) as { txHash?: string } | undefined;
   let txHash: string | null = mint?.txHash ?? mintTxHash;
   let datum: string | null = null;
@@ -38,9 +52,7 @@ async function currentReferenceDatum(tx: CapTransaction, referenceUnit: string, 
       SELECT.one.from(TransactionOutputs).columns('utxo_inlineDatum', 'utxo_dataHash').where({ txSeq: head.txSeq, outputIndex: holder.output_outputIndex })
     ) as { utxo_inlineDatum?: string | null; utxo_dataHash?: string | null } | undefined;
     datum = output?.utxo_inlineDatum ?? (output?.utxo_dataHash ? await storedDatum(tx, output.utxo_dataHash) : null) ?? datum;
-    const spender = await tx.run(
-      SELECT.one.from(TransactionInputs).columns('txSeq').where({ spentTxHash: txHash, spentOutputIndex: holder.output_outputIndex })
-    ) as { txSeq?: number | string } | undefined;
+    const spender = await consumingTx(tx, txHash, holder.output_outputIndex);
     if (spender?.txSeq == null) break;
     const next = await tx.run(SELECT.one.from(Transactions).columns('hash').where({ txSeq: spender.txSeq })) as { hash?: string } | undefined;
     txHash = next?.hash ?? null;
@@ -48,11 +60,8 @@ async function currentReferenceDatum(tx: CapTransaction, referenceUnit: string, 
   return datum;
 }
 
-/**
- * CIP-68 decimals of a user token (label 333 or 444) from the crawled chain. `mintTxHash` is the
- * token's own mint, tried when AssetHistory has no mint of the reference NFT. null for any other
- * unit or when the chain does not answer.
- */
+// CIP-68 decimals of a label 333 or 444 token. `mintTxHash` is the token's own mint, tried when
+// AssetHistory has no mint of the reference NFT. Null for other units or without data.
 export async function cip68Decimals(tx: CapTransaction, unit: string, mintTxHash: string | null = null): Promise<number | null> {
   const referenceUnit = cip68ReferenceUnit(unit);
   if (!referenceUnit) return null;
@@ -66,10 +75,7 @@ export async function setAssetDecimals(tx: CapTransaction, unit: string, decimal
   return Number(changed) || 0;
 }
 
-/**
- * Apply the reference datums a block carries: for every output holding a reference NFT, the
- * decimals of its datum go to the catalogue rows of the matching user tokens. Returns the rows changed.
- */
+// Copy decimals from each reference-NFT datum in a block to the matching user tokens. Returns rows changed.
 export async function applyReferenceDatums(tx: CapTransaction, txs: ProviderTransaction[]): Promise<number> {
   let changed = 0;
   for (const t of txs) {

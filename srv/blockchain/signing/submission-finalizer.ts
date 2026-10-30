@@ -3,6 +3,9 @@ import { TransactionAlreadySubmittedError } from '../../utils/errors';
 import { detachedTx, runWithoutAmbientTx } from '../../utils/tx-utils';
 import { extractTxCacheTargets } from '../../utils/tx-build-helper';
 import { getExternalSignerModule } from './external-signer';
+import type { CardanoIndexer } from '../cardano-indexer';
+import type { CardanoClient } from '../cardano-client';
+import { AddressTransactionBuilds, type TransactionSubmission } from '#cds-models/CardanoTransactionService';
 
 const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('SubmissionFinalizer');
@@ -23,17 +26,16 @@ export interface FinalizeParams {
   signerInfo?: string;
 }
 
+type SubmissionIndexer = Pick<CardanoIndexer, 'persistTransactionSubmission' | 'updateSubmissionStatus' | 'invalidateUtxoCacheForTx'>;
+
 // Lazy require avoids the srv/server.ts <-> this-module import cycle; the app-context
 // getters are only needed at runtime.
 function server(): typeof import('../../server') {
   return require('../../server') as typeof import('../../server');
 }
 
-/**
- * Submit a claimed signing request (status 'submitting' already committed by the caller) and
- * persist the outcome in detached transactions, so no DB lock is held across the network call.
- * Submit failure → 'failed' in its own tx, then rethrow. A crash before finalize leaves 'submitting'.
- */
+// Outcomes are written in detached transactions, so no DB lock is held across the network call.
+// A failure is marked 'failed' and rethrown. A crash before finalize leaves 'submitting'.
 export async function submitAndFinalize(
   SigningRequests: unknown,
   params: FinalizeParams,
@@ -43,8 +45,7 @@ export async function submitAndFinalize(
   const finalizeSubmitted = () => detachedTx('finalize transaction submission', async (db: cds.Transaction) => {
     const submission = await server().getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
     if (afterFinalize) await afterFinalize(db);
-    // Invalidate stale UTxO cache (spent inputs + output addresses) — best-effort,
-    // must never roll back the durable submission record.
+    // Best effort; must never roll back the durable submission record.
     try {
       await server().getCardanoIndexer().invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.fullSignedTxCbor));
     } catch (invalidateErr: unknown) {
@@ -60,7 +61,7 @@ export async function submitAndFinalize(
     // lost, fallback saw the duplicate): finalize as 'submitted' rather than recording a spurious 'failed'.
     if (submitErr instanceof TransactionAlreadySubmittedError) {
       logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
-        'Submit reported already-submitted — finalizing as submitted (tx already in mempool)');
+        'Submit reported already-submitted; finalizing as submitted (tx already in mempool)');
       return finalizeSubmitted();
     }
     try {
@@ -77,11 +78,50 @@ export async function submitAndFinalize(
   return finalizeSubmitted();
 }
 
-/**
- * Deferred submit: runs submitAndFinalize only after the caller's root transaction has committed
- * (claim durable, connection released), detached via setImmediate + runWithoutAmbientTx.
- * If the caller rolls back, 'succeeded' never fires and nothing was claimed.
- */
+// 'pending' commits first and the network call runs outside any DB tx.
+// The final status commits on its own and survives a rethrown error.
+export async function submitRecorded(
+  params: { signedTxCbor: string; txHash: string; buildId: string | null },
+  indexer: SubmissionIndexer = server().getCardanoIndexer(),
+  client: Pick<CardanoClient, 'submitTransaction'> = server().getCardanoClient(),
+): Promise<TransactionSubmission> {
+  const record = await detachedTx('record transaction submission', (db) => indexer.persistTransactionSubmission(db as never, params));
+
+  try {
+    await client.submitTransaction(params.signedTxCbor);
+    logger.info({ txHash: params.txHash }, 'Transaction submitted to blockchain');
+  } catch (submitErr: unknown) {
+    const alreadySubmitted = submitErr instanceof TransactionAlreadySubmittedError;
+    const errMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+    try {
+      await detachedTx('record submission outcome', (db) => alreadySubmitted
+        ? indexer.updateSubmissionStatus(db as never, record.id!, 'submitted')
+        : indexer.updateSubmissionStatus(db as never, record.id!, 'failed', errMsg));
+    } catch (markErr: unknown) {
+      logger.error({ err: markErr, submissionId: record.id }, 'Could not record the submission outcome after a submit error');
+    }
+    if (!alreadySubmitted) logger.error({ txHash: params.txHash, error: errMsg }, 'Transaction submission failed');
+    throw submitErr;
+  }
+
+  await detachedTx('record submission outcome', async (db) => {
+    await indexer.updateSubmissionStatus(db as never, record.id!, 'submitted');
+    // best-effort: a cache failure must not roll back the submitted status
+    try {
+      const senders = params.buildId
+        ? await db.run(SELECT.from(AddressTransactionBuilds).columns('address_address').where({ txBuild_id: params.buildId })) as Array<{ address_address?: string | null }>
+        : [];
+      await indexer.invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.signedTxCbor),
+        senders.map(r => r.address_address).filter((a): a is string => !!a));
+    } catch (invalidateErr: unknown) {
+      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
+    }
+  });
+  return { ...record, status: 'submitted' };
+}
+
+// Submits only after the caller's transaction has committed and released its connection.
+// If the caller rolls back, 'succeeded' never fires and nothing was claimed.
 export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, params: FinalizeParams): void {
   req.on('succeeded', () => {
     setImmediate(() => {
@@ -98,12 +138,8 @@ export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, p
   });
 }
 
-/**
- * Boot-time recovery: re-drive rows at 'submitting' WITH persisted signedTxCbor (process died between
- * the caller's commit and the detached submit). Idempotent: a tx the node already holds finalizes as
- * 'submitted'. Rows without signed CBOR are left for the operator/poller.
- * @returns number of rows re-driven (attempted, not necessarily succeeded)
- */
+// Boot recovery for rows stuck at 'submitting' that have signed CBOR. Idempotent, since a tx
+// the node already holds finalizes as 'submitted'. Returns the number of rows attempted.
 export async function redriveInterruptedSubmissions(): Promise<number> {
   const SigningRequests = 'odatano.cardano.SigningRequests';
 

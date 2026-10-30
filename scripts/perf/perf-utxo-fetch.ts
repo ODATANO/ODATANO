@@ -1,19 +1,6 @@
-/**
- * ODATANO UTxO Fetch Benchmark
- *
- * Isolates UTxO fetching performance: Blockfrost vs Ogmios+Blockfrost.
- * Only calls GetUTxOsByAddress (read endpoint) — no TX building, no evaluation.
- * This helps determine whether the Ogmios overhead comes from UTxO routing
- * or from ExUnit evaluation during TX builds.
- *
- * Prerequisites:
- *   - .env with BLOCKFROST_API_KEY and OGMIOS_URL
- *   - Ogmios node running on OGMIOS_URL
- *
- * Usage:
- *   npx tsx scripts/perf-utxo-fetch.ts
- *   npx tsx scripts/perf-utxo-fetch.ts --rounds 10
- */
+// Times GetUTxOsByAddress with Blockfrost alone against Ogmios plus Blockfrost, without tx builds.
+// Needs BLOCKFROST_API_KEY and a reachable OGMIOS_URL in .env.
+// Usage: npx tsx scripts/perf/perf-utxo-fetch.ts [--rounds 10]
 
 import { spawn, execSync, ChildProcess } from "child_process";
 import * as fs from "fs";
@@ -254,7 +241,7 @@ async function runUtxoBenchmark(base: string, rounds: number): Promise<Benchmark
 
     console.log(`\n${"═".repeat(80)}`);
     console.log(`  UTxO FETCH: ${bf.name} vs ${ogm.name}`);
-    console.log(`  (No TX building, no ExUnit evaluation — pure UTxO/Address reads)`);
+    console.log(`  (No TX building, no ExUnit evaluation, pure UTxO and address reads)`);
     console.log("═".repeat(80));
 
     console.log(`\n  ${"Endpoint".padEnd(40)}${"Blockfrost".padStart(12)}${"Ogmios+BF".padStart(12)}${"Diff".padStart(10)}${"Impact".padStart(10)}`);

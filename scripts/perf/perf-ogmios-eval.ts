@@ -1,20 +1,6 @@
-/**
- * ODATANO Ogmios Evaluation Impact Benchmark
- *
- * Compares TX-build performance with and without Ogmios evaluation:
- *   1. blockfrost_buildooor        — Blockfrost only, default ExUnits (no evaluation)
- *   2. ogmios+blockfrost_buildooor — Ogmios + Blockfrost, dynamic ExUnit evaluation via Ogmios
- *
- * Only runs TX-build endpoints to isolate the evaluation overhead.
- *
- * Prerequisites:
- *   - .env with BLOCKFROST_API_KEY and OGMIOS_URL
- *   - Ogmios node running on OGMIOS_URL
- *
- * Usage:
- *   npx tsx scripts/perf-ogmios-eval.ts
- *   npx tsx scripts/perf-ogmios-eval.ts --rounds 5
- */
+// Compares tx-build times with Blockfrost alone against Ogmios with script evaluation.
+// Needs BLOCKFROST_API_KEY and a reachable OGMIOS_URL in .env.
+// Usage: npx tsx scripts/perf/perf-ogmios-eval.ts [--rounds 5]
 
 import { spawn, execSync, ChildProcess } from "child_process";
 import * as fs from "fs";

@@ -223,6 +223,14 @@ describe('tx-build-helper utilities', () => {
   });
 
   describe('jsonToPlutusData', () => {
+    it.each([
+      ['a bare number', 5],
+      ['an object without a PlutusData key', { foo: 1 }],
+      ['fields that are not a list', { constructor: 0, fields: 'x' }],
+    ])('answers %s from the request as a 400, not a server fault', (_label, json) => {
+      expect(() => jsonToPlutusData(json as never)).toThrow(expect.objectContaining({ statusCode: 400 }));
+    });
+
     it('should convert integer JSON to DataI', () => {
       const result = jsonToPlutusData({ int: 42 });
       expect(result).toBeInstanceOf(DataI);

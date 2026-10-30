@@ -11,43 +11,27 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Install ALL dependencies (needed for build). --ignore-scripts is REQUIRED here:
-# the package's `prepare` lifecycle runs `tsc -p tsconfig.build.json`, but at this
-# layer only the manifests exist — the compile would fail with TS5058. The real
-# build runs explicitly below once the source has been copied.
+# --ignore-scripts is required. The prepare script runs tsc, which fails with TS5058
+# while only the manifests exist. The real build runs below, after the source is copied.
 RUN npm ci --ignore-scripts
 
 # Copy source code
 COPY . .
 
-# Best-effort native build for the OPTIONAL pkcs11js dependency (skipped by
-# --ignore-scripts above). Alpine has no gyp toolchain, so this fails and HSM
-# stays unavailable in this image — exactly as before, where npm ci silently
-# skipped the failing optional dep. Everything else needs no install scripts
-# (sqlite is node:sqlite, blake2b is wasm, esbuild is dev-only).
+# Best-effort native build of the optional pkcs11js. Alpine has no gyp toolchain,
+# so it fails and HSM is unavailable in this image. No other dependency needs install scripts.
 RUN npm rebuild pkcs11js || echo "pkcs11js native build skipped (optional; HSM unavailable in this image)"
 
-# Generate CDS types and compile TypeScript IN PLACE (tsconfig.build.json, outDir "."):
-# `cds serve srv` resolves each service's @impl as srv/<name>.js next to its .cds,
-# and the runtime image has no TypeScript loader (devDependencies are pruned below).
-# `npm run build` would emit into dist/, which nothing serves; the image only
-# worked before because stale in-place .js twins happened to be in the build
-# context (2026-09-05).
+# Compile TypeScript in place. `cds serve srv` resolves each @impl as srv/<name>.js next to its .cds,
+# and the runtime image has no TypeScript loader. `npm run build` emits into dist/, which nothing serves.
 RUN npm run build:plugin
 
 # Deploy database
 RUN npm run db:deploy
 
-# Remove devDependencies to reduce image size and avoid plugin conflicts.
-# @cap-js/sqlite and @cap-js/postgres are devDependencies of the npm package
-# (consumers pick their own DB adapter), but THIS image serves from one of them
-# (ODATANO_DB_URL selects PostgreSQL): re-add both after the prune, otherwise
-# cds-serve crashes at startup with MODULE_NOT_FOUND.
-# `npm pkg delete devDependencies` is REQUIRED before the install: with the dev
-# block still in the manifest, a plain install reinstalls every devDependency
-# (vitest, eslint, typescript, ...), while `--omit=dev` drops the requested
-# sqlite package itself because it is classified as dev. Deleting the block
-# sidesteps both failure modes; the edited package.json only lives in the image.
+# The DB adapters are devDependencies but this image serves from one, so both are re-added after the prune.
+# Deleting the devDependencies block first is required. Otherwise the install restores every dev
+# dependency, and --omit=dev would drop the sqlite adapter itself.
 RUN npm prune --omit=dev \
  && npm pkg delete devDependencies \
  && npm install --no-save --ignore-scripts @cap-js/sqlite@^3 @cap-js/postgres@^3
@@ -77,10 +61,8 @@ USER node
 # Expose port
 EXPOSE 4004
 
-# Health check — CardanoIndexerService.getLiveness() is @requires: 'any', so it
-# answers without credentials under mocked/basic/XSUAA auth alike. The service
-# document and $metadata are NOT (401 for anonymous requests would leave the
-# container permanently "unhealthy"). Process liveness only: no backend/DB probe.
+# getLiveness() answers without credentials under every auth kind. The service document
+# would return 401 to the probe and leave the container unhealthy for good.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD wget --quiet --tries=1 --spider "http://localhost:4004/odata/v4/cardano-indexer/getLiveness()" || exit 1
 

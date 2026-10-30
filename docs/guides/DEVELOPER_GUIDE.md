@@ -22,7 +22,7 @@
 
 ### Service Surface
 
-**50 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (v2.0 crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (v2.0 wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
+**50 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
 
 **21 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData
 
@@ -112,8 +112,8 @@ srv/
   cardano-tx-service.ts         # Transaction handler implementations (build, submit)
   cardano-sign-service.cds      # Signing service definitions (signing requests, verification)
   cardano-sign-service.ts       # Signing handler implementations
-  cardano-indexer-service.{cds,ts}  # Crawler control surface (v2.0)
-  cardano-worker-service.{cds,ts}   # Wallet job control surface (v2.0)
+  cardano-indexer-service.{cds,ts}  # Crawler control surface
+  cardano-worker-service.{cds,ts}   # Wallet job control surface
   blockchain/
     cardano-client.ts           # Multi-backend orchestrator
     cardano-indexer.ts          # Lazy indexing & caching
@@ -131,11 +131,11 @@ srv/
       hsm-signer.ts             # PKCS#11 signing (key never leaves the module)
       cose-verifier.ts          # CIP-8/COSE data signatures (wallet login)
       submission-finalizer.ts   # Shared submit + bookkeeping, incl. deferred submit
-    crawler/                    # v2.0 chain crawler / pre-sync
+    crawler/                    # chain crawler / pre-sync
       crawler.ts                # Engine: chain-sync + pagination, reorg handling
       sync-state.ts             # Cursor singleton + DB lease
       hooks.ts                  # blockIndexed / reorg listeners
-    wallet-worker/              # v2.0 async wallet job engine
+    wallet-worker/              # async wallet job engine
       wallet-worker.ts          # Dispatch loop, build -> sign -> submit
       job-store.ts              # Job state machine + idempotency + leases
       signers.ts                # hsm / software WorkerSigner
@@ -146,14 +146,14 @@ srv/
     validators.ts               # Input validation (10+ functions)
     errors.ts                   # Error hierarchy (14 classes)
     error-codes.ts              # ODATANO_* error-code contract
-    service-events.ts           # Mirrors internal notifications onto CAP services (v2.0 events)
+    service-events.ts           # Mirrors internal notifications onto CAP services (events)
     mappers.ts                  # API → OData transformations
     tx-build-helper.ts          # Transaction utilities (M2)
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
 db/schema.cds                   # 50 entities with temporal support
-test/                           # 88 test files (70 unit + 18 integration, vitest)
+test/                           # unit and integration tests (vitest), see test/README.md
 ```
 ---
 
@@ -189,9 +189,9 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── cardano-tx-service.js    # Compiled handler
 │   ├── cardano-sign-service.cds # CardanoSignService definition
 │   ├── cardano-sign-service.js  # Compiled handler
-│   ├── cardano-indexer-service.cds # CardanoIndexerService definition (v2.0)
+│   ├── cardano-indexer-service.cds # CardanoIndexerService definition
 │   ├── cardano-indexer-service.js  # Compiled handler
-│   ├── cardano-worker-service.cds  # CardanoWorkerService definition (v2.0)
+│   ├── cardano-worker-service.cds  # CardanoWorkerService definition
 │   ├── cardano-worker-service.js   # Compiled handler
 │   ├── server.js                # AppContext, loadConfigFromEnv()
 │   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
@@ -692,7 +692,7 @@ describe('CardanoODataService', () => {
 
 **.env (Development)**
 ```env
-LOG_LEVEL=debug
+DEBUG=CardanoService,CardanoIndexer
 NETWORK=preview
 BLOCKFROST_API_KEY=your_preview_key
 PRIMARY_TIMEOUT_MS=8000
@@ -702,7 +702,6 @@ INDEX_TTL_MS=60000
 
 **.env (Production)**
 ```env
-LOG_LEVEL=info
 NETWORK=mainnet
 BLOCKFROST_API_KEY=your_mainnet_key
 PRIMARY_TIMEOUT_MS=8000

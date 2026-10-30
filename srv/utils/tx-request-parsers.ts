@@ -4,10 +4,8 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { dataFromCbor } from '@harmoniclabs/plutus-data';
 import { MIN_FULL_ASSET_UNIT_LENGTH } from './const';
 
-/**
- * Shared parsers for the Build*-action JSON payload fields (transaction service and wallet worker).
- * Result contract: `{ parsed }` on success (undefined for absent/empty input) or `{ error }` with a client message.
- */
+// Parsers for the JSON fields of the Build actions, shared with the wallet worker.
+// Each returns `{ parsed }`, undefined for empty input, or `{ error }` with a client message.
 
 /** PlutusData as CBOR hex, checked to decode; `field` names it in the error. */
 export function parsePlutusCbor(value: unknown, field: string): { hex?: string; error?: string } {
@@ -110,10 +108,7 @@ export function parseExtraOutputs(
   return parseOutputList(extraOutputsJson, 'extraOutputsJson');
 }
 
-/**
- * Parse an output list. `outputsJson` (BuildPlutusTransaction) additionally accepts `datumHash`;
- * the entries keep their order, each is min-ADA checked by the builder.
- */
+/** Entries keep their order. `outputsJson` also accepts `datumHash`. */
 export function parseOutputList(
   json: string | undefined,
   fieldName: 'extraOutputsJson' | 'outputsJson'
@@ -212,10 +207,8 @@ export function parseOutputList(
   return { parsed: out };
 }
 
-/**
- * Parse the optional per-action policy fields of a mintActionsJson entry: `mintingPolicyScript` (CBOR hex,
- * applied as-is) and `redeemerJson` (JSON string). Absent fields fall back to the top-level script/redeemer.
- */
+// Optional per-action `mintingPolicyScript` and `redeemerJson` of a mintActionsJson entry.
+// Absent fields fall back to the request's script and redeemer.
 export function parseMintActionPolicyFields(
   entry: Record<string, unknown>,
   i: number,
@@ -364,10 +357,8 @@ export interface ParsedWithdrawal {
   redeemerCbor?: string;
 }
 
-/**
- * Parse and validate withdrawalsJson: distinct reward accounts, lovelace >= 0, optionally a staking
- * script (inline or by reference) with exactly one redeemer form; without a script no redeemer.
- */
+// Distinct reward accounts and lovelace >= 0. A staking script needs exactly one redeemer form.
+// Without a script no redeemer is allowed.
 export function parseWithdrawals(json: string | undefined): { parsed?: ParsedWithdrawal[]; error?: string } {
   if (!json) return { parsed: undefined };
   const jsonResult = validateJsonWithLimits(json, 'withdrawalsJson');
@@ -469,10 +460,7 @@ export interface ParsedCertificate extends ParsedStakingScriptWitness {
   deposit?: string;
 }
 
-/**
- * Parse and validate certificatesJson: stake registrations and deregistrations, each with an
- * optional staking script (inline or by reference) and exactly one redeemer form when scripted.
- */
+// Stake registrations and deregistrations. A scripted one needs exactly one redeemer form.
 export function parseCertificates(json: string | undefined): { parsed?: ParsedCertificate[]; error?: string } {
   if (!json) return { parsed: undefined };
   const jsonResult = validateJsonWithLimits(json, 'certificatesJson');
@@ -507,11 +495,8 @@ export function parseCertificates(json: string | undefined): { parsed?: ParsedCe
   return { parsed: out };
 }
 
-/**
- * Parse mintActionsJson for BuildPlutusTransaction: every action carries its own `mintingPolicyScript`
- * or `referenceScript` (no request-level default) and optional `redeemerJson`; `assetUnit` is
- * policyId+assetName, or with an inline script a bare assetName prefixed with the script's policy id.
- */
+// Every action carries its own `mintingPolicyScript` or `referenceScript`, with no request default.
+// With an inline script, `assetUnit` may be a bare asset name, prefixed with the script's policy id.
 export function parsePolicyMintActions(json: string | undefined): { parsed?: MintAction[]; error?: string } {
   if (!json) return { parsed: undefined };
   const jsonResult = validateJsonWithLimits(json, 'mintActionsJson');

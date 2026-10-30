@@ -1,15 +1,7 @@
 #!/usr/bin/env node
-// Rewrite Blocks.slotLeader values written before it became the bech32 pool id: an Ogmios
-// issuer key (64 hex chars) becomes bech32('pool', blake2b-224(key)); a Koios VRF key
-// (vrf_vk1…) is matched on blake2b-256 against the pools' registered VRF key hashes, taken
-// from an Ogmios `queryLedgerState/stakePools` response. Prints SQL; the database is not touched.
-//
-//   psql -Atc "SELECT DISTINCT slotLeader FROM odatano_cardano_Blocks WHERE slotLeader NOT LIKE 'pool1%'" \
-//     | node scripts/migrate-slot-leader.mjs [--stake-pools stake-pools.json] [--extra-map extra.txt] > slot-leader.sql
-//
-// The SQL fills a mapping table and runs one UPDATE (PostgreSQL and SQLite). Values that cannot
-// be mapped (a VRF key of a pool no longer registered, unknown formats) are listed on stderr
-// and left unchanged; `--extra-map` supplies them as "<old value> <pool id>" lines.
+// Reads old Blocks.slotLeader values on stdin and prints SQL that rewrites them to bech32 pool ids.
+// Issuer keys are hashed. VRF keys are matched via --stake-pools. Unmapped values go to stderr.
+// --extra-map supplies those as "<old value> <pool id>" lines. The database is not touched.
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { bech32 } from 'bech32';

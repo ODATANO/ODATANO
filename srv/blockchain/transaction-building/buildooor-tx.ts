@@ -33,8 +33,8 @@ import {
   txRedeemerTagToString
 } from "@harmoniclabs/cardano-ledger-ts";
 
-// Metadata classes come from the DIST paths on purpose: buildooor's AuxiliaryData/TxMetadata
-// run `instanceof` checks against these exact class identities, not the package-root re-exports.
+// Metadata classes come from the dist paths on purpose. Buildooor's `instanceof` checks
+// match these exact classes, not the package-root re-exports.
 import { TxMetadata } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata";
 import {
   type TxMetadatum,
@@ -63,16 +63,14 @@ interface LocalEvalFailure {
   logs: string[];
 }
 
-/** Execution units as bigints (matching ExBudget's mem/cpu). */
+/** Execution units as bigints, like ExBudget. */
 type ExUnitsBig = { mem: bigint; cpu: bigint };
 
 /** Cost-model arrays exactly as served by the chain, keyed like Buildooor's CostModels. */
 type RawCostModelArrays = Partial<Record<'PlutusScriptV1' | 'PlutusScriptV2' | 'PlutusScriptV3', number[]>>;
 
 /**
- * Build options for script-bearing transactions. Buildooor stamps each redeemer with its
- * local CEK budget and, without `onScriptInvalid`, aborts on a local failure; we only record
- * failures here and let `_buildScriptTx` decide (Ogmios result wins, otherwise abort).
+ * Records local script failures instead of aborting, so `_buildScriptTx` can let Ogmios decide.
  */
 function makeScriptBuildOpts(failures: LocalEvalFailure[]): ITxBuildOptions {
   return {
@@ -115,17 +113,14 @@ function maxBig(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
 }
 
-/**
- * Parse a protocol-parameter value (number or decimal string) into a non-negative safe integer;
- * undefined for null/empty/invalid so callers keep library defaults instead of coercing to 0.
- */
+/** Non-negative safe integer, or undefined so callers keep library defaults instead of 0. */
 function toUInt(value: number | string | null | undefined): number | undefined {
   if (value === null || value === undefined || value === '') return undefined;
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
 }
 
-/** Parse a strictly positive finite number (e.g. exUnit prices); undefined when absent/invalid. */
+/** Strictly positive finite number, else undefined. */
 function toPositiveNumber(value: number | string | null | undefined): number | undefined {
   if (value === null || value === undefined || value === '') return undefined;
   const n = Number(value);
@@ -138,7 +133,7 @@ function protocolParamsFingerprint(p: LedgerProtocolParameter): string {
   return JSON.stringify(p);
 }
 
-/** Ledger limit for a single text/bytes metadatum (bytes, not characters). */
+/** Ledger limit for one text or bytes metadatum, counted in bytes. */
 const METADATA_BYTE_LIMIT = 64;
 
 /** Split a string into pieces of at most maxBytes UTF-8 bytes without splitting a code point. */
@@ -161,11 +156,8 @@ function chunkUtf8(str: string, maxBytes: number): string[] {
   return chunks;
 }
 
-/**
- * The same script without the CBOR it was parsed from. Script.fromCbor keeps the input bytes (the
- * compiler's bare bytestring) and toCbor() returns them, while an output's script_ref must hold the
- * ledger form [language, bytes]; the hash is the same either way.
- */
+// Script.fromCbor keeps the compiler bytes, but an output's script_ref needs the ledger form.
+// Rebuilding the script gives that form. The hash stays the same.
 function ledgerScript(script: Script): Script {
   return new Script(script.type, script.bytes);
 }
@@ -187,16 +179,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private cardanoClient!: CardanoClient;
   private genesisInfos!: NonNullable<ConstructorParameters<typeof TxBuilder>[1]>;
   private paramsFingerprint: string | undefined;
-  /**
-   * Chain cost-model arrays kept verbatim for language-view hashing; set by _mapCostModels,
-   * empty when the current parameters carry no usable cost models.
-   */
+  /** Chain cost-model arrays kept verbatim for language-view hashing. */
   private rawCostModelArrays: RawCostModelArrays = {};
 
-  /**
-   * Initialize the builder.
-   * @param protocolParams - optional; fetched from the backend when omitted
-   */
+  /** Initialize the builder. Protocol parameters are fetched when omitted. */
   public async init(client: CardanoClient, protocolParams?: LedgerProtocolParameters): Promise<void> {
     this.cardanoClient = client;
     const params = protocolParams ?? await client.getProtocolParameters();
@@ -209,10 +195,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     logger.debug(`Initialized with protocol parameters and ${client.network} genesis infos`);
   }
 
-  /**
-   * Rebuild the TxBuilder when the per-request protocol parameters differ from the current
-   * ones; the TxBuilder has no setter but its constructor is cheap (effectively once per epoch).
-   */
+  /** TxBuilder has no setter, so it is rebuilt when the protocol parameters change. */
   private _ensureCurrentProtocolParameters(ctx: TxBuildContext): void {
     const params = ctx.protocolParameters;
     if (!params) return;
@@ -237,10 +220,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return this._withRefScriptFallback(ctx.utxos, (include) => this._buildSimpleTransfer(req, ctx, 'metadata transfer', include));
   }
 
-  /**
-   * Shared non-script transfer build; assets, outputDatum and metadataJson are each
-   * handled only when present in the request.
-   */
+  /** Shared non-script transfer build. */
   private async _buildSimpleTransfer(req: TxBuildRequest, ctx: TxBuildContext, label: string, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
     try {
       this._ensureCurrentProtocolParameters(ctx);
@@ -388,8 +368,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
       const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
 
-      // Resolve validity bounds once — both passes must share them so redeemer ExUnits
-      // and fee computation stay consistent (a mismatch would force re-evaluation).
+      // Both passes must share the validity bounds so redeemer ExUnits and fee stay consistent.
       const { invalidBefore, invalidAfter } = this._resolveValiditySlots(req, 'script');
 
       // Auxiliary metadata (CIP-20, label 674, ...) must be identical across eval + final passes:
@@ -421,7 +400,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   }
 
   private async _buildPlutusSpendTransaction(req: TxBuildPlutusSpendRequest, ctx: TxBuildContext, includeRefScriptUtxos: boolean): Promise<TxBuildResult> {
-    // See _buildMintTransaction — same collateral-partition context for rejections.
+    // Same collateral-partition context as in _buildMintTransaction.
     let coinSelectionContext: string | undefined;
     let requestedOutputs: number | undefined;
     try {
@@ -432,7 +411,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
       if (!plutusScriptExecution.datum) {
         // Without an explicit datum the script UTxO must carry an inline datum.
-        logger.debug('No datumJson provided — expecting inline datum on script UTxO');
+        logger.debug('No datumJson provided, expecting inline datum on script UTxO');
       }
 
       const scriptUtxoRef = plutusScriptExecution.scriptUtxo;
@@ -453,7 +432,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const recipientAddress = Address.fromString(req.recipientAddress);
       const changeAddress = Address.fromString(req.changeAddress ?? req.senderAddress);
 
-      // Partition forced inputs (excluding any ref that matches the script UTxO — silently ignored)
+      // A forced input that matches the script UTxO is silently ignored.
       const forceInputsFiltered = (req.forceInputs ?? []).filter(
         r => !(r.txHash === scriptUtxoRef.txHash && r.outputIndex === scriptUtxoRef.outputIndex)
       );
@@ -482,8 +461,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const selectedFundingInputs = this.txBuilder.keepRelevant(requiredFundingValue, allFundingInputs);
       logger.debug(`Coin selection: ${selectedFundingInputs.length}/${allFundingInputs.length} UTxOs selected (${forcedInputs.length} forced) for Plutus spend`);
 
-      // Compute the final input order (Buildooor's lex sort) and resolve __INPUT_IDX__ placeholders
-      // in redeemer / datum / output datums BEFORE PlutusData encoding.
+      // Resolve __INPUT_IDX__ placeholders against Buildooor's input order before PlutusData encoding.
       const sortedInputs = this._computeSortedInputs([scriptUtxoRef], forced, this._extractFundingRefs(selectedFundingInputs));
       const resolveCtx = { sortedInputs };
       const resolvedRedeemer = resolveIndexPlaceholders(plutusScriptExecution.redeemer, resolveCtx);
@@ -512,7 +490,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         mintScriptHash = mintScript.hash.toString();
       }
 
-      // Build outputs — include multi-assets from script UTxO in continuing output
+      // The continuing output carries the multi-assets of the script UTxO.
       const scriptNonAdaAssets = scriptOdatanoUtxo.amount.filter(
         a => a.unit.toLowerCase() !== 'lovelace' && BigInt(a.quantity) > 0n
       );
@@ -553,8 +531,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       // CIP-31: map resolved reference input UTxOs to Buildooor LedgerUTxO format
       const readonlyRefInputs = this._mapReferenceInputs(ctx.referenceInputUtxos);
 
-      // Resolve validity bounds once — both passes must share them so redeemer ExUnits
-      // and fee computation stay consistent (a mismatch would force re-evaluation).
+      // Both passes must share the validity bounds so redeemer ExUnits and fee stay consistent.
       const { invalidBefore, invalidAfter } = this._resolveValiditySlots(req, 'script');
 
       // One set of build args shared by both internal passes and the Ogmios evaluation.
@@ -580,10 +557,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /**
-   * Several script inputs in one transaction, each with its own redeemer (inline validator or a
-   * reference-script UTxO), the outputs exactly in the given order and change after them.
-   */
+  // Several script inputs, each with its own redeemer and an inline or referenced validator.
+  // Outputs keep the given order, change comes after them.
   public buildUnsignedPlutusTransaction(req: TxBuildPlutusRequest, ctx: TxBuildContext): Promise<TxBuildResult> {
     return this._withRefScriptFallback(ctx.utxos, (include) => this._buildPlutusTransaction(req, ctx, include));
   }
@@ -831,10 +806,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /**
-   * Outputs of a BuildPlutusTransaction in the given order: inline datum or datum hash, ref script, min-ADA each.
-   * Returns the inline datums given as CBOR, keyed by output index.
-   */
+  /** Appends the outputs in order and returns the CBOR inline datums by output index. */
   private _appendPlutusOutputs(outputs: TxOut[], list: PlutusTxOutput[]): CallerDatums {
     const callerDatums: CallerDatums = new Map();
     for (let i = 0; i < list.length; i++) {
@@ -858,11 +830,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return callerDatums;
   }
 
-  /**
-   * Min-ADA of an output, counting the caller's datum bytes where they are longer than
-   * Buildooor's encoding. `forAnyAmount` sizes the coin field for the largest amount, so the
-   * result stays valid once written into the output.
-   */
+  // Min-ADA also counts caller datum bytes that are longer than Buildooor's encoding.
+  // `forAnyAmount` sizes the coin field for the largest amount, so the result stays valid.
   private _minOutputLovelace(txOut: TxOut, callerDatum?: Uint8Array, forAnyAmount = false): bigint {
     const base = forAnyAmount
       ? this.txBuilder.minimizeLovelaces(txOut).value.lovelaces
@@ -948,18 +917,15 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  /**
-   * Build a script-bearing transaction with real execution units: Buildooor stamps local CEK
-   * budgets and ignores caller-supplied units, so build once, evaluate via Ogmios when available,
-   * rebuild with a fee floor for the target units, then stamp them and recompute scriptDataHash.
-   */
+  // Buildooor stamps local CEK budgets and ignores caller units. So build once, evaluate via Ogmios,
+  // rebuild with a fee floor for the target units, then stamp them and recompute scriptDataHash.
   private async _buildScriptTx(
     buildParams: ITxBuildArgs, evaluator?: TxEvaluator, callerDatums: CallerDatums = new Map(), witnessDatums: Uint8Array[] = []
   ): Promise<LedgerTx> {
     const pass1Failures: LocalEvalFailure[] = [];
     const tx1 = await this.txBuilder.build(buildParams, makeScriptBuildOpts(pass1Failures));
     if (!tx1) {
-      throw new TransactionValidationError('Buildooor txBuilder.build() returned null — check inputs, datum, and collateral configuration');
+      throw new TransactionValidationError('Buildooor txBuilder.build() returned null; check inputs, datum, and collateral configuration');
     }
     const rdmrs1 = tx1.witnesses.redeemers ?? [];
     if (rdmrs1.length === 0) {
@@ -972,7 +938,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       ? await this._evaluateExUnitsByRedeemer(toHex(tx1.toCbor()), evaluator)
       : undefined;
     if (!evaluator) {
-      logger.debug('No evaluator available — falling back to buffered local execution units');
+      logger.debug('No evaluator available, falling back to buffered local execution units');
     }
 
     const targets1 = this._resolveTargetExUnits(rdmrs1, evaluatedUnits, pass1Failures);
@@ -993,10 +959,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return writeWitnessDatums(tx, witnessDatums, this._languageViews(tx));
   }
 
-  /**
-   * Evaluate via Ogmios; returns cushioned budgets keyed `tag:index`, or undefined when the
-   * evaluation is unusable (transient failure, empty result). Validation errors are rethrown.
-   */
+  // Cushioned Ogmios budgets keyed `tag:index`. Undefined when the evaluation is unusable.
+  // Validation errors are rethrown.
   private async _evaluateExUnitsByRedeemer(
     evalTxCbor: string,
     evaluator: TxEvaluator
@@ -1040,10 +1004,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /**
-   * Cushion: relative multiplier for proportional drift on large validators, absolute floor
-   * for sub-percent drift on small ones.
-   */
+  // The multiplier covers drift on large validators, the absolute floor covers small ones.
   private _applyExUnitBuffer(mem: number | bigint, cpu: number | bigint): ExUnitsBig {
     return {
       mem: BigInt(Math.ceil(Number(mem) * EXECUTION_UNIT_BUFFER) + ABS_MEM_BUFFER),
@@ -1051,11 +1012,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  /**
-   * Execution units each redeemer must declare: max(local, Ogmios) when both exist, buffered
-   * local without Ogmios, Ogmios alone after a local failure; a local failure without Ogmios
-   * aborts because unreliable units would forfeit the signer's collateral.
-   */
+  // Per redeemer: max of local and Ogmios, else buffered local, else Ogmios after a local failure.
+  // A local failure without Ogmios aborts, since unreliable units would forfeit the collateral.
   private _resolveTargetExUnits(
     rdmrs: readonly TxRedeemer[],
     evaluatedUnits: Map<string, ExUnitsBig> | undefined,
@@ -1070,7 +1028,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
           throw new TransactionValidationError(
             `Plutus script failed local evaluation (redeemer ${txRedeemerTagToString(r.tag)}:${r.index}) ` +
             `and no Ogmios evaluation is available to certify its execution units. Refusing to return a ` +
-            `transaction with unreliable execution units — signing and submitting it would forfeit the collateral. ` +
+            `transaction with unreliable execution units. Signing and submitting it would forfeit the collateral. ` +
             `Configure an Ogmios backend for authoritative script evaluation, or fix the script/datum/redeemer. ` +
             `Script logs: [${failure.logs.join(', ')}]`
           );
@@ -1119,11 +1077,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return BigInt(this.txBuilder.protocolParamters.txFeePerByte);
   }
 
-  /**
-   * Replace the redeemers' execution units and recompute scriptDataHash with the raw chain
-   * cost-model arrays (TxBuilder.overrideTxRedeemers hashes with clamped named-key models,
-   * which mismatches once the on-chain cost model grows). Recomputed even when units match.
-   */
+  // Recomputes scriptDataHash with the raw chain cost-model arrays, even when units match.
+  // TxBuilder.overrideTxRedeemers hashes clamped models, which breaks once the chain model grows.
   private _stampExecUnits(tx: LedgerTx, targets: ExUnitsBig[]): LedgerTx {
     const rdmrs = tx.witnesses.redeemers ?? [];
     const unchanged = rdmrs.every((r, i) =>
@@ -1150,10 +1105,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return costModelsToLanguageViewCbor(this._languageViewCostModels(), this._usedLanguageViewOpts(tx));
   }
 
-  /**
-   * Check a witness datum against the datum hash its script UTxO is locked with: the ledger
-   * finds the datum by the hash of its bytes. Inline-datum UTxOs need no witness datum.
-   */
+  // The ledger finds a witness datum by the hash of its bytes, so it must match the UTxO's datum hash.
+  // Inline-datum UTxOs need no witness datum.
   private _checkWitnessDatum(utxo: OdatanoUtxo, datum: Uint8Array, field: string, hint: string): void {
     if (!utxo.datumHash || utxo.inlineDatum) return;
     const hash = datumHashOf(datum);
@@ -1164,11 +1117,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /**
-   * Language-view selection for scriptDataHash, mirroring Buildooor's initTxBuild
-   * (which flags the languages of *executed* scripts). This builder only attaches
-   * scripts inline, so the witness set carries every executed script.
-   */
+  // Mirrors Buildooor's initTxBuild, which flags the languages of executed scripts.
+  // Scripts are attached inline here, so the witness set carries every executed script.
   private _usedLanguageViewOpts(tx: LedgerTx): { mustHaveV1: boolean; mustHaveV2: boolean; mustHaveV3: boolean } {
     const w = tx.witnesses;
     const opts = {
@@ -1180,35 +1130,27 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return opts;
   }
 
-  /**
-   * Cost models for language-view hashing: named-key objects clamp the chain array to the
-   * parameter count this library release knows, but the ledger hashes every entry served,
-   * so raw chain arrays (passed through unclamped) are substituted where available.
-   */
+  // Named-key models are clamped to the parameter count the library knows.
+  // The ledger hashes every served entry, so the raw chain arrays win where available.
   private _languageViewCostModels(): CostModels {
     const models = this.txBuilder.protocolParamters.costModels;
     if (Object.keys(this.rawCostModelArrays).length === 0) return models;
     return { ...models, ...this.rawCostModelArrays } as CostModels;
   }
 
-  /**
-   * Run a build without the sender's reference-script UTxOs first; when that leaves the funds short
-   * and such UTxOs exist, build again with them in the pool (their script bytes then count in the fee).
-   */
+  // Builds without the sender's reference-script UTxOs first, since their script bytes raise the fee.
+  // When funds are short, builds again with them in the pool.
   private async _withRefScriptFallback(utxos: OdatanoUtxo[] | undefined, build: (includeRefScriptUtxos: boolean) => Promise<TxBuildResult>): Promise<TxBuildResult> {
     try {
       return await build(false);
     } catch (err: unknown) {
       if (!(err instanceof InsufficientFundsError) || !(utxos ?? []).some(hasRefScript)) throw err;
-      logger.info('Funds short without the reference-script UTxOs — building again with them in the coin-selection pool');
+      logger.info('Funds short without the reference-script UTxOs, building again with them in the coin-selection pool');
       return build(true);
     }
   }
 
-  /**
-   * Split UTxOs into forced inputs (must be consumed) and remaining candidates; forceInputs
-   * refs absent from utxos are ignored (existence is validated upstream).
-   */
+  // Forced inputs must be consumed. Refs absent from utxos are ignored, upstream validates them.
   private _partitionForcedInputs(
     utxos: OdatanoUtxo[],
     forceInputs?: Array<{ txHash: string; outputIndex: number }>,
@@ -1225,7 +1167,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const forcedKeys = new Set((forceInputs ?? []).map(key));
     // a UTxO cannot be spent and referenced in one transaction
     const clash = [...forcedKeys].find(k => referenced.has(k));
-    if (clash) throw new TransactionValidationError(`forceInputs ${clash} is also a reference input — a UTxO cannot be spent and referenced in one transaction`);
+    if (clash) throw new TransactionValidationError(`forceInputs ${clash} is also a reference input; a UTxO cannot be spent and referenced in one transaction`);
     const protectedClash = [...forcedKeys].find(k => protectedKeys.has(k));
     if (protectedClash) throw new TransactionValidationError(`forceInputs ${protectedClash} is also in protectInputs`);
     const forced: OdatanoUtxo[] = [];
@@ -1239,10 +1181,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return { forced, rest };
   }
 
-  /**
-   * Script of a withdrawal, certificate or mint: inline (swapped for a reference input that already
-   * carries the same hash), by reference, or none (key witness).
-   */
+  // Script of a withdrawal, certificate or mint. Inline scripts are swapped for a reference input
+  // with the same hash. No script means a key witness.
   private _resolveScriptWitness(
     w: { script?: string; referenceScript?: { txHash: string; outputIndex: number } },
     at: string,
@@ -1269,11 +1209,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return { refLedgerUtxo };
   }
 
-  /**
-   * Withdrawal credential hashes in ledger order, which `__WDRL_IDX__` resolves against. Buildooor
-   * numbers withdrawal redeemers by hash alone, so a scripted withdrawal whose position differs
-   * between the two orders would get the wrong redeemer; such a build is refused.
-   */
+  // Ledger order of withdrawal credential hashes, used by `__WDRL_IDX__`. Buildooor numbers
+  // withdrawal redeemers by hash alone, so a build where the two orders differ is refused.
   private _ledgerWithdrawalOrder(
     entries: ReadonlyArray<{ rewardAccount: StakeAddress; script?: Script; refLedgerUtxo?: LedgerUTxO }>
   ): string[] {
@@ -1294,11 +1231,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return ledger;
   }
 
-  /**
-   * Forced inputs of other key addresses: the owner's payment key hash must be a required signer,
-   * and every unit they bring must be spent by the outputs, so none of it lands in the sender's change.
-   * Script addresses are refused; those UTxOs are script inputs.
-   */
+  // A forced input of another key address needs its owner as required signer, and the outputs
+  // must spend all it brings so nothing lands in the sender's change. Script addresses are refused.
   private _checkForeignForcedInputs(forced: OdatanoUtxo[], req: TxBuildPlutusRequest): void {
     const sender = req.senderAddress.toLowerCase();
     const foreign = forced.filter(u => u.address.toLowerCase() !== sender);
@@ -1357,10 +1291,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return referenceInputUtxos.map(u => this._mapMultiAssetUtxoToLedgerUtxo(u));
   }
 
-  /**
-   * Funding contributed by extra outputs on a mint build: their summed lovelace plus, per asset
-   * unit, the demand the transaction's own positive mints do not cover.
-   */
+  // Extra outputs need their lovelace plus any asset amount the mints themselves do not cover.
   private _extraOutputsFundingAfterMint(
     mintActions: MintAction[],
     extraOutputs: NonNullable<TxBuildRequest['extraOutputs']>
@@ -1390,20 +1321,14 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return { lovelace, ...(assets.length > 0 ? { assets } : {}) };
   }
 
-  /**
-   * Script a mint action executes under: its per-action policy when set, else the request's
-   * top-level policy script.
-   */
+  /** Per-action policy script when set, else the request's policy script. */
   private _mintActionScript(action: MintAction, defaultScript: Script, index: number): Script {
     if (!action.mintingPolicyScript) return defaultScript;
     return this._parsePlutusV3Script(action.mintingPolicyScript, `mintActions[${index}].mintingPolicyScript`);
   }
 
-  /**
-   * Buildooor mint entries shared by all mint flows. `scriptFor` gives each action's policy, inline
-   * or as a reference-script UTxO. Each action may carry its own redeemer (falling back to the
-   * request-level one); the ledger holds ONE redeemer per policy, so actions on the same policy must agree.
-   */
+  // Mint entries for all mint flows. An action may carry its own redeemer, but the ledger holds
+  // one redeemer per policy, so actions on the same policy must agree.
   private _buildMintEntries(
     mintActions: MintAction[],
     scriptFor: (action: MintAction, index: number) => MintScriptSource,
@@ -1427,7 +1352,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const seen = redeemerByPolicy.get(policyId);
       if (seen !== undefined && seen !== redeemerFingerprint) {
         throw new Error(
-          `mint actions under policy ${policyId} carry different redeemers — the ledger allows one redeemer per policy; ` +
+          `mint actions under policy ${policyId} carry different redeemers; the ledger allows one redeemer per policy; ` +
           'split them into separate transactions or align the redeemers'
         );
       }
@@ -1440,10 +1365,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     });
   }
 
-  /**
-   * Context for insufficient-funds rejections after the collateral partition: the builder's
-   * message counts only the funding pool, so the reservation would otherwise be invisible.
-   */
+  // The builder's insufficient-funds message counts only the funding pool.
+  // This context makes the collateral reservation visible.
   private _collateralPartitionContext(collateralUtxos: LedgerUTxO[], fundingUtxos: OdatanoUtxo[], forced: OdatanoUtxo[] = []): string {
     const fundingLovelace = fundingUtxos.reduce((s, u) => s + getLovelace(u), 0n);
     if (collateralUtxos.length === 0) {
@@ -1459,14 +1382,9 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       `${fundingUtxos.length} UTxO(s) with ${fundingLovelace} lovelace for coin selection`;
   }
 
-  /**
-   * Pick the smallest ADA-only UTxO covering COLLATERAL_LOVELACE as collateral and return the
-   * rest as funding; excess above the floor goes back via collateralReturn when it meets min-ADA
-   * (Buildooor sets no collateralReturn for ADA-only collateral). Throws without an ADA-only UTxO.
-   * When the rest cannot pay `requiredLovelace` plus fee and change, the collateral UTxO is
-   * funding too. The ledger allows one UTxO as input and as collateral.
-   * When no UTxO in `utxos` covers the floor, a forced input of the sender that does is the collateral.
-   */
+  // Smallest ADA-only UTxO covering COLLATERAL_LOVELACE, else a forced sender input. Buildooor sets no
+  // collateralReturn for it, so the excess is returned here. When funds are short the collateral
+  // UTxO also funds the transaction, which the ledger allows.
   private _setupCollateral(utxos: OdatanoUtxo[], requiredLovelace: bigint, forced: OdatanoUtxo[] = [], senderAddress = ''): {
     collateralUtxos: LedgerUTxO[]; fundingUtxos: OdatanoUtxo[];
     collateralReturn?: { address: Address; value: Value };
@@ -1491,7 +1409,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     if (getLovelace(chosen) < COLLATERAL_LOVELACE) {
       logger.warn(
         `Largest ADA-only UTxO (${getLovelace(chosen)} lovelace) is below the ${COLLATERAL_LOVELACE} lovelace ` +
-        `collateral floor — the node will reject the transaction if collateralPercentage × fee exceeds it`
+        `collateral floor; the node will reject the transaction if collateralPercentage × fee exceeds it`
       );
     }
 
@@ -1548,11 +1466,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return new TxOut(params);
   }
 
-  /**
-   * Parse a CBOR-wrapped Plutus script and reject UPLC 1.0.0 code (V1/V2): Script.fromCbor
-   * defaults to V3 and would hash with the 0x03 prefix, giving a silently wrong script hash.
-   * The UPLC version is the first three flat naturals of the unwrapped script: [1,0,0] vs [1,1,0].
-   */
+  // Rejects UPLC 1.0.0 code. Script.fromCbor assumes V3 and would give a wrong script hash.
+  // The UPLC version is the first three flat naturals of the unwrapped script.
   private _parsePlutusV3Script(hex: string, field: string): Script {
     let script: Script;
     try {
@@ -1564,7 +1479,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const b = script.bytes;
     if (b.length >= 3 && b[0] === 1 && b[1] === 0 && b[2] === 0) {
       throw new TransactionValidationError(
-        `${field} contains UPLC 1.0.0 code (PlutusV1/V2) — ODATANO builds Plutus V3 transactions only. ` +
+        `${field} contains UPLC 1.0.0 code (PlutusV1/V2). ODATANO builds Plutus V3 transactions only. ` +
         `Hashing it as V3 would yield a different script hash (wrong policy ID / unspendable address).`
       );
     }
@@ -1577,27 +1492,24 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return ledgerScript(this._parsePlutusV3Script(hex, 'referenceScript'));
   }
 
-  /**
-   * Map an input UTxO's reference script to a Script: `scriptRefCbor` (Ogmios), else a full-CBOR
-   * `scriptRef` (Koios). With the hash and size only (Blockfrost, the tables) a placeholder of
-   * that size stands in, so the fee counts its bytes; without the size nothing can be counted.
-   */
+  // Uses `scriptRefCbor`, else a full-CBOR `scriptRef`. With hash and size only, a placeholder
+  // of that size stands in so the fee counts its bytes.
   private _buildInputRefScript(utxo: OdatanoUtxo): Script | undefined {
     const cbor = utxo.scriptRefCbor ?? (utxo.scriptRef && utxo.scriptRef.length > 56 ? utxo.scriptRef : undefined);
     if (!cbor) {
       if (utxo.scriptRef && utxo.scriptRefSize) {
-        logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash and size only — fee counts ${utxo.scriptRefSize} bytes, local Plutus eval will not see the script`);
+        logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash and size only; fee counts ${utxo.scriptRefSize} bytes, local Plutus eval will not see the script`);
         return sizePlaceholderScript(utxo.scriptRefSize);
       }
-      if (utxo.scriptRef) logger.warn(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only — its reference-script fee cannot be counted, the node may reject the transaction as underpaid`);
+      if (utxo.scriptRef) logger.warn(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash only; its reference-script fee cannot be counted, the node may reject the transaction as underpaid`);
       return undefined;
     }
     try {
       const script = ledgerScript(Script.fromCbor(Buffer.from(cbor, 'hex')));
-      // chain data, not consumer input — warn instead of rejecting
+      // Chain data, not consumer input, so warn instead of rejecting.
       const b = script.bytes;
       if (b.length >= 3 && b[0] === 1 && b[1] === 0 && b[2] === 0) {
-        logger.warn(`Input refScript on ${utxo.txHash}#${utxo.outputIndex} is UPLC 1.0.0 (PlutusV1/V2) — treated as V3, local eval may misbehave`);
+        logger.warn(`Input refScript on ${utxo.txHash}#${utxo.outputIndex} is UPLC 1.0.0 (PlutusV1/V2), treated as V3, local eval may misbehave`);
       }
       return script;
     } catch (err: unknown) {
@@ -1607,10 +1519,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /**
-   * Post-sort input order so __INPUT_IDX__ placeholders resolve to the indices Buildooor assigns
-   * in build(): all inputs (script, forced, funding) sorted lexicographically on (txHash, outputIndex).
-   */
+  // Buildooor sorts all inputs by txHash and outputIndex. __INPUT_IDX__ resolves against that order.
   private _computeSortedInputs(
     scriptUtxoRefs: Array<{ txHash: string; outputIndex: number }>,
     forcedUtxos: OdatanoUtxo[],
@@ -1646,10 +1555,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }));
   }
 
-  /**
-   * Append parsed extra outputs, enforcing min-ADA per entry; the rejection names the
-   * required min-ADA so consumers can adjust without inspecting Buildooor internals.
-   */
+  /** Appends extra outputs. A rejection names the required min-ADA. */
   private _appendExtraOutputs(
     outputs: TxOut[],
     extraOutputs?: TxBuildRequest['extraOutputs']
@@ -1674,10 +1580,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   // UTxO Mapping & Configuration Helpers
   //---------------------------------------------------------------------------
 
-  /**
-   * Validity window (slots) from the request. Script builds default to `now - 2 min` / `now + 1 h`;
-   * plain transfers pass explicit bounds through without defaulting.
-   */
+  // Script builds default to two minutes ago until one hour ahead.
+  // Plain transfers pass only explicit bounds through.
   private _resolveValiditySlots(req: Pick<TxBuildRequest, 'validityStartMs' | 'validityEndMs'>, mode: 'script' | 'passthrough'): { invalidBefore?: bigint; invalidAfter?: bigint } {
     const hasStart = req.validityStartMs !== undefined && req.validityStartMs !== null && req.validityStartMs !== '';
     const hasEnd = req.validityEndMs !== undefined && req.validityEndMs !== null && req.validityEndMs !== '';
@@ -1702,11 +1606,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     };
   }
 
-  /**
-   * Map LedgerProtocolParameter to Buildooor's ProtocolParameters. Every field is null-guarded so a
-   * missing value keeps the library default instead of degrading to 0 (e.g. utxoCostPerByte = 0
-   * disables min-ADA); cost models and ExUnit prices feed scriptDataHash and the fee math.
-   */
+  // A missing value keeps the library default instead of 0. For example, utxoCostPerByte = 0
+  // would disable min-ADA.
   private _mapLedgerParametersToBuildooorParams(protocolParameters: LedgerProtocolParameter): ProtocolParameters {
     const pp = protocolParameters;
     const d = defaultProtocolParameters;
@@ -1754,7 +1655,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       mapped.costModels = costModels;
     } else {
       logger.warn(
-        'Protocol parameters carry no usable cost models — keeping library defaults. ' +
+        'Protocol parameters carry no usable cost models; keeping library defaults. ' +
         'scriptDataHash of script transactions may not match the ledger (PPViewHashesDontMatch risk).'
       );
     }
@@ -1762,11 +1663,8 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return mapped;
   }
 
-  /**
-   * Parse the cost-models JSON (keys 'PlutusVN', 'plutus:vN' or 'PlutusScriptVN') into Buildooor's
-   * CostModels; undefined when nothing usable is found. Also (re)sets this.rawCostModelArrays with
-   * the unclamped chain arrays, which the scriptDataHash must cover (see _languageViewCostModels).
-   */
+  // Accepts the keys 'PlutusVN', 'plutus:vN' and 'PlutusScriptVN'. Also resets rawCostModelArrays,
+  // since the scriptDataHash must cover the unclamped chain arrays.
   private _mapCostModels(costModelsJson: string | null | undefined): CostModels | undefined {
     this.rawCostModelArrays = {};
     if (!costModelsJson) return undefined;
@@ -1784,7 +1682,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       PlutusV2: 'PlutusScriptV2', 'plutus:v2': 'PlutusScriptV2', PlutusScriptV2: 'PlutusScriptV2',
       PlutusV3: 'PlutusScriptV3', 'plutus:v3': 'PlutusScriptV3', PlutusScriptV3: 'PlutusScriptV3',
     };
-    // Buildooor's CEK Machine rejects array-form cost models — convert to named-key objects.
+    // Buildooor's CEK machine rejects array-form cost models, so convert them to named-key objects.
     const result: Record<string, unknown> = {};
     const rawArrays: RawCostModelArrays = {};
     for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
@@ -1799,13 +1697,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         // the hash falls back to the clamped named-key form for this version.
         if (arr.every(Number.isFinite)) rawArrays[target] = arr;
       } catch {
-        logger.warn(`Cost-model array for ${key} has unexpected length (${value.length}) — skipping`);
+        logger.warn(`Cost-model array for ${key} has unexpected length (${value.length}), skipping`);
       }
     }
     if (Object.keys(result).length === 0) return undefined;
     if (!isCostModels(result)) {
-      // Buildooor would silently substitute default cost models — surface it instead.
-      logger.warn('Mapped cost models failed Buildooor validation — keeping library defaults');
+      // Buildooor would silently substitute default cost models, so surface it instead.
+      logger.warn('Mapped cost models failed Buildooor validation, keeping library defaults');
       return undefined;
     }
     this.rawCostModelArrays = rawArrays;
@@ -1860,7 +1758,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     for (const [label, value] of Object.entries(metadataJson)) {
       if (!/^\d+$/.test(label)) {
         throw new TransactionValidationError(
-          `Invalid metadata label "${label}" — labels must be non-negative integers`
+          `Invalid metadata label "${label}": labels must be non-negative integers`
         );
       }
       metadata[Number(label)] = this._jsonToTxMetadatum(value, label);
@@ -1869,16 +1767,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return new TxMetadata(metadata);
   }
 
-  /**
-   * Recursively convert a JSON value to TxMetadatum, enforcing ledger rules: integers only, text/bytes
-   * over 64 BYTES chunked into a list, "0x..." strings become bytes, over-long map keys rejected.
-   * @param path label-rooted position of `value` (e.g. "721.files[0].src"), named in every rejection
-   */
+  // Ledger rules: integers only, text over 64 bytes is chunked into a list, "0x" strings become bytes.
+  // `path` is the position of `value`, for example "721.files[0].src", named in every rejection.
   private _jsonToTxMetadatum(value: JSONValue, path: string): TxMetadatum {
     if (typeof value === 'number' || typeof value === 'bigint') {
       if (typeof value === 'number' && !Number.isInteger(value)) {
         throw new TransactionValidationError(
-          `Metadata numbers must be integers (got ${value} at ${path}) — encode decimals as strings`
+          `Metadata numbers must be integers (got ${value} at ${path}); encode decimals as strings`
         );
       }
       return new TxMetadatumInt(BigInt(value));
@@ -1921,7 +1816,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
     throw new TransactionValidationError(
       `Unsupported metadata value type: ${value === null ? 'null' : typeof value} at ${path}` +
-      (typeof value === 'boolean' ? ' — on-chain metadata has no boolean; encode as string or 0/1' : '')
+      (typeof value === 'boolean' ? '; on-chain metadata has no boolean, encode as string or 0/1' : '')
     );
   }
 }

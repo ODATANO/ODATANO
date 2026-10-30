@@ -1,31 +1,8 @@
 using {odatano.cardano as db} from '../db/schema';
 
-/**
- * Cardano Agent Service (v2.0)
- *
- * Agent grants: scoped, budgeted bearer capabilities an Admin hands to an agent
- * instead of a full user.
- *
- * - CreateAgentGrant / UpdateAgentGrant / RotateAgentGrantToken / RevokeAgentGrant:
- *   Admin-only administration, rate limited per principal per hour
- *   (AGENT_GRANT_ADMIN_RATE_LIMIT, default 10). The token is returned ONCE from
- *   CreateAgentGrant and RotateAgentGrantToken and stored as SHA-256 only.
- * - AgentGrants: Admin-only projection (no token hash). A request carrying a token
- *   runs as the principal `agent:<grantId>` with the role `agent-grant` and sees
- *   exactly its own row through the row-level restriction below.
- * - GetGrantStatus: token self-service — what am I allowed to do, how much budget
- *   is left, when do I expire. What an MCP tool needs to describe itself honestly.
- * - GetGrantUsage: admitted calls per service and action over a window — an Admin
- *   for any grant, a token for its own (a partner usage view, ledger reconciliation).
- *
- * A token request never inherits the operator's roles: `@requires: 'Admin'` on the
- * four actions, on PauseWorker / ResumeWorker / pauseCrawler / resumeCrawler and on
- * every other Admin surface therefore refuses it by construction. The allow list,
- * wallet pinning and daily budget are enforced by a before('*') hook on all six
- * ODATANO services (srv/utils/agent-grants.ts). The `x-agent-token` header only
- * reaches the services when cds.requires.odatano-core.agentGrants.enabled is set
- * (srv/utils/agent-token-auth.ts).
- */
+// Agent grants: scoped, budgeted bearer tokens an Admin issues instead of a full user.
+// A token request runs as `agent:<grantId>` with the role `agent-grant`, so every Admin gate refuses it.
+// The allow list, wallet binding and daily budget are enforced in srv/utils/agent-grants.ts.
 @requires: 'authenticated-user'
 service CardanoAgentService @(impl: './cardano-agent-service') {
 
@@ -64,7 +41,7 @@ service CardanoAgentService @(impl: './cardano-agent-service') {
     }
 
     @title      : 'Get Grant Status'
-    @description: 'The calling token''s own grant: allow list, wallet, remaining daily budget, expiry. 400 without a token — an operator lists AgentGrants instead.'
+    @description: 'The calling token''s own grant: allow list, wallet, remaining daily budget, expiry. 400 without a token; an operator lists AgentGrants instead.'
     function GetGrantStatus() returns GrantStatus;
 
     @title      : 'Create Agent Grant'

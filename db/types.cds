@@ -24,8 +24,8 @@ type AssetAmount      : Decimal(38, 0);
 type AssetUnit        : String(120);
 
 @title      : 'Metadata Label'
-@description: 'Metadata label as string — a uint64 (0 .. 18446744073709551615, up to 20 digits)'
-type MetadataLabel    : String(20); // was String(5): truncated labels above 5 digits
+@description: 'Metadata label as string: a uint64 (0 .. 18446744073709551615, up to 20 digits)'
+type MetadataLabel    : String(20);
 
 @title      : 'Bech32 Address'
 @description: 'Bech32 encoded address string'
@@ -89,7 +89,7 @@ type AssetSumSlice {
 type MetadataSlice {
 
     @title      : 'Metadata Label'
-    @description: 'Metadata label as string — a uint64 (0 .. 18446744073709551615, up to 20 digits)'
+    @description: 'Metadata label as string: a uint64 (0 .. 18446744073709551615, up to 20 digits)'
     label   : MetadataLabel;
 
     @title      : 'Metadata Payload'
@@ -188,14 +188,31 @@ type WalletJobKind    : String(12) enum {
     multiAsset = 'multiAsset'; // BuildMultiAssetTransaction payload
     mint = 'mint'; // BuildMintTransaction payload
     plutusSpend = 'plutusSpend'; // BuildPlutusSpendTransaction payload
-    submitSigned = 'submitSigned'; // externally signed CBOR — managed submit + confirm only
+    submitSigned = 'submitSigned'; // externally signed CBOR, managed submit and confirm only
 }
 
 @title      : 'Worker Signer Type'
 @description: 'Enum type for how a worker wallet signs transactions'
 type WorkerSignerType : String(10) enum {
-    hsm = 'hsm'; // PKCS#11 HSM (production) — keys never leave the module
+    hsm = 'hsm'; // PKCS#11 HSM for production, keys never leave the module
     software = 'software'; // operator-configured Ed25519 key (dev/test)
+}
+
+@title      : 'Cardano Network'
+@description: 'Enum type for the Cardano networks a deployment can target'
+type CardanoNetwork   : String(10) enum {
+    mainnet = 'mainnet';
+    preview = 'preview';
+    preprod = 'preprod';
+}
+
+@title      : 'UTxO Set Import Source'
+@description: 'Enum type for where importUtxoSet reads the UTxO set from'
+type UtxoSetImportSource : String(12) enum {
+    ogmios = 'ogmios';
+    file = 'file';
+    aggregates = 'aggregates';
+    scripts = 'scripts';
 }
 
 // -----------------------------------------------------

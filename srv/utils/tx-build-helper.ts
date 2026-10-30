@@ -30,10 +30,7 @@ export function assertAdaOnly(u: OdatanoUtxo): void {
   }
 }
 
-/**
- * Transaction hash of a signed or unsigned tx CBOR: blake2b-256 over the body bytes, so witnesses do not affect it.
- * @returns 64-char hex string
- */
+/** Transaction hash: blake2b-256 over the body bytes, so witnesses do not affect it. */
 export function getTxHashFromCbor(txCbor: string): string {
   if (!txCbor || typeof txCbor !== 'string') {
     throw new Error('Invalid input: txCbor must be a non-empty string');
@@ -65,10 +62,8 @@ export interface TxCacheTargets {
   outputAddresses: string[];
 }
 
-/**
- * Consumed input refs and output addresses of a tx CBOR: the UTxO-cache rows a submit makes stale.
- * Outputs whose address bytes cannot be decoded (Byron) are skipped.
- */
+// Consumed inputs and output addresses, i.e. the UTxO-cache rows a submit makes stale.
+// Outputs with undecodable Byron addresses are skipped.
 export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   let body: CborMap;
   try {
@@ -120,11 +115,8 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   return { inputs, outputAddresses: [...outputAddresses] };
 }
 
-/**
- * Maps Buildooor errors to typed BackendErrors. Asset unit is parsed from "not enough <unit>" when not given;
- * `context` (e.g. the collateral partition) is appended to the consumer-facing message.
- * `requestedOutputs` is the number of outputs the caller asked for; Buildooor appends the change after them.
- */
+// Maps Buildooor errors to typed BackendErrors. `context` is appended to the message.
+// `requestedOutputs` counts the caller's outputs. Buildooor appends the change after them.
 export function mapBuilderError(err: unknown, assetUnit?: string, context?: string, requestedOutputs?: number): never {
   // Typed errors keep their own status and payload
   if (err instanceof BackendError) {
@@ -225,19 +217,22 @@ function normalizeConstructorKey(obj: Record<string, unknown>): Record<string, u
 /** JSON (`int` / `bytes` / `list` / `map` / `constructor`|`constr`) to Buildooor PlutusData. */
 export function jsonToPlutusData(json: JSONValue): Data {
   if (json === null || json === undefined) {
-    throw new Error('PlutusData JSON cannot be null or undefined');
+    throw new TransactionValidationError('PlutusData JSON cannot be null or undefined');
   }
   if (typeof json === 'object' && !Array.isArray(json)) {
     const normalized = normalizeConstructorKey(json);
-    return dataFromJson(normalized);
+    try {
+      return dataFromJson(normalized);
+    } catch (err) {
+      // request data: a shape Buildooor cannot read is the caller's mistake, not a server fault
+      throw new TransactionValidationError(`Invalid PlutusData JSON: ${err instanceof Error ? err.message : String(err)}`, err);
+    }
   }
-  throw new Error(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);
+  throw new TransactionValidationError(`Unsupported PlutusData JSON format: expected an object with "int", "bytes", "list", "map", or "constructor" key`);
 }
 
-/**
- * Backend inline datum to lowercase CBOR hex: hex string (Blockfrost), `{ bytes, value }` wrapper (Koios)
- * or raw PlutusData JSON. Returns null on unknown shapes instead of throwing.
- */
+// Accepts a hex string, the `{ bytes, value }` wrapper of Koios, or PlutusData JSON.
+// Returns null on unknown shapes instead of throwing.
 export function inlineDatumToHex(datum: unknown): string | null {
   if (datum === null || datum === undefined) return null;
 
@@ -276,11 +271,8 @@ export function inlineDatumToHex(datum: unknown): string | null {
 /** UPLC type tag for a typed script parameter (see {@link encodeScriptParam}). */
 export type ScriptParamUplcType = 'data' | 'bytes' | 'int' | 'bool' | 'unit';
 
-/**
- * Encode a script parameter as the UPLC constant of the type the validator expects: typed
- * `{ uplc: data|bytes|int|bool|unit, value }` for native-typed params, or a bare PlutusData object
- * (Aiken / CIP-57 convention) as shorthand for `uplc: "data"`.
- */
+// Typed form is `{ uplc, value }` with uplc one of data, bytes, int, bool or unit.
+// A bare PlutusData object, the CIP-57 convention, is shorthand for `uplc: "data"`.
 export function encodeScriptParam(param: JSONValue): UPLCConst {
   if (
     param !== null &&
@@ -294,43 +286,39 @@ export function encodeScriptParam(param: JSONValue): UPLCConst {
         return UPLCConst.data(jsonToPlutusData(value as JSONValue));
       case 'bytes': {
         if (typeof value !== 'string' || !/^([0-9a-fA-F]{2})*$/.test(value)) {
-          throw new Error('Script param of uplc type "bytes" requires an even-length hex string "value"');
+          throw new TransactionValidationError('Script param of uplc type "bytes" requires an even-length hex string "value"');
         }
         return UPLCConst.byteString(fromHex(value));
       }
       case 'int': {
         if (typeof value !== 'number' && typeof value !== 'string') {
-          throw new Error('Script param of uplc type "int" requires a number or numeric-string "value"');
+          throw new TransactionValidationError('Script param of uplc type "int" requires a number or numeric-string "value"');
         }
         let n: bigint;
         try {
           n = BigInt(value as string | number);
         } catch {
-          throw new Error(`Script param of uplc type "int" has a non-integer "value": ${String(value)}`);
+          throw new TransactionValidationError(`Script param of uplc type "int" has a non-integer "value": ${String(value)}`);
         }
         return UPLCConst.int(n);
       }
       case 'bool': {
         if (typeof value !== 'boolean') {
-          throw new Error('Script param of uplc type "bool" requires a boolean "value"');
+          throw new TransactionValidationError('Script param of uplc type "bool" requires a boolean "value"');
         }
         return UPLCConst.bool(value);
       }
       case 'unit':
         return UPLCConst.unit;
       default:
-        throw new Error(`Unknown script param uplc type "${String(uplc)}"; expected one of: data, bytes, int, bool, unit`);
+        throw new TransactionValidationError(`Unknown script param uplc type "${String(uplc)}"; expected one of: data, bytes, int, bool, unit`);
     }
   }
   // Bare PlutusData: apply as Data
   return UPLCConst.data(jsonToPlutusData(param));
 }
 
-/**
- * Apply parameters to a parameterized PlutusV3 script (CBOR-wrapped flat UPLC): each parameter becomes a
- * UPLC Application around the program body, encoded via {@link encodeScriptParam}.
- * @returns CBOR hex of the applied script
- */
+/** Wraps the program body in one UPLC application per parameter. Returns the script CBOR hex. */
 export function applyScriptParameters(scriptHex: string, params: JSONValue[]): string {
   if (!Array.isArray(params) || params.length === 0) {
     throw new Error('Script parameters must be a non-empty array');
@@ -354,11 +342,8 @@ export function applyScriptParameters(scriptHex: string, params: JSONValue[]): s
   return toHex(cborEncoded);
 }
 
-/**
- * Script hash of a Plutus script, CBOR-wrapped once or twice as cardano-cli writes it:
- * blake2b-224 over the language byte and the once-wrapped CBOR. The version cannot be read
- * from the script, so the caller names it.
- */
+// blake2b-224 over the language byte and the once-wrapped CBOR. Accepts cardano-cli's double wrap.
+// The version cannot be read from the script, so the caller names it.
 export function plutusScriptHash(scriptHex: string, version: 'plutusV2' | 'plutusV3'): string {
   if (version !== 'plutusV2' && version !== 'plutusV3') {
     throw new TransactionValidationError(`version must be plutusV2 or plutusV3, got ${String(version)}`);

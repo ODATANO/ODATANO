@@ -47,10 +47,8 @@ export interface TxOutputLine {
   referenceScriptType?: ReferenceScriptType | null;
 }
 
-/**
- * Normalized certificate kinds; unknown types pass through as the raw source string. A Conway
- * stake+vote delegation is split into `pool_delegation` + `vote_delegation` sharing one `certIndex`.
- */
+// Unknown types pass through as the raw source string. A Conway stake and vote delegation
+// becomes two rows, pool_delegation and vote_delegation, with one certIndex.
 export type CertificateKind =
   | 'stake_registration'
   | 'stake_deregistration'
@@ -129,20 +127,13 @@ export interface Transaction {
   /** What the ledger charged: the declared fee, or on a phase-2 failure the collateral consumed. */
   fee: Lovelace | string;
   deposit: Lovelace | string;
-  /**
-   * True when phase-2 failed: inputs/outputs not applied, collateral consumed, only the collateral
-   * return produced. Ogmios (`spends`) and Blockfrost (`valid_contract`) report it; Koios leaves it undefined.
-   */
+  /** True when phase 2 failed and only collateral was consumed. Undefined when the source does not report it. */
   spendsCollaterals?: boolean;
-  /**
-   * `total_collateral` from the body when declared; equals the collateral consumed on a phase-2 failure.
-   * Null when omitted, the charge is then derived from the resolved collateral inputs minus the return.
-   */
+  // null = not declared, the charge is then collateral inputs minus the return.
+  // Equals the collateral consumed on a phase-2 failure.
   totalCollateral?: Lovelace | string | null;
-  /**
-   * Signed net mint/burn per unit (negative = burn), never `lovelace`. Ogmios and Koios report it;
-   * Blockfrost leaves it undefined and the indexer derives it from resolved input/output assets.
-   */
+  // Net mint per unit, negative for a burn, never lovelace.
+  // Undefined when the source lacks it, then the indexer derives it from inputs and outputs.
   mint?: Amount[];
   /** Tx size in bytes; null when the source cannot provide it (Ogmios chain-sync). */
   size: number | null;
@@ -386,17 +377,13 @@ export type MintAction = {
   quantity: bigint;
   /** Optional integer redeemer, default 0 */
   redeemer?: number;
-  /**
-   * Per-action minting policy (CBOR hex, applied as-is) for multi-policy transactions; overrides the
-   * top-level mintingPolicyScript. The assetUnit must carry this script's policyId.
-   */
+  // CBOR hex; optional; policy for this action, overrides mintingPolicyScript.
+  // The assetUnit must carry this script's policyId.
   mintingPolicyScript?: string;
   /** BuildPlutusTransaction only: UTxO that carries the policy as reference script; exclusive with mintingPolicyScript. */
   referenceScript?: { txHash: string; outputIndex: number };
-  /**
-   * Per-action redeemer (parsed PlutusData JSON), only with mintingPolicyScript or referenceScript; falls back to mintRedeemer.
-   * Actions on the same policy must agree (one redeemer per policy in the ledger).
-   */
+  // PlutusData JSON; default mintRedeemer; needs mintingPolicyScript or referenceScript.
+  // Actions on one policy must agree, because the ledger has one redeemer per policy.
   redeemerJson?: JSONValue;
 };
 
@@ -448,10 +435,7 @@ export type TxBuildRequest = {
   mintRedeemer?: JSONValue;
   /** When true, route output to enterprise script address derived from applied script hash */
   lockOnScript?: boolean;
-  /**
-   * UTxOs that must be consumed, added before coin selection (one-shot minting seeds);
-   * deduplicated against plutusScriptExecution.scriptUtxo.
-   */
+  /** UTxOs that must be spent, such as one-shot minting seeds. Added before coin selection. */
   forceInputs?: Array<{ txHash: string; outputIndex: number }>;
   /** UTxOs the build must never spend: left out of coin selection and collateral. */
   protectInputs?: Array<{ txHash: string; outputIndex: number }>;
@@ -510,10 +494,8 @@ export type PlutusTxOutput = NonNullable<TxBuildRequest['extraOutputs']>[number]
   inlineDatumCbor?: string;
 };
 
-/**
- * Reward-account withdrawal of a BuildPlutusTransaction. A staking script (inline or by reference)
- * runs with the redeemer under the Reward purpose; without a script the stake key signs.
- */
+// Withdrawal for BuildPlutusTransaction. A staking script runs with the redeemer.
+// Without a script the stake key signs.
 export type WithdrawalInput = {
   /** Bech32 reward account (stake address). */
   rewardAddress: string;
@@ -529,11 +511,8 @@ export type WithdrawalInput = {
   redeemerCbor?: string;
 };
 
-/**
- * Stake-credential certificate of a BuildPlutusTransaction. A registration without a script is the
- * witness-free legacy form (key or script credential); with a script the Conway deposit form, run
- * under the Certifying purpose. A deregistration needs the key's witness or the script.
- */
+// Stake certificate for BuildPlutusTransaction. Registration without a script uses the witness-free
+// legacy form, with a script the Conway deposit form. Deregistration needs the key's witness or the script.
 export type CertificateInput = {
   type: 'registerStake' | 'deregisterStake';
   /** Bech32 stake address of the credential. */

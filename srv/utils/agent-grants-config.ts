@@ -1,10 +1,7 @@
 import cds from '@sap/cds';
 
-/**
- * Agent-grant feature switch from `cds.requires.odatano-core.agentGrants`, else the environment
- * (AGENT_GRANTS_ENABLED, AGENT_GRANTS_DELEGATE, AGENT_GRANT_ADMIN_RATE_LIMIT). Own module because
- * src/plugin.ts reads it at plugin load, before any blockchain module is required.
- */
+// Read from `cds.requires.odatano-core.agentGrants`, else from AGENT_GRANT* env vars.
+// Own module because src/plugin.ts reads it before any blockchain module loads.
 export interface AgentGrantsConfig {
   enabled: boolean;
   /** CAP auth kind the transport middleware delegates to for non-token requests. */
@@ -17,10 +14,8 @@ export const AGENT_GRANTS_DELEGATES: readonly string[] = ['mocked', 'basic', 'jw
 
 export const AGENT_GRANT_ADMIN_RATE_LIMIT_DEFAULT = 10;
 
-/**
- * Grant-administration calls per principal per hour: `agentGrants.adminRateLimit`, then
- * `AGENT_GRANT_ADMIN_RATE_LIMIT`, default 10. An unusable value is logged and falls back, never disables the feature.
- */
+// Grant administration calls per principal per hour. An invalid value logs a warning
+// and falls back to the default. It never disables the feature.
 export function loadGrantAdminRateLimit(env: Record<string, string | undefined> = process.env): number {
   const cfg = envRecord();
   const raw = cfg.adminRateLimit !== undefined ? cfg.adminRateLimit : env.AGENT_GRANT_ADMIN_RATE_LIMIT;
@@ -37,10 +32,8 @@ export function loadGrantAdminRateLimit(env: Record<string, string | undefined> 
 
 export const AGENT_TOKEN_CACHE_MS_DEFAULT = 10_000;
 
-/**
- * How long the transport lane reuses a resolved grant row before re-reading the DB: `agentGrants.tokenCacheMs`,
- * then `AGENT_TOKEN_CACHE_MS`, default 10 s, 0 disables. Bounds how late a revoke on another replica takes effect.
- */
+// How long a resolved grant row is reused before the DB is read again. 0 disables the cache.
+// This bounds how late a revoke on another replica takes effect.
 export function loadTokenCacheMs(env: Record<string, string | undefined> = process.env): number {
   const cfg = envRecord();
   const raw = cfg.tokenCacheMs !== undefined ? cfg.tokenCacheMs : env.AGENT_TOKEN_CACHE_MS;
@@ -102,11 +95,8 @@ export function loadAgentGrantsConfig(env: Record<string, string | undefined> = 
 /** Once-per-process marker on the `cds` singleton; a module-level flag would not survive a double load. */
 const ACTIVATED = Symbol.for('odatano.agentGrants.activated');
 
-/**
- * Switch agent grants on when configured: installs @odatano/cap-auth with the `x-agent-token` lane
- * (previous strategy kept as delegate) and attaches the enforcement hook to each service on `serving`.
- * Called from src/plugin.ts and srv/server.ts, before cds.server() builds middlewares. Never throws.
- */
+// Installs @odatano/cap-auth with the `x-agent-token` lane and keeps the old strategy as delegate.
+// Must run before cds.server() builds middlewares. Never throws.
 export function activateAgentGrants(): boolean {
   const facade = cds as unknown as Record<symbol, boolean | undefined>;
   if (facade[ACTIVATED] !== undefined) return facade[ACTIVATED] === true;

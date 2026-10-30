@@ -1,8 +1,5 @@
-/**
- * `x-agent-token` transport lane: a token on a service path runs as `agent:<grantId>` with
- * role `agent-grant` (unknown 401, expired 410); other paths fall through to the delegate.
- * Failed attempts are throttled per client address (20 per 15 minutes).
- */
+// A token on a service path runs as `agent:<grantId>` with role `agent-grant`. Other paths go to the delegate.
+// Unknown tokens get 401, expired ones 410. Failed attempts are throttled per client address.
 
 import cds from '@sap/cds';
 import { inLaneOf, requestPath, respondError, type TransportLane } from '@odatano/cap-auth';

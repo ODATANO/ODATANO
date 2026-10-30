@@ -1,13 +1,7 @@
 #!/usr/bin/env node
-// Copy an ODATANO SQLite database into PostgreSQL (offline data migration: stop
-// every writer first). Rows are inserted through CAP so types convert the way the
-// runtime expects; views are skipped; per-table row counts are compared at the end.
-//
-//   node scripts/migrate-sqlite-to-postgres.mjs --from /data/db.sqlite --to postgres://user:pw@host:5432/db [--dry-run] [--force] [--ignore-unknown] [--batch 500]
-//
-// Defaults: --from ODATANO_DB_PATH or /data/db.sqlite, --to ODATANO_DB_URL.
-// The deployed target must be empty unless --force (appends; duplicate keys fail).
-// Source tables the model does not define stop the run unless --ignore-unknown.
+// Copies an ODATANO SQLite database into PostgreSQL through CAP. Stop every writer first.
+// The target must be empty unless --force, which appends. Unknown source tables stop the run
+// unless --ignore-unknown. Row counts per table are compared at the end.
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';

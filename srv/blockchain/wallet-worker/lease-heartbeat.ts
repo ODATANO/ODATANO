@@ -3,21 +3,15 @@ import { WORKER_LEASE_TTL_MS } from './job-store';
 
 const logger = cds.log('CardanoWalletWorker');
 
-/**
- * Keeps a per-wallet lease alive while a job executes (build+sign can outlast the TTL).
- * Renews at a third of the TTL, so two consecutive misses are tolerated. `beat` is lenient
- * (DB error → retry next tick); `fence()` is strict (unprovable ownership = lost, before irreversible steps).
- */
+// Keeps a wallet lease alive while a job runs. Renewing at a third of the TTL tolerates two misses.
+// beat retries on DB errors. fence treats an unprovable lease as lost, before irreversible steps.
 export const LEASE_HEARTBEAT_INTERVAL_MS = Math.floor(WORKER_LEASE_TTL_MS / 3);
 
 export class LeaseHeartbeat {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lost = false;
 
-  /**
-   * @param renew   renews the lease and reports whether it is (still) ours
-   * @param label   what the lease covers, for log messages
-   */
+  /** renew reports whether the lease is still ours. label names the lease in logs. */
   constructor(
     private readonly renew: () => Promise<boolean>,
     private readonly label: string,
@@ -34,7 +28,7 @@ export class LeaseHeartbeat {
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
-  /** True once a renewal proved the lease is not ours anymore — abort the execution. */
+  /** True once a renewal proved the lease is not ours. The execution must abort. */
   isLost(): boolean {
     return this.lost;
   }
@@ -47,7 +41,7 @@ export class LeaseHeartbeat {
       if (!held) this.markLost();
       return held;
     } catch (err) {
-      logger.warn(`Lease fence for ${this.label} could not be verified — treating the lease as lost:`, err);
+      logger.warn(`Lease fence for ${this.label} could not be verified, treating the lease as lost:`, err);
       this.lost = true;
       return false;
     }
@@ -66,6 +60,6 @@ export class LeaseHeartbeat {
     if (this.lost) return;
     this.lost = true;
     this.stop();
-    logger.warn(`Lease for ${this.label} was taken over by another instance — this executor must stand down`);
+    logger.warn(`Lease for ${this.label} was taken over by another instance, this executor must stand down`);
   }
 }

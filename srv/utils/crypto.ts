@@ -4,10 +4,8 @@ import cds from '@sap/cds';
 
 const logger = cds.log('CardanoWalletWorker');
 
-/**
- * AES-256-GCM for secrets at rest (wallet worker signing keys), format `iv:authTag:ciphertext` in base64.
- * Key derived from ENCRYPTION_KEY; production refuses to start without it.
- */
+// AES-256-GCM for secrets at rest, stored as base64 `iv:authTag:ciphertext`.
+// The key comes from ENCRYPTION_KEY. Production refuses to start without it.
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;        // 96 bits, recommended for GCM
@@ -22,7 +20,7 @@ export function getEncryptionKey(): Buffer {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('ENCRYPTION_KEY must be set in production. Refusing to start with a fallback key.');
   }
-  logger.warn('ENCRYPTION_KEY not set — using dev fallback key. Set ENCRYPTION_KEY for production.');
+  logger.warn('ENCRYPTION_KEY not set, using dev fallback key. Set ENCRYPTION_KEY for production.');
   const fallback = `odatano-core-${process.pid}-${os.hostname()}`;
   return crypto.createHash('sha256').update(fallback).digest();
 }

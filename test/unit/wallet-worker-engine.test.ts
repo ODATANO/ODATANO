@@ -81,6 +81,7 @@ vi.mock('@sap/cds', () => {
 vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoWalletJobs: 'odatano.cardano.CardanoWalletJobs',
   CardanoWorkerWallets: 'odatano.cardano.CardanoWorkerWallets',
+  TransactionSubmissions: 'odatano.cardano.TransactionSubmissions',
 }));
 
 const MOCK_TX_HASH = 'c'.repeat(64);
@@ -220,7 +221,9 @@ describe('engine: executeJob', () => {
 
     expect(deps.signer.signTransaction).toHaveBeenCalledWith('dead', 'e'.repeat(64));
     expect(deps.client.submitTransaction).toHaveBeenCalledWith('beef');
-    expect(deps.indexer.persistTransactionSubmission).toHaveBeenCalled();
+    // recorded as submitted, so CheckSubmissionStatus accepts it
+    expect(deps.indexer.persistTransactionSubmission).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ txHash: TX_HASH, status: 'submitted' }));
 
     const row = (await getJobById(db, job.ID))!;
     expect(row.status).toBe('submitted');
@@ -228,6 +231,19 @@ describe('engine: executeJob', () => {
     expect(row.signedTxCbor).toBe('beef');
     expect(row.attempt).toBe(1);
     expect(worker.getStatusSummary().awaitingConfirmation).toBe(1);
+  });
+
+  it('records the submission row once when an interrupted submit is adopted again', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob();
+    tables.set('odatano.cardano.TransactionSubmissions', [{ id: 's1', txHash: TX_HASH, status: 'submitted' }]);
+
+    await (worker as unknown as { adoptSubmitted: (j: WalletJobRow, h: string, c: string) => Promise<void> })
+      .adoptSubmitted(job, TX_HASH, 'beef');
+
+    expect(deps.indexer.persistTransactionSubmission).not.toHaveBeenCalled();
+    tables.delete('odatano.cardano.TransactionSubmissions');
   });
 
   it('transient failure re-queues with future notBefore and keeps attempts bounded', async () => {
@@ -467,6 +483,33 @@ describe('engine: start / stop', () => {
     } finally {
       await worker.stop();
     }
+  });
+
+  it('waits for the running tick and starts no job once stop began', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps);
+    await worker.start();
+    let releaseTick!: () => void;
+    const spawned = vi.fn();
+    const internals = worker as unknown as {
+      tick: () => Promise<void>; tickSafe: () => Promise<void>; spawn: (w: string, work: () => Promise<void>) => void;
+      tickInFlight: Promise<void> | null;
+    };
+    await internals.tickInFlight; // the first tick start() fires
+    const realSpawn = internals.spawn.bind(worker);
+    // the tick holds a lease and spawns only after stop() was called
+    internals.tick = () => new Promise<void>((resolve) => { releaseTick = () => { realSpawn('w1', async () => { spawned(); }); resolve(); }; });
+
+    const tick = internals.tickSafe();
+    let stopped = false;
+    const stop = worker.stop().then(() => { stopped = true; });
+    await new Promise((r) => setImmediate(r));
+    expect(stopped).toBe(false);
+
+    releaseTick();
+    await Promise.all([tick, stop]);
+    expect(stopped).toBe(true);
+    expect(spawned).not.toHaveBeenCalled();
   });
 });
 

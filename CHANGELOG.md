@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.45] - API contract, durable submissions, hardening
+
+No schema change. New indexes are created at start.
+
+### Breaking
+
+- List operations take `limit` and `skip`, range-checked in the model: a value outside the range is a 400
+  instead of being clamped. `GetAssetHistory` and `GetLatestTransactionsByAddress` allow `limit` 1–100 with
+  `skip + limit` at most 100; `GetUTxOsByAddress`, `GetUTxOsByCredential`, `GetAssetsByAddress`,
+  `GetMetadataByTxHash`, `GetTransactionBuildsByAddress` and `GetSigningRequestsByAddress` allow 1–5000,
+  default 1000. Every list answers in a fixed order (table in docs/guides/USER_GUIDE.md).
+- `CardanoBackendService`: `limit` of `GetAddressTransactions`, `GetAddressTransactionHashes` and
+  `GetAssetHistory` is 1–100 (was clamped to 1000), `count` of `GetNextBlocks` 1–500; out of range is a 400.
+- Heights, slots, epochs, output indexes and `priority` are range-checked (`≥ 0`, `priority` 0–10000).
+  `network` (`SubmitSignedTransaction`, `DeriveScriptAddress`), `kind` (`SubmitWalletJob`) and `source`
+  (`importUtxoSet`) are enums: an unknown value is a 400 from CAP's input validation.
+- Error responses of operations carry the ODATANO error code in `error.code` (for example
+  `ODATANO_INVALID_INPUT`) instead of the HTTP status. The message keeps its `[CODE] Operation:` prefix.
+- An invalid PlutusData JSON (datum, redeemer, script parameter) is a 400 `ODATANO_TX_VALIDATION_FAILED`
+  instead of a 500.
+
+### Fixed
+
+- `SubmitTransaction` and `SubmitSignedTransaction` record the submission as `pending` before the network call
+  and the outcome (`submitted` or `failed`) in its own transaction, so a rejected submit leaves a `failed` row.
+  The network call no longer runs inside an open DB transaction. An already-submitted transaction is recorded
+  as `submitted` and still answers 409.
+- Wallet-worker submissions are recorded as `submitted`, once per transaction, and marked `confirmed` with the
+  job, so `CheckSubmissionStatus` accepts them.
+- A detached bookkeeping transaction is bounded only while it waits for a connection; work that takes longer
+  than the timeout no longer answers 503 after it committed, and a signing request is no longer left in
+  `submitting` without its signed transaction.
+- `GetLatestTransactionsByAddress` lists the newest hashes on every call and fetches only the transactions the
+  address has no row for; new transactions appear instead of the stored rows being returned for good.
+- CIP-68 `Assets.decimals` follows only the transaction that consumed the reference NFT; a transaction reading
+  it as reference input, or holding it as collateral of a valid transaction, is skipped.
+- A block row superseded at the same height is removed after the transactions of the new block moved to it, so
+  a rolled-back lazily indexed tip no longer stays next to the canonical block.
+- The `odatano` backend maps a remote 409 already-submitted to `TransactionAlreadySubmittedError`, so a signing
+  request is finalized as submitted instead of failed.
+- Agent-grant budget and usage are refunded for a request CAP rejects with several input errors at once.
+- The wallet worker waits for a running dispatch round on stop and starts no job after stop began.
+- Shutdown runs once when the plugin and the standalone hook both trigger it.
+- `GetMetadataByTxHash` answers `[]` for a stored transaction without metadata instead of 404.
+- `GetAssetHistory` no longer fails with 500 on Postgres when the provider lists one transaction twice.
+
+### Added
+
+- `getStatus().lastIndexedAt` and `getStatus().stalled`: true while the crawler holds its lease but committed
+  no block for 10 minutes.
+- Composite indexes `Transactions(blockHash, txIndex)` (replaces `(blockHash)`), `AssetHistory(unit,
+  blockHeight desc)`, `LedgerUTxOs(address, createdSlot)` and `(address, spentSlot)`,
+  `CardanoWalletJobs(status, priority, createdAt)` and `(walletId, status, createdAt)`.
+
+### Changed
+
+- `GetWorkerStatus` counts pending jobs instead of loading them.
+- `@harmoniclabs/plutus-data` and `@harmoniclabs/uplc` are declared dependencies (same versions as before).
+- `CheckSubmissionStatus` confirms a submission once its transaction is 3 blocks deep (own block included), read
+  from the crawled chain when it holds the transaction, else from the backends; before, any inclusion confirmed.
+- Handlers read their parameters through the generated cds-typer action types.
+- Code comments shortened; em dashes in log and error messages replaced.
+- `.dockerignore` keeps local notes, key and seed files, `.env*` files and build output out of the image
+  context.
+- Docs: `LOG_LEVEL` was never read and is replaced by `DEBUG` (cds.log); per-address data and ownership in
+  docs/guides/SECURITY_GUIDE.md.
+
 ## [v2.0.0-rc.44] - CIP-68 decimals on Assets, credential backfill paged by key
 
 Schema change: `decimals` on `Assets`. Run `cds deploy` on existing databases, then `backfillAssetDecimals` once.

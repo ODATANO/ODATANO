@@ -1,8 +1,5 @@
-/**
- * ORDER BY on PostgreSQL: drop the NULLS clause for columns that cannot be NULL.
- * @cap-js/postgres renders `ASC NULLS FIRST` / `DESC NULLS LAST`, the opposite of a btree index's
- * placement, so `$top` reads sorted the whole table; key, `not null` and `@cds.valid.from` columns are exempt.
- */
+// Drops the NULLS clause from ORDER BY on PostgreSQL for columns that cannot be NULL.
+// The driver's NULLS placement is the opposite of the btree index, so `$top` would sort the whole table.
 import cds from '@sap/cds';
 
 const logger = cds.log('PgOrderNulls');

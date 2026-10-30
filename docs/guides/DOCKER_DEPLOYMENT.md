@@ -86,6 +86,7 @@ challenged. Agent tokens (`x-agent-token`, `AGENT_GRANTS_ENABLED=true`) pass on 
 |---|---|---|
 | `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`); the schema is deployed on every boot (additive evolution, `ODATANO_DB_DEPLOY=never` skips it) |
 | `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set; seeded on the first boot from the schema the image build deployed |
+| `ODATANO_SQLITE_TIMEOUT_MS` | `5000` | How long a SQLite writer waits for the lock |
 
 Moving an existing SQLite deployment to PostgreSQL: stop the service, then run the image's
 `migrate` mode once against the freshly created database and start the service with
@@ -167,7 +168,7 @@ HSM_SLOT=0
 HSM_PIN=
 HSM_KEY_LABEL=cardano-signing-key
 
-# --- Chain crawler / pre-sync (v2.0, off by default) ------------------------
+# --- Chain crawler / pre-sync (off by default) ------------------------
 CRAWLER_ENABLED=false
 CRAWLER_START_SLOT=              # required when enabled
 CRAWLER_START_HASH=              # required when enabled
@@ -178,7 +179,7 @@ CRAWLER_BATCH_SIZE=20
 CRAWLER_POLL_INTERVAL_MS=20000
 # chain-sync needs `ogmios` listed in BACKENDS — a reachable Ogmios alone is not enough
 
-# --- Wallet worker (v2.0, off by default) -----------------------------------
+# --- Wallet worker (off by default) -----------------------------------
 WALLET_WORKER_ENABLED=false
 # JSON array: [{"walletId":"treasury","signerType":"software","keyEnv":"TREASURY_KEY"}]
 # signerType hsm | software; the software key is read from the env var named in keyEnv

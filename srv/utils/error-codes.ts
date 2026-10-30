@@ -45,10 +45,8 @@ export const ERROR_CODES = {
   /** 400: HSM signing requested but HSM not configured. */
   HSM_NOT_CONFIGURED: 'ODATANO_HSM_NOT_CONFIGURED',
 
-  /**
-   * 503: a detached bookkeeping transaction could not acquire a pooled DB connection in time,
-   * typically because an in-process caller awaits the action while its own request tx holds the single sqlite connection.
-   */
+  // 503: a detached transaction got no DB connection in time. Typical cause is an in-process caller
+  // whose own request transaction holds the single SQLite connection.
   NESTED_TX_TIMEOUT: 'ODATANO_NESTED_TX_TIMEOUT',
 } as const;
 

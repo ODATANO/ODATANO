@@ -6,12 +6,8 @@ export const CARDANO_DEFAULTS = {
   MS_PER_SLOT: 1000,
 };
 
-/**
- * Per-network epoch geometry anchored at the Shelley transition:
- * `epochStartSlot(epoch) = shelleyStartSlot + (epoch - shelleyStartEpoch) * slotsPerEpoch`.
- * Preview epochs are 1 day; mainnet/preprod are offset by their Byron era.
- * `securityParam` (k): blocks the node keeps volatile, i.e. how far back ledger state can be acquired.
- */
+// Epoch layout per network, counted from the first Shelley epoch and slot.
+// securityParam is k, the number of recent blocks whose ledger state the node can still acquire.
 export const EPOCH_CONFIG_BY_NETWORK = {
   mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000, securityParam: 2160 },
   preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000, securityParam: 2160 },
@@ -33,10 +29,8 @@ export const HIGH_EXECUTION_UNITS = {
 /** Relative multiplier on evaluator ExUnits; combined with the ABS_* floors below. */
 export const EXECUTION_UNIT_BUFFER = 1.1;
 
-/**
- * Absolute ExUnits floor on top of the relative multiplier: covers ScriptContext drift of validators
- * that iterate reference inputs and decode CBOR datums. `max_tx_ex_units` still caps the total.
- */
+// Fixed ExUnits margin added on top of the multiplier, for validators whose cost drifts
+// with the script context. The protocol's max_tx_ex_units still caps the total.
 export const ABS_CPU_BUFFER = 200_000;
 export const ABS_MEM_BUFFER = 5_000;
 
@@ -59,10 +53,7 @@ export const HRP = {
 export const MAX_JSON_SIZE = 1_048_576;
 /** Maximum nesting depth for JSON objects/arrays */
 export const MAX_DEPTH = 10;
-/**
- * Nesting depth for PlutusData JSON (redeemers, datums, script params): every constructor takes two
- * levels ({constructor, fields: [...]}), so protocol redeemers go past MAX_DEPTH; size stays capped.
- */
+// Higher depth limit for PlutusData JSON. Each constructor uses two JSON levels, so real redeemers exceed MAX_DEPTH.
 export const PLUTUS_DATA_MAX_DEPTH = 64;
 /** Maximum number of keys in a JSON object */
 export const MAX_KEYS = 100;
@@ -92,10 +83,8 @@ export const ED25519_KEY_HASH_REGEX = /^[a-f0-9]{56}$/i;
 /** Minimum lovelace for a change output carrying native assets (2 ADA) */
 export const MIN_CHANGE_LOVELACE = 2_000_000;
 
-/**
- * Shelley genesis parameters per network for Buildooor's GenesisInfos (`TxBuilder.posixToSlot()`)
- * and `slotToPosixSeconds()`. `systemStartPosixMs` is the first Shelley slot's wall-clock time.
- */
+// Shelley genesis values per network for slot and time conversion.
+// systemStartPosixMs is the wall-clock time of the first Shelley slot.
 export const GENESIS_INFOS_BY_NETWORK = {
   mainnet: { systemStartPosixMs: 1596059091000, slotLengthMs: 1000, startSlotNo: 4492800 }, // 2020-07-29T21:44:51Z
   preprod: { systemStartPosixMs: 1655683200000, slotLengthMs: 1000, startSlotNo: 0 },

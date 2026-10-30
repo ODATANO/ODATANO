@@ -16,11 +16,11 @@ vi.mock('@sap/cds', () => {
 });
 
 import { OdatanoBackend } from '../../srv/blockchain/backends/odatano-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionValidationError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, RateLimitError, ScriptValidationError, TransactionAlreadySubmittedError, TransactionValidationError } from '../../srv/utils/errors';
 
 const ok = (value: string, headers: Record<string, string> = {}) => ({ data: { value }, headers });
-const httpError = (status: number, message: string, headers: Record<string, string> = {}) =>
-  Object.assign(new Error(`status ${status}`), { isAxiosError: true, response: { status, headers, data: { error: { message } } } });
+const httpError = (status: number, message: string, headers: Record<string, string> = {}, code?: string) =>
+  Object.assign(new Error(`status ${status}`), { isAxiosError: true, response: { status, headers, data: { error: { message, code } } } });
 
 beforeEach(() => {
   post.mockReset();
@@ -87,6 +87,15 @@ describe('OdatanoBackend', () => {
     await expect(b.evaluateTransaction('84a0')).rejects.toBeInstanceOf(ScriptValidationError);
     post.mockRejectedValueOnce(httpError(400, '[ODATANO_TX_VALIDATION_FAILED] EvaluateTransaction: bad cbor'));
     await expect(b.evaluateTransaction('84a0')).rejects.toBeInstanceOf(TransactionValidationError);
+  });
+
+  it('maps a remote already-submitted 409 to TransactionAlreadySubmittedError, by code or by the older message prefix', async () => {
+    const hash = 'ab'.repeat(32);
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    post.mockRejectedValueOnce(httpError(409, `Transaction ${hash} already exists in mempool or on chain`, {}, 'ODATANO_TX_ALREADY_SUBMITTED'));
+    await expect(b.submitTransaction('84a0')).rejects.toSatisfy((e: unknown) => e instanceof TransactionAlreadySubmittedError && e.txHash === hash);
+    post.mockRejectedValueOnce(httpError(409, `[ODATANO_TX_ALREADY_SUBMITTED] SubmitTransaction: Transaction ${hash} already exists`));
+    await expect(b.submitTransaction('84a0')).rejects.toBeInstanceOf(TransactionAlreadySubmittedError);
   });
 
   it('passes the chain-point mismatch marker through verbatim, so the crawler recovers', async () => {

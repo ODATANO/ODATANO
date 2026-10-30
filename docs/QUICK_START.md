@@ -61,14 +61,14 @@ All five services auto-register:
 - **CardanoODataService** at `/odata/v4/cardano/` — read blockchain data
 - **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
 - **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
-- **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (v2.0, off by default)
-- **CardanoWorkerService** at `/odata/v4/cardano-worker/` — asynchronous wallet jobs (v2.0, off by default)
+- **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (off by default)
+- **CardanoWorkerService** at `/odata/v4/cardano-worker/` — asynchronous wallet jobs (off by default)
 
 > `getStatus`, `GetJobStatus` and `GetWorkerStatus` are OData **functions** — call them with
 > HTTP GET and the parameters in the URL, e.g. `GET .../cardano-worker/GetWorkerStatus()`.
 > POSTing to a function returns 405.
 
-Both v2.0 services also publish **CAP events**, so a CAP consumer can subscribe rather than poll —
+Both services also publish **CAP events**, so a CAP consumer can subscribe rather than poll —
 in-process, so no message broker is involved:
 
 ```js
@@ -119,8 +119,8 @@ Copy-Item .env.example .env
 Open `.env` and set at least your Blockfrost key. Supported variables:
 
 ```env
-# Log level: trace | debug | info | warn | error | fatal
-LOG_LEVEL=info
+# Debug output for single modules (cds.log), e.g. DEBUG=CardanoService
+# DEBUG=
 
 # Network: mainnet | preview | preprod (default: preview)
 NETWORK=preview
@@ -154,7 +154,7 @@ HSM_SLOT=0
 HSM_PIN=
 HSM_KEY_LABEL=cardano-signing-key
 
-# --- Chain crawler / pre-sync (v2.0, off by default) ------------------------
+# --- Chain crawler / pre-sync (off by default) ------------------------
 CRAWLER_ENABLED=false
 CRAWLER_START_SLOT=              # required when enabled
 CRAWLER_START_HASH=              # required when enabled
@@ -165,7 +165,7 @@ CRAWLER_BATCH_SIZE=20
 CRAWLER_POLL_INTERVAL_MS=20000
 # chain-sync needs `ogmios` listed in BACKENDS — a reachable Ogmios alone is not enough
 
-# --- Wallet worker (v2.0, off by default) -----------------------------------
+# --- Wallet worker (off by default) -----------------------------------
 WALLET_WORKER_ENABLED=false
 # JSON array: [{"walletId":"treasury","signerType":"software","keyEnv":"TREASURY_KEY"}]
 # signerType hsm | software; the software key is read from the env var named in keyEnv

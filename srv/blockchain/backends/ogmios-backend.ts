@@ -119,10 +119,7 @@ function ogmiosValueToLovelaceString(value: OgmiosRewardAccountSummary['rewards'
   return lovelace === undefined ? '0' : String(lovelace);
 }
 
-/**
- * Ogmios v6 `queryLedgerState/delegateRepresentatives` summary (local wire type; the schema
- * package is only a transitive dependency). Only the `registered` variant carries an id.
- */
+/** Ogmios `queryLedgerState/delegateRepresentatives` entry. Only the `registered` variant has an id. */
 interface OgmiosDrepSummary {
   type: 'registered' | 'noConfidence' | 'abstain';
   id?: string;
@@ -133,7 +130,7 @@ interface OgmiosDrepSummary {
   delegators?: unknown[];
 }
 
-/** Ogmios `stakePoolsPerformances`: only nOpt is used — its stake figures are live, not active. */
+/** Ogmios `stakePoolsPerformances`. Only nOpt is used, because its stake figures are live, not active. */
 interface OgmiosStakePoolsPerformances {
   desiredNumberOfStakePools?: number;
 }
@@ -152,12 +149,8 @@ function ratio(a: bigint, b: bigint): number {
   return b === 0n ? 0 : Number((a * 1_000_000n) / b) / 1_000_000;
 }
 
-/**
- * Ogmios ledger answers -> EpochLedgerState. Saturation follows the ledger: live stake over
- * (max supply - reserves) / nOpt. Figures the ledger view does not carry stay 0 / null: active
- * stake (the indexer derives it from the previous snapshot), block counts, delegator counts,
- * DRep last activity.
- */
+// Saturation is live stake over ((max supply - reserves) / nOpt), as in the ledger.
+// Figures the ledger does not carry stay 0 or null, such as active stake and block counts.
 export function mapOgmiosEpochState(raw: OgmiosEpochStateRaw): EpochLedgerState {
   const lovelace = (v: OgmiosRewardAccountSummary['rewards']) => BigInt(ogmiosValueToLovelaceString(v));
   const reserves = raw.pots?.reserves ? lovelace(raw.pots.reserves) : null;
@@ -228,10 +221,8 @@ interface OgmiosRpcEnvelope<T> {
   error?: { code?: number; message?: string };
 }
 
-/**
- * Decode a CIP-129 DRep ID (`drep1…`, 29 bytes) into credential hash and type. Header byte:
- * high nibble 0x2 = DRep, low nibble 0x2 = key hash / 0x3 = script hash.
- */
+// Decode a CIP-129 DRep ID into credential hash and type. In the header byte the high
+// nibble 0x2 means DRep. The low nibble is 0x2 for a key hash and 0x3 for a script hash.
 export function decodeDrepId(drepId: string): { hashHex: string; isScript: boolean } {
   const decoded = bech32.decode(drepId, BECH32_MAX_LENGTH);
   const bytes = Buffer.from(bech32.fromWords(decoded.words));
@@ -254,10 +245,8 @@ export function resolveOgmiosHeight(height: 'origin' | number): number {
   return height === 'origin' ? 0 : height;
 }
 
-/**
- * Redeemers of a chain-sync tx. A spend index points into the body inputs sorted by
- * (txHash, index), a mint index into the sorted policy ids; both are resolved here.
- */
+// Redeemers of a chain-sync tx. A spend index points into the inputs sorted by txHash and index.
+// A mint index points into the sorted policy ids. Both are resolved here.
 function mapOgmiosRedeemers(tx: OgmiosChainSyncTx): TxRedeemer[] {
   const sortedInputs = [...(tx.inputs ?? [])].sort((a, b) =>
     compareOutRef({ txHash: a.transaction.id, outputIndex: a.index }, { txHash: b.transaction.id, outputIndex: b.index }));
@@ -278,10 +267,7 @@ function mapOgmiosRedeemers(tx: OgmiosChainSyncTx): TxRedeemer[] {
   });
 }
 
-/**
- * Structural views of the Ogmios chain-sync `BlockPraos` / `Transaction` JSON we consume
- * (Shelley-era onward); declared locally so the mapper is not coupled to the schema package.
- */
+/** The fields of Ogmios chain-sync blocks and transactions that the mapper reads. */
 interface OgmiosChainSyncTx {
   id: string;
   /** Which input/output partition was applied by the ledger (phase-2 validity). */
@@ -292,7 +278,7 @@ interface OgmiosChainSyncTx {
   outputs: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string; script?: unknown }[];
   collateralReturn?: { address: string; value: { ada: { lovelace: number | bigint } } & Record<string, unknown>; datum?: string; datumHash?: string; script?: unknown };
   fee?: { ada: { lovelace: number | bigint } };
-  /** `total_collateral` from the body — optional there, so absent on many phase-2 failures. */
+  /** Optional in the tx body, so many phase-2 failures lack it. */
   totalCollateral?: { ada: { lovelace: number | bigint } };
   /** Body mint field: policyId -> assetName -> signed quantity (negative = burn). Never contains `ada`. */
   mint?: Record<string, Record<string, number | bigint>>;
@@ -304,10 +290,7 @@ interface OgmiosChainSyncTx {
   /** Witness-set datums: hash -> CBOR hex (original bytes). */
   datums?: Record<string, string>;
 }
-/**
- * Ogmios v6 `Certificate` (cardano.json), structurally typed for the fields we index.
- * Unknown `type` values pass through as the raw kind so nothing is silently dropped.
- */
+/** Ogmios certificate fields we index. Unknown `type` values pass through as the raw kind. */
 interface OgmiosCertificate {
   type: string;
   /** Stake credential hash (hex) + origin for stake* certificates. */
@@ -318,7 +301,7 @@ interface OgmiosCertificate {
   delegateRepresentative?: OgmiosDelegateRepresentative;
 }
 interface OgmiosPraosBlock {
-  type: string; // 'praos' | 'ebb' | 'bft' — only 'praos' carries indexable txs
+  type: string; // only 'praos' blocks carry indexable txs
   era: string;
   id: string;
   ancestor: string; // parent block hash (used by the crawler's reorg parent check)
@@ -332,13 +315,10 @@ interface OgmiosPraosBlock {
 /** CardanoBackend implementation over an Ogmios WebSocket (local node). */
 export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend, EpochStateBackend {
   public readonly name = 'ogmios';
-  /**
-   * Capability declaration — the orchestrator skips Ogmios for these without counting
-   * circuit failures. Historic queries are out of protocol scope.
-   */
+  /** Ogmios cannot answer historic queries. The orchestrator skips it for these. */
   public readonly unsupportedMethods: ReadonlySet<string> = new Set([
-    // getEpoch is NOT listed: Ogmios can serve the CURRENT epoch and only
-    // rejects historic ones — routing prefers historical backends anyway.
+    // getEpoch is not listed, because Ogmios serves the current epoch.
+    // Routing prefers historical backends for it anyway.
     'getBlock',
     'getTransaction',
     'getTransactionMetadata',
@@ -370,11 +350,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     this.ogmiosUrl = ogmiosUrl;
   }
 
-  /**
-   * Force non-keep-alive HTTP for the Ogmios `/health` probe: node-fetch v2 uses `http.globalAgent`,
-   * whose pooled sockets (kept alive since Node 19) fail with "Premature close" once Ogmios' Warp server
-   * half-closes them. No agent hook exists, so keep-alive is disabled process-wide for `http://` only.
-   */
+  // The `/health` probe uses node-fetch v2 on `http.globalAgent`. Its kept-alive sockets fail with
+  // "Premature close" once Ogmios half-closes them. There is no agent hook, so keep-alive is off for http.
   private static keepAliveDisabled = false;
   private static disableHttpKeepAlive(): void {
     if (OgmiosBackend.keepAliveDisabled) return;
@@ -388,7 +365,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
 
     // Only allow WebSocket schemes (block file://, http://, etc.)
     if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-      throw new BackendInitError('ogmios', new Error(`Invalid Ogmios URL scheme "${url.protocol}" — only ws:// and wss:// are allowed`));
+      throw new BackendInitError('ogmios', new Error(`Invalid Ogmios URL scheme "${url.protocol}": only ws:// and wss:// are allowed`));
     }
 
     // In production, block link-local / metadata IPs (SSRF prevention).
@@ -403,11 +380,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
   }
 
-  /**
-   * Bound an init step in time: the WebSocket connect/handshake has no built-in timeout and
-   * can hang when the node is busy. The rejection message contains "timeout" so the
-   * orchestrator's transient-error retry picks it up.
-   */
+  // The WebSocket handshake has no timeout and can hang on a busy node. The rejection says
+  // "timeout" so the orchestrator retries it as a transient error.
   private withInitTimeout<T>(p: Promise<T>, label: string): Promise<T> {
     // Short on purpose: the orchestrator retries init several times within a bounded bootstrap window.
     const ms = Math.max(1, Math.min(this.timeoutMs, 4000));
@@ -419,10 +393,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
   }
 
-  /**
-   * Force-release an interaction socket after a failed/expired open or close. The runtime
-   * socket is `ws` (has `terminate`); the `close` fallback keeps test doubles working.
-   */
+  /** Force-release a socket after a failed open or close. Test doubles without `terminate` get `close`. */
   private forceCloseContext(context: Awaited<ReturnType<typeof createInteractionContext>>): void {
     const socket = context.socket as unknown as {
       terminate?: () => void;
@@ -458,7 +429,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       () => {
         // Socket closed: clear the clients so the next request reconnects via ensureConnected.
         if (this.isShutdown) return;
-        logger.warn('[OgmiosBackend] WebSocket closed — will reconnect on next request');
+        logger.warn('[OgmiosBackend] WebSocket closed, will reconnect on next request');
         this.stateQueryClient = null;
         this.txSubmissionClient = null;
       },
@@ -478,11 +449,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return true;
   }
 
-  /**
-   * Query client for address queries. The node answers them by scanning its whole UTxO set (seconds
-   * each), and Ogmios serves the queries of one connection in order; on their own connection they no
-   * longer hold up tip, epoch and protocol parameters. Opened on first use, reopened after a close.
-   */
+  // Address queries scan the whole UTxO set and take seconds. Ogmios answers one connection in order,
+  // so they get their own connection and do not hold up tip and epoch queries.
   private async scanQueryClient(): Promise<Awaited<ReturnType<typeof createLedgerStateQueryClient>>> {
     this.ensureNotShutdown();
     // never initialized (test-injected clients): the shared client
@@ -512,10 +480,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return this.scanConnecting;
   }
 
-  /**
-   * Reconnect when the WebSocket died since the last init. No-op when never initialized
-   * (test-injected clients); concurrent callers share one reconnect attempt.
-   */
+  /** Reconnect a dead WebSocket. Concurrent callers share one attempt. No-op before the first init. */
   private async ensureConnected(): Promise<void> {
     this.ensureNotShutdown();
     if (!this.context) return;
@@ -524,7 +489,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     if (this.stateQueryClient && socketOpen) return;
 
     if (!this.reconnectPromise) {
-      logger.warn('[OgmiosBackend] WebSocket not connected — reconnecting');
+      logger.warn('[OgmiosBackend] WebSocket not connected, reconnecting');
       this.reconnectPromise = this.init()
         .then(() => undefined)
         .finally(() => { this.reconnectPromise = null; });
@@ -532,22 +497,13 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     await this.reconnectPromise;
   }
 
-  /** 
-   * Get specific Block Data (not supported)
-   * @param _hash block hash (hex)
-   * @returns {Promise<BlockData>} block data
-   */
   async getBlock(_hash: string): Promise<BlockData> {
     return handleBackendRequest(async () => {
       throw new NotFoundError('Historic Block queries not supported', this.name);
     }, this.name);
   }
 
-  /** 
-   * Get specific Epoch Data (not supported)
-   * @param _epochNumber epoch number
-   * @returns {Promise<EpochData>} epoch data
-   */
+  /** Only the current epoch. */
   async getEpoch(epochNumber: number): Promise<EpochData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -563,34 +519,20 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** 
-   * Get specific Transaction Data (not supported)
-   * @param _hash transaction hash (hex)
-   * @returns {Promise<Transaction>} transaction data
-   */
   async getTransaction(_hash: string): Promise<Transaction> {
     return handleBackendRequest(async () => {
       throw new NotFoundError('Historic Transaction queries not supported', this.name);
     }, this.name);
   }
 
-  /** 
-   * Get specific Transaction Metadata (not supported)
-   * @param _tx_hash transaction hash (hex)
-   * @returns {Promise<MetadataLabelTx[]>} transaction metadata list
-   */
   async getTransactionMetadata(_tx_hash: string): Promise<MetadataLabelTx[]> {
     return handleBackendRequest(async () => {
       throw new NotFoundError('Historic Transaction metadata not supported', this.name);
     }, this.name);
   }
 
-  /**
-   * DRep data from the live ledger state (`queryLedgerState/delegateRepresentatives`) via the
-   * raw `Method()` primitive, since the client ships no wrapper. Ogmios lists only REGISTERED
-   * DReps: retired/unknown → NotFoundError; `expired` is derived from the mandate epoch.
-   * @param drepId CIP-129 bech32 DRep ID (`drep1…`)
-   */
+  // DRep from `queryLedgerState/delegateRepresentatives` via raw `Method()`, as the client has no wrapper.
+  // Ogmios lists only registered DReps, so others are NotFoundError.
   async getDrep(drepId: string): Promise<DrepData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -635,7 +577,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         hex: hashHex,
         amount: ogmiosValueToLovelaceString(drep.stake),
         hasScript: isScript || drep.from === 'script',
-        // Ogmios reports the mandate (expiry) epoch, not the last activity — keep 0.
+        // Ogmios reports the mandate expiry epoch, not the last activity.
         lastActiveEpoch: 0,
         expired: typeof mandateEpoch === 'number' && mandateEpoch < Number(currentEpoch),
         retired: false,
@@ -643,21 +585,14 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Get Asset Info (not supported for Ogmios — no aggregate-supply query in the protocol)
-   * @param _unit asset unit (policyId + assetNameHex)
-   * @returns {Promise<AssetInfo>} asset info
-   */
+  /** Not supported. The protocol has no aggregate-supply query. */
   async getAssetInfo(_unit: string): Promise<AssetInfo> {
     return handleBackendRequest(async () => {
       throw new ProviderUnavailableError('Asset info queries not supported by Ogmios backend', this.name);
     }, this.name);
   }
 
-  /**
-   * Supply figures from `queryLedgerState/treasuryAndReserves`: total = max − reserves.
-   * Circulating, locked and stake totals are not in the ledger state and stay '0'.
-   */
+  /** Total supply is max supply minus reserves. Circulating, locked and stake totals stay '0'. */
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -698,10 +633,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Address at the tip: type, script flag and stake address decoded from the address itself,
-   * UTxOs from the ledger, balance summed over them. No transaction history (getAddressTransactions).
-   */
+  /** Address at the tip, decoded locally, with UTxOs and balance from the ledger. No tx history. */
   async getAddress(address: string): Promise<Address> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -719,10 +651,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** get current specific Address UTxOs
-   * @param address bech32 address
-   * @returns {Promise<UTxO[]>} address UTxOs
-   */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -754,11 +682,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     };
   }
 
-  /**
-   * Run `fn` against the ledger state acquired at `point` on a SEPARATE WebSocket: local-state-query
-   * holds one acquired point per connection, so the shared socket would pin live queries to the past.
-   * The point must be inside the node's volatile window (k blocks) or acquisition is refused.
-   */
+  // Runs `fn` on the ledger state at `point` over a separate WebSocket. A connection holds one acquired
+  // point, so the shared socket would pin live queries to the past. `point` must be within k blocks.
   private async withLedgerStateAt<T>(
     point: ChainPoint,
     label: string,
@@ -793,10 +718,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     );
   }
 
-  /**
-   * Pools, DReps and pots as of `point` (crawler epoch snapshot), all read from one acquired
-   * ledger state. Performances are optional: without them (no nOpt) saturation stays 0.
-   */
+  /** Pools, DReps and pots at `point` from one ledger state. Without nOpt saturation stays 0. */
   async epochStateAt(point: ChainPoint): Promise<EpochLedgerState> {
     return handleBackendRequest(
       () => this.withLedgerStateAt(point, 'epoch snapshot', async (client) => {
@@ -827,7 +749,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     );
   }
 
-  /** Not supported — Ogmios is a live state-query backend; use Blockfrost/Koios. */
+  /** Not supported. Ogmios only queries live state. */
   async getAddressTransactions(_address: string): Promise<Transaction[]> {
     throw new NotFoundError(
       'Address transactions not available via Ogmios - use historical backend (Blockfrost/Koios)',
@@ -835,11 +757,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     );
   }
 
-  /**
-   * Get current specific Pool Data
-   * @param poolId pool id
-   * @returns {Promise<PoolData>} pool data
-   */
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -863,8 +780,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         // not in the ledger state; null = unavailable
         liveDelegators: null,
         liveSaturation: 0,
-        // activeStake is not available from Ogmios pool params — report 0 instead
-        // of fabricating it from the pledge
+        // Ogmios pool params have no active stake
         activeStake: '0',
         activeSize: 0,
         // pledge/cost are ValueAdaOnly objects in Ogmios v6; margin is a Ratio string ("1/10")
@@ -876,11 +792,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** 
-   * Get Account Data for specified stake address
-   * @param stakeAddress stake address
-   * @returns {Promise<AccountData>} account data
-   */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -921,11 +832,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Submit Transaction to the network
-   * @param signedTxCbor signed transaction in CBOR hex format
-   * @returns {Promise<string>} transaction hash
-   */
   async submitTransaction(signedTxCbor: string): Promise<string> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -947,11 +853,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Evaluate transaction script execution units
-   * @param unsignedTxCbor unsigned transaction in CBOR hex format
-   * @returns {Promise<ScriptEvaluationResult[]>} evaluation results
-   */
   async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -974,10 +875,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** 
-   * Get current Protocol Parameters
-   * @returns {Promise<LedgerProtocolParameters>} protocol parameters
-   */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -1029,10 +926,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** 
-   * Get Latest Epoch Data
-   * @returns {Promise<EpochData>} latest epoch data
-   */
   async getLatestEpoch(): Promise<EpochData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -1063,10 +956,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /** 
-   * Get current Latest Block Data
-   * @returns {Promise<BlockData>} latest block data
-   */
   async getLatestBlock(): Promise<BlockData> {
     return handleBackendRequest(async () => {
       await this.ensureConnected();
@@ -1100,10 +989,6 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }, this.name);
   }
 
-  /**
-   * Get the latest chain tip slot.
-   * @returns {Promise<number>} current chain slot
-   */
   async getCurrentSlot(): Promise<number> {
     const block = await this.getLatestBlock();
     if (block.slot == null) {
@@ -1115,11 +1000,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return block.slot;
   }
 
-  /**
-   * Unspent check via `queryLedgerState/utxo` with an outputReferences filter; empty = spent or nonexistent.
-   * @param txHash 64-char lowercase hex
-   * @param outputIndex non-negative integer
-   */
+  /** Unspent check via `queryLedgerState/utxo`. An empty answer means spent or unknown. */
   async isUtxoUnspent(txHash: string, outputIndex: number): Promise<boolean> {
     if (!Number.isInteger(outputIndex) || outputIndex < 0) return false;
     return handleBackendRequest(async () => {
@@ -1195,10 +1076,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
   }
 
-  /**
-   * Ogmios value `{ ada: { lovelace }, policyId: { assetName: qty } }` →
-   * `[{ unit: 'lovelace', quantity }, { unit: policyId+assetName, quantity }]`.
-   */
+  /** Ogmios value `{ ada: { lovelace }, policyId: { assetName: qty } }` to a list of units and quantities. */
   private convertOgmiosValue(value: { ada?: { lovelace?: number | bigint } } & Record<string, unknown>): Array<{ unit: string; quantity: string }> {
     const amounts: Array<{ unit: string; quantity: string }> = [];
 
@@ -1223,14 +1101,11 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   }
 
   // ---------------------------------------------------------------------------
-  // ChainSyncBackend — streamed forward sync for the chain crawler
+  // ChainSyncBackend: streamed forward sync for the chain crawler
   // ---------------------------------------------------------------------------
 
-  /**
-   * Open a long-lived chain-sync stream on its own WebSocket. `sequential: true` + `inFlight: 1`
-   * deliver blocks strictly in order (required by reorg detection and serial persist). Inputs arrive
-   * as bare references (resolved by the indexer from indexed outputs); per-tx size/deposit are not surfaced.
-   */
+  // Opens a chain-sync stream on its own WebSocket. One block in flight keeps blocks strictly
+  // in order, which reorg detection needs. Inputs arrive as bare references the indexer resolves.
   async openChainSync(from: ChainPoint[] | 'origin', callbacks: ChainSyncCallbacks): Promise<ChainSyncHandle> {
     OgmiosBackend.validateOgmiosUrl(this.ogmiosUrl);
     const url = new URL(this.ogmiosUrl);
@@ -1300,7 +1175,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       rollForward: async ({ block, tip }, nextBlock) => {
         try {
           const b = block as unknown as OgmiosPraosBlock;
-          // Byron epoch-boundary (ebb) / bft blocks carry no indexable Praos txs — skip.
+          // Byron boundary and bft blocks carry no indexable txs
           if (b.type !== 'praos') { nextBlock(); return; }
           const mapped = this.mapOgmiosBlock(b);
           const t = tip as { slot?: number; id?: string; height?: number } | 'origin';
@@ -1310,7 +1185,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
           await callbacks.rollForward(mapped.block, mapped.txs, tipPoint);
           nextBlock();
         } catch (err) {
-          logger.error('[OgmiosBackend] chain-sync rollForward failed — stream halted:', err);
+          logger.error('[OgmiosBackend] chain-sync rollForward failed, stream halted:', err);
           await reportStreamError(err);
         }
       },
@@ -1320,7 +1195,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
           await callbacks.rollBackward(p === 'origin' ? 'origin' : { slot: p.slot, hash: p.id });
           nextBlock();
         } catch (err) {
-          logger.error('[OgmiosBackend] chain-sync rollBackward failed — stream halted:', err);
+          logger.error('[OgmiosBackend] chain-sync rollBackward failed, stream halted:', err);
           await reportStreamError(err);
         }
       },
@@ -1374,11 +1249,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     };
   }
 
-  /**
-   * Map an Ogmios Praos block to BlockData + transactions. Block fees are the sum of per-tx
-   * fees; epoch/epochSlot derive from the slot via the Shelley anchor. A phase-2 failure without
-   * `total_collateral` still carries its declared fee here; applyCollateralFees() corrects it.
-   */
+  // Block fees are the sum of tx fees. A phase-2 failure without `total_collateral` keeps
+  // its declared fee here, and applyCollateralFees() corrects it later.
   private mapOgmiosBlock(block: OgmiosPraosBlock): { block: BlockData; txs: Transaction[] } {
     const txs = (block.transactions ?? []).map((t, i) => this.mapOgmiosTx(t, block, i));
     const totalFees = txs.reduce((sum, t) => sum + BigInt(t.fee || 0), 0n);
@@ -1402,11 +1274,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     return { block: blockData, txs };
   }
 
-  /**
-   * Map one chain-sync transaction. Inputs stay bare references (resolved by the indexer).
-   * `spends` selects the ledger-applied partition: a phase-2-invalid tx consumes collaterals
-   * and creates only its collateral-return output; the fee follows that partition too.
-   */
+  // A phase-2 invalid tx consumes its collaterals and creates only the collateral-return output.
+  // `spends` selects which side the ledger applied, and the fee follows it.
   private mapOgmiosTx(tx: OgmiosChainSyncTx, block: OgmiosPraosBlock, index: number): Transaction {
     const mapInput = (
       input: { transaction: { id: string }; index: number },
@@ -1476,14 +1345,12 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       // The ledger applies no mint when the script phase failed: the body's mint field is
       // declared but never enacted, so a phase-2 failure must report none at all.
       mint: spendsCollaterals ? undefined : this.convertOgmiosValue(tx.mint ?? {}),
-      // null = unknown (chain-sync doesn't surface the serialized size) — matches the
-      // lazy path's `size ?? null` convention; 0 would masquerade as a real size
+      // chain-sync has no serialized size, and 0 would look like a real size
       size: null,
       blockTime: slotToPosixSeconds(this.network, block.slot),
       inputs,
       outputs,
-      // undefined (not []) when absent — matches the Blockfrost path so
-      // mapTransaction's hasMetadata flag stays false for metadata-less txs
+      // undefined, not [], so hasMetadata stays false as on the Blockfrost path
       metadata: metadataEntries.length ? metadataEntries : undefined,
       certificates: this.mapOgmiosCertificates(tx.certificates ?? []),
       withdrawals: Object.entries(tx.withdrawals ?? {}).map(([stakeAddress, value]) => ({
@@ -1495,11 +1362,8 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     });
   }
 
-  /**
-   * Normalize Ogmios certificates onto the shared `CertificateKind` vocabulary. A `stakeDelegation`
-   * with both pool and DRep target is split into two entries with the same index (as db-sync
-   * reports it); bare credential hashes are re-encoded as bech32 to match the other tables.
-   */
+  // Maps Ogmios certificates to `CertificateKind`. A delegation to both pool and DRep becomes two
+  // entries with one index, as db-sync reports it. Credential hashes are re-encoded as bech32.
   private mapOgmiosCertificates(certs: OgmiosCertificate[]): TxCertificate[] {
     const out: TxCertificate[] = [];
     const lovelace = (v?: { ada?: { lovelace?: number | bigint } }): string | null =>

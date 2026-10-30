@@ -28,15 +28,8 @@ interface CircuitEntry {
   halfOpenProbes: number;
 }
 
-/**
- * Circuit Breaker for backend failover.
- * Tracks per-backend failure counts and prevents hammering unhealthy backends.
- *
- * States:
- *   closed    → normal operation, requests pass through
- *   open      → backend is unhealthy, requests are skipped
- *   half-open → probe period, limited requests allowed to test recovery
- */
+// Per-backend circuit breaker. Closed passes requests, open skips the backend.
+// Half-open lets a few probe requests through to test recovery.
 export class CircuitBreakerManager {
   private circuits = new Map<string, CircuitEntry>();
   private config: CircuitBreakerConfig;
@@ -45,10 +38,7 @@ export class CircuitBreakerManager {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
-  /**
-   * Check if a backend should be attempted.
-   * Transitions open → half-open if reset timeout has elapsed.
-   */
+  /** Moves an open circuit to half-open once the reset timeout has elapsed. */
   shouldAttempt(backendName: string): boolean {
     const entry = this.circuits.get(backendName);
     if (!entry) return true; // no history = closed
@@ -67,8 +57,8 @@ export class CircuitBreakerManager {
       return false;
     }
 
-    // half-open: cap in-flight probes at successThreshold — previously a burst
-    // of concurrent requests all probed a barely-recovering backend at once
+    // half-open: cap in-flight probes at successThreshold, so a burst of
+    // concurrent requests does not all probe a barely-recovering backend
     if (entry.halfOpenProbes >= this.config.successThreshold) {
       return false;
     }

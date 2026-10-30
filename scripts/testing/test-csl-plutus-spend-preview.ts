@@ -4,16 +4,9 @@ import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-/**
- * PlutusV3 parameterized spend on preview (pharma_trace validator): consumes the
- * minted NFT UTxO and produces a continuing output with an updated inline
- * ChainOfCustody datum (state-machine pattern), signs with cardano-cli, submits.
- *
- * Prerequisites: server running with a Blockfrost backend, payment.skey in the
- * project root, Docker for cardano-cli signing, an NFT minted by
- * test-csl-plutus-mint-preview.ts (set MINT_TX_HASH / MINT_OUTPUT_INDEX below).
- * Usage: npx tsx scripts/testing/test-csl-plutus-spend-preview.ts
- */
+// Parameterized PlutusV3 spend on preview. Moves the minted NFT to an output with an updated datum.
+// Needs a running server, payment.skey and an NFT from test-csl-plutus-mint-preview.ts (set MINT_TX_HASH below).
+// Usage: npx tsx scripts/testing/test-csl-plutus-spend-preview.ts
 
 const ODATA_URL = 'http://localhost:4004/odata/v4/cardano-transaction';
 const ODATA_READ_URL = 'http://localhost:4004/odata/v4/cardano';
@@ -21,7 +14,7 @@ const AUTH_HEADER = 'Basic ' + Buffer.from('alice:').toString('base64');
 const axiosConfig = { headers: { 'Authorization': AUTH_HEADER } };
 
 // ---------------------------------------------------------------------------
-// Configuration — adjust to your wallet and mint transaction
+// Configuration, adjust to your wallet and mint transaction
 // ---------------------------------------------------------------------------
 
 // Wallet address on preview (same as minting wallet)
@@ -44,7 +37,7 @@ const NEXT_HOLDER_VKH = MANUFACTURER_VKH;
 // Pharma Trace PlutusV3 Validator (Aiken v1.1.21, odatano/nft-lock)
 // ---------------------------------------------------------------------------
 
-// Unapplied compiled code from plutus.json — pharma_trace.pharma_trace.spend
+// Unapplied compiled code from plutus.json, pharma_trace.pharma_trace.spend
 // (combined mint+spend validator, so the same hex as the mint script).
 const UNAPPLIED_VALIDATOR_HEX = "5902be010100229800aba2aba1aab9faab9eaab9dab9a9bae00248888889660033001300437540112300730083008300830083008300830083008001911919800800801912cc00400629422b30013371e6eb8c02800400e2946266004004601600280310094dc3a4000911119194c004c024dd5000cc03001a60180049112cc004c01800e264b30013300837586012601c6ea800c02e26644b30010018014566002602600313370e6eb4c040c0480052002801202240442940c8c8cc004004dd59809180998099809980998081baa0052259800800c00e2646644b30013372200e00515980099b8f0070028800c01901244cc014014c05c0110121bae3011001375660240026026002809052f5bded8c114a08060dd7180798069baa0048acc004cdc3a4004007132332259800980498079baa004899192cc004c05400a2b3001300b3011375400719800980a18091baa0039bae30143012375400d2301530160014889660026601e6eb0c040c054dd50051bae300130153754007132323300100137586004602e6ea8030896600200314a1159800992cc004cdc3a400860306ea8006264b300130133019375400313232323298009bad30200019bae30200049bae30200039bae30200024888966002604a00b15980099b8f375c604860446ea8024dd7181218111baa0108acc004cdc79bae300e3022375401201f15980099b8f375c601a60446ea8024dd7180698111baa01089919b87375a600260466ea8028cdc01bad300130233754022900111812981318131813000c52820408a50408114a081022c81186040002603e002603c00260346ea80062c80c0c06cc064dd5000c528202e300330183754603400314a3133002002301b001405880c88c060c064c064006294101322c80822c8098dd7180980098081baa0048b201c301000130103011001300d375400916402c80586016601800260160088a4d13656400801";
 
@@ -59,7 +52,7 @@ const BATCH_ID_HEX = Buffer.from("BATCH-2026-001", 'utf8').toString('hex');
 // Datum & Redeemer construction
 // ---------------------------------------------------------------------------
 
-// Current ChainOfCustody datum (step 0 — as set during mint)
+// Current ChainOfCustody datum (step 0, as set during mint)
 const CURRENT_DATUM = {
   constructor: 0,
   fields: [
@@ -70,7 +63,7 @@ const CURRENT_DATUM = {
   ]
 };
 
-// Updated ChainOfCustody datum (step 1 — after transfer)
+// Updated ChainOfCustody datum (step 1, after transfer)
 const UPDATED_DATUM = {
   constructor: 0,
   fields: [
@@ -81,7 +74,7 @@ const UPDATED_DATUM = {
   ]
 };
 
-// Redeemer: Transfer action — Constr(0, [next_holder_vkh])
+// Redeemer: Transfer action, Constr(0, [next_holder_vkh])
 // The pharma_trace spend validator expects this as the redeemer
 const REDEEMER = {
   constructor: 0,
@@ -118,7 +111,7 @@ const txBodyJsonPath = join(tempDir, 'tx-csl-v3-spend.body.json');
 async function main() {
   try {
 
-    console.log('=== CSL PlutusV3 Pharma Trace Spend (Redeem) — Preview ===');
+    console.log('=== CSL PlutusV3 Pharma Trace Spend (Redeem), Preview ===');
     console.log('');
     console.log('Tests BuildPlutusSpendTransaction with inlineDatumJson (state-machine pattern).');
     console.log('Consumes the minted NFT UTxO and produces a continuing output with updated datum.');

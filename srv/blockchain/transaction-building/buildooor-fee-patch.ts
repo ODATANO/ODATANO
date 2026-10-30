@@ -12,10 +12,8 @@ export interface Rational {
   den: bigint;
 }
 
-/**
- * Reference-script fee as the ledger computes it: `totalBytes` priced tier by tier, each tier
- * 1.2 times the previous, exact rationals, floored once at the end.
- */
+// Ledger reference-script fee: priced tier by tier, each tier 1.2 times the previous.
+// Exact rationals, floored once at the end.
 export function tierRefScriptFee(totalBytes: bigint, pricePerByte: Rational): bigint {
   let remaining = totalBytes;
   let priceNum = pricePerByte.num;
@@ -52,11 +50,8 @@ interface TxBuilderInternals {
   calcLinearFee(tx: Tx): bigint;
 }
 
-/**
- * `TxBuilder.calcMinFee` with the ledger's reference-script rule. Buildooor 0.2.9 prices only the
- * reference inputs, linearly; the ledger also counts scripts on spent inputs and prices in tiers.
- * The rest (linear fee, estimated key witnesses) is Buildooor's own arithmetic.
- */
+// `TxBuilder.calcMinFee` with the ledger's reference-script rule. Buildooor prices only reference
+// inputs, linearly. The ledger also counts scripts on spent inputs and prices them in tiers.
 function calcMinFeeWithRefScripts(this: TxBuilder, tx: Tx, minimum?: CanBeUInteger): bigint {
   const self = this as unknown as TxBuilderInternals;
   const pp = self.protocolParamters;

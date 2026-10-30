@@ -10,11 +10,8 @@ import type { WorkerSignerTypeValue } from './job-store';
 
 const logger = cds.log('CardanoWalletWorker');
 
-/**
- * Wallet-worker signers: `hsm` wraps the process-wide HsmSigner (PKCS#11), `software` holds an
- * Ed25519 key from an env var (plain hex or AES-256-GCM `iv:authTag:ciphertext`, keyed by ENCRYPTION_KEY).
- * Keys are never accepted via OData and never persisted.
- */
+// Wallet-worker signers. hsm wraps the process-wide HsmSigner, software holds an Ed25519 key from an env var.
+// Keys are never accepted via OData and never persisted.
 
 export interface WorkerSigner {
   readonly type: WorkerSignerTypeValue;
@@ -30,14 +27,11 @@ export interface WorkerSigner {
 export interface WorkerWalletConfig {
   walletId: string;
   signerType: WorkerSignerTypeValue;
-  /** software only: env var holding the Ed25519 key — 64-char hex or AES-256-GCM `iv:authTag:ciphertext` (base64). */
+  /** software only. Env var with the Ed25519 key as 64 hex chars or AES-256-GCM `iv:authTag:ciphertext` in base64. */
   keyEnv?: string;
 }
 
-/**
- * Merge a single VKey witness into the witness set at the raw CBOR level, preserving
- * non-vkey entries and encoding metadata. Single-signer semantics as HsmSigner.signTransaction.
- */
+/** Replaces the vkey witnesses in the raw CBOR witness set with this one. Other entries and encoding stay. */
 export function mergeVkeyWitness(unsignedTxCbor: string, publicKeyHex: string, signatureHex: string): string {
   const txObj = Cbor.parse(fromHex(unsignedTxCbor));
   if (!(txObj instanceof CborArray) || txObj.array.length < 2) {
@@ -72,7 +66,7 @@ export function deriveEnterpriseAddress(publicKeyHash: Uint8Array, network: stri
   return bech32.encode(hrp, bech32.toWords(payload), 120);
 }
 
-/** hsm — delegates to the process-wide HsmSigner initialized at bootstrap. */
+/** Delegates to the process-wide HsmSigner set up at bootstrap. */
 class HsmWorkerSigner implements WorkerSigner {
   readonly type = 'hsm' as const;
 
@@ -97,7 +91,7 @@ class HsmWorkerSigner implements WorkerSigner {
   }
 }
 
-/** software — in-memory Ed25519 key (dev/test). */
+/** In-memory Ed25519 key for development and tests. */
 export class SoftwareWorkerSigner implements WorkerSigner {
   readonly type = 'software' as const;
   private readonly privateKey: Uint8Array;

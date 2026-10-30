@@ -21,6 +21,7 @@ const { fakeDb, workerMock, jobStoreMock, serverMock } = vi.hoisted(() => ({
   jobStoreMock: {
     WALLET_JOB_KINDS: ['simpleAda', 'metadata', 'multiAsset', 'mint', 'plutusSpend', 'submitSigned'],
     findDueJobs: vi.fn(async (): Promise<unknown[]> => []),
+    countPendingJobs: vi.fn(async (): Promise<number> => 0),
     getJobById: vi.fn(async (): Promise<unknown> => null),
     insertJob: vi.fn(async (): Promise<unknown> => ({ jobId: 'job-1', status: 'pending', deduplicated: false })),
     markCancelled: vi.fn(async () => true),
@@ -154,10 +155,8 @@ describe('CardanoWorkerService.SubmitWalletJob HSM role gate', () => {
 describe('CardanoWorkerService.SubmitWalletJob validation', () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [
     ['walletId is missing', { ...JOB_DATA, walletId: '  ' }, 'walletId is required'],
-    ['kind is unknown', { ...JOB_DATA, kind: 'teleport' }, 'Invalid kind'],
     ['requestJson is missing', { ...JOB_DATA, requestJson: '' }, 'requestJson is required'],
     ['requestJson is not JSON', { ...JOB_DATA, requestJson: 'not-json' }, 'requestJson'],
-    ['priority is out of range', { ...JOB_DATA, priority: 99_999 }, 'priority must be an integer'],
     ['notBefore is unparseable', { ...JOB_DATA, notBefore: 'whenever' }, 'notBefore must be a valid timestamp'],
     ['idempotencyKey is oversized', { ...JOB_DATA, idempotencyKey: 'x'.repeat(101) }, 'idempotencyKey exceeds'],
   ];
@@ -308,7 +307,7 @@ describe('CardanoWorkerService worker control', () => {
     workerMock.getWalletWorker.mockReturnValue({
       getStatusSummary: () => ({ running: true, wallets: ['treasury'], executing: ['treasury'], awaitingConfirmation: 2 }),
     });
-    jobStoreMock.findDueJobs.mockResolvedValue([{ ID: 'a' }, { ID: 'b' }, { ID: 'c' }]);
+    jobStoreMock.countPendingJobs.mockResolvedValue(3);
     const handlers = boot();
 
     await expect(handlers.GetWorkerStatus(makeReq([], {}))).resolves.toEqual({
@@ -319,7 +318,7 @@ describe('CardanoWorkerService worker control', () => {
   it('GetWorkerStatus falls back to a stopped summary when no worker runs here', async () => {
     workerMock.getWalletWorker.mockReturnValue(undefined);
     // clearAllMocks() clears calls but keeps implementations — be explicit.
-    jobStoreMock.findDueJobs.mockResolvedValue([]);
+    jobStoreMock.countPendingJobs.mockResolvedValue(0);
     const handlers = boot();
 
     await expect(handlers.GetWorkerStatus(makeReq([], {}))).resolves.toEqual({

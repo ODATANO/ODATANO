@@ -1,25 +1,9 @@
 using {odatano.cardano as db} from '../db/schema';
 using {Bech32} from '../db/types';
 
-/**
- * Cardano Sign Service
- *
- * Handles the external signing workflow for Cardano transactions, including:
- * - Creating signing requests with transaction details and signing instructions
- * - Verifying signatures of signed transactions and storing verification results
- * - Submitting verified transactions to the blockchain and tracking submission status
- * - Providing actions for signing with a Hardware Security Module (HSM) and retrieving HSM status
- *
- * Security note: see CardanoODataService (cardano-service.cds) for the rationale on auth
- * without per-resource ownership enforcement. Deliberately NO service-level @requires:
- * CAP checks it on every request BEFORE the operation annotation, which silenced the
- * `any` on VerifyDataSignature (anonymous callers got the 401 challenge first). The
- * requirement therefore sits on each element; VerifyDataSignature alone is public.
- */
-// Service-level 'any' on purpose: CAP authorizes the service BEFORE the operation and
-// treats a service without a service-level @requires as authenticated-user under
-// NODE_ENV=production, which would 401 the anonymous operation below despite its own
-// 'any'. Every element carries its requirement; the service itself refuses nothing.
+// External signing: signing requests, signature checks, submission and HSM signing.
+// The service itself is 'any': CAP checks the service before the operation, so anything stricter
+// would 401 the anonymous VerifyDataSignature. Each element carries its own requirement.
 @requires: 'any'
 service CardanoSignService @(impl: './cardano-sign-service') {
 
@@ -34,7 +18,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
 
     @readonly
     @title      : 'Address Signing Requests'
-    @description: 'Projection for retrieving signing requests by address'
+    @description: 'Signing requests of an address, ordered by request id'
     @requires   : 'authenticated-user'
     entity AddressSigningRequests as projection on db.AddressSigningRequests;
 
@@ -106,8 +90,7 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     // ---------------------------------------------------------------------------
 
     // Public override: this action is the crypto check behind wallet-based LOGIN,
-    // so the caller is not yet authenticated. It is a stateless verification —
-    // no DB write, no key access, no state — so exposing it leaks nothing.
+    // so the caller is not yet authenticated. It writes nothing and touches no key, so it leaks nothing.
     @requires   : 'any'
     @title      : 'Verify Data Signature (CIP-30 signData)'
     @description: 'Verify a COSE_Sign1 message signature against a bech32 address. Confirms the Ed25519 signature, that the signer key hashes to the address payment credential, and (optionally) that the signed payload matches an expected value.'
@@ -155,7 +138,15 @@ service CardanoSignService @(impl: './cardano-sign-service') {
     action GetSigningRequestsByAddress(
                                        @title: 'Bech32 Address'
                                        @description: 'The Bech32 encoded address to retrieve signing requests for'
-                                       address: Bech32) returns array of AddressSigningRequests;
+                                       address: Bech32,
+                                       @title: 'Limit'
+                                       @description: 'Maximum number of rows (default 1000, at most 5000)'
+                                       @assert.range: [1, 5000]
+                                       limit: Integer,
+                                       @title: 'Skip'
+                                       @description: 'Number of rows to skip (default 0)'
+                                       @assert.range: [0, _]
+                                       skip: Integer) returns array of AddressSigningRequests;
 
     // ---------------------------------------------------------------------------
     // HSM (Hardware Security Module) Signing Actions

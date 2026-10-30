@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, TransactionValidationError } from './utils/errors';
 import { getCrawler, isCrawlerRunning, isCrawlerRunningInCluster, startCrawler, stopCrawler } from './blockchain/crawler';
-import { isCrawlerLeaseActive, readCursor } from './blockchain/crawler/sync-state';
+import { isCrawlerLeaseActive, readCursor, type SyncCursor } from './blockchain/crawler/sync-state';
 import { importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts } from './blockchain/crawler/utxo-set-import';
 import { backfillCertificates, type CertificateBackfillProgress } from './blockchain/crawler/certificate-backfill';
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
@@ -79,11 +79,11 @@ type BackfillData = { fromSlot?: string | number | null; toSlot?: string | numbe
 /** Slot range of a backfill: defaults to crawl start .. cursor, never past the cursor. */
 async function backfillRange(db: Parameters<typeof readCursor>[0], data: BackfillData): Promise<{ fromSlot: number; toSlot: number }> {
   const cursor = await readCursor(db);
-  if (!cursor) throw new TransactionValidationError('No crawler cursor yet — the backfill covers crawled blocks only.');
+  if (!cursor) throw new TransactionValidationError('No crawler cursor yet. The backfill covers crawled blocks only.');
   const fromSlot = data.fromSlot != null ? Number(data.fromSlot) : (cursor.startSlot ?? 0);
   const toSlot = data.toSlot != null ? Number(data.toSlot) : cursor.lastSlot;
   if (toSlot < fromSlot) throw new TransactionValidationError(`toSlot ${toSlot} lies before fromSlot ${fromSlot}.`);
-  if (toSlot > cursor.lastSlot) throw new TransactionValidationError(`toSlot ${toSlot} is past the crawler cursor (slot ${cursor.lastSlot}) — only crawled blocks can be backfilled.`);
+  if (toSlot > cursor.lastSlot) throw new TransactionValidationError(`toSlot ${toSlot} is past the crawler cursor (slot ${cursor.lastSlot}). Only crawled blocks can be backfilled.`);
   return { fromSlot, toSlot };
 }
 
@@ -114,16 +114,22 @@ function epochSnapshotSource(): 'ogmios' | 'koios' | null {
   }
 }
 
-/**
- * CardanoIndexerService handlers: control/observability surface over the crawler
- * singleton (srv/blockchain/crawler). Reads the cursor and starts/stops the crawler.
- */
+/** No block committed for this long while the crawler holds its lease: it is stuck. */
+export const CRAWLER_STALL_MS = 10 * 60 * 1000;
+
+/** A crawler that holds the lease but has committed no block within CRAWLER_STALL_MS. */
+export function isCrawlerStalled(cursor: SyncCursor | null, now = Date.now()): boolean {
+  if (!cursor || !isCrawlerLeaseActive(cursor) || !cursor.lastIndexedAt) return false;
+  return now - Date.parse(cursor.lastIndexedAt) > CRAWLER_STALL_MS;
+}
+
+/** CardanoIndexerService handlers. They read the crawler cursor and start or stop the crawler. */
 module.exports = (srv: cds.Service) => {
 
-  // getLiveness — unauthenticated probe (@requires: 'any'); no handleRequest, no app context.
+  // getLiveness: unauthenticated probe. No handleRequest and no app context.
   srv.on('getLiveness', async () => buildLiveness());
 
-  // getStatus — live run state + sync progress (numeric fields as strings, CAP 10 convention)
+  // getStatus: run state and sync progress. Numeric fields are strings, as CAP 10 serializes them.
   srv.on('getStatus', async (req: Request) => {
     return handleRequest(req, async (db) => {
       const cursor = await readCursor(db);
@@ -144,6 +150,8 @@ module.exports = (srv: cds.Service) => {
         tipHeight: String(tipHeight),
         syncProgress: progress.toFixed(2),
         consecutiveErrors: cursor?.consecutiveErrors ?? 0,
+        lastIndexedAt: cursor?.lastIndexedAt ?? null,
+        stalled: isCrawlerStalled(cursor),
         utxoSet: {
           enabled: utxoSetConfigured(),
           status: utxoSetImportInFlight ? 'importing' : (cursor?.utxoSet?.status ?? 'none'),
@@ -193,8 +201,8 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // backfillCertificates — second chain-sync stream over already crawled blocks; writes the
-  // certificate and withdrawal tables only. Validates, then runs detached.
+  // backfillCertificates: a second chain-sync stream over crawled blocks.
+  // Writes only the certificate and withdrawal tables and runs detached.
   srv.on('backfillCertificates', async (req: Request) => {
     const data = (req.data ?? {}) as { fromSlot?: string | number | null; toSlot?: string | number | null };
     if (data.fromSlot != null && !Number.isInteger(Number(data.fromSlot))) return rejectInvalid(req, 'backfillCertificates', 'fromSlot must be an integer', 'fromSlot');
@@ -234,8 +242,8 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  // backfillTransactions — second chain-sync stream over already crawled blocks; fills empty
-  // input fields (outpoint, datum, address) and the redeemers. Validates, then runs detached.
+  // backfillTransactions: a second chain-sync stream over crawled blocks.
+  // Fills empty input fields and the redeemers and runs detached.
   srv.on('backfillTransactions', async (req: Request) => {
     const data = (req.data ?? {}) as BackfillData;
     if (data.fromSlot != null && !Number.isInteger(Number(data.fromSlot))) return rejectInvalid(req, 'backfillTransactions', 'fromSlot must be an integer', 'fromSlot');
@@ -275,8 +283,8 @@ module.exports = (srv: cds.Service) => {
     }
   });
 
-  // backfillPaymentCredentials — walks the UTxO-shaped tables once and fills the credential
-  // from the stored address. No backend; runs detached, progress via getStatus().credentialBackfill.
+  // backfillPaymentCredentials: fills the credential from the stored address in every UTxO table.
+  // Needs no backend and runs detached. Progress is in getStatus().credentialBackfill.
   srv.on('backfillPaymentCredentials', async (req: Request) => {
     if (credentialBackfill.status === 'running') return rejectInvalid(req, 'backfillPaymentCredentials', 'A payment-credential backfill is already running');
     credentialBackfill = { status: 'running', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
@@ -292,8 +300,8 @@ module.exports = (srv: cds.Service) => {
     return { accepted: true, message: 'Payment-credential backfill started; poll getStatus().credentialBackfill.' };
   });
 
-  // backfillAssetDecimals — resolves the CIP-68 reference datum of every label-333/444 catalogue
-  // unit from the crawled chain. No backend; runs detached, progress via getStatus().decimalsBackfill.
+  // backfillAssetDecimals: reads the CIP-68 reference datum of every label 333 and 444 unit.
+  // Needs no backend and runs detached. Progress is in getStatus().decimalsBackfill.
   srv.on('backfillAssetDecimals', async (req: Request) => {
     if (decimalsBackfill.status === 'running') return rejectInvalid(req, 'backfillAssetDecimals', 'An asset-decimals backfill is already running');
     decimalsBackfill = { status: 'running', scanned: 0, candidates: 0, filled: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
@@ -309,17 +317,17 @@ module.exports = (srv: cds.Service) => {
     return { accepted: true, message: 'Asset-decimals backfill started; poll getStatus().decimalsBackfill.' };
   });
 
-  // importUtxoSet — one-off snapshot import that anchors crawler.utxoSet. Validates, then
-  // runs detached; progress via getStatus().utxoSet.
+  // importUtxoSet: one-off snapshot import that anchors crawler.utxoSet.
+  // Runs detached. Progress is in getStatus().utxoSet.
   srv.on('importUtxoSet', async (req: Request) => {
     const data = (req.data ?? {}) as { source?: string; filePath?: string; anchorSlot?: string | number | null; anchorHash?: string | null };
     if (data.source === 'aggregates') {
-      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process — pauseCrawler first');
+      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process. Run pauseCrawler first');
       if (utxoSetImportInFlight) return rejectInvalid(req, 'importUtxoSet', 'A UTxO set import is already running');
       return handleRequest(req, async (db) => {
         const cursor = await readCursor(db);
         const { anchorSlot, anchorHash } = cursor?.utxoSet ?? {};
-        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to rebuild the sums from — run importUtxoSet first.');
+        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to rebuild the sums from. Run importUtxoSet first.');
         utxoSetImportInFlight = rebuildUtxoSetAggregates({ indexer: getCardanoIndexer() })
           .then((r) => logger.info(`UTxO set sums rebuilt: ${r.utxos} rows at ${r.anchor.slot}/${r.anchor.hash}`))
           .catch((err: unknown) => logger.error(`UTxO set aggregate rebuild failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -333,12 +341,12 @@ module.exports = (srv: cds.Service) => {
       });
     }
     if (data.source === 'scripts') {
-      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process — pauseCrawler first');
+      if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process. Run pauseCrawler first');
       if (utxoSetImportInFlight) return rejectInvalid(req, 'importUtxoSet', 'A UTxO set import is already running');
       return handleRequest(req, async (db) => {
         const cursor = await readCursor(db);
         const { anchorSlot, anchorHash } = cursor?.utxoSet ?? {};
-        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to fill — run importUtxoSet first.');
+        if (anchorSlot == null || !anchorHash) throw new TransactionValidationError('No imported UTxO set to fill. Run importUtxoSet first.');
         utxoSetImportInFlight = refreshUtxoSetReferenceScripts({ filePath: data.filePath, client: getCardanoClient() })
           .then((r) => logger.info(`UTxO set reference scripts filled: ${r.updated} of ${r.candidates} rows`))
           .catch((err: unknown) => logger.error(`UTxO set reference-script fill failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -351,8 +359,9 @@ module.exports = (srv: cds.Service) => {
         };
       });
     }
-    const source = data.source === 'file' || data.source === 'ogmios' ? data.source : null;
-    if (!source) return rejectInvalid(req, 'importUtxoSet', 'source must be "ogmios", "file", "aggregates" or "scripts"', 'source');
+    // the model rejects an unknown source and a negative anchorSlot
+    const source = data.source;
+    if (source !== 'file' && source !== 'ogmios') return rejectMissing(req, 'importUtxoSet', 'source');
     if (source === 'file' && !data.filePath) return rejectMissing(req, 'importUtxoSet', 'filePath');
     const anchorGiven = data.anchorSlot != null || !!data.anchorHash;
     if (source === 'file' && !anchorGiven) {
@@ -361,19 +370,19 @@ module.exports = (srv: cds.Service) => {
     if (anchorGiven && (data.anchorSlot == null || !Number.isInteger(Number(data.anchorSlot)) || !isBlockHash(data.anchorHash))) {
       return rejectInvalid(req, 'importUtxoSet', 'anchorSlot must be an integer and anchorHash a 64-hex block hash', 'anchorHash');
     }
-    if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process — pauseCrawler first');
+    if (isCrawlerRunning()) return rejectInvalid(req, 'importUtxoSet', 'Crawler is running in this process. Run pauseCrawler first');
     if (utxoSetImportInFlight) return rejectInvalid(req, 'importUtxoSet', 'A UTxO set import is already running');
     return handleRequest(req, async (db) => {
       const cursor = await readCursor(db);
-      if (!cursor) throw new TransactionValidationError('No crawler cursor yet — start the crawler once before importing.');
-      if (isCrawlerLeaseActive(cursor)) throw new TransactionValidationError('Crawler is running (active lease) — pauseCrawler first.');
+      if (!cursor) throw new TransactionValidationError('No crawler cursor yet. Start the crawler once before importing.');
+      if (isCrawlerLeaseActive(cursor)) throw new TransactionValidationError('Crawler is running (active lease). Run pauseCrawler first.');
       const anchor = anchorGiven
         ? { slot: Number(data.anchorSlot), hash: String(data.anchorHash).toLowerCase() }
         : { slot: cursor.lastSlot, hash: cursor.lastBlockHash ?? '' };
-      if (!anchor.hash) throw new TransactionValidationError('Cursor has no block hash yet — pass anchorSlot + anchorHash.');
+      if (!anchor.hash) throw new TransactionValidationError('Cursor has no block hash yet. Pass anchorSlot + anchorHash.');
       if (cursor.lastSlot > anchor.slot) {
         throw new TransactionValidationError(
-          `Crawler cursor (slot ${cursor.lastSlot}) is past the anchor (slot ${anchor.slot}) — dump the set at or after the cursor.`
+          `Crawler cursor (slot ${cursor.lastSlot}) is past the anchor (slot ${anchor.slot}). Dump the set at or after the cursor.`
         );
       }
       utxoSetImportInFlight = importUtxoSet({
@@ -393,7 +402,7 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // pauseCrawler — stop the stream; the cursor is preserved so resume continues.
+  // pauseCrawler: stops the stream. The cursor is kept, so resume continues from it.
   srv.on('pauseCrawler', async (req: Request) => {
     return handleRequest(req, async () => {
       await stopCrawler(true);
@@ -402,9 +411,8 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // resumeCrawler — (re)start from the persisted cursor. Gated on config.enabled so an
-  // unconfigured crawler is never started (it would sync from genesis). Resume on a running
-  // crawler is a no-op; pauseCrawler first to apply changed config.
+  // resumeCrawler: starts from the stored cursor, only when enabled, since otherwise it would sync from genesis.
+  // A no-op on a running crawler. Pause first to apply changed config.
   srv.on('resumeCrawler', async (req: Request) => {
     let config: CrawlerConfig;
     try {
@@ -414,7 +422,7 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'resumeCrawler', err instanceof Error ? err.message : String(err));
     }
     if (!config.enabled) {
-      return rejectInvalid(req, 'resumeCrawler', 'Crawler is not enabled — set cds.requires.odatano-core.crawler.enabled (or CRAWLER_ENABLED=true) with a start block before resuming.');
+      return rejectInvalid(req, 'resumeCrawler', 'Crawler is not enabled. Set cds.requires.odatano-core.crawler.enabled (or CRAWLER_ENABLED=true) with a start block before resuming.');
     }
     return handleRequest(req, async () => {
       const client = getCardanoClient();

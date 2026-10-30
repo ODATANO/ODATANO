@@ -7,17 +7,13 @@ import { mapTransactionInputAssets, mapTransactionRedeemers, mapTransactionDatum
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { streamCrawledBlocks } from './certificate-backfill';
 import type { LedgerLookup } from '../ledger-state';
-import { TransactionInputs, TransactionInputAssets, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums } from '#cds-models/odatano/cardano';
+import { TransactionInputs, TransactionInputAssets, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums, type TransactionInput } from '#cds-models/odatano/cardano';
 
 const { SELECT, UPDATE, UPSERT, DELETE } = cds.ql;
 const logger = cds.log('TransactionBackfill');
 
-/**
- * Completes transactions the crawl already holds from a second chain-sync stream: input
- * outpoints (spentTxHash / spentOutputIndex), the spent output's datum and reference-script
- * hash, a missing input address, the redeemers and the witness datums. Only empty input fields
- * are filled; a transaction whose stored inputs do not line up with the stream is left as it is.
- */
+// Complete crawled transactions from a second chain-sync stream: spent outputs, input fields,
+// redeemers and witness datums. Only empty fields are filled. Mismatching transactions stay as they are.
 
 export class TransactionBackfillError extends Error {
   constructor(message: string) {
@@ -61,29 +57,14 @@ export interface TransactionBackfillResult extends TransactionBackfillProgress {
   intersection: ChainPoint | 'origin';
 }
 
-interface StoredInputRow {
-  txSeq: number | string;
-  inputIndex: number;
-  address_address: string | null;
-  spentTxHash: string | null;
-  spentOutputIndex: number | null;
-  utxoData_dataHash: string | null;
-  utxoData_inlineDatum: string | null;
-  utxoData_referenceScriptHash: string | null;
-  utxoData_referenceScriptSize: number | null;
-  utxoData_referenceScriptType: string | null;
-  isCollateral: boolean | null;
-  isReference: boolean | null;
-}
+/** A stored input row with its key set. */
+type StoredInputRow = TransactionInput & { txSeq: number | string; inputIndex: number };
 
 const key = (txSeq: number | string, inputIndex: number): string => `${Number(txSeq)}#${Number(inputIndex)}`;
 const lovelaceOf = (i: TxInputLine): string | null => i.amount?.find((a) => a.unit === 'lovelace')?.quantity ?? null;
 
-/**
- * Stored input and streamed input describe the same outpoint: same flags, same outpoint where
- * one is stored, same address and lovelace where both sides know them. A stored address the
- * stream cannot resolve is unverifiable, so it does not match.
- */
+// Whether a stored and a streamed input are the same: same flags, output, address and lovelace
+// where known. A stored address the stream cannot resolve does not match.
 function sameInput(row: StoredInputRow, fresh: TxInputLine, storedLovelace: string | null): boolean {
   if (Boolean(row.isCollateral) !== Boolean(fresh.isCollateral) || Boolean(row.isReference) !== Boolean(fresh.isReference)) return false;
   if (row.spentTxHash != null) {
@@ -96,10 +77,7 @@ function sameInput(row: StoredInputRow, fresh: TxInputLine, storedLovelace: stri
   return storedLovelace == null || freshLovelace == null || String(storedLovelace) === String(freshLovelace);
 }
 
-/**
- * Stored rows in the stream's order when they hold the same outpoints with the same flags, each
- * once; null otherwise (a row without outpoint cannot be placed).
- */
+/** Stored rows in stream order if they hold the same outputs once each, else null. */
 function reorderByOutpoint(rows: StoredInputRow[], fresh: TxInputLine[]): StoredInputRow[] | null {
   if (rows.length !== fresh.length || rows.some((r) => r.spentTxHash == null)) return null;
   const byOutpoint = new Map<string, StoredInputRow[]>();
@@ -162,11 +140,8 @@ const FILL_COLUMNS: Array<[column: string, sqlType: string]> = [
   ['hasAssets', 'boolean'],
 ];
 
-/**
- * One UPDATE per chunk: the fills travel as a JSON array and are joined on (txSeq, inputIndex).
- * COALESCE keeps any value that is already there. Postgres and SQLite; other databases get one
- * UPDATE per row.
- */
+// One UPDATE per chunk that joins a JSON array of fills on the input key. COALESCE keeps existing
+// values. Null for databases other than Postgres and SQLite, which update row by row.
 export function inputFillStatement(kind: string): string | null {
   const set = FILL_COLUMNS
     .map(([c]) => c.startsWith('has')
@@ -205,10 +180,7 @@ async function writeInputFills(tx: CapTransaction, fills: InputFill[]): Promise<
   }
 }
 
-/**
- * Rewrites the input rows of one transaction as the ledger view: the kept rows (and their assets)
- * move to their position, rows left out are dropped, empty fields are filled on the way.
- */
+// Rewrite one transaction's inputs in ledger order. Rows left out are dropped, empty fields filled.
 async function rewriteInOrder(tx: CapTransaction, seq: number, ordered: StoredInputRow[], fresh: TxInputLine[]): Promise<void> {
   const assets = (await tx.run(SELECT.from(TransactionInputAssets).where({ input_txSeq: seq }))) as Array<Record<string, unknown>> ?? [];
   const newIndex = new Map(ordered.map((r, i) => [Number(r.inputIndex), i]));
@@ -223,11 +195,8 @@ async function rewriteInOrder(tx: CapTransaction, seq: number, ordered: StoredIn
   if (movedAssets.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(movedAssets));
 }
 
-/**
- * Deletes stored outputs the ledger never produced: a provider lists the collateral return of a
- * valid transaction, and the declared outputs of a phase-2 failure. Only when every output of the
- * stream is stored, so a gap is never mistaken for an extra. Returns the transactions touched.
- */
+// Delete outputs the ledger never produced, which some providers list for phase-2 results.
+// Runs only when every streamed output is stored. Returns the transactions touched.
 async function dropUnappliedOutputs(tx: CapTransaction, txs: Transaction[]): Promise<number[]> {
   const wanted = new Map(txs.map((t) => [txSeqOf(t.slot, t.index), new Set((t.outputs ?? []).map((o) => o.outputIndex))]));
   const stored = new Map<number, number[]>();
@@ -305,7 +274,7 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
             continue;
           }
           progress.skipped++;
-          logger.debug(`Transaction ${t.hash}: stored inputs differ from the stream — left as it is`);
+          logger.debug(`Transaction ${t.hash}: stored inputs differ from the stream, left as it is`);
           continue;
         }
         for (let i = 0; i < inputs.length; i++) {

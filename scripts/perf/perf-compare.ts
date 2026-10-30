@@ -1,19 +1,6 @@
-/**
- * ODATANO Backend Comparison Benchmark
- *
- * Automatically starts the server with different backend configs (Koios, Blockfrost),
- * runs the full benchmark against each, measures server startup time, and outputs
- * a side-by-side comparison.
- *
- * Prerequisites:
- *   - .env file with BLOCKFROST_API_KEY and KOIOS_API_KEY set
- *   - No other cds watch running on the same port
- *
- * Usage:
- *   npx tsx scripts/perf-compare.ts
- *   npx tsx scripts/perf-compare.ts --rounds 5
- *   npx tsx scripts/perf-compare.ts --port 4005
- */
+// Starts the server once per backend config, runs the benchmark and prints a side-by-side comparison.
+// Needs BLOCKFROST_API_KEY and KOIOS_API_KEY in .env and a free port.
+// Usage: npx tsx scripts/perf/perf-compare.ts [--rounds 5] [--port 4005]
 
 import { spawn, execSync, ChildProcess } from "child_process";
 import axios from "axios";
@@ -219,7 +206,7 @@ function cleanDatabase() {
     try {
       fs.unlinkSync(filePath);
     } catch {
-      // File doesn't exist — that's fine
+      // File doesn't exist, which is fine
     }
   }
   // Redeploy schema so cds watch finds the tables
@@ -380,15 +367,15 @@ function printComparison(result: CompareResult) {
     const backends = config.env.BACKENDS.split(",");
     for (const backend of backends) {
       if (backend === "ogmios" && !config.env.OGMIOS_URL) {
-        console.error(`  ERROR: OGMIOS_URL not set in .env — cannot benchmark ${config.name}`);
+        console.error(`  ERROR: OGMIOS_URL not set in .env, cannot benchmark ${config.name}`);
         process.exit(1);
       }
       if (backend === "blockfrost" && !config.env.BLOCKFROST_API_KEY) {
-        console.error(`  ERROR: BLOCKFROST_API_KEY not set in .env — cannot benchmark ${config.name}`);
+        console.error(`  ERROR: BLOCKFROST_API_KEY not set in .env, cannot benchmark ${config.name}`);
         process.exit(1);
       }
       if (backend === "koios" && !config.env.KOIOS_API_KEY) {
-        console.error(`  ERROR: KOIOS_API_KEY not set in .env — cannot benchmark ${config.name}`);
+        console.error(`  ERROR: KOIOS_API_KEY not set in .env, cannot benchmark ${config.name}`);
         process.exit(1);
       }
     }

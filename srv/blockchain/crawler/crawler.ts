@@ -15,8 +15,7 @@ import {
   AddressTransactions,
   AddressUTxOs,
   UTxOAssets,
-  // the entity name is already plural-ish, so the typer's plural (array) class
-  // carries a trailing underscore — that's the CQL-target class, like Blocks/Transactions
+  // The typer appends an underscore to the plural class of this entity name.
   AssetHistory_ as AssetHistory,
   CardanoReorgLog,
   PoolEpochSnapshots,
@@ -72,39 +71,24 @@ export interface CrawlerConfig {
   confirmationDepth: number;
   /** Poll cadence when caught up / on transient errors (pagination path). */
   pollIntervalMs: number;
-  /** Write mint/burn rows into AssetHistory. Free — no provider call. */
+  /** Write mint and burn rows into AssetHistory. Needs no provider call. */
   assetHistory: boolean;
-  /**
-   * `off` — nothing; `bare` — one Assets row per unit from block data alone (free);
-   * `enrich` — additionally resolve supply/registry data in the background, rate limited.
-   */
+  /** `bare` writes one Assets row per unit from block data. `enrich` also fetches registry data, rate limited. */
   assetCatalogue: 'off' | 'bare' | 'enrich';
   /** Units per second the background enrichment resolves (`assetCatalogue: 'enrich'` only). */
   assetEnrichRate: number;
   /** Snapshot every pool, DRep and the ada pots at each epoch boundary (Ogmios, or Koios at the tip). */
   epochSnapshots: boolean;
-  /**
-   * Write TransactionCertificates + TransactionWithdrawals per block (ledger-state
-   * coverage). Free on Ogmios chain-sync and Koios; Blockfrost does not report them.
-   */
+  /** Write certificates and withdrawals per block. Ogmios and Koios report them, Blockfrost does not. */
   certificates: boolean;
-  /**
-   * Maintain the crawler-fed UTxO set (`LedgerUTxOs` / `LedgerAddresses` / `LedgerAccounts`).
-   * Needs a one-off snapshot import (`importUtxoSet`) to become active.
-   */
+  /** Maintain the Ledger* UTxO tables. Inactive until `importUtxoSet` has run once. */
   utxoSet: boolean;
-  /**
-   * Treat the crawled chain as complete: a block, transaction, metadata or asset the database
-   * does not hold is answered 404 instead of asking a provider (crawl from Shelley, synced).
-   */
+  /** Answer 404 for chain data the database lacks instead of asking a provider. Needs a full synced crawl. */
   authoritative?: boolean;
 }
 
-/**
- * Pre-sync engine: streams the chain forward from a start block and bulk-indexes it. Sources:
- * Ogmios chain-sync (primary, native rollBackward) or Blockfrost/Koios pagination (fallback).
- * Per-block writes are atomic; stop() awaits the detached pipeline; no implicit genesis crawl.
- */
+// Streams the chain forward from a start block and bulk-indexes it.
+// Ogmios chain-sync is the primary source, provider pagination the fallback. Each block is written atomically.
 export class CardanoCrawler {
   /** Transient-failure retries per block before giving up. */
   private static readonly PERSIST_RETRIES = 3;
@@ -112,10 +96,7 @@ export class CardanoCrawler {
   private static readonly POISON_BLOCK_THRESHOLD = 5;
   /** Process-wide, survives instance restarts: the block currently failing and how often. */
   private static poison: { hash: string; failures: number } | null = null;
-  /**
-   * Errors deterministic for the block's data — only these count towards the poison latch.
-   * Outages, statement timeouts and exhausted pools are fixed by a restart and must not latch.
-   */
+  /** Errors caused by the block's data. Only these count towards the poison latch, outages never do. */
   private static readonly DATA_REJECTION_PATTERNS: readonly RegExp[] = [
     /unsupported unicode escape sequence/i, // PostgreSQL: U+0000 inside a JSON document
     /invalid byte sequence for encoding/i,  // PostgreSQL: bytes that are not valid UTF-8
@@ -145,7 +126,7 @@ export class CardanoCrawler {
   private chainSyncProbeTimer: ReturnType<typeof setTimeout> | null = null;
   private chainSyncProbe: Promise<void> | null = null;
   private chainSyncRecovered = false;
-  /** The detached ingest pipeline — awaited by stop() so teardown never races it. */
+  /** The detached ingest pipeline. stop() awaits it so teardown never races it. */
   private pipeline: Promise<void> | null = null;
   /** Resolver that cancels a pending poll sleep (set while sleeping). */
   private wake: (() => void) | null = null;
@@ -163,7 +144,7 @@ export class CardanoCrawler {
   /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
   private streamEnded: (() => void) | null = null;
   private finalStatus: CrawlSyncStatusValue = 'stopped';
-  /** Set only by an unrecoverable halt — clears desiredRunning so restarts stay down. */
+  /** Set only by an unrecoverable halt. It clears desiredRunning so restarts stay down. */
   private latchOnHalt = false;
   /** Distance to k at which a block no longer counts as acquirable (the tip moves on while we query). */
   private static readonly SNAPSHOT_WINDOW_MARGIN = 10;
@@ -202,11 +183,7 @@ export class CardanoCrawler {
     return this.running ? this.activeSource : null;
   }
 
-  /**
-   * Start crawling. Does NOT await the ingest pipeline (fire-and-forget).
-   * Refuses to start without a resume point: an explicit configured start block or an
-   * existing cursor — never an implicit full-chain sync from genesis.
-   */
+  /** Start crawling without awaiting the pipeline. Refuses without a start block or cursor, never syncs from genesis. */
   async start(): Promise<void> {
     if (this.running) return;
     if (this.haltPromise) await this.haltPromise;
@@ -220,7 +197,7 @@ export class CardanoCrawler {
     const cursor = await cds.tx((tx) => ensureSyncStateSingleton(tx, this.network, start));
 
     if (!cursor.lastBlockHash && !start) {
-      logger.error('Crawler start refused: no start block configured and no existing cursor — set crawler.startSlot + crawler.startBlockHash.');
+      logger.error('Crawler start refused: no start block configured and no existing cursor. Set crawler.startSlot + crawler.startBlockHash.');
       return;
     }
 
@@ -243,14 +220,13 @@ export class CardanoCrawler {
       utxoSet: this.config.utxoSet,
       authoritative: this.config.authoritative ?? false,
     });
-    // Ledger state is only ever applied from a known anchor — no snapshot, no writes.
+    // Ledger state is only applied after an imported snapshot.
     if (this.config.utxoSet) {
       const u = cursor.utxoSet;
-      // Blocks crawled while the mode was off never reached the ledger tables: the cursor is
-      // ahead of the last applied slot and the set cannot be caught up — invalidate it.
+      // Blocks crawled while the mode was off never reached the ledger tables, so the set is stale.
       const lastApplied = u.appliedSlot ?? u.anchorSlot;
       if (u.status === 'active' && lastApplied != null && cursor.lastSlot > lastApplied) {
-        const error = `cursor at slot ${cursor.lastSlot} is past the last ledger-applied slot ${lastApplied} — blocks were crawled without the set; re-import`;
+        const error = `cursor at slot ${cursor.lastSlot} is past the last ledger-applied slot ${lastApplied}: blocks were crawled without the set; re-import`;
         await cds.tx((tx) => setUtxoSetState(tx, { status: 'invalid', error }));
         u.status = 'invalid';
         u.error = error;
@@ -258,11 +234,11 @@ export class CardanoCrawler {
       if (u.status === 'active' && u.anchorSlot != null && u.anchorHash) {
         this.indexer.setUtxoAnchor({ slot: u.anchorSlot, hash: u.anchorHash });
         void this.indexer.paymentCredentialsReady();
-        logger.info(`UTxO set active from anchor ${u.anchorSlot}/${u.anchorHash} — ledger tables are maintained`);
+        logger.info(`UTxO set active from anchor ${u.anchorSlot}/${u.anchorHash}, ledger tables are maintained`);
       } else {
         this.indexer.setUtxoAnchor(null);
         logger.error(
-          `crawler.utxoSet is enabled but the UTxO set is "${u.status}"${u.error ? ` (${u.error})` : ''} — ` +
+          `crawler.utxoSet is enabled but the UTxO set is "${u.status}"${u.error ? ` (${u.error})` : ''}: ` +
           'ledger tables are not maintained until importUtxoSet has run (pause the crawler first)'
         );
       }
@@ -271,8 +247,7 @@ export class CardanoCrawler {
     }
     this.startLeaseHeartbeat();
 
-    // A pipeline crash (e.g. chain-sync intersection not found after downtime) must
-    // surface on the cursor — otherwise the crawler looks healthy while doing nothing.
+    // A pipeline crash must show on the cursor, or the crawler looks healthy while idle.
     this.pipeline = this.runIngestPipeline().catch(async (err) => {
       if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) {
         await this.halt('stopped');
@@ -284,21 +259,15 @@ export class CardanoCrawler {
     });
   }
 
-  /**
-   * Stop crawling and await the pipeline's in-flight step, so callers can tear down
-   * backends/DB afterwards.
-   */
+  /** Stop crawling and await the in-flight step, so callers can tear down backends and the DB. */
   async stop(finalStatus: CrawlSyncStatusValue = 'stopped'): Promise<void> {
     this.beginHalt(finalStatus);
     if (this.haltPromise) await this.haltPromise;
     this.pipeline = null;
   }
 
-  /**
-   * Halt without awaiting the pipeline — safe to call from inside it.
-   * @param latch clears `desiredRunning` so no restart brings the crawler back; only for failures
-   *   a restart cannot fix (misconfiguration, missing resume point), never for runtime outages.
-   */
+  // Halt without awaiting the pipeline, so it is safe to call from inside it.
+  // `latch` keeps the crawler down across restarts. Use it only for misconfiguration, never for outages.
   private async halt(finalStatus: CrawlSyncStatusValue = 'stopped', latch = false): Promise<void> {
     this.beginHalt(finalStatus, latch);
   }
@@ -310,11 +279,11 @@ export class CardanoCrawler {
     if (this.finalStatus !== 'error' || finalStatus === 'error') this.finalStatus = finalStatus;
     this.running = false;
     this.activeSource = null;
-    // Background asset enrichment belongs to the crawl — it must not outlive it.
+    // Background asset enrichment belongs to the crawl and must not outlive it.
     this.indexer.stopAssetEnrichment();
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
     this.stopChainSyncProbing();
-    this.streamEnded?.(); // release the ingest loop — beginHalt awaits the pipeline below
+    this.streamEnded?.(); // release the ingest loop, the pipeline is awaited below
     this.leaseWake?.();
     for (const cancel of [...this.callCancels]) cancel();
     if (this.haltPromise) return;
@@ -364,16 +333,15 @@ export class CardanoCrawler {
           if (this.reopenStream) { this.reopenStream = false; continue; }
           if (failure?.height == null) return;
           logger.warn(
-            `chain-sync cannot deliver block ${failure.height} — switching to pagination until it is behind the cursor`
+            `chain-sync cannot deliver block ${failure.height}, switching to pagination until it is behind the cursor`
           );
           await this.runPagination({ untilHeight: failure.height + 1 });
         }
         return;
       }
       if (this.config.source === 'ogmios') {
-        // 'ogmios' means chain-sync ONLY — never silently degrade to the weaker
-        // pagination reorg handling the operator explicitly opted out of.
-        logger.error("Crawler source is 'ogmios' but no chain-sync backend is available — crawler not started (use source 'auto' to allow pagination fallback).");
+        // 'ogmios' means chain-sync only. Never fall back to pagination the operator opted out of.
+        logger.error("Crawler source is 'ogmios' but no chain-sync backend is available. Crawler not started (use source 'auto' to allow pagination fallback).");
         await this.halt('error', true); // config error: a restart cannot fix it
         return;
       }
@@ -383,20 +351,17 @@ export class CardanoCrawler {
       }
       // 'auto' with no usable chain-sync backend (typical while the node still replays after a
       // restart): crawl on pagination and keep retrying chain-sync.
-      logger.warn('No chain-sync backend usable — crawling on pagination and retrying chain-sync periodically');
+      logger.warn('No chain-sync backend usable, crawling on pagination and retrying chain-sync periodically');
       await this.runPagination({ untilChainSync: true });
       // Returned because chain-sync came back (or we stopped): the loop reopens it.
     }
   }
 
-  /**
-   * Retry the init of a chain-sync backend on its own timer (a poll sleep can be an hour long),
-   * one probe at a time. On success `chainSyncRecovered` is set and a pending sleep is cut short;
-   * the pagination loop leaves at its next check and the ingest loop reopens chain-sync.
-   */
+  // Retry the chain-sync init on its own timer, because a poll sleep can last an hour.
+  // On success the sleep is cut short and the ingest loop reopens chain-sync.
   private startChainSyncProbing(): void {
     this.chainSyncRecovered = false;
-    // The startup init has only just failed — give the node a full interval first.
+    // The startup init has just failed, so give the node a full interval first.
     this.scheduleChainSyncProbe();
   }
 
@@ -427,7 +392,7 @@ export class CardanoCrawler {
     this.chainSyncProbeTimer = null;
   }
 
-  /** Bound a direct backend call — these bypass the client's timeout/breaker layer. */
+  /** Bound a direct backend call. These calls bypass the client's timeout and circuit breaker. */
   private withTimeout<T>(p: Promise<T>, label: string, ms = CardanoCrawler.CALL_TIMEOUT_MS): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -455,14 +420,14 @@ export class CardanoCrawler {
   }
 
   // ---------------------------------------------------------------------------
-  // Chain-sync (Ogmios) — primary, reorg-aware
+  // Chain-sync (Ogmios): primary source, reorg-aware
   // ---------------------------------------------------------------------------
 
   private async runChainSync(backend: ChainSyncBackend): Promise<void> {
     const cursor = await cds.tx((tx) => readCursor(tx));
     const points = await this.buildIntersectionPoints(cursor);
     if (!points.length) {
-      // Defense in depth — start() already refuses this state.
+      // start() already refuses this state.
       logger.error('Chain-sync refused: no resume point (configured start block or cursor) available.');
       await this.halt('error', true); // config error: a restart cannot fix it
       return;
@@ -476,30 +441,27 @@ export class CardanoCrawler {
       }),
       rollBackward: (point) => this.trackCallback(async () => {
         if (!this.running) return;
-        // Ogmios ALWAYS opens the stream with a rollBackward to the intersection
-        // point — that is the protocol handshake, not a reorg. Only roll back when
-        // the point differs from our cursor.
+        // Ogmios always opens the stream with a rollBackward to the intersection. That is the
+        // handshake, not a reorg, so only roll back when the point differs from the cursor.
         const current = await cds.tx((tx) => readCursor(tx));
         if (point !== 'origin' && current?.lastBlockHash === point.hash) {
-          logger.debug(`chain-sync intersection acknowledged at slot ${point.slot} — no reorg`);
+          logger.debug(`chain-sync intersection acknowledged at slot ${point.slot}, no reorg`);
           return;
         }
         await this.handleReorg(point);
       }),
       onError: (err) => this.trackCallback(async () => {
         if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) return;
-        // A frame the client's parser cannot handle is a fault of that one block, not of the
-        // crawler or the node — pagination can still fetch it, so degrade instead of halting.
+        // An unparseable frame is a fault of that one block. Pagination can still fetch it.
         if (err instanceof ChainSyncFrameError && this.canDegradeToPagination(err)) {
           await this.degradeToPagination(err);
           return;
         }
-        // The server dropped the socket. After progress: reopen at the cursor. Without progress
-        // the server fails on the next block itself (e.g. a header it cannot decode): fetch that
-        // block over pagination, then chain-sync takes over again.
+        // Socket dropped. After progress, reopen at the cursor. Without progress the server
+        // cannot decode the next block, so fetch that block over pagination first.
         if (err instanceof ChainSyncClosedError) {
           if (this.blocksThisStream > 0) {
-            logger.warn(`${err.message} after ${this.blocksThisStream} block(s) — reopening chain-sync at the cursor`);
+            logger.warn(`${err.message} after ${this.blocksThisStream} block(s), reopening chain-sync at the cursor`);
             await this.endStream(() => { this.reopenStream = true; });
             return;
           }
@@ -509,15 +471,14 @@ export class CardanoCrawler {
             return;
           }
         }
-        // The stream is stalled (mapping/callback failure) — record and halt cleanly
-        // so the cursor status shows 'error' instead of a healthy-looking hang.
+        // Record and halt, so the cursor shows 'error' instead of a healthy-looking hang.
         const streak = await this.recordCrawlerError(err);
-        logger.error('Chain-sync stream error — stopping crawler:', err);
+        logger.error('Chain-sync stream error, stopping crawler:', err);
         await this.halt(streak < 0 ? 'stopped' : 'error');
       }),
     });
 
-    // stop() may have raced the async open — close the fresh socket instead of leaking it.
+    // stop() may have raced the async open. Close the fresh socket instead of leaking it.
     if (!this.running) {
       try { await handle.close(); } catch { /* best effort */ }
       return;
@@ -534,24 +495,17 @@ export class CardanoCrawler {
     return failure;
   }
 
-  /**
-   * Whether an unparseable frame can be worked around over HTTP: needs a height, a paginating
-   * backend, and a source not pinned to 'ogmios' (chain-sync only).
-   */
   private canDegradeToPagination(err: ChainSyncFrameError): boolean {
     return err.height != null
       && this.config.source !== 'ogmios'
       && !!this.client.getPaginatingBackend();
   }
 
-  /**
-   * End the chain-sync stream and hand back to the ingest loop, which continues on pagination
-   * past the offending block. The error is recorded first so `lastError` names the block.
-   */
+  /** End the stream so the ingest loop passes the bad block on pagination. Records first, so `lastError` names it. */
   private async degradeToPagination(err: ChainSyncFrameError | ChainSyncStalledError): Promise<void> {
     const streak = await this.recordCrawlerError(err);
     if (streak < 0) { await this.halt('stopped'); return; }
-    logger.error('Chain-sync cannot deliver a block — continuing on pagination:', err.message);
+    logger.error('Chain-sync cannot deliver a block, continuing on pagination:', err.message);
     await this.endStream(() => { this.frameFailure = err; });
   }
 
@@ -566,11 +520,8 @@ export class CardanoCrawler {
     this.streamEnded?.();
   }
 
-  /**
-   * Candidate intersection points, newest first: the cursor, a ladder of already-crawled
-   * ancestors, then the configured start block. If the cursor's block was orphaned while the
-   * crawler was down, the node intersects at the last common ancestor and reports a rollBackward.
-   */
+  // Intersection points, newest first: cursor, crawled ancestors, configured start block.
+  // The ancestors let the node find the last common block if the cursor was orphaned.
   private async buildIntersectionPoints(cursor: Awaited<ReturnType<typeof readCursor>>): Promise<ChainPoint[]> {
     const points: ChainPoint[] = [];
     const seen = new Set<string>();
@@ -618,14 +569,10 @@ export class CardanoCrawler {
   }
 
   // ---------------------------------------------------------------------------
-  // Pagination (Blockfrost/Koios) — fallback
+  // Pagination (Blockfrost, Koios): fallback source
   // ---------------------------------------------------------------------------
 
-  /**
-   * @param untilHeight return once the cursor reaches it — walks past a block chain-sync
-   *   cannot deliver, then hands back.
-   * @param untilChainSync retry a chain-sync backend in the background; return once one is usable.
-   */
+  /** `untilHeight` returns once the cursor reaches it. `untilChainSync` returns once chain-sync is usable again. */
   private async runPagination(opts: { untilHeight?: number; untilChainSync?: boolean } = {}): Promise<void> {
     if (opts.untilChainSync) this.startChainSyncProbing();
     try {
@@ -638,7 +585,7 @@ export class CardanoCrawler {
   private async paginate({ untilHeight, untilChainSync = false }: { untilHeight?: number; untilChainSync?: boolean }): Promise<void> {
     const backend = this.client.getPaginatingBackend();
     if (!backend) {
-      logger.error('No paginating backend available — cannot crawl without Ogmios or Blockfrost/Koios');
+      logger.error('No paginating backend available: cannot crawl without Ogmios or Blockfrost/Koios');
       await this.halt('error', true); // config error: a restart cannot fix it
       return;
     }
@@ -646,15 +593,14 @@ export class CardanoCrawler {
     this.activeSource = 'pagination';
     logger.info('Crawler running (pagination)');
 
-    // Tip cache, refreshed only when the cursor reaches the cached target; during catch-up
-    // the exact tip is irrelevant.
+    // Tip cache, refreshed only when the cursor reaches the cached target.
     let tip: BlockData | null = null;
     let target = Number.NEGATIVE_INFINITY;
 
     while (this.running) {
       try {
         if (untilChainSync && this.chainSyncRecovered) {
-          logger.info('chain-sync backend usable again — leaving pagination');
+          logger.info('chain-sync backend usable again, leaving pagination');
           return;
         }
 
@@ -666,7 +612,7 @@ export class CardanoCrawler {
         }
 
         if (untilHeight != null && cursor.lastHeight >= untilHeight) {
-          logger.info(`pagination reached block ${cursor.lastHeight} — handing back to chain-sync`);
+          logger.info(`pagination reached block ${cursor.lastHeight}, handing back to chain-sync`);
           return;
         }
 
@@ -675,8 +621,7 @@ export class CardanoCrawler {
           target = (tip.height ?? 0) - this.config.confirmationDepth;
         }
         const tipHeight = tip.height ?? 0;
-        // Unknown tip slot must mean "NOT at tip" — a 0-fallback would mark every
-        // block 'synced' (block.slot >= 0 is always true).
+        // An unknown tip slot means "not at tip". A 0 fallback would mark every block 'synced'.
         const tipPoint: ChainPoint | undefined = tip.slot != null
           ? { slot: tip.slot, hash: tip.hash, height: tipHeight }
           : undefined;
@@ -693,8 +638,7 @@ export class CardanoCrawler {
         }
 
         const blocks = await this.withTimeout(
-          // pass the cursor height as anchor hint (>0 only — 0 can mean "unknown"
-          // on a fresh start without configured startHeight)
+          // Cursor height as a hint. Height 0 can mean unknown on a fresh start.
           backend.getNextBlocks(cursor.lastBlockHash, this.config.batchSize, cursor.lastHeight > 0 ? cursor.lastHeight : undefined),
           'getNextBlocks',
         );
@@ -706,16 +650,14 @@ export class CardanoCrawler {
           const txs = await this.withTimeout(backend.getBlockTransactions(block.hash), 'getBlockTransactions');
           const ok = await this.persistBlock(block, txs, tipPoint);
           if (!ok) return; // persistBlock already recorded + halted
-          // Chain-sync came back mid-batch: the block just written is complete and on the
-          // cursor, the rest of the batch is cheaper to stream than to fetch one by one.
+          // Chain-sync came back mid-batch. Streaming the rest is cheaper than fetching it.
           if (untilChainSync && this.chainSyncRecovered) break;
         }
       } catch (err) {
         if (!this.running || err instanceof CrawlerStoppedError) return;
 
-        // Only the backend's explicit anchor/hash mismatch proves that our cursor may
-        // be orphaned. Provider outages and partial tx responses must back off instead
-        // of launching up to 100 additional provider calls.
+        // Only an explicit chain point mismatch suggests an orphaned cursor.
+        // Outages back off instead of starting up to 100 more provider calls.
         if (err instanceof Error && err.message.startsWith(CHAIN_POINT_MISMATCH_PREFIX)) {
           const recovered = await this.tryReorgRecovery(backend).catch(() => false);
           if (recovered) continue;
@@ -731,20 +673,14 @@ export class CardanoCrawler {
     }
   }
 
-  /**
-   * Poll pause between pagination rounds; skipped when a chain-sync handover is already due,
-   * since the probe's wake-up only reaches a sleep that has begun.
-   */
+  /** Skipped when a chain-sync handover is due, since the probe's wake-up only reaches a running sleep. */
   private async pollPause(untilChainSync: boolean): Promise<void> {
     if (untilChainSync && this.chainSyncRecovered) return;
     await this.sleep(this.config.pollIntervalMs);
   }
 
-  /**
-   * Pagination reorg recovery: walk back by height comparing the on-chain block hash with
-   * our stored one until they agree — that height is the fork point. If the last-indexed
-   * block still matches on-chain, there is no reorg (returns false → treat as transient).
-   */
+  // Walk back by height until the on-chain hash matches the stored one. That height is the fork point.
+  // Returns false if the cursor block still matches, so the error counts as transient.
   private async tryReorgRecovery(backend: PaginatingBackend): Promise<boolean> {
     if (!this.running) return false;
     const cursor = await cds.tx((tx) => readCursor(tx));
@@ -766,8 +702,7 @@ export class CardanoCrawler {
       const ours = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).where({ height: h }))) as { hash?: string } | undefined;
       if (ours?.hash && onChain.hash === ours.hash) {
         if (h === cursor.lastHeight) return false; // tip still matches → not a reorg
-        // A null provider slot would make forkSlot 0 and wipe the entire crawled dataset —
-        // abort this round instead.
+        // A null slot would make forkSlot 0 and wipe all crawled data.
         if (onChain.slot == null) return false;
         await this.handleReorg({ slot: onChain.slot, hash: onChain.hash, height: h });
         return true;
@@ -780,11 +715,7 @@ export class CardanoCrawler {
   // Persist + reorg (shared)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Persist one block atomically and advance the cursor. Transient failures are retried; the
-   * cursor is not advanced on failure, so a resume re-syncs from it. Marks 'synced' at the tip.
-   * @returns true when the block was persisted, false when the crawler was stopped
-   */
+  /** Persist one block atomically and advance the cursor. Returns false when the crawler stopped. */
   private async persistBlock(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<boolean> {
     if (txs.length !== block.txCount) {
       throw new ProviderUnavailableError(
@@ -794,8 +725,7 @@ export class CardanoCrawler {
     }
     const isAtTip = tip != null && block.slot != null && block.slot >= tip.slot;
 
-    // Epoch enrichment needs a backend round-trip on epoch boundaries — do it BEFORE
-    // opening the write transaction so the DB lock is never held across network I/O.
+    // Fetch epoch data before the write transaction, so no DB lock is held across network I/O.
     if (block.epoch != null) {
       await this.indexer.prefetchCrawlEpoch(block.epoch);
     }
@@ -805,8 +735,7 @@ export class CardanoCrawler {
       try {
         await cds.tx(async (tx) => {
           await this.indexer.indexBlockFull(tx, block, txs);
-          // Ledger progress marker: written in the same statement as the cursor, so "the
-          // cursor is ahead of the marker" always means blocks went by without the set.
+          // Written with the cursor, so a cursor ahead of this marker means blocks skipped the set.
           const anchor = this.indexer.getUtxoAnchor();
           const ledgerApplied = anchor != null && (block.slot ?? 0) > anchor.slot;
           // The cursor UPDATE also renews and fences the lease; a lost lease rolls the block back.
@@ -823,14 +752,12 @@ export class CardanoCrawler {
         this.leaseRenewedAt = Date.now();
         this.indexer.confirmBlockCommit();
         if (CardanoCrawler.poison?.hash === block.hash) CardanoCrawler.poison = null;
-        // A ledger invalidation decided inside the block transaction takes effect in memory
-        // only now, after the commit that carries it — a rolled-back attempt changes nothing.
+        // Applied in memory only after the commit, so a rolled-back attempt changes nothing.
         const invalidation = this.indexer.takeLedgerInvalidation();
         if (invalidation) {
-          logger.error(`UTxO set invalidated: ${invalidation} — ledger tables stop updating until importUtxoSet runs again`);
+          logger.error(`UTxO set invalidated: ${invalidation}. Ledger tables stop updating until importUtxoSet runs again`);
         }
-        // Notify observers (wallet-worker confirmation tracker) AFTER the commit —
-        // listener failures are swallowed inside emitBlockIndexed.
+        // Notify observers after the commit. emitBlockIndexed swallows listener failures.
         emitBlockIndexed({
           hash: block.hash,
           slot: block.slot ?? null,
@@ -853,7 +780,7 @@ export class CardanoCrawler {
           return false;
         }
         if (attempt < CardanoCrawler.PERSIST_RETRIES && streak < MAX_CONSECUTIVE_ERRORS) {
-          logger.warn(`persistBlock ${block.hash} failed (attempt ${attempt}/${CardanoCrawler.PERSIST_RETRIES}, streak ${streak}) — retrying:`, err);
+          logger.warn(`persistBlock ${block.hash} failed (attempt ${attempt}/${CardanoCrawler.PERSIST_RETRIES}, streak ${streak}), retrying:`, err);
           await this.sleep(1000 * attempt);
           continue;
         }
@@ -862,19 +789,18 @@ export class CardanoCrawler {
         if (failures >= CardanoCrawler.POISON_BLOCK_THRESHOLD) {
           const cause = err instanceof Error ? err.message : String(err);
           const message = `poison block ${block.hash} @${block.height ?? '?'} failed ${failures}x: ${cause}`;
-          logger.error(`persistBlock failed for ${block.hash} (height ${block.height}) ${failures}x across restarts — poison block, latching the crawler off. Fix the cause, then resumeCrawler():`, err);
-          // Lease-independent on purpose (see latchPoisonBlock); the memory is only forgotten
-          // once the latch is durable, so a failed write is retried after the next restart.
+          logger.error(`persistBlock failed for ${block.hash} (height ${block.height}) ${failures}x across restarts: poison block, latching the crawler off. Fix the cause, then resumeCrawler():`, err);
+          // Memory is cleared only once the latch is stored, so a failed write retries after restart.
           const latched = await cds.tx((tx) => latchPoisonBlock(tx, message)).then(
             () => true,
-            (e: unknown) => { logger.error('poison-block latch could not be written — retried after the next restart:', e); return false; },
+            (e: unknown) => { logger.error('poison-block latch could not be written, retried after the next restart:', e); return false; },
           );
           if (latched) CardanoCrawler.poison = null;
           await this.halt('error', true);
           return false;
         }
         const perBlock = dataRejection ? ` (${failures}/${CardanoCrawler.POISON_BLOCK_THRESHOLD} for this block)` : '';
-        logger.error(`persistBlock failed for ${block.hash} after ${attempt} attempts${perBlock} — stopping crawler (resume re-syncs from cursor):`, err);
+        logger.error(`persistBlock failed for ${block.hash} after ${attempt} attempts${perBlock}, stopping crawler (resume re-syncs from cursor):`, err);
         await this.halt('error');
         return false;
       }
@@ -888,18 +814,13 @@ export class CardanoCrawler {
     return cfg.shelleyStartEpoch + Math.floor((slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
   }
 
-  /**
-   * Pool/DRep snapshot once per epoch, detached from the triggering block. With Ogmios the ledger
-   * state is read AT the block, which works while the block is inside the node's volatile window
-   * (k blocks behind the tip). Koios reports current state only, so there the crawl must be in the
-   * tip's epoch. Epochs passed outside those bounds are skipped. Authority is the marker row in
-   * `EpochLedgerSnapshots` (or a pool row written before the marker existed).
-   */
+  // Snapshot pools and DReps once per epoch. Ogmios reads the ledger at a block within k of the tip.
+  // Koios reports only current state, so the crawl must be in the tip's epoch. Other epochs are skipped.
   private maybeSnapshotEpoch(block: BlockData, tip?: ChainPoint): void {
     if (!this.config.epochSnapshots || block.epoch == null) return;
     if (this.snapshotedEpoch === block.epoch || this.snapshotInFlight) return;
 
-    // No tip reported = we cannot prove we are live, so we do not pretend to be.
+    // Without a tip the crawler cannot prove it is live.
     if (tip == null) {
       logger.debug(`epoch ${block.epoch} snapshot skipped: no chain tip reported for this block`);
       return;
@@ -917,7 +838,7 @@ export class CardanoCrawler {
       const tipEpoch = this.epochOfSlot(tip.slot);
       if (block.epoch !== tipEpoch) {
         logger.debug(
-          `epoch ${block.epoch} snapshot skipped: still backfilling (tip is in epoch ${tipEpoch}) — ` +
+          `epoch ${block.epoch} snapshot skipped: still backfilling (tip is in epoch ${tipEpoch}); ` +
           `the provider reports the pool/DRep set as it is now, never as it was`
         );
         return;
@@ -944,7 +865,7 @@ export class CardanoCrawler {
         ) as { e?: number | string | null } | undefined;
         const last = previous?.e == null ? null : Number(previous.e);
         if (last != null && epoch > last + 1) {
-          logger.warn(`epoch snapshots missing for epochs ${last + 1}..${epoch - 1} — passed outside the snapshot window`);
+          logger.warn(`epoch snapshots missing for epochs ${last + 1}..${epoch - 1}: passed outside the snapshot window`);
         }
       }
       this.snapshotedEpoch = epoch;
@@ -952,8 +873,7 @@ export class CardanoCrawler {
       this.snapshotRetryAfter = 0;
     })
       .catch((err: unknown) => {
-        // Never fatal: the crawl keeps its data, the epoch is retried on a later block —
-        // but not on the very next one, or an outage would re-enumerate per block.
+        // Never fatal. The epoch is retried after a backoff, so an outage does not re-run per block.
         this.snapshotFailures++;
         const backoff = Math.min(
           CardanoCrawler.SNAPSHOT_RETRY_BASE_MS * 2 ** (this.snapshotFailures - 1),
@@ -965,11 +885,8 @@ export class CardanoCrawler {
       .finally(() => { this.snapshotInFlight = null; });
   }
 
-  /**
-   * Chain rollback in one transaction: delete blocks with slot > fork (absolute-slot axis, never
-   * height), their transactions resolved via blockHash (lazily indexed txs of other blocks are
-   * untouched), reset the cursor to the fork and write a CardanoReorgLog row.
-   */
+  // Roll back in one transaction. Deletes blocks after the fork slot, never by height, and their transactions.
+  // Lazily indexed transactions of other blocks stay. Resets the cursor and logs the reorg.
   private async handleReorg(point: ChainPoint | 'origin'): Promise<void> {
     const forkSlot = point === 'origin' ? (this.config.startSlot ?? 0) : point.slot;
     let blocksRolledBack = 0;
@@ -984,7 +901,7 @@ export class CardanoCrawler {
         const renewed = await renewCrawlerLease(tx, this.leaseOwner);
         if (!renewed) throw new CrawlerLeaseLostError();
       }
-      // Fork height is metrics/cursor info only — NEVER a delete axis.
+      // Fork height is for the cursor and the log only, never a delete criterion.
       let forkHeight = point === 'origin' ? 0 : point.height;
       if (forkHeight == null && point !== 'origin') {
         const fb = await tx.run(SELECT.one.from(Blocks).where({ hash: point.hash })) as { height?: number | string } | undefined;
@@ -993,7 +910,7 @@ export class CardanoCrawler {
       emittedForkHeight = forkHeight ?? null;
 
       // Blocks strictly after the fork, cut on the absolute-slot axis. Rows without a
-      // slot (pre-v2.0 lazily indexed blocks) are deliberately excluded.
+      // slot (lazily indexed blocks from an older schema) are deliberately excluded.
       const staleBlocks = await tx.run(
         SELECT.from(Blocks).columns('hash').where({ slot: { '>': forkSlot } })
       ) as Array<{ hash: string }>;
@@ -1001,8 +918,7 @@ export class CardanoCrawler {
       blocksRolledBack = blockHashes.length;
 
       for (const blockChunk of chunk(blockHashes, IN_CHUNK)) {
-        // Only transactions of the rolled-back blocks — resolved via blockHash, so
-        // lazily-indexed txs of unrelated blocks are not collateral damage.
+        // Select by blockHash, so lazily indexed transactions of other blocks stay.
         const staleTxs = await tx.run(
           SELECT.from(Transactions).columns('hash', 'txSeq').where({ blockHash: { in: blockChunk } })
         ) as TxKey[];
@@ -1011,8 +927,7 @@ export class CardanoCrawler {
         rolledBackTxHashes.push(...txHashes);
 
         for (const txChunk of chunk(txHashes, IN_CHUNK)) {
-          // These denormalized/lazy indexes have no generated FK cascades. Remove
-          // them before their parent tx/output rows so orphan data cannot leak via OData.
+          // These tables have no cascading delete. Remove them first so no orphans leak via OData.
           await tx.run(DELETE.from(UTxOAssets).where({ utxo_hash: { in: txChunk } }));
           await tx.run(DELETE.from(AddressUTxOs).where({ hash: { in: txChunk } }));
           await tx.run(DELETE.from(AddressTransactions).where({ tx_hash: { in: txChunk } }));
@@ -1029,14 +944,13 @@ export class CardanoCrawler {
         }
       }
 
-      // Ledger state, driven by the PERSISTED status: a fork after the anchor is undone and the
-      // progress marker follows the cursor back; a fork before the anchor invalidates the set.
+      // Uses the stored status. A fork after the snapshot slot is undone, one before it invalidates the set.
       const persisted = (await readCursor(tx))?.utxoSet;
       if (persisted?.status === 'active' && persisted.anchorSlot != null) {
         if (forkSlot < persisted.anchorSlot) {
           await setUtxoSetState(tx, {
             status: 'invalid',
-            error: `reorg to slot ${forkSlot} before the UTxO set anchor ${persisted.anchorSlot} — re-import the set`,
+            error: `reorg to slot ${forkSlot} before the UTxO set anchor ${persisted.anchorSlot}: re-import the set`,
           });
           ledgerInvalidated = true;
         } else {
@@ -1071,11 +985,9 @@ export class CardanoCrawler {
 
     if (ledgerInvalidated) {
       this.indexer.setUtxoAnchor(null);
-      logger.error(`UTxO set invalidated: reorg to slot ${forkSlot} reaches behind the anchor — ledger tables stop updating until importUtxoSet runs again`);
+      logger.error(`UTxO set invalidated: reorg to slot ${forkSlot} reaches behind the anchor. Ledger tables stop updating until importUtxoSet runs again`);
     }
-    // Notify observers (wallet-worker confirmation tracker + CAP subscribers) AFTER
-    // the rollback commit.
-    // The rollback may have removed this epoch's snapshot; the next block re-checks it.
+    // The rollback may have removed this epoch's snapshot. The next block re-checks it.
     this.snapshotedEpoch = null;
     emitReorg({ forkSlot, forkHeight: emittedForkHeight, blocksRolledBack });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
@@ -1144,7 +1056,7 @@ export class CardanoCrawler {
     });
   }
 
-  /** Cancellable, unref'd delay — halt() wakes it so shutdown never waits out a poll. */
+  /** Cancellable delay. halt() wakes it so shutdown never waits out a poll. */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => { this.wake = null; resolve(); }, ms);
