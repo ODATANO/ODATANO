@@ -33,6 +33,7 @@ function makeIndexer() {
   return {
     persistTransactionSubmission: vi.fn(async () => ({ id: 's1', txHash: 'h', status: 'pending' as const })),
     updateSubmissionStatus: vi.fn(async () => undefined),
+    dropDuplicateSubmission: vi.fn(async () => false),
     invalidateUtxoCacheForTx: vi.fn(async () => undefined),
   };
 }
@@ -71,7 +72,20 @@ describe('submitRecorded', () => {
 
     await expect(submitRecorded(params, indexer as never, client as never)).rejects.toBe(err);
 
+    expect(indexer.dropDuplicateSubmission).toHaveBeenCalledWith(expect.anything(), 's1', 'h');
     expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted');
+  });
+
+  it('drops its own row on a resubmit when the transaction already has one, and still answers 409', async () => {
+    const indexer = makeIndexer();
+    indexer.dropDuplicateSubmission.mockResolvedValue(true);
+    const err = new TransactionAlreadySubmittedError('h');
+    const client = { submitTransaction: vi.fn(async () => { throw err; }) };
+
+    await expect(submitRecorded(params, indexer as never, client as never)).rejects.toBe(err);
+
+    expect(indexer.dropDuplicateSubmission).toHaveBeenCalledWith(expect.anything(), 's1', 'h');
+    expect(indexer.updateSubmissionStatus).not.toHaveBeenCalled();
   });
 
   it('keeps the submitted status when cache invalidation fails', async () => {

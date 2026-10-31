@@ -5,6 +5,7 @@ import {
   createTransactionSubmissionClient,
   createLedgerStateQueryClient,
   createChainSynchronizationClient,
+  createMempoolMonitoringClient,
   Method
 } from '@cardano-ogmios/client';
 import { bech32 } from 'bech32';
@@ -12,7 +13,8 @@ import { blake2b_224 } from '@harmoniclabs/crypto';
 import { ogmiosReferenceScript } from '../../utils/reference-script';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionValidationError, normalizeBackendError } from '../../utils/errors';
+import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionAlreadySubmittedError, TransactionValidationError, normalizeBackendError } from '../../utils/errors';
+import { getTxHashFromCbor } from '../../utils/tx-build-helper';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../../utils/epoch-slots';
 import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId, decodeShelleyAddress, sumUtxoAmounts, compareOutRef, ledgerView } from '../../utils/mappers';
@@ -43,6 +45,9 @@ import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '..
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
+
+/** Node rejection text for inputs that are no longer unspent. */
+const SPENT_INPUTS = /inputs are spent|unknown output reference|already been included/i;
 
 /** Ogmios response shapes not fully typed in @cardano-ogmios/client. */
 interface OgmiosStakePool {
@@ -846,11 +851,58 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         const e = err as { code?: unknown; message?: unknown; data?: unknown };
         if (typeof e?.code === 'number' && e.code >= 3000 && e.code < 4000) {
           const detail = e.data === undefined ? '' : ` ${JSON.stringify(e.data).slice(0, 800)}`;
+          // spent inputs are also what a resubmit of a transaction the node already holds reports
+          if (SPENT_INPUTS.test(`${String(e.message ?? '')}${detail}`)) {
+            const txHash = this.txHashOrNull(signedTxCbor);
+            if (txHash && await this.isKnownTransaction(txHash)) throw new TransactionAlreadySubmittedError(txHash, err);
+          }
           throw new TransactionValidationError(`node rejected the transaction (${e.code}): ${String(e.message ?? '')}${detail}`, err);
         }
         throw err;
       }
     }, this.name);
+  }
+
+  /** Hash of a signed transaction, or null when the CBOR does not parse. */
+  private txHashOrNull(signedTxCbor: string): string | null {
+    try {
+      return getTxHashFromCbor(signedTxCbor);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Whether the node holds the transaction: in its mempool, or on chain with its first output unspent. */
+  private async isKnownTransaction(txHash: string): Promise<boolean> {
+    try {
+      if (await this.mempoolHas(txHash)) return true;
+      const query = await this.scanQueryClient();
+      const onChain = await this.withInitTimeout(query.utxo({ outputReferences: [{ transaction: { id: txHash }, index: 0 }] }), 'utxo/known-transaction');
+      return onChain.length > 0;
+    } catch (err: unknown) {
+      logger.warn(`[OgmiosBackend] could not check whether ${txHash} is known: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
+  /** Mempool lookup on its own short connection, since an acquired mempool snapshot blocks the session. */
+  private async mempoolHas(txHash: string): Promise<boolean> {
+    const url = new URL(this.ogmiosUrl);
+    const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
+    const context = await this.withInitTimeout(createInteractionContext(
+      (err) => logger.debug(`[OgmiosBackend] mempool context error: ${err.message}`),
+      () => undefined,
+      { connection }
+    ), 'mempool/createInteractionContext');
+    try {
+      const mempool = await this.withInitTimeout(createMempoolMonitoringClient(context), 'mempool/client');
+      await this.withInitTimeout(mempool.acquireMempool(), 'mempool/acquire');
+      const has = await this.withInitTimeout(mempool.hasTransaction(txHash), 'mempool/hasTransaction');
+      await mempool.shutdown().catch(() => undefined);
+      return has;
+    } finally {
+      this.forceCloseContext(context);
+    }
   }
 
   async evaluateTransaction(unsignedTxCbor: string): Promise<ScriptEvaluationResult[]> {

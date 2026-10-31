@@ -97,7 +97,7 @@ Via browser extension integration (same CIP-30 API as above).
 }
 ```
 
-**Response** includes `txHash`, `status`, `submittedAt`, and `submittedToBackend`. Submission goes to Ogmios (primary), then Blockfrost/Koios as fallback.
+**Response** includes `txHash`, `status`, `submittedAt`, and `submittedToBackend`. Submission goes to Ogmios (primary), then the configured providers (Koios, Blockfrost) as fallback.
 
 ---
 
@@ -399,7 +399,7 @@ For externally built transactions (not via ODATANO actions).
 | `ODATANO_INSUFFICIENT_FUNDS` | 400 | Sender doesn't have enough ADA | Top up address or reduce amount |
 | `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid amount, missing fields | Validate bech32 format, check required params |
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | Wrong signing key or tampered CBOR | Verify correct `.skey`, re-build if modified |
-| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | All backends unreachable/timed out | Retry after 30s, check Ogmios/Blockfrost status |
+| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | All backends unreachable/timed out | Retry after 30s, check the status of the configured backends |
 | `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Transaction already on chain/mempool | Expected (idempotent), check explorer |
 
 ---

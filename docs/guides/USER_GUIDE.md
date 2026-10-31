@@ -30,7 +30,7 @@ ODATANO is an **OData V4 service** that provides access to Cardano blockchain da
 - ✅ **External signing workflow** (CIP-30 wallets, Cardano CLI, hardware wallets) - M3
 - ✅ **Signature verification** with cryptographic validation - M3
 - ✅ **Complete audit trail** for signing requests and verifications - M3
-- ✅ Automatic failover (Ogmios → Blockfrost → Koios)
+- ✅ Automatic failover across the configured backends (e.g. Ogmios → Koios)
 - ✅ Intelligent caching (configurable TTL)
 - ✅ Full OData V4 support ($filter, $select, $expand, $top, $skip, $count, $orderby)
 - ✅ Multi-network support (mainnet, preview, preprod)
@@ -359,17 +359,19 @@ GET /Transactions?$expand=inputs,outputs
 
 📚 See [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) for details
 
-### Q: What's the difference between Blockfrost and Koios?
+### Q: Which backend do I need?
 
-**A:**
-- **Blockfrost:** Primary provider, faster (250-500 req/sec), requires API key
-- **Koios:** Fallback provider, free (10 req/sec), no API key needed
+**A:** None beyond the default. `BACKENDS=koios` works without an account on the Koios public tier.
+- **Koios:** default; an optional token (`KOIOS_API_KEY` / `koiosApiKey`, from https://koios.rest) raises the rate limit
+- **Ogmios:** a local cardano-node with Ogmios, for live data, script evaluation and the chain crawler
+- **Blockfrost:** optional provider; needs `BLOCKFROST_API_KEY` or a self-hosted Blockfrost-compatible node
+- **odatano:** another ODATANO instance as backend (`ODATANO_URL`, `ODATANO_API_KEY`)
 
 Service tries the first configured backend (`PRIMARY_TIMEOUT_MS`, default 30s), then the next (`FALLBACK_TIMEOUT_MS`, default 60s)
 
 ### Q: Can I query mainnet?
 
-**A:** Yes! Set `NETWORK=mainnet` and `BLOCKFROST_API_KEY=your_mainnet_key` in .env file
+**A:** Yes. Set `NETWORK=mainnet` in the .env file. Koios needs no key there either; a Blockfrost key must belong to a mainnet project.
 
 Supported: `mainnet`, `preview`, `preprod`
 
@@ -404,7 +406,7 @@ Supported: `mainnet`, `preview`, `preprod`
 
 ### Q: Is the API free to use?
 
-**A:** Yes, public preview is free. Blockfrost has free tier limits (250 req/sec).
+**A:** ODATANO itself is free (Apache 2.0). Provider limits depend on the backend: the Koios public tier is rate limited, a Koios token or a local Ogmios lifts most of that.
 
 ### Q: Can I use this from the browser?
 
@@ -429,10 +431,10 @@ const response = await fetch(
 
 ### Q: What if the provider is down?
 
-**A:** Automatic failover:
-1. Try Blockfrost (8s timeout)
-2. If fails, try Koios (8s timeout)
-3. If both fail, return 503
+**A:** Automatic failover in the order of `BACKENDS`:
+1. Try the first backend (`PRIMARY_TIMEOUT_MS`, default 30s)
+2. If it fails, try the next ones (`FALLBACK_TIMEOUT_MS`, default 60s)
+3. If all fail, return 503
 
 ---
 

@@ -55,7 +55,7 @@ services:
       - odatano-network
 
   # ---------------------------------------------------------------------------
-  # ODATANO service with local Ogmios for live data and Blockfrost as fallback
+  # ODATANO service with local Ogmios for live data and Koios as fallback
   # ---------------------------------------------------------------------------
   odatano:
     build:
@@ -71,10 +71,10 @@ services:
       - "4004:4004"
     environment:
       - NETWORK=preview
-      # Ogmios first (live), Blockfrost/Koios as historical fallback
-      - BACKENDS=ogmios,blockfrost,koios
+      # Ogmios first (live), Koios as historical fallback. Blockfrost: add it to BACKENDS and set BLOCKFROST_API_KEY.
+      - BACKENDS=${BACKENDS:-ogmios,koios}
       - OGMIOS_URL=ws://ogmios:1337
-      - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY:-your-blockfrost-api-key-here}
+      - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY:-}
       - KOIOS_API_KEY=${KOIOS_API_KEY:-}
       - PRIMARY_TIMEOUT_MS=15000
       - FALLBACK_TIMEOUT_MS=15000

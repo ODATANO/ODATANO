@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
@@ -26,6 +27,8 @@ export default defineConfig({
         globalSetup: ['test/vitest.globalSetup.ts'],
         // Fork per test file; forks are killed after the run, so open handles cannot hang it.
         pool: 'forks',
+        // At most six forks, and one core stays free. More forks starve the timing-sensitive tests.
+        maxWorkers: Math.min(6, Math.max(os.availableParallelism() - 1, 1)),
         testTimeout: 120000,
         hookTimeout: 120000,
         slowTestThreshold: 120000,

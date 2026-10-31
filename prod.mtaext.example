@@ -6,7 +6,7 @@
 #     cf deploy mta_archives/odatano_<version>.mtar -e prod.mtaext
 #
 # Values here OVERRIDE the module `properties:` placeholders in mta.yaml,
-# so the real BLOCKFROST_API_KEY never has to be committed to the repo.
+# so real API keys never have to be committed to the repo.
 #
 # - `extends:` must match the top-level `ID:` in mta.yaml (odatano)
 # - the module name must match the module in mta.yaml (odatano-srv)
@@ -18,9 +18,10 @@ modules:
   - name: odatano-srv
     properties:
       NETWORK: preview                       # mainnet | preview | preprod
-      BACKENDS: blockfrost,koios             # blockfrost | koios | ogmios
-      BLOCKFROST_API_KEY: preview_REPLACE_ME # key prefix must match NETWORK
-      TX_BUILDERS: buildooor                 # csl | buildooor
+      BACKENDS: koios                        # koios | ogmios | blockfrost | odatano
+      KOIOS_API_KEY: ""                      # optional token, raises the Koios rate limit
+      # BLOCKFROST_API_KEY: preview_REPLACE_ME   # only with blockfrost in BACKENDS; prefix must match NETWORK
+      TX_BUILDERS: buildooor                 # buildooor only
       HSM_ENABLED: false
       PRIMARY_TIMEOUT_MS: "8000"
       FALLBACK_TIMEOUT_MS: "10000"

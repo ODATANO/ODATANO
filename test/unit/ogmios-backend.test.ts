@@ -508,6 +508,46 @@ describe('OgmiosBackend', () => {
       await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 409 });
     });
 
+    describe('a resubmit the node reports as spent inputs', () => {
+      const spent = () => Object.assign(new Error("The transaction couldn't be added to the mempool."), {
+        code: 3997, data: { error: 'All inputs are spent. Transaction has probably already been included' },
+      });
+      const SIGNED = '84a400818258201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef00018182581d60aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1a000f4240021a00029810031a00ffffffa0f5f6';
+      function backendWith(inMempool: boolean, onChainOutputs: unknown[]) {
+        const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+        (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(spent()) };
+        (backend as any).isShutdown = false;
+        vi.spyOn(backend as any, 'mempoolHas').mockResolvedValue(inMempool);
+        (backend as any).stateQueryClient = { utxo: vi.fn().mockResolvedValue(onChainOutputs) };
+        return backend;
+      }
+
+      it('is a 409 when the transaction sits in the mempool', async () => {
+        await expect(backendWith(true, []).submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 409, code: 'ODATANO_TX_ALREADY_SUBMITTED' });
+      });
+
+      it('is a 409 when the transaction is on chain', async () => {
+        await expect(backendWith(false, [{ transaction: { id: 'x' }, index: 0 }]).submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 409 });
+      });
+
+      it('stays a 400 when another transaction spent the inputs', async () => {
+        await expect(backendWith(false, []).submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('stays a 400 when the on-chain lookup hangs', async () => {
+        const backend = backendWith(false, []);
+        (backend as any).timeoutMs = 50;
+        (backend as any).stateQueryClient = { utxo: vi.fn(() => new Promise(() => undefined)) };
+        await expect(backend.submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 400 });
+      });
+
+      it('stays a 400 when the signed CBOR has no readable hash', async () => {
+        const backend = backendWith(true, []);
+        await expect(backend.submitTransaction('84a0')).rejects.toMatchObject({ statusCode: 400 });
+        expect((backend as any).mempoolHas).not.toHaveBeenCalled();
+      });
+    });
+
     it('should throw error when backend is shutdown', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
       (backend as any).isShutdown = true;

@@ -782,9 +782,10 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           } as AssetHistoryEntry;
         });
 
-        // Koios may return ascending order
-        events.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-        return events.slice(0, Math.max(1, limit));
+        // Koios may return ascending order and may list one transaction twice
+        const unique = [...new Map(events.map(e => [e.txHash, e])).values()];
+        unique.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+        return unique.slice(0, Math.max(1, limit));
       },
       this.name
     );

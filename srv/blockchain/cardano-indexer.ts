@@ -1892,6 +1892,18 @@ export class CardanoIndexer {
     logger.debug({ submissionId, status }, 'Updated submission status');
   }
 
+  /** Deletes a resubmit's row when the transaction already has a submitted or confirmed row. */
+  async dropDuplicateSubmission(tx: CapTransaction, submissionId: string, txHash: string): Promise<boolean> {
+    const existing = await tx.run(
+      SELECT.one.from(TransactionSubmissions).columns('id')
+        .where({ txHash, status: { in: ['submitted', 'confirmed'] }, id: { '!=': submissionId } })
+    ) as Pick<TransactionSubmission, 'id'> | undefined;
+    if (!existing) return false;
+    await tx.run(DELETE.from(TransactionSubmissions).where({ id: submissionId }));
+    logger.debug({ submissionId, existingId: existing.id, txHash }, 'Dropped duplicate submission row');
+    return true;
+  }
+
   /** Persist a new signing request and link it to the build's sender address. */
   async persistSigningRequest(
     tx: CapTransaction,

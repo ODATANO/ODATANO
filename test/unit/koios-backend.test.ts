@@ -1214,6 +1214,24 @@ describe('KoiosBackend', () => {
       expect(result[1].txHash).toBe('c'.repeat(64));
     });
 
+    it('fills the limit with distinct transactions when Koios lists one twice', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/asset_history')
+        .query(true)
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          minting_txs: [
+            { tx_hash: 'b'.repeat(64), block_time: 300, quantity: '1' },
+            { tx_hash: 'b'.repeat(64), block_time: 300, quantity: '1' },
+            { tx_hash: 'c'.repeat(64), block_time: 200, quantity: '1' },
+          ],
+        }]);
+
+      const result = await backend.getAssetHistory(UNIT, 2);
+      expect(result.map(r => r.txHash)).toEqual(['b'.repeat(64), 'c'.repeat(64)]);
+    });
+
     it('returns empty array when asset has no minting_txs', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/asset_history')

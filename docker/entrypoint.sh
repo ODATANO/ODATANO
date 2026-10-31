@@ -45,7 +45,7 @@ if [ "$MODE" = "migrate" ]; then
     export CDS_CONFIG
     wait_for_postgres
     echo "Deploying schema to PostgreSQL, then migrating: $*"
-    node /app/node_modules/@sap/cds/bin/deploy.js
+    node /app/docker/deploy-schema.mjs
     exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-sqlite-to-postgres.mjs --to "$DB_URL" "$@"
 fi
 
@@ -63,7 +63,7 @@ if [ -n "$DB_URL" ]; then
     wait_for_postgres
     if [ "${ODATANO_DB_DEPLOY:-auto}" != "never" ]; then
         echo "Deploying schema to PostgreSQL (additive evolution; ODATANO_DB_DEPLOY=never skips this)"
-        node /app/node_modules/@sap/cds/bin/deploy.js
+        node /app/docker/deploy-schema.mjs
     fi
 else
     DB_LABEL="sqlite ($DB_PATH)"

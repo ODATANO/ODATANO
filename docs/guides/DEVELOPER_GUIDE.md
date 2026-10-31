@@ -50,7 +50,7 @@ CardanoIndexer + CardanoTransactionBuilder + CardanoCrawler (crawler/) + Cardano
     ↓
 CardanoClient (Multi-Backend Orchestrator)
     ↓
-Backends: Ogmios (live) + Blockfrost → Koios Fallback
+Backends: Ogmios (live) + Koios / Blockfrost / odatano (providers, failover in BACKENDS order)
     ↓
 Transaction Builder: Buildooor
     ↓
@@ -65,7 +65,7 @@ SQLite Cache (temporal entities)
 1. HTTP Request → Service Handler
 2. Input Validation (isTxHash, isBech32Address, etc.)
 3. Cache Check (SELECT from DB)
-4. On miss: Fetch from blockchain (Blockfrost/Koios)
+4. On miss: Fetch from the configured backends (e.g. Koios, Ogmios)
 5. Transform & Store (mappers → UPSERT)
 6. Return OData response
 ```
@@ -82,7 +82,7 @@ npm ci
 
 # Configure
 cp .env.example .env
-# Edit .env: Set BLOCKFROST_API_KEY, NETWORK=preview
+# Edit .env: NETWORK=preview, BACKENDS=koios (default); KOIOS_API_KEY is optional
 
 # Development (TypeScript, live reload)
 npm run cds:watch
@@ -246,8 +246,8 @@ Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
     "requires": {
       "odatano-core": {
         "network": "preview",
-        "backends": ["blockfrost", "koios"],
-        "blockfrostApiKey": "preview_KEY",
+        "backends": ["koios"],
+        "koiosApiKey": "optional_koios_token",
         "primaryTimeoutMs": 30000,
         "fallbackTimeoutMs": 60000,
         "indexTtlMs": 3600000
@@ -261,8 +261,8 @@ Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
 
 ```env
 NETWORK=preview
-BACKENDS=blockfrost,koios
-BLOCKFROST_API_KEY=preview_KEY
+BACKENDS=koios
+KOIOS_API_KEY=optional_koios_token
 ```
 
 ### Dual-Mode Initialization Guard
@@ -694,7 +694,8 @@ describe('CardanoODataService', () => {
 ```env
 DEBUG=CardanoService,CardanoIndexer
 NETWORK=preview
-BLOCKFROST_API_KEY=your_preview_key
+BACKENDS=koios
+# KOIOS_API_KEY=          # optional token, raises the Koios rate limit
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 INDEX_TTL_MS=60000
@@ -703,7 +704,9 @@ INDEX_TTL_MS=60000
 **.env (Production)**
 ```env
 NETWORK=mainnet
-BLOCKFROST_API_KEY=your_mainnet_key
+BACKENDS=ogmios,koios
+OGMIOS_URL=ws://ogmios:1337
+KOIOS_API_KEY=your_koios_token
 PRIMARY_TIMEOUT_MS=8000
 FALLBACK_TIMEOUT_MS=10000
 PORT=4004
@@ -763,7 +766,7 @@ npm test           # Terminal 2 (wait 3s)
 **Slow responses:**
 - Check provider timeouts (`primaryTimeoutMs` / `fallbackTimeoutMs` in `cds.requires.odatano-core`, or `PRIMARY_TIMEOUT_MS` / `FALLBACK_TIMEOUT_MS`)
 - Verify network connectivity
-- Check Blockfrost status: https://status.blockfrost.io
+- Check the status of the configured providers (e.g. https://koios.rest, https://status.blockfrost.io)
 
 **BLOCKFROST_API_KEY not set:**
 - Koios tests run without key (always available)

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.46] - resubmit over Ogmios, Koios asset history page size, no credentials in the deploy log
+
+No schema change.
+
+### Changed
+
+- Default setup without Blockfrost: `docker-compose.yml` runs `BACKENDS=ogmios,koios` (overridable with
+  `BACKENDS`), `mta.yaml` and `prod.mtaext.example` use `koios`, and `.env.example` starts with `BACKENDS=koios`.
+  Koios needs no account; `KOIOS_API_KEY` is an optional token. Blockfrost stays available as an optional backend.
+- README and guides show the Koios setup with the optional token first.
+
+### Fixed
+
+- Ogmios: a resubmit the node rejects with spent inputs is a 409 `ODATANO_TX_ALREADY_SUBMITTED` when the
+  transaction itself is in the node's mempool or on chain; spent inputs from another transaction stay a 400.
+  `SubmitTransaction` then records the submission as `submitted`, or drops the new row when the transaction
+  already has a submitted or confirmed one, so a resubmit leaves one row per transaction.
+- Koios: `getAssetHistory` removes a transaction listed twice before it applies `limit`, so a page of
+  `GetAssetHistory` holds `limit` distinct events when the provider has that many.
+- Docker image: the schema deploy at start no longer prints the database credentials to the log.
+  `@sap/cds/bin/deploy.js` logged its options including the password; the image now deploys through
+  `docker/deploy-schema.mjs`, which does the same without the log line.
+- Docker image: `@cap-js/sqlite` and `@cap-js/postgres` are installed at the versions in `package-lock.json`.
+  The image took the newest `^3` release at build time, so it could ship other adapter versions than the
+  ones tested.
+
 ## [v2.0.0-rc.45] - API contract, durable submissions, hardening
 
 No schema change. New indexes are created at start.

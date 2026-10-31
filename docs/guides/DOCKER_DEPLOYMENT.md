@@ -10,12 +10,12 @@
 |---|---|---|
 | `cardano-node` | `ghcr.io/intersectmbo/cardano-node:11.0.1` | Full node. Syncs the chain into the `node-db` volume and exposes a socket via `node-ipc`. |
 | `ogmios` | `cardanosolutions/ogmios:v7.0.0` | WebSocket bridge to the node on port `1337`. Healthy once it is *connected* to the node. |
-| `odatano` | `odatano:${VERSION:-0.1.0}` (built locally) | The API on port `4004`, wired to `BACKENDS=ogmios,blockfrost,koios` and `OGMIOS_URL=ws://ogmios:1337`. |
+| `odatano` | `odatano:${VERSION:-0.1.0}` (built locally) | The API on port `4004`, wired to `BACKENDS=ogmios,koios` and `OGMIOS_URL=ws://ogmios:1337`. |
 
 `odatano` waits for the Ogmios healthcheck (`condition: service_healthy`), which reports healthy as
 soon as Ogmios can talk to the node — **not** when the chain is fully synced. Expect the node to
 need hours on a first start; until it catches up, Ogmios answers `202` instead of `200` and the
-Ogmios-backed paths return stale or empty results while Blockfrost/Koios still serve.
+Ogmios-backed paths return stale or empty results while Koios still serves.
 
 > On a restart the node first **validates its existing ChainDB** ("Validating chunk N of M"). It
 > creates `/ipc/node.socket` only when that finishes, so Ogmios logs `HealthFailedToConnect` until
@@ -29,7 +29,7 @@ Ogmios-backed paths return stale or empty results while Blockfrost/Koios still s
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
 
-cp .env.example .env          # then set BLOCKFROST_API_KEY
+cp .env.example .env          # then set ODATANO_HTTP_PASSWORD; KOIOS_API_KEY is optional
 docker compose up -d          # builds the odatano image, starts all three services
 
 # follow the node's initial sync
@@ -57,7 +57,8 @@ curl -O https://raw.githubusercontent.com/ODATANO/ODATANO/main/docker-compose.ym
 # Pin the version the compose file interpolates, and use the published image
 # instead of the local build by commenting out the `build:` block of `odatano`.
 echo "VERSION=2.0.0-rc.3" >> .env
-echo "BLOCKFROST_API_KEY=your-key" >> .env
+echo "ODATANO_HTTP_PASSWORD=choose-a-password" >> .env
+echo "KOIOS_API_KEY=your-koios-token" >> .env   # optional, raises the Koios rate limit
 
 docker compose up -d
 ```
@@ -144,18 +145,20 @@ Note the last two are OData **functions** — HTTP GET with `()`. POST returns 4
 The `.env` file configures the service. Copy `.env.example` as a starting point:
 
 ```env
-# Required: Blockfrost API Key (get from https://blockfrost.io)
-BLOCKFROST_API_KEY=your-blockfrost-api-key-here
-
 # Network: mainnet, preview, preprod (default: preview)
 NETWORK=preview
 
-# Backends: blockfrost, koios, or both comma-separated (default: blockfrost,koios)
-BACKENDS=blockfrost,koios
+# Backends, comma-separated: koios, ogmios, blockfrost, odatano (default: koios; docker-compose: ogmios,koios)
+BACKENDS=ogmios,koios
+
+# Koios token (optional, https://koios.rest): raises the public-tier rate limit
+KOIOS_API_KEY=
+
+# Blockfrost API key, only with blockfrost in BACKENDS (https://blockfrost.io)
+# BLOCKFROST_API_KEY=
 
 # Cache TTL in milliseconds (default: 3600000 = 1 hour)
 INDEX_TTL_MS=3600000
-KOIOS_API_KEY=
 OGMIOS_URL=ws://ogmios:1337   # set by docker-compose; only needed when running outside it
 
 # --- HSM signing (optional; server-side keys) -------------------------------

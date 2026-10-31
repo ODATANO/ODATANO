@@ -26,7 +26,8 @@
       (`$XSAPPNAME.Admin` is deliberately NOT part of `CardanoUser`)
 - [ ] `NETWORK` set to target network (`mainnet`, `preview`, `preprod`)
 - [ ] `BACKENDS` specifies at least one provider
-- [ ] `BLOCKFROST_API_KEY` set and matching the target network prefix (`mainnetXXX`, `previewXXX`, `preprodXXX`)
+- [ ] `KOIOS_API_KEY` set if the Koios public-tier rate limit is too low (optional)
+- [ ] With `blockfrost` in `BACKENDS`: `BLOCKFROST_API_KEY` set and matching the network prefix (see table)
 - [ ] (No transaction-builder config needed — Buildooor is the only builder)
 - [ ] `NODE_ENV=production` set
 - [ ] Outbound HTTPS (port 443) to blockchain APIs is allowed
@@ -34,7 +35,7 @@
 - [ ] TLS/SSL termination configured for public-facing deployments
 - [ ] Build passes: `npm run build && npm run typecheck && npm test`
 
-| Network | Address Prefix | Blockfrost Project Prefix |
+| Network | Address Prefix | Blockfrost Project Prefix (only with Blockfrost) |
 |---------|---------------|--------------------------|
 | `mainnet` | `addr1...` | `mainnetXXX` |
 | `preview` | `addr_test1...` | `previewXXX` |
@@ -59,8 +60,8 @@
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `KOIOS_API_KEY` | No | Optional bearer token; raises the Koios public-tier rate limit |
 | `BLOCKFROST_API_KEY` | If using Blockfrost | Project ID (must match `NETWORK`) |
-| `KOIOS_API_KEY` | No | Bearer token for higher rate limits |
 | `OGMIOS_URL` | If using Ogmios | WebSocket URL |
 
 ### Timeouts & Caching
@@ -77,9 +78,10 @@
 NETWORK=mainnet
 NODE_ENV=production
 PORT=4004
-BACKENDS=blockfrost,koios
-BLOCKFROST_API_KEY=mainnetYourApiKeyHere
-KOIOS_API_KEY=yourKoiosApiKeyHere
+BACKENDS=ogmios,koios
+OGMIOS_URL=ws://ogmios:1337
+KOIOS_API_KEY=yourKoiosTokenHere        # optional
+# BLOCKFROST_API_KEY=mainnetYourApiKeyHere  # only with blockfrost in BACKENDS
 PRIMARY_TIMEOUT_MS=30000
 FALLBACK_TIMEOUT_MS=60000
 INDEX_TTL_MS=3600000
@@ -283,9 +285,9 @@ cf deploy mta_archives/odatano_2.0.0.mtar -e prod.mtaext
 ### Environment Variables (`odatano-srv`)
 
 `mta.yaml` declares the blockchain env vars as module `properties:` (`NETWORK`,
-`BACKENDS`, `BLOCKFROST_API_KEY`, `TX_BUILDERS`, `HSM_ENABLED`). The committed
-`BLOCKFROST_API_KEY` is a **placeholder** — never put the real key in `mta.yaml`,
-since it would be committed to git. There are two ways to supply real values:
+`BACKENDS` = `koios`, `TX_BUILDERS`, `HSM_ENABLED`). API keys are not in `mta.yaml` and
+never belong there, since it is committed to git. `KOIOS_API_KEY` is optional; with
+`blockfrost` in `BACKENDS`, `BLOCKFROST_API_KEY` is required. There are two ways to supply values:
 
 **Recommended — MTA extension descriptor (`.mtaext`):** durable across redeploys
 and keeps secrets out of git.
@@ -293,7 +295,7 @@ and keeps secrets out of git.
 1. Copy the template and fill in real values:
    ```bash
    cp prod.mtaext.example prod.mtaext   # prod.mtaext is git-ignored
-   # edit prod.mtaext → set the real BLOCKFROST_API_KEY, NETWORK, etc.
+   # edit prod.mtaext → set NETWORK, BACKENDS, the optional KOIOS_API_KEY, etc.
    ```
 2. Deploy with `-e` (see above). Values in `prod.mtaext` override the
    placeholders in `mta.yaml` at deploy time.
@@ -305,7 +307,7 @@ The extension descriptor's `extends:` must match the top-level `ID:` in
 ⚠️ **overwritten on the next `cf deploy`** by the `mta.yaml` properties.
 
 ```bash
-cf set-env odatano-srv BLOCKFROST_API_KEY "mainnetYourKeyHere"
+cf set-env odatano-srv KOIOS_API_KEY "yourKoiosTokenHere"
 cf set-env odatano-srv NETWORK "mainnet"
 # ...other vars...
 cf restage odatano-srv   # restage to apply
@@ -379,7 +381,7 @@ The `odatano-db-deployer` module in `mta.yaml` handles HDI container schema depl
 | Scenario | `PRIMARY_TIMEOUT_MS` | `FALLBACK_TIMEOUT_MS` |
 |----------|---------------------|----------------------|
 | Ogmios as primary (local) | `5000` | `8000` |
-| Blockfrost as primary (external) | `8000` | `10000` |
+| External provider as primary (Koios, Blockfrost) | `8000` | `10000` |
 
 **Max request latency** = `PRIMARY_TIMEOUT_MS + (N-1) * FALLBACK_TIMEOUT_MS` where N = number of backends.
 
@@ -429,7 +431,7 @@ parameters:
 ## Mainnet Considerations
 
 Setting `NETWORK=mainnet` affects:
-- Blockfrost endpoint: `cardano-mainnet.blockfrost.io`
+- Provider endpoints: Koios `api.koios.rest`, Blockfrost `cardano-mainnet.blockfrost.io`
 - Address validation: expects `addr1...` / `stake1...` prefixes
 - Ogmios must connect to a mainnet-synced node
 
@@ -456,8 +458,9 @@ docker-compose logs -f odatano
 # BTP
 cf logs odatano-srv --recent
 
-# Verify Blockfrost key
-curl -s -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/health
+# Verify the providers
+curl -s https://api.koios.rest/api/v1/tip
+curl -s -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/health   # only with Blockfrost
 ```
 
 ### "SqlError: Could not find table or view"
@@ -475,14 +478,14 @@ For Docker, the schema deploys during image build — rebuild with `docker-compo
 All configured backends are unreachable. Check each individually:
 
 ```bash
-curl -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/blocks/latest
 curl https://api.koios.rest/api/v1/tip
+curl -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/blocks/latest   # only with Blockfrost
 curl http://localhost:1337/health
 ```
 
 Verify outbound HTTPS (port 443) from the container:
 ```bash
-docker exec odatano-production wget -q -O- https://cardano-mainnet.blockfrost.io/api/v0/health
+docker exec odatano-production wget -q -O- https://api.koios.rest/api/v1/tip
 ```
 
 ### Blockfrost 403 / "Invalid project"
@@ -519,7 +522,7 @@ Use WSL — `mbt build` doesn't work on Windows/MSYS. See [Build & Deploy](#buil
 1. First request for an entity: 1-5s (blockchain fetch). Subsequent: near-instant (cache).
 2. Lower timeouts for faster failover: `PRIMARY_TIMEOUT_MS=5000`
 3. Increase `INDEX_TTL_MS` to reduce re-fetches.
-4. Check Blockfrost status: [status.blockfrost.io](https://status.blockfrost.io)
+4. Check the status of the configured providers (Koios, or [status.blockfrost.io](https://status.blockfrost.io) with Blockfrost)
 
 ### Port 4004 Already in Use
 

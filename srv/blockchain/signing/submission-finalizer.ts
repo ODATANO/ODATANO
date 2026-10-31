@@ -26,7 +26,7 @@ export interface FinalizeParams {
   signerInfo?: string;
 }
 
-type SubmissionIndexer = Pick<CardanoIndexer, 'persistTransactionSubmission' | 'updateSubmissionStatus' | 'invalidateUtxoCacheForTx'>;
+type SubmissionIndexer = Pick<CardanoIndexer, 'persistTransactionSubmission' | 'updateSubmissionStatus' | 'dropDuplicateSubmission' | 'invalidateUtxoCacheForTx'>;
 
 // Lazy require avoids the srv/server.ts <-> this-module import cycle; the app-context
 // getters are only needed at runtime.
@@ -94,9 +94,12 @@ export async function submitRecorded(
     const alreadySubmitted = submitErr instanceof TransactionAlreadySubmittedError;
     const errMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
     try {
-      await detachedTx('record submission outcome', (db) => alreadySubmitted
-        ? indexer.updateSubmissionStatus(db as never, record.id!, 'submitted')
-        : indexer.updateSubmissionStatus(db as never, record.id!, 'failed', errMsg));
+      // A resubmit keeps one row per transaction: its own row goes when an earlier one exists.
+      await detachedTx('record submission outcome', async (db) => {
+        if (!alreadySubmitted) return indexer.updateSubmissionStatus(db as never, record.id!, 'failed', errMsg);
+        if (await indexer.dropDuplicateSubmission(db as never, record.id!, params.txHash)) return;
+        return indexer.updateSubmissionStatus(db as never, record.id!, 'submitted');
+      });
     } catch (markErr: unknown) {
       logger.error({ err: markErr, submissionId: record.id }, 'Could not record the submission outcome after a submit error');
     }

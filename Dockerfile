@@ -29,12 +29,13 @@ RUN npm run build:plugin
 # Deploy database
 RUN npm run db:deploy
 
-# The DB adapters are devDependencies but this image serves from one, so both are re-added after the prune.
-# Deleting the devDependencies block first is required. Otherwise the install restores every dev
-# dependency, and --omit=dev would drop the sqlite adapter itself.
-RUN npm prune --omit=dev \
+# The DB adapters are devDependencies but this image serves from one, so both are re-added after the prune,
+# at the versions in package-lock.json. Deleting the devDependencies block first is required. Otherwise the
+# install restores every dev dependency, and --omit=dev would drop the sqlite adapter itself.
+RUN ADAPTERS="$(node -p 'const p = require("./package-lock.json").packages; ["@cap-js/sqlite", "@cap-js/postgres"].map(n => n + "@" + p["node_modules/" + n].version).join(" ")')" \
+ && npm prune --omit=dev \
  && npm pkg delete devDependencies \
- && npm install --no-save --ignore-scripts @cap-js/sqlite@^3 @cap-js/postgres@^3
+ && npm install --no-save --ignore-scripts $ADAPTERS
 
 # Add metadata labels
 LABEL org.opencontainers.image.version="${VERSION}" \

@@ -35,18 +35,11 @@ npm install @odatano/core @cap-js/sqlite
       "db": { "kind": "sqlite" },
       "odatano-core": {
         "network": "preview",
-        "backends": ["blockfrost"]
+        "backends": ["koios"]
       }
     }
   }
 }
-```
-
-Put your API key in a `.env` file in the project root (loaded automatically by `cds serve` / `cds watch`) — don't commit it to `package.json`:
-
-```bash
-# .env
-BLOCKFROST_API_KEY=preview_your_api_key_here
 ```
 
 ```bash
@@ -54,12 +47,19 @@ cds deploy --to sqlite
 cds serve
 ```
 
-> Config in `cds.requires.odatano-core` takes precedence over environment
-> variables; a `blockfrostApiKey` set there would override the `.env` value.
+Koios works without an account on its public tier. A [Koios token](https://koios.rest) is optional and raises the rate limit. Put it in a `.env` file in the project root (loaded automatically by `cds serve` / `cds watch`), not in `package.json`:
 
-> **Self-hosted Blockfrost-compatible node?** (Dolos MiniBF, Demeter Self-Hosted)
-> Set `blockfrostCustomBackend` to the node's base URL (e.g. `http://localhost:3010/api/v0`).
-> When set, `blockfrostApiKey` becomes optional. See the [Backend Configuration Guide](docs/guides/BACKEND_CONFIGURATION.md#self-hosted-blockfrost-compatible-backends).
+```bash
+# .env (optional)
+KOIOS_API_KEY=your_koios_token
+```
+
+> Config in `cds.requires.odatano-core` takes precedence over environment
+> variables; a `koiosApiKey` set there would override the `.env` value.
+
+Other backends are optional and can be combined, for example `["ogmios", "koios"]` with a local node, or
+`blockfrost` with a Blockfrost key or a self-hosted Blockfrost-compatible node. See the
+[Backend Configuration Guide](docs/guides/BACKEND_CONFIGURATION.md).
 
 ### Standalone
 
@@ -68,7 +68,7 @@ Run ODATANO as a self-contained service (no host CAP project needed):
 ```bash
 git clone https://github.com/ODATANO/ODATANO && cd ODATANO
 npm ci
-cp .env.example .env   # set BLOCKFROST_API_KEY, NETWORK, BACKENDS
+cp .env.example .env   # set NETWORK, BACKENDS (default koios), optional KOIOS_API_KEY
 cds deploy --to sqlite
 cds serve
 ```
@@ -83,8 +83,8 @@ docker compose logs -f ogmios             # watch sync (/health: 202 syncing, 20
 ```
 
 > First sync from genesis takes hours; the node DB persists in a Docker volume so
-> restarts resume. Until Ogmios catches up, historical queries fall back to
-> Blockfrost (set `BLOCKFROST_API_KEY`).
+> restarts resume. Until Ogmios catches up, queries fall back to Koios
+> (optional `KOIOS_API_KEY`).
 
 Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/QUICK_START.md#local-ogmios--cardano-node-docker) for the local Ogmios stack and full details.
 

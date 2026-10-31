@@ -27,24 +27,23 @@ Add the `odatano-core` section to your project's `package.json`:
       "db": { "kind": "sqlite" },
       "odatano-core": {
         "network": "preview",
-        "backends": ["blockfrost"],
-        "blockfrostApiKey": "preview_YOUR_BLOCKFROST_API_KEY"
+        "backends": ["koios"]
       }
     }
   }
 }
 ```
 
-Get a free Blockfrost API key at [blockfrost.io](https://blockfrost.io).
+Koios needs no account on its public tier. A token from [koios.rest](https://koios.rest) is optional and raises the rate limit. Set it as `KOIOS_API_KEY` in a `.env` file, or as `koiosApiKey` in the config above.
 
 All config options:
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `network` | `preview` | `mainnet`, `preview`, or `preprod` |
-| `backends` | `["koios"]` | `blockfrost`, `koios`, `ogmios`, `odatano` (array) |
-| `blockfrostApiKey` | | Required if using blockfrost backend |
-| `koiosApiKey` | | Optional for Koios |
+| `backends` | `["koios"]` | `koios`, `ogmios`, `blockfrost`, `odatano` (array) |
+| `koiosApiKey` | | Optional token for Koios, raises the rate limit |
+| `blockfrostApiKey` | | Required if using the blockfrost backend |
 | `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |
 | `txBuilders` | `["buildooor"]` | Buildooor only — not configurable (legacy values ignored) |
 | `primaryTimeoutMs` | `30000` | Timeout for primary backend |
@@ -116,7 +115,7 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Open `.env` and set at least your Blockfrost key. Supported variables:
+Open `.env` and adjust it. With the default `BACKENDS=koios` nothing is required. Supported variables:
 
 ```env
 # Debug output for single modules (cds.log), e.g. DEBUG=CardanoService
@@ -125,15 +124,18 @@ Open `.env` and set at least your Blockfrost key. Supported variables:
 # Network: mainnet | preview | preprod (default: preview)
 NETWORK=preview
 
-# Blockfrost API key (https://blockfrost.io)
-BLOCKFROST_API_KEY=your_api_key_here
-
 # Timeouts (milliseconds)
 PRIMARY_TIMEOUT_MS=30000
 FALLBACK_TIMEOUT_MS=60000
 
-# Enabled Backends (comma-separated): koios, blockfrost, ogmios
+# Enabled Backends (comma-separated): koios, ogmios, blockfrost, odatano
 BACKENDS=koios
+
+# Koios token (optional, https://koios.rest): raises the public-tier rate limit
+KOIOS_API_KEY=
+
+# Blockfrost API key, only with blockfrost in BACKENDS (https://blockfrost.io)
+# BLOCKFROST_API_KEY=
 
 # Ogmios WebSocket URL (optional, for live data)
 OGMIOS_URL=ws://localhost:1337
@@ -142,7 +144,6 @@ OGMIOS_URL=ws://localhost:1337
 
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
 INDEX_TTL_MS=3600000
-KOIOS_API_KEY=
 
 # --- HSM signing (optional; server-side keys) -------------------------------
 HSM_ENABLED=false
@@ -245,13 +246,13 @@ docker compose down -v     # also wipe the DB volume → full re-sync next time
 - **First sync takes hours** (Preview from genesis). The node DB persists in the
   `node-db` volume, so restarts resume rather than re-syncing.
 - The `odatano` service is pre-wired to the local Ogmios
-  (`OGMIOS_URL=ws://ogmios:1337`, `BACKENDS=ogmios,blockfrost,koios`) and waits
+  (`OGMIOS_URL=ws://ogmios:1337`, `BACKENDS=ogmios,koios`) and waits
   until Ogmios answers `/health` (connected to the node) — **not** for a full
-  sync. Until Ogmios catches up, historical queries fall back to Blockfrost, so
-  set a `BLOCKFROST_API_KEY` (env or `.env`).
+  sync. Until Ogmios catches up, queries fall back to Koios. A `KOIOS_API_KEY`
+  is optional. To add Blockfrost, set `BACKENDS` and `BLOCKFROST_API_KEY`.
 - To point a **locally-run** (non-Docker) ODATANO at the stack, start only
   `cardano-node ogmios` and set `OGMIOS_URL=ws://localhost:1337` +
-  `BACKENDS=ogmios,blockfrost` before `npm run cds:watch`.
+  `BACKENDS=ogmios,koios` before `npm run cds:watch`.
 - The node ↔ Ogmios IPC socket uses a named Docker volume (`node-ipc`) — required
   on Windows, where Unix domain sockets don't work over a host bind mount.
 - `GenesisHashMismatch`? Your checkout converted the genesis JSON to CRLF. Fix:
@@ -429,4 +430,4 @@ npm run test:integration
 npm run test:unit
 ```
 
-For tests using live providers, set `BLOCKFROST_API_KEY` in your environment.
+The Koios integration suites run without a key. The Blockfrost suites need `BLOCKFROST_API_KEY` in your environment.
