@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.47] - reference-script fee for overlapping inputs, voting and proposing redeemers
+
+No schema change.
+
+### Fixed
+
+- Reference-script fee: a UTxO that is both spent and referenced counts once, as the ledger counts it.
+  The same script on two UTxOs still counts twice. Before, such a UTxO was charged twice.
+- `ParseTransactionCbor` and the transaction builder read transactions with Voting or Proposing redeemers.
+  Before, decoding such a transaction failed with `invalid redeemer tag`.
+- CI: the sync and test workflows free runner disk space before they restore the node database cache.
+
 ## [v2.0.0-rc.46] - resubmit over Ogmios, Koios asset history page size, no credentials in the deploy log
 
 No schema change.

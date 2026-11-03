@@ -7,6 +7,9 @@ import { Cbor, CborArray, CborBytes, CborMap, CborTag, CborUInt } from '@harmoni
 import type { CborObj } from '@harmoniclabs/cbor';
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
+import { installRedeemerTagPatch } from './redeemer-tag-patch';
+
+installRedeemerTagPatch();
 
 export interface ParsedInput {
   txHash: string;

@@ -49,6 +49,7 @@ import { CardanoClient } from "../cardano-client";
 import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums, datumHashOf, witnessDatumsGrowth, writeWitnessDatums } from "./caller-datums";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
 import { installReferenceScriptFeePatch } from './buildooor-fee-patch';
+import { installRedeemerTagPatch } from '../../cbor/redeemer-tag-patch';
 import { sizePlaceholderScript } from '../../utils/reference-script';
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
@@ -171,6 +172,7 @@ if (!Object.prototype.hasOwnProperty.call(Hash32.prototype, 'clone')) {
 }
 
 installReferenceScriptFeePatch();
+installRedeemerTagPatch();
 
 /** CardanoTxBuilder implementation on top of Buildooor. */
 export class BuildooorTxBuilder implements CardanoTxBuilder {

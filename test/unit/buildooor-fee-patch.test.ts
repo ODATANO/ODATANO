@@ -46,10 +46,15 @@ describe('tierRefScriptFee', () => {
 describe('refScriptBytesOf', () => {
   const script = Script.fromCbor(Buffer.from(PLUTUS_V3, 'hex'));
 
-  it('counts scripts on inputs and reference inputs alike, without deduplication', () => {
+  it('counts scripts on inputs and reference inputs alike, the same script on two UTxOs twice', () => {
     expect(refScriptBytesOf(tx([utxo(0)]))).toBe(0n);
     expect(refScriptBytesOf(tx([utxo(0, script)]))).toBe(86n);
     expect(refScriptBytesOf(tx([utxo(0, script), utxo(1)], [utxo(2, script), utxo(3, script)]))).toBe(258n);
+  });
+
+  it('counts a UTxO that is both spent and referenced once', () => {
+    expect(refScriptBytesOf(tx([utxo(0, script)], [utxo(0, script)]))).toBe(86n);
+    expect(refScriptBytesOf(tx([utxo(0, script)], [utxo(0, script), utxo(1, script)]))).toBe(172n);
   });
 });
 

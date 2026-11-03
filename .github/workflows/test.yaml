@@ -35,6 +35,14 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
+      # The restore holds the archive and the unpacked DB at once. Remove preinstalled toolchains this job never uses.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+
       # The sync workflow saves a unique key per run, so the newest is restored by prefix.
       # A prefix match sets cache-hit=false, so gate on cache-matched-key instead.
       - name: Restore Cardano Node DB Cache

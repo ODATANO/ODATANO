@@ -1,6 +1,6 @@
 import { TxBuilder } from '@harmoniclabs/buildooor';
 import { estimateMaxSignersNeeded } from '@harmoniclabs/buildooor/dist/TxBuilder/utils';
-import { Tx, cborFromRational, defaultProtocolParameters, type ProtocolParameters } from '@harmoniclabs/cardano-ledger-ts';
+import { Tx, UTxO, cborFromRational, defaultProtocolParameters, type ProtocolParameters } from '@harmoniclabs/cardano-ledger-ts';
 import type { CanBeUInteger } from '@harmoniclabs/cardano-ledger-ts/dist/utils/ints';
 import { referenceScriptSize } from '../../utils/reference-script';
 
@@ -34,10 +34,11 @@ export function tierRefScriptFee(totalBytes: bigint, pricePerByte: Rational): bi
   return accNum / accDen;
 }
 
-/** Reference-script bytes of the inputs and reference inputs, not deduplicated, as the ledger counts them. */
+/** Reference-script bytes of the inputs and reference inputs as one set. A UTxO in both counts once, the same script on two UTxOs twice. */
 export function refScriptBytesOf(tx: Tx): bigint {
-  const utxos = [...tx.body.inputs, ...(tx.body.refInputs ?? [])];
-  return utxos.reduce((sum, u) => sum + BigInt(u.resolved.refScript ? referenceScriptSize(u.resolved.refScript) : 0), 0n);
+  const utxos = new Map<string, UTxO>();
+  for (const u of [...tx.body.inputs, ...(tx.body.refInputs ?? [])]) utxos.set(u.utxoRef.toString(), u);
+  return [...utxos.values()].reduce((sum, u) => sum + BigInt(u.resolved.refScript ? referenceScriptSize(u.resolved.refScript) : 0), 0n);
 }
 
 function refScriptPrice(pp: ProtocolParameters): Rational {
