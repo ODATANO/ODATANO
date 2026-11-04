@@ -1,5 +1,5 @@
 import cds, { Request } from '@sap/cds';
-import { safeJSON } from '@cardano-ogmios/client';
+import { stringifyJson } from './utils/deep-json';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, rejectMissing, ProviderUnavailableError, ChainPointMismatchError } from './utils/errors';
 import {
@@ -45,7 +45,7 @@ module.exports = (srv: cds.Service) => {
     srv.on(name, async (req: Request) => {
       const data = (req.data ?? {}) as Data;
       validate?.(req, data);
-      return handleRequest(req, async (db) => safeJSON.stringify(toPlain(await run(data, db))));
+      return handleRequest(req, async (db) => stringifyJson(toPlain(await run(data, db))));
     });
   };
 

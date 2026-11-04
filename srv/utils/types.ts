@@ -9,8 +9,8 @@ export type Hex = string;
 /** Lovelace amount; a string preserves precision above Number.MAX_SAFE_INTEGER (max supply is 4.5e16). */
 export type Lovelace = number | string;
 
-/** Any valid JSON value */
-export type JSONValue = | string | number | boolean | { [key: string]: JSONValue } | JSONValue[] | null;
+/** Any JSON value; an integer literal too long for a double is read as bigint */
+export type JSONValue = | string | number | bigint | boolean | { [key: string]: JSONValue } | JSONValue[] | null;
 
 /** Multi-asset amount line as returned by common Cardano APIs */
 export interface Amount {

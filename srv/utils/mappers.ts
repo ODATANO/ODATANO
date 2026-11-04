@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import { TextDecoder } from 'node:util';
 import blake2b from 'blake2b';
 import { bech32 } from 'bech32';
-import { safeJSON } from '@cardano-ogmios/client';
+import { stringifyJson } from './deep-json';
 import { toCostModelArrV3 } from '@harmoniclabs/cardano-costmodels-ts';
 import type { AnyV3CostModel } from '@harmoniclabs/cardano-costmodels-ts/dist/v3/AnyV3CostModel';
 
@@ -550,8 +550,8 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
       id: id as unknown as number,
       tx_hash: lbl.txHash,
       label: lbl.label.toString(),
-      // Ogmios exposes numeric metadata as bigint; safeJSON writes exact number tokens
-      payload: lbl.json !== undefined ? safeJSON.stringify(lbl.json) : null,
+      // Ogmios exposes numeric metadata as bigint; written as exact number tokens
+      payload: lbl.json !== undefined ? stringifyJson(lbl.json) : null,
     });
   }
   return rows;
@@ -677,7 +677,7 @@ export function mapAsset(providerAssetInfo: AssetInfoProviderData, max_age: numb
     initialMintTxHash: providerAssetInfo.initialMintTxHash,
     initialMintTime: providerAssetInfo.initialMintTime,
     onchainMetadata: providerAssetInfo.onchainMetadata
-      ? JSON.stringify(providerAssetInfo.onchainMetadata)
+      ? stringifyJson(providerAssetInfo.onchainMetadata)
       : null,
     registryName: providerAssetInfo.registryName,
     registryTicker: providerAssetInfo.registryTicker,

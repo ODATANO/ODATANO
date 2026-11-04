@@ -12,7 +12,6 @@ import { safeJSON } from '@cardano-ogmios/client';
 import {
   installOgmiosFrameGuard,
   resetOgmiosFrameGuardForTests,
-  widenBigIntegers,
   type UnparseableFrame,
 } from '../../srv/blockchain/backends/ogmios-frame-guard';
 
@@ -39,35 +38,6 @@ beforeEach(() => {
 
 afterEach(() => resetOgmiosFrameGuardForTests(pristineParse));
 
-describe('widenBigIntegers', () => {
-  it('quotes only integers a double cannot hold exactly', () => {
-    const out = widenBigIntegers('{"a":45000000000000000,"b":170000,"c":9007199254740991}');
-    expect(out).toBe('{"a":"45000000000000000","b":170000,"c":9007199254740991}');
-  });
-
-  it('leaves digits inside strings alone', () => {
-    // a 64-character id of nothing but digits is legal JSON and must not become a number
-    const id = '1'.repeat(64);
-    const text = `{"id":"${id}","lovelace":45000000000000000}`;
-    expect(widenBigIntegers(text)).toBe(`{"id":"${id}","lovelace":"45000000000000000"}`);
-  });
-
-  it('leaves floats and exponents alone — they were never exact integers', () => {
-    const text = '{"a":1.00000000000000009,"b":1e300,"c":-45000000000000000}';
-    expect(widenBigIntegers(text)).toBe('{"a":1.00000000000000009,"b":1e300,"c":"-45000000000000000"}');
-  });
-
-  it('returns the very same string when nothing needs widening', () => {
-    const text = '{"height":5183974,"slot":133883400}';
-    expect(widenBigIntegers(text)).toBe(text);
-  });
-
-  it('survives a payload deeper than any recursive parser', () => {
-    // the function itself must not recurse — that is the whole point
-    expect(() => widenBigIntegers(deepFrame(20000))).not.toThrow();
-  });
-});
-
 describe('installOgmiosFrameGuard', () => {
   it('leaves an ordinary frame to the client parser, BigInts included', () => {
     const parsed = safeJSON.parse(
@@ -90,14 +60,42 @@ describe('installOgmiosFrameGuard', () => {
     expect(reported).toHaveLength(0);
   });
 
-  it('keeps an unsafe integer exact on the deep path, as a string', () => {
+  it('keeps an unsafe integer exact on the deep path, as a bigint', () => {
     const parsed = safeJSON.parse(deepFrame(12000, ',"fee":{"ada":{"lovelace":45000000000000001}}')) as {
       result: { block: { fee: { ada: { lovelace: unknown } } } };
     };
     const lovelace = parsed.result.block.fee.ada.lovelace;
-    // a plain JSON.parse would have rounded this to …000; the mapper stringifies it either way
-    expect(lovelace).toBe('45000000000000001');
+    // a plain JSON.parse would have rounded this to …000
+    expect(lovelace).toBe(45000000000000001n);
     expect(String(lovelace)).toBe('45000000000000001');
+  });
+
+  it('leaves a short integer a number on the deep path, where the client would make it a bigint', () => {
+    // the client's bigint pass recurses as well, so it is skipped; every reader stringifies quantities
+    const parsed = safeJSON.parse(deepFrame(12000, ',"fee":{"ada":{"lovelace":170000}}')) as {
+      result: { block: { fee: { ada: { lovelace: unknown } } } };
+    };
+    expect(parsed.result.block.fee.ada.lovelace).toBe(170000);
+  });
+
+  it('delivers a frame with a "__proto__" metadata key the client parser refuses', () => {
+    // Ogmios writes a metadata map with text keys as a plain object, so anyone can author this key
+    const frame = '{"jsonrpc":"2.0","method":"nextBlock","result":{"direction":"forward","block":{"height":5183975,'
+      + '"id":"' + 'd'.repeat(64) + '","transactions":[{"metadata":{"labels":{"674":{"json":{"__proto__":{"x":1},"n":2}}}}}]}}}';
+    let thrown: unknown;
+    try { pristineParse(frame as never); } catch (e) { thrown = e; }
+    expect((thrown as { name?: string })?.name).toBe('SyntaxError');
+
+    const parsed = safeJSON.parse(frame) as {
+      result: { block: { height: number; transactions: { metadata: { labels: Record<string, { json: Record<string, unknown> }> } }[] } };
+    };
+    const json = parsed.result.block.transactions[0].metadata.labels['674'].json;
+    expect(parsed.result.block.height).toBe(5183975);
+    expect(json.n).toBe(2);
+    expect(Object.prototype.hasOwnProperty.call(json, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(json)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+    expect(reported).toHaveLength(0);
   });
 
   it('reports an unusable frame instead of throwing, naming the block', () => {
@@ -119,7 +117,7 @@ describe('installOgmiosFrameGuard', () => {
     try { safeJSON.parse('{"a":'); } catch (e) { thrown = e; }
 
     expect((thrown as { name?: string })?.name).toBe('SyntaxError');
-    expect(reported).toHaveLength(0); // only an overflow is the guard's business
+    expect(reported).toHaveLength(0); // only an overflow or a refused key is the guard's business
   });
 
   it('installs once — a second stream adds its callback, it does not stack wrappers', () => {

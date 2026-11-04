@@ -117,7 +117,7 @@ describe('stored chain in the provider shape', () => {
     ]);
     expect(tx.datums).toEqual([{ hash: 'd'.repeat(64), cbor: 'd8799f182aff' }]);
     expect(lacksOutpoints(tx)).toBe(false);
-    // metadata numbers above 2^53 survive (safeJSON)
+    // metadata numbers above 2^53 survive
     expect(String((tx.metadata![0].json as { n: unknown }).n)).toBe('18446744073709551615');
   });
 

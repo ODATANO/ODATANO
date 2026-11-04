@@ -7,6 +7,7 @@ import type { CardanoClient } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { Amount, ReferenceScriptType } from '../../utils/types';
 import { cliReferenceScript } from '../../utils/reference-script';
+import { parseJson } from '../../utils/deep-json';
 import { buildLedgerUtxoRows, type LedgerAnchor, type LedgerUtxoAssetRow, type LedgerUtxoRow } from '../ledger-state';
 import {
   readCursor,
@@ -80,21 +81,11 @@ export interface UtxoSetImportResult {
 /** `cardano-cli query utxo` value: `{ lovelace: n, [policyId]: { [assetNameHex]: qty } }`. */
 export interface CliUtxoValue {
   address: string;
-  value: Record<string, number | string | Record<string, number | string>>;
+  value: Record<string, number | bigint | string | Record<string, number | bigint | string>>;
   datumhash?: string | null;
   datumHash?: string | null;
   inlineDatumRaw?: string | null;
   referenceScript?: unknown;
-}
-
-/** `JSON.parse` that quotes integer literals first, so quantities above 2^53 are never rounded. */
-export function parseJsonLossless<T = unknown>(text: string): T {
-  // string literals pass through untouched; floats keep their JSON meaning
-  const rewritten = text.replace(
-    /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
-    (m) => (m[0] === '"' || !/^-?\d+$/.test(m) ? m : `"${m}"`),
-  );
-  return JSON.parse(rewritten) as T;
 }
 
 /** Parse one `"txHash#index": {…}` entry of a cardano-cli dump; null when malformed. */
@@ -130,9 +121,9 @@ export function parseCliUtxoEntry(key: string, value: CliUtxoValue | null | unde
 /** Stream a cardano-cli dump. See the module doc for the accepted layouts. */
 export async function* readUtxoSetFile(filePath: string): AsyncGenerator<UtxoSetEntry> {
   if (/\.json$/i.test(filePath)) {
-    const parsed = parseJsonLossless<Record<string, CliUtxoValue>>(await readFile(filePath, 'utf8'));
+    const parsed = parseJson(await readFile(filePath, 'utf8')) as Record<string, unknown>;
     for (const [key, value] of Object.entries(parsed)) {
-      const entry = parseCliUtxoEntry(key, value);
+      const entry = parseCliUtxoEntry(key, value as CliUtxoValue);
       if (entry) yield entry;
     }
     return;
@@ -141,7 +132,7 @@ export async function* readUtxoSetFile(filePath: string): AsyncGenerator<UtxoSet
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const obj = parseJsonLossless<Record<string, unknown>>(trimmed);
+    const obj = parseJson(trimmed) as Record<string, unknown>;
     if (typeof obj.key === 'string' && obj.value && typeof obj.value === 'object') {
       const entry = parseCliUtxoEntry(obj.key, obj.value as CliUtxoValue);
       if (entry) yield entry;

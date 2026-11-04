@@ -62,7 +62,8 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   CRAWLER_LEASE_TTL_MS: 15_000,
 }));
 
-import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts, UtxoSetImportError, UtxoSetLeaseLostError, parseJsonLossless } from '../../srv/blockchain/crawler/utxo-set-import';
+import { parseCliUtxoEntry, readUtxoSetFile, aggregateStatements, importUtxoSet, rebuildUtxoSetAggregates, refreshUtxoSetReferenceScripts, UtxoSetImportError, UtxoSetLeaseLostError } from '../../srv/blockchain/crawler/utxo-set-import';
+import { parseJson } from '../../srv/utils/deep-json';
 import { Cbor, CborBytes } from '@harmoniclabs/cbor';
 
 const TX = 'a'.repeat(64);
@@ -106,23 +107,18 @@ describe('parseCliUtxoEntry', () => {
   });
 });
 
-describe('parseJsonLossless', () => {
-  it('keeps integers above 2^53 exact (JSON.parse would round them)', () => {
+describe('parseCliUtxoEntry on a parsed dump', () => {
+  it('keeps quantities above 2^53 exact (JSON.parse would round them)', () => {
     const text = `{"${TX}#0": {"address": "${ADDR}", "value": {"lovelace": 9007199254740993, "${POLICY}": {"746f6b656e": 18446744073709551615, "": -5}}, "datumhash": null}}`;
     expect(JSON.parse(text)[`${TX}#0`].value.lovelace).toBe(9007199254740992); // the problem
-    const parsed = parseJsonLossless<Record<string, { value: Record<string, unknown> }>>(text);
-    expect(parsed[`${TX}#0`].value.lovelace).toBe('9007199254740993');
+    const parsed = parseJson(text) as Record<string, { value: Record<string, unknown> }>;
+    expect(parsed[`${TX}#0`].value.lovelace).toBe(9007199254740993n);
     const entry = parseCliUtxoEntry(`${TX}#0`, parsed[`${TX}#0`] as never)!;
     expect(entry.amount).toEqual([
       { unit: 'lovelace', quantity: '9007199254740993' },
       { unit: `${POLICY}746f6b656e`, quantity: '18446744073709551615' },
       { unit: POLICY, quantity: '-5' },
     ]);
-  });
-
-  it('never touches string contents (colons, digits, escapes) and keeps floats, null and booleans', () => {
-    expect(parseJsonLossless('{"a": "x:1, \\"q\\" 2", "b": [1, 2], "c": {"d": 1.5e3, "n": -7}, "e": null, "f": true, "12": "0"}'))
-      .toEqual({ a: 'x:1, "q" 2', b: ['1', '2'], c: { d: 1500, n: '-7' }, e: null, f: true, '12': '0' });
   });
 });
 

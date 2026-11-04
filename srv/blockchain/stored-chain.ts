@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
-import { safeJSON } from '@cardano-ogmios/client';
+import { parseJson } from '../utils/deep-json';
 import {
   Blocks,
   Transactions,
@@ -122,7 +122,7 @@ function metadataRow(r: Row): MetadataLabelTx {
   return {
     txHash: str(r.tx_hash),
     label: str(r.label),
-    json: r.payload == null ? undefined : safeJSON.parse(String(r.payload)),
+    json: r.payload == null ? undefined : parseJson(String(r.payload)),
   };
 }
 

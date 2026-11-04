@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.48] - transaction metadata at any nesting depth, exact integers on every path
+
+No schema change.
+
+### Fixed
+
+- The crawler stores blocks with transaction metadata nested thousands of levels deep.
+  The metadata payload and the CIP-25 on-chain metadata of an asset are written at any depth.
+  Integers stay exact, including in chain-sync frames too deep for the Ogmios client's parser.
+- A chain-sync frame with a `__proto__` metadata key, which the Ogmios client's parser refuses,
+  is delivered instead of ending the process.
+- `CardanoBackendService` answers and the `odatano` backend read such blocks the same way,
+  so a remote ODATANO carries deep metadata and exact integers too.
+- The cardano-cli UTxO dump import uses the same reader; quantities above 2^53 stay exact as before.
+
 ## [v2.0.0-rc.47] - reference-script fee for overlapping inputs, voting and proposing redeemers
 
 No schema change.

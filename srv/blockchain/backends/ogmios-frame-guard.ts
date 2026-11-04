@@ -1,7 +1,8 @@
-// The Ogmios client's `safeJSON.parse` recurses per nesting level. A deeply nested native script
-// overflows the stack in a socket handler and ends the process, so on RangeError we use `JSON.parse`.
+// The Ogmios client's `safeJSON.parse` recurses per nesting level and refuses a "__proto__" key.
+// Either throw lands in a socket handler and ends the process, so such frames are parsed here.
 import { safeJSON } from '@cardano-ogmios/client';
 import cds from '@sap/cds';
+import { parseJson } from '../../utils/deep-json';
 
 const logger = cds.log('OgmiosFrameGuard');
 
@@ -15,54 +16,6 @@ export interface UnparseableFrame {
   bytes: number;
 }
 
-/** Quote integers beyond 2^53 so `JSON.parse` cannot round them. One pass, no recursion. */
-export function widenBigIntegers(text: string): string {
-  const SAFE_DIGITS = String(Number.MAX_SAFE_INTEGER).length; // 16
-  let out = '';
-  let last = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') { inString = true; continue; }
-
-    // a number literal starts here only after a structural character
-    if (c !== '-' && (c < '0' || c > '9')) continue;
-    const prev = text[i - 1];
-    if (prev !== ':' && prev !== ',' && prev !== '[' && prev !== ' ' && prev !== '\n' && prev !== '\t' && prev !== '\r') continue;
-
-    let j = i;
-    if (text[j] === '-') j++;
-    const digitsFrom = j;
-    while (j < text.length && text[j] >= '0' && text[j] <= '9') j++;
-    const digits = j - digitsFrom;
-    if (digits === 0) continue;
-
-    // a fraction or exponent means it was never an exact integer
-    const after = text[j];
-    if (after === '.' || after === 'e' || after === 'E') { i = j; continue; }
-
-    if (digits >= SAFE_DIGITS) {
-      const literal = text.slice(i, j);
-      if (!Number.isSafeInteger(Number(literal))) {
-        out += text.slice(last, i) + '"' + literal + '"';
-        last = j;
-      }
-    }
-    i = j - 1;
-  }
-
-  return last === 0 ? text : out + text.slice(last);
-}
-
 /** Block height/id from the front of an unparseable frame, to name the block in logs and `lastError`. */
 function readBlockHeader(text: string): { height: number | null; id: string | null } {
   const head = text.slice(0, 4096);
@@ -73,6 +26,17 @@ function readBlockHeader(text: string): { height: number | null; id: string | nu
 
 let installed = false;
 const reporters = new Set<(frame: UnparseableFrame) => void>();
+
+// Why the client's parser gave up, or null for a genuine syntax error. json-bigint throws a plain
+// object named SyntaxError for a "__proto__" key; the client only rewrites the "constructor" case.
+function fallbackReason(err: unknown): string | null {
+  if (err instanceof RangeError) return "too deeply nested for the client's parser";
+  const e = err as { name?: unknown; message?: unknown } | null;
+  if (e?.name === 'SyntaxError' && typeof e.message === 'string' && e.message.includes('forbidden prototype')) {
+    return 'carries a "__proto__" key the client\'s parser refuses';
+  }
+  return null;
+}
 
 // Wraps `safeJSON.parse` once per process and returns an unregister function. The parser is shared
 // by all chain-sync sockets, so an unusable frame goes to every callback. That stream then stalls.
@@ -88,16 +52,18 @@ export function installOgmiosFrameGuard(onUnparseableFrame: (frame: UnparseableF
     try {
       return original(raw as never);
     } catch (err) {
-      if (!(err instanceof RangeError)) throw err; // a genuine syntax error stays a syntax error
+      const why = fallbackReason(err);
+      if (why === null) throw err; // a genuine syntax error stays a syntax error
 
       const text = String(raw);
       const where = readBlockHeader(text);
       try {
-        const parsed = JSON.parse(widenBigIntegers(text));
+        // Without the client's bigint pass (it recurses too), so short integers stay numbers here.
+        // Every reader of a quantity stringifies it, so the two shapes are read the same way.
+        const parsed = parseJson(text);
         logger.warn(
-          `chain-sync frame too deeply nested for the client's parser (block ${where.height ?? '?'} ` +
-          `${where.id ?? ''}, ${text.length} bytes), parsed without it. Integers beyond 2^53 are ` +
-          `strings on this path; the chain-sync mapper stringifies them anyway.`
+          `chain-sync frame ${why} (block ${where.height ?? '?'} ${where.id ?? ''}, ${text.length} bytes), ` +
+          'parsed without it.'
         );
         return parsed;
       } catch (fallbackErr) {

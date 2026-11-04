@@ -109,6 +109,7 @@ import {
 import { ProviderUnavailableError, AllBackendsFailedError, NotFoundError, isNotFoundOnAllBackends } from '../utils/errors';
 import { TxBuildRequest, TxBuildPlutusRequest, AssetInfo, JSONValue, AccountData, PoolData, NetworkInformation as ProviderNetworkInformation, Address as ProviderAddress, Transaction as ProviderTransaction, UTxO as OdatanoUtxo, TxBuildResult, BlockData, Amount, TxInputLine, TxOutputLine, AssetHistoryEntry as AssetHistoryEntryProviderData, TransactionConfirmations, ReferenceScriptType } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
+import { parseJson } from '../utils/deep-json';
 import { deleteTransactionRows, readTxKeys, seqKey, type TxKey } from './transaction-rows';
 import {
   applyBlockToLedger,
@@ -318,7 +319,7 @@ export class CardanoIndexer {
         SELECT.one.from(TransactionMetadata).columns('payload').where({ tx_hash: latest.txHash, label: '721' })
       ) as { payload?: string | null } | undefined;
       if (meta?.payload) {
-        try { onchainMetadata = JSON.parse(meta.payload) as JSONValue; } catch { /* unparseable payload: leave empty */ }
+        try { onchainMetadata = parseJson(meta.payload); } catch { /* unparseable payload: leave empty */ }
       }
     }
 

@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import axios, { AxiosError, AxiosInstance } from 'axios';
-import { safeJSON } from '@cardano-ogmios/client';
+import { parseJson } from '../../utils/deep-json';
 import {
   CardanoBackend,
   EvaluatingBackend,
@@ -146,7 +146,7 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
     return out;
   }
 
-  // POSTs one operation and parses the JSON answer with safeJSON to keep big integers.
+  // POSTs one operation and parses the JSON answer with exact big integers.
   // The remote error message stays verbatim, so `CHAIN_POINT_MISMATCH:` reaches the crawler.
   private async call<T>(operation: string, body: Record<string, unknown> = {}): Promise<T> {
     try {
@@ -154,7 +154,7 @@ export class OdatanoBackend implements CardanoBackend, EvaluatingBackend, Pagina
       const left = Number(res.headers?.['x-access-units-left']);
       if (Number.isFinite(left)) this.unitsLeft = left;
       const value = (res.data as { value?: unknown } | undefined)?.value;
-      return (typeof value === 'string' ? safeJSON.parse(value) : value) as T;
+      return (typeof value === 'string' ? parseJson(value) : value) as T;
     } catch (err) {
       throw this.mapError(operation, err);
     }
