@@ -1,5 +1,5 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend, TokenRegistryBackend, isTokenRegistryBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
 import { PendingSpends } from './pending-spends';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
@@ -594,6 +594,15 @@ export class CardanoClient {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
     for (const b of candidates) {
       if (b && !this.uninitializedBackends.has(b) && isEnumeratingBackend(b)) return b;
+    }
+    return null;
+  }
+
+  /** Backend that lists the CIP-26 token registry (Koios). Null when none is configured. */
+  getTokenRegistryBackend(): TokenRegistryBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isTokenRegistryBackend(b)) return b;
     }
     return null;
   }

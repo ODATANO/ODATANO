@@ -6,12 +6,13 @@
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock, registryBackfillMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
   backfillMock: vi.fn(),
   txBackfillMock: vi.fn(),
   credentialBackfillMock: vi.fn(),
   decimalsBackfillMock: vi.fn(),
+  registryBackfillMock: vi.fn(),
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
     getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
@@ -57,6 +58,7 @@ vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCe
 vi.mock('../../srv/blockchain/crawler/transaction-backfill', () => ({ backfillTransactions: txBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/credential-backfill', () => ({ backfillUtxoCredentials: credentialBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/asset-decimals-backfill', () => ({ backfillAssetDecimals: decimalsBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/asset-registry-backfill', () => ({ backfillAssetRegistry: registryBackfillMock }));
 
 // The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
 // mocks above and surfaces the CJS export as `.default`. beforeAll, not top-level
@@ -114,6 +116,7 @@ describe('CardanoIndexerService.getStatus', () => {
       },
       credentialBackfill: { status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null },
       decimalsBackfill: { status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null },
+      registryBackfill: { status: 'none', units: 0, processed: 0, filled: 0, failed: 0, startedAt: null, finishedAt: null, error: null },
       epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
     });
   });
@@ -367,5 +370,39 @@ describe('CardanoIndexerService.backfillAssetDecimals', () => {
     await new Promise((r) => setImmediate(r));
     expect(await handlers.getStatus({})).toMatchObject({ decimalsBackfill: { status: 'done', scanned: 9000, candidates: 4, filled: 4, error: null } });
     expect(await handlers.backfillAssetDecimals({ data: {} })).toMatchObject({ accepted: true });
+  });
+});
+
+describe('CardanoIndexerService.backfillAssetRegistry', () => {
+  const cursor = { lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 };
+
+  it('refuses without a backend that lists the registry', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getTokenRegistryBackend: () => null } as any);
+    const handlers = boot();
+
+    await expect(handlers.backfillAssetRegistry({ data: {} })).rejects.toThrow(/needs Koios/);
+    expect(registryBackfillMock).not.toHaveBeenCalled();
+  });
+
+  it('runs detached, refuses a second start and reports progress in getStatus', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getTokenRegistryBackend: () => ({}) } as any);
+    let finishRun!: (r: unknown) => void;
+    registryBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ units: 7984, processed: 100, filled: 98, failed: 2 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillAssetRegistry({ data: {} })).toMatchObject({ accepted: true });
+    expect(registryBackfillMock).toHaveBeenCalledWith(expect.objectContaining({ indexer: { indexer: true } }));
+    await expect(handlers.backfillAssetRegistry({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ registryBackfill: { status: 'running', units: 7984, processed: 100, filled: 98, failed: 2 } });
+
+    finishRun({ units: 7984, processed: 7984, filled: 7980, failed: 4 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ registryBackfill: { status: 'done', processed: 7984, filled: 7980, failed: 4, error: null } });
+    expect(await handlers.backfillAssetRegistry({ data: {} })).toMatchObject({ accepted: true });
   });
 });

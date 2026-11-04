@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [v2.0.0-rc.49] - CIP-26 registry fields for the asset catalogue
+
+No schema change.
+
+### Added
+
+- `backfillAssetRegistry()` on `CardanoIndexerService` (Admin): fills `registryName`, `registryTicker`,
+  `registryDecimals`, `registryDescription`, `registryUrl` and `registryLogo` on every slice of every
+  `Assets` unit the CIP-26 token registry lists, and `decimals` where it is still empty. The registry is
+  off-chain, so the units come from Koios `asset_token_registry` and each unit is read from the backend,
+  rate limited to 4 per second; the crawler may keep running; a repeat refreshes the values. Progress in
+  `getStatus().registryBackfill` (`units`, `processed`, `filled`, `failed`).
+- Koios backend lists the token registry (`getTokenRegistryUnits`); `CardanoClient.getTokenRegistryBackend()`.
+
 ## [v2.0.0-rc.48] - transaction metadata at any nesting depth, exact integers on every path
 
 No schema change.

@@ -1,6 +1,6 @@
 import cds from '@sap/cds';
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
-import { CardanoBackend, PaginatingBackend, EnumeratingBackend } from './cardano-backend';
+import { CardanoBackend, PaginatingBackend, EnumeratingBackend, TokenRegistryBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError, ScriptValidationError, normalizeBackendError, isPostgrestServerErrorCode } from '../../utils/errors';
 import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
@@ -235,7 +235,7 @@ interface KoiosAddressInfoRow {
 }
 
 /** CardanoBackend implementation on the Koios REST API (Axios). */
-export class KoiosBackend implements CardanoBackend, PaginatingBackend, EnumeratingBackend {
+export class KoiosBackend implements CardanoBackend, PaginatingBackend, EnumeratingBackend, TokenRegistryBackend {
   public readonly name = 'koios';
   private api: AxiosInstance;
   private network: Network;
@@ -1248,6 +1248,35 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     }
     logger.warn(`${label}: stopped after ${KoiosBackend.LIST_MAX_PAGES} pages, the list may be truncated`);
     return ids;
+  }
+
+  /** Units with a CIP-26 registry entry, from `asset_token_registry` (the whole registry, paged). */
+  async getTokenRegistryUnits(): Promise<string[]> {
+    return handleBackendRequest(
+      async () => {
+        const units: string[] = [];
+        for (let page = 0; page < KoiosBackend.LIST_MAX_PAGES; page++) {
+          const offset = page * KoiosBackend.LIST_PAGE_SIZE;
+          const { data } = await this.getWithRetryOn42804(
+            `/asset_token_registry?select=policy_id,asset_name&limit=${KoiosBackend.LIST_PAGE_SIZE}&offset=${offset}`,
+            {},
+            'getTokenRegistryUnits',
+          );
+          if (!Array.isArray(data) || data.length === 0) return units;
+          for (const row of data) {
+            const r = row as { policy_id?: unknown; asset_name?: unknown };
+            if (typeof r.policy_id !== 'string' || !/^[0-9a-f]{56}$/i.test(r.policy_id)) continue;
+            const name = typeof r.asset_name === 'string' ? r.asset_name : '';
+            if (!/^([0-9a-f]{2}){0,32}$/i.test(name)) continue;
+            units.push((r.policy_id + name).toLowerCase());
+          }
+          if (data.length < KoiosBackend.LIST_PAGE_SIZE) return units;
+        }
+        logger.warn(`getTokenRegistryUnits: stopped after ${KoiosBackend.LIST_MAX_PAGES} pages, the list may be truncated`);
+        return units;
+      },
+      this.name,
+    );
   }
 
   /** All pool ids, including retired ones, so a snapshot does not drop retiring pools. */

@@ -44,6 +44,8 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         credentialBackfill : CredentialBackfillStatus;
         // one-off CIP-68 decimals fill of the asset catalogue (this process)
         decimalsBackfill : DecimalsBackfillStatus;
+        // one-off CIP-26 registry fill of the asset catalogue (this process)
+        registryBackfill : RegistryBackfillStatus;
         // per-epoch pool/DRep/pot snapshots (crawler.epochSnapshots)
         epochSnapshots    : EpochSnapshotStatus;
     }
@@ -112,6 +114,19 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         scanned    : Integer64; // catalogue rows read
         candidates : Integer64; // units with label 333 or 444
         filled     : Integer64; // units that received a decimals value
+        startedAt  : Timestamp;
+        finishedAt : Timestamp;
+        error      : String;
+    }
+
+    @title      : 'Registry Backfill Status'
+    @description: 'Progress of the CIP-26 registry fill started with backfillAssetRegistry; process-local, none after a restart'
+    type RegistryBackfillStatus {
+        status     : String;    // none | running | done | failed
+        units      : Integer64; // units with a registry entry
+        processed  : Integer64; // units handled so far
+        filled     : Integer64; // units whose rows received the registry values
+        failed     : Integer64; // units the backend did not resolve
         startedAt  : Timestamp;
         finishedAt : Timestamp;
         error      : String;
@@ -223,4 +238,9 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @description: 'Fill Assets.decimals from the CIP-68 reference datum for every catalogue unit with label 333 or 444: the reference NFT is followed from its mint through the crawled transactions to the output that holds it now, and the decimals of that datum are written to every slice of the unit. No backend call; the crawler may keep running; a repeat refreshes the values. Runs in the background; progress via getStatus().decimalsBackfill.'
     @requires   : 'Admin'
     action   backfillAssetDecimals() returns BackfillResult;
+
+    @title      : 'Backfill Asset Registry'
+    @description: 'Fill the CIP-26 registry fields (registryName, registryTicker, registryDecimals, registryDescription, registryUrl, registryLogo) on every slice of every Assets unit the token registry lists, and decimals where it is still empty. The registry is off-chain, so each unit is read from the backend (needs Koios), rate limited; the crawler may keep running; a repeat refreshes the values. Runs in the background; progress via getStatus().registryBackfill.'
+    @requires   : 'Admin'
+    action   backfillAssetRegistry() returns BackfillResult;
 }

@@ -1458,4 +1458,37 @@ describe('KoiosBackend', () => {
       expect(await backend.getPoolIds()).toEqual([]);
     });
   });
+
+  describe('TokenRegistryBackend', () => {
+    it('pages /asset_token_registry and returns units as policy id plus asset name', async () => {
+      const full = Array.from({ length: 1000 }, (_, i) => ({ policy_id: 'a'.repeat(56), asset_name: i.toString(16).padStart(4, '0') }));
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/asset_token_registry')
+        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '0' })
+        .reply(200, full);
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/asset_token_registry')
+        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '1000' })
+        .reply(200, [
+          { policy_id: 'B'.repeat(56), asset_name: null },
+          { policy_id: 'not-a-policy', asset_name: '00' },
+          { policy_id: 'c'.repeat(56), asset_name: 'zz' },
+        ]);
+
+      const units = await backend.getTokenRegistryUnits();
+
+      expect(units).toHaveLength(1001);
+      expect(units[0]).toBe('a'.repeat(56) + '0000');
+      expect(units.at(-1)).toBe('b'.repeat(56));
+    });
+
+    it('returns an empty list when the registry endpoint is empty', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/asset_token_registry')
+        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '0' })
+        .reply(200, []);
+
+      expect(await backend.getTokenRegistryUnits()).toEqual([]);
+    });
+  });
 });

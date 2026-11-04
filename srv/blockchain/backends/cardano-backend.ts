@@ -212,6 +212,18 @@ export function isEpochStateBackend(backend: CardanoBackend): backend is EpochSt
   return typeof (backend as EpochStateBackend).epochStateAt === 'function';
 }
 
+// Backend that lists every unit with a CIP-26 token-registry entry. The registry is off-chain
+// (a GitHub repository mirrored by Koios), so the crawler can never derive these fields.
+export interface TokenRegistryBackend extends CardanoBackend {
+  /** Units (policyId + assetNameHex) that have a registry entry. */
+  getTokenRegistryUnits(): Promise<string[]>;
+}
+
+/** Type guard: can this backend list the token registry? */
+export function isTokenRegistryBackend(backend: CardanoBackend): backend is TokenRegistryBackend {
+  return typeof (backend as TokenRegistryBackend).getTokenRegistryUnits === 'function';
+}
+
 /** Type guard: can this backend enumerate pools and DReps? */
 export function isEnumeratingBackend(backend: CardanoBackend): backend is EnumeratingBackend {
   const b = backend as EnumeratingBackend;

@@ -8,6 +8,7 @@ import { backfillCertificates, type CertificateBackfillProgress } from './blockc
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
 import { backfillUtxoCredentials, type CredentialBackfillProgress } from './blockchain/crawler/credential-backfill';
 import { backfillAssetDecimals, type DecimalsBackfillProgress } from './blockchain/crawler/asset-decimals-backfill';
+import { backfillAssetRegistry, type RegistryBackfillProgress } from './blockchain/crawler/asset-registry-backfill';
 import { isBlockHash } from './utils/validators';
 import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
 import { buildLiveness } from './utils/liveness';
@@ -72,6 +73,17 @@ interface DecimalsBackfillState extends DecimalsBackfillProgress {
 }
 let decimalsBackfill: DecimalsBackfillState = {
   status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null,
+};
+
+/** The CIP-26 registry fill of this process, same lifecycle as the backfills. */
+interface RegistryBackfillState extends RegistryBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+let registryBackfill: RegistryBackfillState = {
+  status: 'none', units: 0, processed: 0, filled: 0, failed: 0, startedAt: null, finishedAt: null, error: null,
 };
 
 type BackfillData = { fromSlot?: string | number | null; toSlot?: string | number | null };
@@ -190,6 +202,7 @@ module.exports = (srv: cds.Service) => {
         },
         credentialBackfill: { ...credentialBackfill },
         decimalsBackfill: { ...decimalsBackfill },
+        registryBackfill: { ...registryBackfill },
         epochSnapshots: {
           enabled: epochSnapshotsConfigured(),
           source: epochSnapshotSource(),
@@ -315,6 +328,25 @@ module.exports = (srv: cds.Service) => {
         logger.error(`Asset-decimals backfill failed: ${message}`);
       });
     return { accepted: true, message: 'Asset-decimals backfill started; poll getStatus().decimalsBackfill.' };
+  });
+
+  // backfillAssetRegistry: writes the CIP-26 registry fields of every registered unit. The registry
+  // is off-chain, so this needs a backend that lists it. Progress is in getStatus().registryBackfill.
+  srv.on('backfillAssetRegistry', async (req: Request) => {
+    if (registryBackfill.status === 'running') return rejectInvalid(req, 'backfillAssetRegistry', 'An asset-registry backfill is already running');
+    if (!getCardanoClient().getTokenRegistryBackend()) return rejectInvalid(req, 'backfillAssetRegistry', 'No backend lists the token registry (needs Koios)');
+    registryBackfill = { status: 'running', units: 0, processed: 0, filled: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    void backfillAssetRegistry({
+      client: getCardanoClient(), indexer: getCardanoIndexer(),
+      onProgress: (p) => { Object.assign(registryBackfill, p); },
+    })
+      .then((r) => { Object.assign(registryBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(registryBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Asset-registry backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Asset-registry backfill started; poll getStatus().registryBackfill.' };
   });
 
   // importUtxoSet: one-off snapshot import that anchors crawler.utxoSet.

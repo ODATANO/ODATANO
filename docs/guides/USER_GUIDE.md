@@ -865,6 +865,18 @@ POST /odata/v4/cardano-indexer/backfillAssetDecimals
 GET  /odata/v4/cardano-indexer/getStatus()            # → decimalsBackfill: status, scanned, candidates, filled
 ```
 
+The CIP-26 registry fields (`registryName`, `registryTicker`, `registryDecimals`, `registryDescription`,
+`registryUrl`, `registryLogo`) are off-chain data: the lazy path takes them from the backend when it
+writes a row, the crawler's catalogue rows carry none. A fifth backfill fills them for every unit the
+registry lists (Koios `asset_token_registry`, about 8,000 units on mainnet): each unit is read from the
+backend at 4 per second and every slice of the unit receives the values, `decimals` only where it is
+still empty. Needs Koios; the crawler may keep running; a repeat refreshes the values. Requires Admin.
+
+```
+POST /odata/v4/cardano-indexer/backfillAssetRegistry
+GET  /odata/v4/cardano-indexer/getStatus()            # → registryBackfill: status, units, processed, filled, failed
+```
+
 Transaction rows hold the same ledger view whichever source the crawl used: inputs in ledger order
 (regular, collateral, reference, each by transaction hash and output index); after a phase-2 failure
 only the collateral and reference inputs and the collateral return; otherwise no collateral return.

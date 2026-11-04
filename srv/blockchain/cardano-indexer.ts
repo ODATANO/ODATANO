@@ -1730,7 +1730,15 @@ export class CardanoIndexer {
 
   /** Index an asset by unit (policyId + assetNameHex). */
   async indexAsset(tx: CapTransaction, unit: string): Promise<Asset> {
-    const assetInfo = await this.resolveAssetInfo(tx, unit);
+    return this.writeAsset(tx, unit, await this.resolveAssetInfo(tx, unit));
+  }
+
+  /** Like indexAsset, but always from the backend: the crawled chain has no CIP-26 registry fields. */
+  async indexAssetFromBackend(tx: CapTransaction, unit: string): Promise<Asset> {
+    return this.writeAsset(tx, unit, await this.client.getAssetInfo(unit));
+  }
+
+  private async writeAsset(tx: CapTransaction, unit: string, assetInfo: AssetInfo): Promise<Asset> {
     const assetEntity = mapAsset(assetInfo, this.client.max_age_ms);
     assetEntity.decimals = (await cip68Decimals(tx, unit, assetInfo.initialMintTxHash)) ?? assetInfo.registryDecimals;
 
